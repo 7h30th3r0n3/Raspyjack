@@ -3,7 +3,7 @@
 Small **offensive toolkit** for Raspberry Pi (+ Waveshare 1.44″ LCD HAT).
 
 <p align="center">
-  <img src="github-img/menu.gif" width="400"><br>
+  <img src="github-img/logo.jpg" width="250"><br>
   <em>Main menu in vertical-carousel mode (icons + labels)</em>
 </p>
 
