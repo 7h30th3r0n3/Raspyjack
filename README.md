@@ -1,8 +1,15 @@
-<p align="center">
-# RaspyJack  
-Small **offensive toolkit** for Raspberry Pi (+ Waveshare 1.44″ LCD HAT).
-  <img src="github-img/logo.jpg" width="250"><br>
-</p>
+<div align="center">
+
+  <h1>RaspyJack</h1>
+
+  <img src="github-img/logo.jpg" width="250"/>
+
+  <p>
+    Small <strong>offensive toolkit</strong> for Raspberry&nbsp;Pi
+    (+ Waveshare&nbsp;1.44″ LCD HAT).
+  </p>
+
+</div>
 
 ---
 
