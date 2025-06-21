@@ -1,10 +1,7 @@
-
+<p align="center">
 # RaspyJack  
 Small **offensive toolkit** for Raspberry Pi (+ Waveshare 1.44″ LCD HAT).
-
-<p align="center">
   <img src="github-img/logo.jpg" width="250"><br>
-  <em>Main menu in vertical-carousel mode (icons + labels)</em>
 </p>
 
 ---
@@ -64,11 +61,25 @@ sudo reboot
 ```
 raspyjack/
 ├── raspyjack.py
-├── install_raspyjack.sh
+├── install.sh
+├── gui_conf.json
+├── LCD_1in44.py
+├── LCD_1in44.pyc
+├── LCD_Config.py
+├── LCD_Config.pyc
+│
 ├── img/
 │   └── logo.bmp
+│
+├── DNSSpoof/
+│   ├── captures/
+│   └── sites/
+│
 ├── loot/
-└── gui_conf.json
+│   ├── MITM/
+│   └── Nmap/
+│
+└── Responder/
 ```
 
 ---
