@@ -1,0 +1,24 @@
+{
+    "COLORS": {
+        "BACKGROUND": "#000000",
+        "BORDER": "#05ff00",
+        "GAMEPAD": "#141494",
+        "GAMEPAD_FILL": "#eeeeee",
+        "SELECTED_TEXT": "#00ff55",
+        "SELECTED_TEXT_BACKGROUND": "#2d0fff",
+        "TEXT": "#05ff00"
+    },
+    "PATHS": {
+        "IMAGEBROWSER_START": "/root/",
+    },
+    "PINS": {
+        "KEY1_PIN": 21,
+        "KEY2_PIN": 20,
+        "KEY3_PIN": 16,
+        "KEY_DOWN_PIN": 19,
+        "KEY_LEFT_PIN": 5,
+        "KEY_PRESS_PIN": 13,
+        "KEY_RIGHT_PIN": 26,
+        "KEY_UP_PIN": 6
+    }
+}
