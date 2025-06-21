@@ -29,6 +29,7 @@ Small **offensive toolkit** for Raspberry Pi (+ Waveshare 1.44″ LCD HAT).
 |------|-------------|-------------------|
 | **Waveshare 1.44″ LCD HAT** | SPI TFT + joystick + 3 buttons | [Buy 🔗](https://s.click.aliexpress.com/e/_oEmEUZW) |
 | **Raspberry Pi Zero 2 WH** | Quad-core 1 GHz, 512 MB RAM – super compact | [Buy 🔗](https://s.click.aliexpress.com/e/_omuGisy) |
+| **RPI 0w with Waveshare Ethernet/USB HUB HAT** | 3 USB + 1 Ethernet | [Buy 🔗](https://s.click.aliexpress.com/e/_oDK0eYc) |
 | **Raspberry Pi 4 Model B** (4 GB) | Quad-core 1.5 GHz, full-size HDMI, GigE LAN | [Buy 🔗](https://s.click.aliexpress.com/e/_oFOHQdm) |
 | **Raspberry Pi 5** (8 GB) | Quad-core Cortex-A76 2.4 GHz, PCIe 2.0 x1 | [Buy 🔗](https://s.click.aliexpress.com/e/_oC6NEZe) |
 
