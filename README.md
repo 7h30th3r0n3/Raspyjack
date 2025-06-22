@@ -5,7 +5,7 @@
   <img src="github-img/logo.jpg" width="250"/>
 
   <p>
-    Small <strong>offensive toolkit</strong> for Raspberry&nbsp;Pi
+    Small <strong>network offensive toolkit</strong> for Raspberry&nbsp;Pi
     (+ Waveshare&nbsp;1.44″ LCD HAT).
   </p>
 
