@@ -9,7 +9,7 @@
         "TEXT": "#05ff00"
     },
     "PATHS": {
-        "IMAGEBROWSER_START": "/root/",
+        "IMAGEBROWSER_START": "/root/"
     },
     "PINS": {
         "KEY1_PIN": 21,
