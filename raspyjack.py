@@ -41,7 +41,7 @@ def _stats_loop():
 def _display_loop():
     while not _stop_evt.is_set():
         LCD.LCD_ShowImage(image, 0, 0)
-        time.sleep(0.011)
+        time.sleep(0.1)
 
 def start_background_loops():
     threading.Thread(target=_stats_loop,   daemon=True).start()
@@ -156,6 +156,7 @@ def getButton():
         for item in PINS:
             if GPIO.input(PINS[item]) == 0:
                 return item
+        time.sleep(0.01)
 
 def temp() -> float:
     with open("/sys/class/thermal/thermal_zone0/temp") as f:
