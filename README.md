@@ -1,5 +1,10 @@
-<div align="center">
+<p align="center">
+  <img src="https://img.shields.io/badge/platform-Raspberry%20Pi-red?style=flat-square&logo=raspberry-pi">
+  <img src="https://img.shields.io/badge/usage-educational%20only-blue?style=flat-square">
+  <img src="https://img.shields.io/badge/code-python3-yellow?style=flat-square&logo=python">
+</p>
 
+<div align="center">
   <h1>RaspyJack</h1>
 
   <img src="github-img/logo.jpg" width="250"/>
