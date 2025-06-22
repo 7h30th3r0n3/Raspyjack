@@ -20,7 +20,7 @@ import sys
 _stop_evt = threading.Event()
 
 
-
+# https://www.waveshare.com/wiki/File:1.44inch-LCD-HAT-Code.7z
 
 def _stats_loop():
     while not _stop_evt.is_set():
@@ -28,13 +28,13 @@ def _stats_loop():
         draw.text((0, 0), f"{temp():.0f} °C ", fill="WHITE", font=font)
         status = ""
         if subprocess.call(['pgrep', 'nmap'], stdout=subprocess.DEVNULL) == 0:
-            status = "(Scan en cours.)"
+            status = "(Scan in progress)"
         elif is_mitm_running():
-            status = "(MITM&sniff en cours.)"
+            status = "(MITM & sniff)"
         elif subprocess.call(['pgrep', 'ettercap'], stdout=subprocess.DEVNULL) == 0:
-            status = "(DNSSpoof running.)"
+            status = "(DNSSpoof)"
         if is_responder_running():
-            status = "(Responder running.)"
+            status = "(Responder)"
         draw.text((30, 0), status, fill="WHITE", font=font)
         time.sleep(2)
 
@@ -46,9 +46,6 @@ def _display_loop():
 def start_background_loops():
     threading.Thread(target=_stats_loop,   daemon=True).start()
     threading.Thread(target=_display_loop, daemon=True).start()
-
-# https://www.waveshare.com/wiki/File:1.44inch-LCD-HAT-Code.7z
-
 
 if os.getuid() != 0:
         print("You need a sudo to run this!")
@@ -180,6 +177,15 @@ def Restart():
     arg = ["-n","-5",os.sys.executable] + sys.argv
     os.execv(os.popen("whereis nice").read().split(" ")[1], arg)
     Leave()
+
+
+def safe_kill(*names):
+    for name in names:
+        subprocess.run(
+            ["pkill", "-9", "-x", name],      # -x = nom exact
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
 
 ### Two threaded functions ###
 # One for updating status bar and one for refreshing display #
@@ -862,8 +868,8 @@ def get_local_network():
     ip_parts[-1] = '0'
     return '.'.join(ip_parts) + '/24'
 
-def Start_MITM(site_spoof):
-    os.system("kill $(pgrep arpspoof)&&kill $(pgrep tcpdump)")
+def Start_MITM():
+    safe_kill("arpspoof", "tcpdump")
     Dialog_info("                    Lancement\n                  MITM & Sniff\n                   En cours\n                  Patientez...", wait=True)
     local_network = get_local_network()
     print(f"[*] Starting MITM attack on local network {local_network}...")
@@ -910,7 +916,7 @@ def Start_MITM(site_spoof):
         time.sleep(2)
 
 def Stop_MITM():
-    os.system("kill $(pgrep arpspoof)&&kill $(pgrep tcpdump)")
+    safe_kill("arpspoof", "tcpdump")
     os.system("echo 0 > /proc/sys/net/ipv4/ip_forward")
     time.sleep(2)
     responder_status = "(!! MITM stopped !!)"
@@ -989,7 +995,6 @@ def Stop_DNSSpoofing():
     Dialog_info("    DNS Spoofing\n     stopped !!!", wait=True)
     time.sleep(2)
 
-
 ### Menu class ###
 class DisposableMenu:
     which  = "a"     # Start menu
@@ -1002,11 +1007,11 @@ class DisposableMenu:
             [" Scan Nmap",      "ab"],    # b
             [" Reverse Shell",  "ac"],    # c
             [" Responder",      "ad"],    # d
-            [" Other features", "ag"],    # g
-            [" Read file",      "ah"],    # h
             [" MITM & Sniff",   "ai"],    # i
             [" DNS Spoofing",   "aj"],    # j
-            [" Network info",   ShowInfo] # appel direct
+            [" Network info",   ShowInfo],# appel direct
+            [" Other features", "ag"],    # g
+            [" Read file",      "ah"],    # h
         ),
 
         "ab": tuple(
@@ -1067,6 +1072,7 @@ class DisposableMenu:
             [" Select site",        "ak"],
             [" Stop DNS&PHP",       Stop_DNSSpoofing]
         ),
+
         "ak": tuple(
             [f" {site}", partial(spoof_site, site)]
             for site in SITES
