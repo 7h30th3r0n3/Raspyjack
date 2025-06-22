@@ -23,7 +23,6 @@
 | **Loot viewer** | Read Nmap / Responder / DNSSpoof logs on‑device |
 | **File browser** | Lightweight text & image explorer |
 | **System** | Theme editor, config save/restore, UI restart, shutdown |
-| **Extensible** | Add a function + a menu line – done |
 
 ---
 
