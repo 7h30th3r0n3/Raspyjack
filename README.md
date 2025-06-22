@@ -42,8 +42,11 @@
 ## 🚀  Quick install
 
 ```bash
+sudo su
+cd /root
 git clone https://github.com/7h30th3r0n3/raspyjack.git
-cd raspyjack
+mv Raspyjack-main Raspyjack
+cd Raspyjack
 chmod +x install_raspyjack.sh
 sudo ./install_raspyjack.sh
 sudo reboot
