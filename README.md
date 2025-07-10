@@ -136,6 +136,20 @@ sudo reboot
 ```
 Note : Depending on the way you get the project Raspyjack-main can take multiple name. Just be sure that Raspyjack folder are in /root.
 
+
+### Update
+
+⚠️ Before updating backup your loot. 
+
+```bash
+sudo su
+cd /root
+rm -rf Raspyjack
+git clone https://github.com/7h30th3r0n3/raspyjack.git
+mv Raspyjack-main Raspyjack
+sudo reboot
+```
+
 ---
 
 ## 🎮  Keymap
