@@ -126,9 +126,9 @@ ssh raspyjack@<IP>
 ```bash
 sudo apt install git
 sudo su
-cd /root
+cd
 git clone https://github.com/7h30th3r0n3/raspyjack.git
-mv Raspyjack-main Raspyjack
+mv raspyjack Raspyjack
 cd Raspyjack
 chmod +x install_raspyjack.sh
 sudo ./install_raspyjack.sh
@@ -146,7 +146,7 @@ sudo su
 cd /root
 rm -rf Raspyjack
 git clone https://github.com/7h30th3r0n3/raspyjack.git
-mv Raspyjack-main Raspyjack
+mv raspyjack Raspyjack
 sudo reboot
 ```
 
