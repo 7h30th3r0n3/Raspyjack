@@ -86,7 +86,7 @@ Select Raspberry Pi Zero 2 W
 ---
 <img src="https://github.com/7h30th3r0n3/Raspyjack/blob/main/github-img/img-tuto/tuto3.png" width="400"/>  
 
-Go in Raspberry Pi OS (other)  
+Go in Raspberry Pi OS (other)  (bad screenshot)
 
 ---
 <img src="https://github.com/7h30th3r0n3/Raspyjack/blob/main/github-img/img-tuto/tuto4.png" width="400"/>  
@@ -124,6 +124,7 @@ ssh raspyjack@<IP>
 ### Part 2 : setup Raspyjack
 
 ```bash
+sudo apt install git
 sudo su
 cd /root
 git clone https://github.com/7h30th3r0n3/raspyjack.git
@@ -133,6 +134,7 @@ chmod +x install_raspyjack.sh
 sudo ./install_raspyjack.sh
 sudo reboot
 ```
+Note : Depending on the way you get the project Raspyjack-main can take multiple name. Just be sure that Raspyjack folder are in /root.
 
 ---
 
