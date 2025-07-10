@@ -106,6 +106,8 @@ Change settings to configure user and enable SSH
 ---
 <img src="https://github.com/7h30th3r0n3/Raspyjack/blob/main/github-img/img-tuto/tuto7.png" width="400"/></br>
 
+⚠️ Note : It seem that ssh work on ethernet only, if you cant find it trough wifi connection, check on ethernet.
+
 <img src="https://github.com/7h30th3r0n3/Raspyjack/blob/main/github-img/img-tuto/tuto8.png" width="400"/>  
 
 Set username and password and enable SSH
