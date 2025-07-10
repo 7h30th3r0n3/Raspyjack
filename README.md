@@ -42,6 +42,7 @@
 | **Loot viewer** | Read Nmap scan / Responder / DNSSpoof logs on‑device |
 | **File browser** | Lightweight text & image explorer |
 | **System** | Theme editor, config save/restore, UI restart, shutdown |
+| **Custom Script** | Custom python script can be added |
 | **Boot time** | On rpi 0w2 : ~22sec  |
 
 ---
