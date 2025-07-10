@@ -18,12 +18,15 @@ from functools import partial
 import time
 import sys
 _stop_evt = threading.Event()
-
+screen_lock = threading.Event()
 
 # https://www.waveshare.com/wiki/File:1.44inch-LCD-HAT-Code.7z
 
 def _stats_loop():
     while not _stop_evt.is_set():
+        if screen_lock.is_set():          # ← payload actif → on saute le dessin
+            time.sleep(0.5)
+            continue
         draw.line([(0, 4), (128, 4)], fill="#222", width=10)
         draw.text((0, 0), f"{temp():.0f} °C ", fill="WHITE", font=font)
         status = ""
@@ -40,7 +43,8 @@ def _stats_loop():
 
 def _display_loop():
     while not _stop_evt.is_set():
-        LCD.LCD_ShowImage(image, 0, 0)
+        if not screen_lock.is_set():
+            LCD.LCD_ShowImage(image, 0, 0)
         time.sleep(0.1)
 
 def start_background_loops():
@@ -69,8 +73,9 @@ class Defaults():
     install_path = "/root/Raspyjack/"
     config_file = install_path + "gui_conf.json"
 
-    hid_ducky_path = "/tmp"
-    hid_log_path = "/tmp"
+    payload_path = install_path + "payloads/"
+    payload_log  = install_path + "loot/payload.log"
+
 
 ### Color scheme class ###
 class template():
@@ -337,92 +342,80 @@ def ShowLines(arr,bold=[]):
         draw.text((default.start_text[0], default.start_text[1] + default.text_gap * i),
                     render_text[:m.max_len], fill=render_color)
 
-### Main method for selecting stuff ###
-# Infinite scroll; Scrolling text;
-# This newer one does deal with duplicates but not by default.
-# When you deal with dupes the whole operation is 0.02sec slower.
-def GetMenuString(inlist,duplicates=False):
-    select = 0
-    inc = 0
-    empty = False
-    if len(inlist) < 1:
-        inlist = ["Nothing here :(   "]
-        empty = True
+def GetMenuString(inlist, duplicates=False):
+    """
+    Affiche une liste déroulante de taille variable dans une fenêtre de 8 lignes.
+    - Défilement fluide (on fait glisser la fenêtre d'un item à la fois).
+    - Navigation circulaire.
+    - Si duplicates=True : retourne (index, valeur) ; sinon retourne valeur.
+    - Si la liste est vide : affiche un placeholder et retourne "".
+    """
+    WINDOW      = 8                 # lignes visibles simultanément
+    CURSOR_MARK = m.char            # '> '
+    empty       = False
+
+    if not inlist:
+        inlist, empty = ["Nothing here :(   "], True
+
     if duplicates:
-        newlist=[]
-        dic = {}
-        i=0
-        for var in inlist:
-            newlist.append(''.join((str(i),"#",str(var))))
-            i = i+1
-        inlist = newlist
-        #newlist still Used
-        print(newlist)
+        inlist = [f"{i}#{txt}" for i, txt in enumerate(inlist)]
 
-    while 1:
+    total   = len(inlist)           # nb total d'items
+    index   = 0                     # position réelle du curseur (0-based)
+    offset  = 0                     # index du 1er item visible (0-based)
+
+    while True:
+        # -- 1/ Recalcule la fenêtre pour que index soit toujours dedans -----
+        if index < offset:
+            offset = index
+        elif index >= offset + WINDOW:
+            offset = index - WINDOW + 1
+
+        # -- 2/ Compose la fenêtre à afficher (pas de wrap visuel) ----------
+        window = inlist[offset:offset + WINDOW]
+
+        # -- 3/ Rendu --------------------------------------------------------
         color.DrawMenuBackground()
-        arr = inlist[0: (len(inlist), 8)[len(inlist) > 8] ]
-        for i in range(0, len(arr)):
-            render_text = (arr[i], ''.join(arr[i].split("#")[1:]))[duplicates]
-            render_color = color.text
-            if(select == i):
-                render_text = m.char + render_text
-                render_color = color.selected_text
-                draw.rectangle([(default.start_text[0]-5, default.start_text[1] + default.text_gap * i),
-                                (120, default.start_text[1] + default.text_gap * i + 10)], fill=color.select)
-            draw.text((default.start_text[0], default.start_text[1] + default.text_gap * i),
-                      render_text[:m.max_len], fill=render_color)
-        time.sleep(0.25)
+        for i, raw in enumerate(window):
+            txt = raw if not duplicates else raw.split('#', 1)[1]
+            line = CURSOR_MARK + txt if i == (index - offset) else txt
+            fill = color.selected_text if i == (index - offset) else color.text
+            # zone de surbrillance
+            if i == (index - offset):
+                draw.rectangle(
+                    (default.start_text[0] - 5,
+                     default.start_text[1] + default.text_gap * i,
+                     120,
+                     default.start_text[1] + default.text_gap * i + 10),
+                    fill=color.select
+                )
+            draw.text(
+                (default.start_text[0],
+                 default.start_text[1] + default.text_gap * i),
+                line[:m.max_len],
+                fill=fill
+            )
+        time.sleep(0.12)
 
-        if len(arr[inc] + m.char) >= m.max_len:
-            counter = time.time()
-            button = ""
-            scroll_text = (" " + arr[inc]," " + ''.join(arr[inc].split("#")[1:]))[duplicates]
+        # -- 4/ Lecture des boutons -----------------------------------------
+        btn = getButton()
 
-            while button == "":
-                for item in PINS:
-                    if GPIO.input(PINS[item]) == 0:
-                        button = item
-                        break
-                if (time.time() - counter) > 0.25: # Less delay for the buttons -> scrolling
-                    scroll_text = scroll_text[1:] + scroll_text[0]
-                    draw.rectangle([(default.start_text[0]-5, default.start_text[1] + default.text_gap * select),
-                                    (120, default.start_text[1] + default.text_gap * select + 10)], fill=color.select)
-                    draw.text((default.start_text[0], default.start_text[1] + default.text_gap * select),
-                          (m.char + scroll_text)[:m.max_len], fill=color.selected_text)
-                    counter = time.time()
-        else:
-            button = getButton()
-
-        if button == "KEY_UP_PIN":
-            inc = inc-1
-            if inc < 0 and len(inlist) > 9:
-                inlist = inlist[-1:] + inlist[:-1]
-                inc = 0
-        elif button == "KEY_DOWN_PIN":
-            inc = inc+1
-            if inc >= 7 and len(inlist) > 9:
-                inlist = inlist[1:] + inlist[:1]
-                inc = 6
-        elif button == "KEY_PRESS_PIN" or button == "KEY_RIGHT_PIN":
+        if btn == "KEY_DOWN_PIN":
+            index = (index + 1) % total      # wrap vers le début
+        elif btn == "KEY_UP_PIN":
+            index = (index - 1) % total      # wrap vers la fin
+        elif btn in ("KEY_PRESS_PIN", "KEY_RIGHT_PIN"):
+            raw = inlist[index]
+            if empty:
+                return (-2, "") if duplicates else ""
             if duplicates:
-                if empty:
-                    return (-2,"")
-                return (int(arr[inc].split("#")[0]),''.join(arr[inc].split("#")[1:]))
-            else:
-                if empty:
-                    return ""
-                return arr[inc]
-        elif button == "KEY_LEFT_PIN":
-            if duplicates:
-                return (-1,"")
-            else:
-                return ""
-        if inc >= len(arr) and len(inlist) <= 9:
-            inc = 0
-        if inc < 0 and len(inlist) <= 9:
-            inc = len(arr)-1
-        select = inc
+                idx, txt = raw.split('#', 1)
+                return int(idx), txt
+            return raw
+        elif btn == "KEY_LEFT_PIN":
+            return (-1, "") if duplicates else ""
+
+
 
 ### Draw up down triangles ###
 color = template()
@@ -996,6 +989,96 @@ def Stop_DNSSpoofing():
     Dialog_info("    DNS Spoofing\n     stopped !!!", wait=True)
     time.sleep(2)
 
+
+def list_payloads():
+    """
+    Returns the list of .py scripts in payload_path, sorted by file name.
+    """
+    try:
+        return sorted(
+            f for f in os.listdir(default.payload_path)
+            if f.endswith(".py") and not f.startswith("_")
+        )
+    except FileNotFoundError:
+        os.makedirs(default.payload_path, exist_ok=True)
+        return []
+
+# ---------------------------------------------------------------------------
+# 1)  Helper – reset GPIO *and* re-initialise the LCD
+# ---------------------------------------------------------------------------
+def _setup_gpio() -> None:
+    """
+    Bring every pin back to a known state **after** a payload
+    (which most likely called ``GPIO.cleanup()`` on exit) and create a *fresh*
+    LCD driver instance so that the display can be used again.
+    """
+    # --- GPIO -------------------------------------------------------------
+    GPIO.setmode(GPIO.BCM)
+    for pin in PINS.values():                     # all buttons back to inputs
+        GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+
+    # --- LCD --------------------------------------------------------------
+    global LCD, image, draw                      # replace the old objects
+    LCD = LCD_1in44.LCD()
+    LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
+    image = Image.new("RGB", (LCD.width, LCD.height), "BLACK")
+    draw  = ImageDraw.Draw(image)
+
+
+# ---------------------------------------------------------------------------
+# 2)  exec_payload – run a script then *immediately* restore RaspyJack UI
+# ---------------------------------------------------------------------------
+def exec_payload(filename: str) -> None:
+    """
+    Execute a Python script located in « payloads/ » and *always*
+    return control – screen **and** buttons – to RaspyJack.
+
+    Workflow
+    --------
+    1. Freeze the UI (stop background threads, black screen).
+    2. Run the payload **blocking** in the foreground.
+    3. Whatever happens, re-initialise GPIO + LCD and redraw the menu.
+    """
+    full = os.path.join(default.payload_path, filename)
+    if not os.path.isfile(full):
+        print(f"[PAYLOAD] ✗ File not found: {full}")
+        return                                       # nothing to launch
+
+    print(f"[PAYLOAD] ► Starting: {filename}")
+    screen_lock.set()                # stop _stats_loop & _display_loop
+    LCD.LCD_Clear()                  # give the payload a clean canvas
+
+    log = open(default.payload_log, "ab", buffering=0)
+    try:
+        subprocess.run(
+            ["python3", full],
+            cwd=default.install_path,  # same PYTHONPATH as RaspyJack
+            stdout=log,
+            stderr=subprocess.STDOUT,
+        )
+        print("[PAYLOAD]   • Finished without error.")
+    except Exception as exc:
+        print(f"[PAYLOAD]   • ERROR: {exc!r}")
+
+    # ---- restore RaspyJack ----------------------------------------------
+    print("[PAYLOAD] ◄ Restoring LCD & GPIO…")
+    _setup_gpio()                                  # SPI/DC/RST/CS back
+
+    # rebuild the current menu image
+    color.DrawMenuBackground()
+    color.DrawBorder()
+    ShowLines(m.GetMenuList())                     # text + cursor
+    LCD.LCD_ShowImage(image, 0, 0)                 # push *before* unlock
+
+    # small debounce: 300 ms max
+    t0 = time.time()
+    while any(GPIO.input(p) == 0 for p in PINS.values()) and time.time() - t0 < .3:
+        time.sleep(.03)
+
+    screen_lock.clear()                            # threads can run again
+    print("[PAYLOAD] ✔ Menu ready – you can navigate again.")
+
+
 ### Menu class ###
 class DisposableMenu:
     which  = "a"     # Start menu
@@ -1005,14 +1088,15 @@ class DisposableMenu:
 
     menu = {
         "a": (
-            [" Scan Nmap",      "ab"],    # b
-            [" Reverse Shell",  "ac"],    # c
-            [" Responder",      "ad"],    # d
-            [" MITM & Sniff",   "ai"],    # i
-            [" DNS Spoofing",   "aj"],    # j
-            [" Network info",   ShowInfo],# appel direct
-            [" Other features", "ag"],    # g
-            [" Read file",      "ah"],    # h
+            [" Scan Nmap",      "ab"],     # b
+            [" Reverse Shell",  "ac"],     # c
+            [" Responder",      "ad"],     # d
+            [" MITM & Sniff",   "ai"],     # i
+            [" DNS Spoofing",   "aj"],     # j
+            [" Network info",   ShowInfo], # appel direct
+            [" Other features", "ag"],     # g
+            [" Read file",      "ah"],     # h
+            [" Payload", "ap"],            # p
         ),
 
         "ab": tuple(
@@ -1029,7 +1113,6 @@ class DisposableMenu:
             [" Responder ON",   responder_on],
             [" Responder OFF",  responder_off]
         ),
-
         "ag": (
             [" Browse Images", ImageExplorer],
             [" Options",       "ae"],   # e
@@ -1077,6 +1160,8 @@ class DisposableMenu:
         "ak": tuple(
             [f" {site}", partial(spoof_site, site)]
             for site in SITES
+
+
         ),
     }
 
@@ -1095,6 +1180,18 @@ class DisposableMenu:
                 if label == x:
                     return i
         return -1
+    # Génération à chaud du sous-menu Payload -------------------------------
+    def _build_payload_menu(self):
+        """Crée (ou rafraîchit) le menu 'ap' en fonction du contenu du dossier."""
+        self.menu["ap"] = tuple(
+            [f" {script[:-3]}", partial(exec_payload, script)]
+            for script in list_payloads()
+        ) or ([" <vide>", lambda: None],)  # si aucun script n'est présent
+
+    def __init__(self):
+        # cette fois, `default` est déjà instancié → pas d’erreur
+        self._build_payload_menu()
+
 
 def main():
     # Draw background once
@@ -1129,7 +1226,7 @@ LCD = LCD_1in44.LCD()
 Lcd_ScanDir = LCD_1in44.SCAN_DIR_DFT  # SCAN_DIR_DFT = D2U_L2R
 LCD.LCD_Init(Lcd_ScanDir)
 LCD_Config.Driver_Delay_ms(5)  # 8
-LCD.LCD_Clear()
+#LCD.LCD_Clear()
 
 image = Image.open(default.install_path + 'img/logo.bmp')
 LCD.LCD_ShowImage(image, 0, 0)

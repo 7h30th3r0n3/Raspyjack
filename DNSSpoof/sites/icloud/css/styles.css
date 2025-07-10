@@ -1,0 +1,296 @@
+@font-face {
+    font-family:'Helvetica Neue';
+    src: local("Helvetica Neue Light"),
+         local("HelveticaNeue-Light"),
+         url("         HelveticaNeue-Light.html") format("truetype"),
+         url("         HelveticaNeue-Light-2.html") format("woff");
+    font-weight:300
+}
+@font-face {
+    font-family: 'HelveticaLight';
+    src: url("         HelveticaNeue-Light.woff");
+}
+
+* {
+    margin: 0;
+    padding: 0;
+}
+
+html, body {
+    width: 100%;
+    height: 100%;
+    font-weight: 300;
+}
+.sign-in {
+	font-size: 39px;
+	line-height: 44px;
+	z-index: 10;
+	pointer-events: none;
+}
+.loader {
+	position: absolute;
+	left: 50%;
+	top: 50%;
+	color: white;
+	background: transparent;
+	font-family: Helvetica, Arial, Sans-Serif;
+	z-index: 3;
+}
+.body_image_old {
+    background: url("          icloud_wallpaper.png") no-repeat center center fixed;
+  -webkit-background-size: cover;
+  -moz-background-size: cover;
+  -o-background-size: cover;
+  background-size: cover;
+  z-index: 2;
+}
+.body_image_new {
+    opacity: 0;
+    background: url("          icloud_effect.png") no-repeat center center fixed;
+    -webkit-background-size: cover;
+    -moz-background-size: cover;
+    -o-background-size: cover;
+    background-size: cover;
+    /*background-size: 90% 90%;*/
+    width: 100%;
+    height: 100%;
+    z-index: 1;
+}
+.logo {
+    background: url("          _logo.png");
+    width: 56px;
+    height: 16px;
+}
+
+.help {
+    background: url("          help.png");
+    width: 22px;
+    height: 22px;
+}
+
+.lF {
+    float: left
+}
+
+.lR {
+    float: right
+}
+
+.instr {
+    color: rgba(255,255,255, 0.8);
+    font: 20px "HelveticaLight", sans-serif;
+    margin-right: 10px;
+    padding-right: 10px;
+    border-right: 1px solid #FFF;
+    cursor: pointer;    
+}
+
+.instr:hover {
+    color: rgba(255,255,255, 0.6);
+}
+.instr > span > a {
+	color: rgba(255,255,255, 0.8);
+	text-decoration: none;
+	font: 20px "HelveticaLight", sans-serif;
+}
+.instr > span > a:hover {
+	color: rgba(255,255,255, 1);
+	font: 20px "HelveticaLight", sans-serif;
+}
+.header {
+    padding: 15px;
+    top: 0px;
+    position: absolute;
+    width: 98%;
+}
+
+.body {
+    width: 360px;
+    height: 400px;
+    margin: -200px 0 0 -180px;
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    background: transparent;
+}
+.sec::before {
+	position: absolute;
+	content: '';
+	height: 47px;
+	width: 380px;
+	top: 25px;
+	display: block;
+	background-size: 380px 247px;
+	background-image: url('          stylesheet-1@2x.png');
+	background-position: 0px -56px;
+	background-repeat: no-repeat;
+}
+.cloud {
+    background: url("          cloud.png");
+    width: 141px;
+    height: 91px;
+    margin: auto;
+}
+.clickable {
+	position: relative;
+	right: 0;
+	color: white;
+	cursor: pointer;
+	font-weight: bold;
+}
+.clickable:visited {
+	color: white;
+	cursor: pointer;
+}
+.center {
+	position: relative;
+	margin: 25px auto auto;
+	padding: 0;
+}
+.clickable:active {
+	color: white;
+	cursor: pointer;
+}
+.clickable:hover {
+	cursor: pointer;
+}
+.labelRef {
+    margin: 15px auto 10px;
+    font: 35px "HelveticaLight", sans-serif;
+    color: #FFF;
+    text-align: center;
+}
+.cont {
+	position: relative;
+	width: 170px;
+	margin: 20px auto auto;
+	text-align: center;
+}
+.cont2 {
+	position: relative;
+	text-align: center;
+	overflow: visible;
+	white-space: pre-line;
+}
+.tlrm {
+	position: absolute;
+	left: 0px;
+	top: -3px
+    background-image:url(check1.png);
+}
+.txt {
+	font-family: "HelveticaLight",sans-serif;
+	white-space: nowrap;
+	font-size: 17px;
+	line-height: 17px;
+	margin-left: 20px;
+	color: white;
+}
+.account-cr {
+	position: relative;
+	font-family: "HelveticaLight", sans-serif;
+	color: white;
+	font-size: 15px;
+	overflow: visible;
+}
+.boxFrm {
+    border-radius: 6px;
+    -webkit-border-radius: 6px;
+    -moz-border-radius: 6px;
+    -o-border-radius: 6px;
+    -ms-border-radius: 6px;
+    background: rgba(255, 255, 255, 0.75);
+    background-clip: padding-box;
+    border: 1px solid rgba(0, 0, 0,0.3);
+    height: 93px;
+    width: 322px;
+    margin: 20px auto 0;
+    margin-top:29px;
+    margin-left:19px
+}
+
+.boxFrm .appId1, .boxFrm .appId2 {
+	padding: 12px;
+	font: 20px "HelveticaLight", sans-serif;
+	margin-bottom: -6px;
+	border: none;
+	outline: none;
+	width: 300px;
+	background: transparent;
+}
+
+.boxFrm .appId1 {
+    border-bottom: 1px solid #CCC;
+}
+
+.boxFrm .appId2 {
+    width: 261px!important
+}
+.sbBtn {
+    opacity: 0.2;
+    background: url("          arrow.png");
+    width: 26px;
+    height: 26px;
+    border: none;
+    outline: none;
+    margin-top: 15px;
+} 
+
+.fLogo {
+    background: url("          logo.png");
+    width: 33px;
+    height: 33px;
+}
+
+.footer {
+    position: absolute;
+    bottom: 0px;
+    font: 13px "Helvetica Neue", sans-serif;
+    color: #FFF;
+    width: 100%;
+}
+
+.footer ul {
+    position: absolute;
+    right: 0;
+    text-decoration: none;
+    color: rgba(255,255,255,0.8);
+    text-shadow: 0px 3px 10px rgba(0,0,0,0.25);
+}
+
+.footer ul li {
+    display: block;
+    float: left;
+    padding-right: 10px;
+    border-right: 1px solid rgba(230,234,237,0.2);
+    margin-right: 10px;
+    line-height: 8px;
+    margin-top: 10px;
+    -webkit-transition: opacity 0.4s;
+    -moz-transition: opacity 0.4s;
+    -ms-transition: opacity 0.4s;
+    transition: opacity 0.4s;
+}
+.footer ul li a {
+	color: rgba(255,255,255,0.8);
+    	text-shadow: 0px 3px 10px rgba(0,0,0,0.25);
+    	cursor: pointer;
+    	text-decoration: none;
+}
+.footer ul li a:hover {
+	color: white;
+	text-decoration: none;
+}
+.footer ul li:hover {
+	color: white;
+	text-shadow: none;
+	cursor: pointer;
+}
+.footer ul li:last-child:hover {
+	color: rgba(255,255,255,0.8);
+    	text-shadow: 0px 3px 10px rgba(0,0,0,0.25);
+    	cursor: default;
+}
+.footer ul li:last-child {
+    border: none;
+}

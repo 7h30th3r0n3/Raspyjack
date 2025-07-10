@@ -1,0 +1,140 @@
+body {
+	margin: 0;
+	/*overflow: hidden;*/
+}
+input {
+	font-size: 16px;
+	color: rgb(0, 128, 0) !important;  /* change [input cursor color] by this*/
+  	text-shadow: 0px 0px 0px black; /* change [input font] by this*/
+  	-webkit-text-fill-color: transparent;
+}
+input::-webkit-input-placeholder {
+  color: #999;  /* change [placeholder color] by this*/
+  text-shadow: none;
+  -webkit-text-fill-color: initial;
+}
+input[type='text'],
+input[type='password'] {
+  font-size: 16px;
+}
+html {
+    -webkit-text-size-adjust: none
+}
+#main-body {
+	background-color: white;
+	width: 100%;
+	height: 100%;
+	cursor: url(my-mouse-pointer.cur), auto;
+}
+#container {
+	position: relative;
+	width: 100%;
+	margin: auto;
+	height:100%;
+}
+#row {
+	position: relative;
+	margin: 50px auto;
+	height: auto;
+}
+#form-group-container {
+	position: relative;
+	display: inline-block;
+	border: 1px solid black;
+	border-radius: 35px;
+	background-color: white;
+}
+#iCloudLogo {
+	height: 390px;
+	width: 400px;
+	margin: auto;
+	border-radius: 75px;
+	background-image: url('iCloud_logo_iPhone_177x44.jpg');
+	background-repeat: no-repeat;
+	background-size: 400px 390px;
+}
+.blueClearable {
+	background-image: url("blue-icon-close.png") !important;
+}
+.clearable {
+	display: none;
+	background-size: 100px 130px;
+	position: absolute;
+	right: -25px;
+	top: -3px;
+}
+.clearable.x {
+	background-position: right -25px center; /* (jQ) Show icon */
+}
+#form-center {
+	margin: 20px auto;
+	position: relative;
+	width: 100%;
+	text-align: center;
+}
+#form-group {
+	position: relative;
+	padding: 25px 45px 25px 25px;
+	text-align: left;
+}
+#form-group > label {
+	text-align: left;
+	font-weight: normal;
+	font-size: 35pt;
+	position: relative;
+}
+#form-group > input {
+	border: none;
+	width: 500px;
+	margin-left: 25px;
+	font-size: 30pt;
+}
+#help-center {
+	position: relative;
+	margin: auto;
+	text-align: center;
+	font-size: 25pt;
+}
+.help-a-style {
+	color: rgba(0, 128, 0, 0.8);
+	text-decoration: none;
+	font-size: 40pt;
+}
+.help-a-style:hover {
+	color: rgba(0, 128, 0, 1);
+	text-decoration: none;
+}
+.help-a-style:visited {
+	color: green;
+}
+.help-a-style:active {
+	color: green;
+}
+#title-center {
+	position: relative;
+	margin: 100px auto 50px;
+	text-align: center;
+	color: black;
+}
+#title-center > h1 {
+	font-weight: 200;
+	font-size: 80pt;
+	margin: 0;
+	padding: 0;
+}
+#form-group:first-child > label {
+	width:208px;
+}
+#form-group:first-child {
+	border-bottom: 1px solid black;
+}
+#footer {
+	position: relative;
+	margin-top: 180px;
+	text-align: center;
+	font-size: 25pt;
+}
+#footer > p {
+	color: #999;
+	font-size: 30pt;
+}
