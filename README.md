@@ -86,7 +86,7 @@ Select Raspberry Pi Zero 2 W
 ---
 <img src="https://github.com/7h30th3r0n3/Raspyjack/blob/main/github-img/img-tuto/tuto3.png" width="400"/>  
 
-Go in Raspberry Pi OS (other)  (bad screenshot)
+Go in Raspberry Pi OS (other)
 
 ---
 <img src="https://github.com/7h30th3r0n3/Raspyjack/blob/main/github-img/img-tuto/tuto4.png" width="400"/>  
