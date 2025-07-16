@@ -796,10 +796,10 @@ SCANS = {
     "Quick Scan"            : ["-T5"],
     "Full Port Scan"        : ["-p-"],
     "Service Scan"          : ["-T5", "-sV"],
-    "Vulnerability"         : ["-T5", "-sV", "--script", "vulners,vulscan"],
-    "Full Vulns"            : ["-p-", "-sV", "--script", "*vul*,vulscan"],
+    "Vulnerability"         : ["-T5", "-sV", "--script", "vuln"],
+    "Full Vulns"            : ["-p-", "-sV", "--script", "vuln"],
     "OS Scan"               : ["-T5", "-A"],
-    "Intensive Scan"        : ["-O", "-p-", "--script", "vulscan"],
+    "Intensive Scan"        : ["-O", "-p-", "--script", "vuln"],
     "Stealth SYN Scan"      : ["-sS", "-T4"],                        # Half-open scan, avoids full TCP handshake
     "UDP Scan"              : ["-sU", "-T4"],                        # Finds services that only speak UDP
     "Ping Sweep"            : ["-sn"],                               # Host discovery without port scanning
