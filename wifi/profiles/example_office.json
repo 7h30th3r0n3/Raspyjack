@@ -1,0 +1,10 @@
+{
+  "ssid": "OfficeWiFi",
+  "password": "office_password",
+  "interface": "wlan1",
+  "priority": 2,
+  "auto_connect": true,
+  "created": "2024-01-01T12:00:00",
+  "last_used": null,
+  "notes": "Office network - medium priority"
+} 

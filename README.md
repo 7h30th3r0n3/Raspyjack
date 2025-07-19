@@ -42,7 +42,7 @@
 | **Loot viewer** | Read Nmap scan / Responder / DNSSpoof logs on‑device |
 | **File browser** | Lightweight text & image explorer |
 | **System** | Theme editor, config save/restore, UI restart, shutdown |
-| **Custom Script** | Custom python script can be added |
+| **WiFi Attacks** | Deauth attacks, WiFi interface management, USB dongle support |
 | **Boot time** | On rpi 0w2 : ~22sec  |
 
 ---
@@ -66,6 +66,26 @@ Others hardwares :
 
 ---
 
+## 📡 WiFi Attack Requirements
+
+**⚠️ Important:** The onboard Raspberry Pi WiFi (Broadcom 43430) **cannot** be used for WiFi attacks due to hardware limitations.
+
+### Required USB WiFi Dongles for WiFi Attacks:
+
+| Dongle | Chipset | Monitor Mode | Buy |
+|--------|---------|--------------|-----|
+| **Alfa AWUS036ACH** | Realtek RTL8812AU | ✅ Full support |  |
+| **TP-Link TL-WN722N v1** | Atheros AR9271 | ✅ Full support |  |
+| **Panda PAU09** | Realtek RTL8812AU | ✅ Full support |  |
+
+**Features:**
+- **Deauth attacks** on 2.4GHz and 5GHz networks
+- **Multi-target attacks** with interface switching
+- **Automatic USB dongle detection** and setup
+- **Research-based attack patterns** for maximum effectiveness
+
+---
+
 ## 🚀 Installation and Setup 
 
 ### Part 1 : setup OS 
@@ -86,7 +106,7 @@ Select Raspberry Pi Zero 2 W
 ---
 <img src="https://github.com/7h30th3r0n3/Raspyjack/blob/main/github-img/img-tuto/tuto3.png" width="400"/>  
 
-Go in Raspberry Pi OS (other)
+Go in Raspberry Pi OS (other)  
 
 ---
 <img src="https://github.com/7h30th3r0n3/Raspyjack/blob/main/github-img/img-tuto/tuto4.png" width="400"/>  
@@ -106,8 +126,6 @@ Change settings to configure user and enable SSH
 ---
 <img src="https://github.com/7h30th3r0n3/Raspyjack/blob/main/github-img/img-tuto/tuto7.png" width="400"/></br>
 
-⚠️ Note : It seem that ssh work on ethernet only, if you cant find it trough wifi connection, check on ethernet.
-
 <img src="https://github.com/7h30th3r0n3/Raspyjack/blob/main/github-img/img-tuto/tuto8.png" width="400"/>  
 
 Set username and password and enable SSH
@@ -126,30 +144,30 @@ ssh raspyjack@<IP>
 ### Part 2 : setup Raspyjack
 
 ```bash
-sudo apt install git
 sudo su
-cd
+cd /root
 git clone https://github.com/7h30th3r0n3/raspyjack.git
-mv raspyjack Raspyjack
+mv Raspyjack-main Raspyjack
 cd Raspyjack
 chmod +x install_raspyjack.sh
 sudo ./install_raspyjack.sh
 sudo reboot
 ```
-Note : Depending on the way you get the project Raspyjack-main can take multiple name. Just be sure that Raspyjack folder are in /root.
 
+### Part 3 : WiFi Attack Setup (Optional)
 
-### Update
+**For WiFi attacks, you need a USB WiFi dongle:**
 
-⚠️ Before updating backup your loot. 
+1. **Plug in USB WiFi dongle** (see requirements above)
+2. **Run WiFi Manager** from RaspyJack menu
+3. **Configure WiFi profiles** for auto-connect
+4. **Test interface switching** between wlan0/wlan1
+5. **Run deauth attacks** on target networks
 
+**Quick Test:**
 ```bash
-sudo su
-cd /root
-rm -rf Raspyjack
-git clone https://github.com/7h30th3r0n3/raspyjack.git
-mv raspyjack Raspyjack
-sudo reboot
+cd /root/Raspyjack/payloads
+python3 fast_wifi_switcher.py
 ```
 
 ---
@@ -180,6 +198,17 @@ raspyjack/
 ├── img/
 │   └── logo.bmp
 │
+├── wifi/
+│   ├── raspyjack_integration.py
+│   ├── wifi_manager.py
+│   ├── wifi_lcd_interface.py
+│   └── profiles/
+│
+├── payloads/
+│   ├── deauth.py
+│   ├── fast_wifi_switcher.py
+│   └── wifi_manager_payload.py
+│
 ├── DNSSpoof/
 │   ├── captures/
 │   └── sites/
@@ -187,11 +216,6 @@ raspyjack/
 ├── loot/
 │   ├── MITM/
 │   └── Nmap/
-│
-├── payloads/
-│   ├── example_show_buttons.py
-│   ├── exfiltrate_discord.py
-│   └── snake.py
 │
 └── Responder/
 ```
