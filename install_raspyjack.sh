@@ -5,6 +5,7 @@
 # * Bookworm‑ready – handles /boot/firmware/config.txt move
 # * Enables I²C/SPI, installs all deps, sets up systemd unit
 # * Ends with a health‑check (SPI nodes + Python imports)
+# * NEW: WiFi attack support with aircrack-ng and USB dongle tools
 # ------------------------------------------------------------
 set -euo pipefail
 
@@ -42,6 +43,10 @@ PACKAGES=(
   python3-setuptools python3-cryptography fonts-dejavu-core \
   # ‣ network / offensive tools
   nmap ncat tcpdump arp-scan dsniff ettercap-text-only php procps \
+  # ‣ WiFi attack tools (NEW)
+  aircrack-ng wireless-tools wpasupplicant iw \
+  # ‣ USB WiFi dongle support
+  firmware-linux-nonfree firmware-realtek firmware-atheros \
   # ‣ misc
   git i2c-tools
 )
@@ -71,7 +76,48 @@ done
 # ensure overlay spi0‑2cs
 grep -qE '^dtoverlay=spi0-[12]cs' "$CFG" || echo 'dtoverlay=spi0-2cs' | sudo tee -a "$CFG" >/dev/null
 
-# ───── 4 ▸ systemd service ───────────────────────────────────
+# ───── 4 ▸ WiFi attack setup ──────────────────────────────────
+step "Setting up WiFi attack environment …"
+
+# Create WiFi profiles directory
+sudo mkdir -p /root/Raspyjack/wifi/profiles
+sudo chown root:root /root/Raspyjack/wifi/profiles
+sudo chmod 755 /root/Raspyjack/wifi/profiles
+
+# Create sample WiFi profile
+sudo tee /root/Raspyjack/wifi/profiles/sample.json >/dev/null <<'PROFILE'
+{
+  "ssid": "YourWiFiNetwork",
+  "password": "your_password_here",
+  "interface": "auto",
+  "priority": 1,
+  "auto_connect": true,
+  "created": "2024-01-01T12:00:00",
+  "last_used": null,
+  "notes": "Sample WiFi profile - edit with your network details"
+}
+PROFILE
+
+# Set up NetworkManager to allow WiFi interface management
+if systemctl is-active --quiet NetworkManager; then
+  info "NetworkManager is active - configuring for WiFi attacks"
+  # Allow NetworkManager to manage WiFi interfaces
+  sudo tee /etc/NetworkManager/conf.d/99-wifi-attacks.conf >/dev/null <<'NM_CONF'
+[main]
+plugins=ifupdown,keyfile
+
+[ifupdown]
+managed=true
+
+[keyfile]
+unmanaged-devices=interface-name:wlan0mon;interface-name:wlan1mon;interface-name:wlan2mon
+NM_CONF
+  sudo systemctl restart NetworkManager
+else
+  warn "NetworkManager not active - WiFi attacks may need manual setup"
+fi
+
+# ───── 5 ▸ systemd service ───────────────────────────────────
 SERVICE=/etc/systemd/system/raspyjack.service
 step "Installing systemd service $SERVICE …"
 
@@ -96,17 +142,31 @@ UNIT
 sudo systemctl daemon-reload
 sudo systemctl enable --now raspyjack.service
 
-# ───── 5 ▸ final health‑check ────────────────────────────────
+# ───── 6 ▸ final health‑check ────────────────────────────────
 step "Running post install checks …"
 
-# 5‑a SPI device nodes
+# 6‑a SPI device nodes
 if ls /dev/spidev* 2>/dev/null | grep -q spidev0.0; then
   info "SPI device found: $(ls /dev/spidev* | xargs)"
 else
   warn "SPI device NOT found – a reboot may still be required."
 fi
 
-# 5‑b python imports
+# 6‑b WiFi attack tools check
+if cmd aireplay-ng && cmd airodump-ng && cmd airmon-ng; then
+  info "WiFi attack tools found: aircrack-ng suite installed"
+else
+  warn "WiFi attack tools missing - check aircrack-ng installation"
+fi
+
+# 6‑c USB WiFi dongle detection
+if lsusb | grep -q -i "realtek\|ralink\|atheros\|broadcom"; then
+  info "USB WiFi dongles detected: $(lsusb | grep -i 'realtek\|ralink\|atheros\|broadcom' | wc -l) devices"
+else
+  warn "No USB WiFi dongles detected - WiFi attacks require external dongle"
+fi
+
+# 6‑d python imports
 python3 - <<'PY' || fail "Python dependency test failed"
 import importlib, sys
 for mod in ("scapy", "netifaces", "pyudev", "serial", "smbus2", "RPi.GPIO", "spidev", "PIL"):
@@ -118,5 +178,20 @@ for mod in ("scapy", "netifaces", "pyudev", "serial", "smbus2", "RPi.GPIO", "spi
 print("[OK] All Python modules import correctly")
 PY
 
+# 6‑e WiFi integration test
+python3 - <<'WIFI_TEST' || warn "WiFi integration test failed - check wifi/ folder"
+import sys
+import os
+sys.path.append('/root/Raspyjack/wifi/')
+try:
+    from wifi.raspyjack_integration import get_available_interfaces
+    interfaces = get_available_interfaces()
+    print(f"[OK] WiFi integration working - found {len(interfaces)} interfaces")
+except Exception as e:
+    print(f"[WARN] WiFi integration test failed: {e}")
+    sys.exit(1)
+WIFI_TEST
+
 step "Installation finished successfully!"
 info "⚠️  Reboot is recommended to ensure overlays & services start cleanly."
+info "📡 For WiFi attacks: Plug in USB WiFi dongle and run payloads/deauth.py"
