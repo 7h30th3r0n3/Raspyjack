@@ -145,15 +145,32 @@ ssh raspyjack@<IP>
 ### Part 2 : setup Raspyjack
 
 ```bash
+sudo apt install git
 sudo su
-cd /root
+cd
 git clone https://github.com/7h30th3r0n3/raspyjack.git
-mv Raspyjack-main Raspyjack
+mv raspyjack Raspyjack
 cd Raspyjack
 chmod +x install_raspyjack.sh
 sudo ./install_raspyjack.sh
 sudo reboot
 ```
+Note : Depending on the way you get the project Raspyjack-main can take multiple name. Just be sure that Raspyjack folder are in /root.
+
+### Update
+
+⚠️ Before updating backup your loot. 
+
+```bash
+sudo su
+cd /root
+rm -rf Raspyjack
+git clone https://github.com/7h30th3r0n3/raspyjack.git
+mv raspyjack Raspyjack
+sudo reboot
+```
+
+---
 
 ### Part 3 : WiFi Attack Setup (Optional)
 
@@ -206,6 +223,9 @@ raspyjack/
 │   └── profiles/
 │
 ├── payloads/
+│   ├── example_show_buttons.py
+│   ├── exfiltrate_discord.py
+│   ├── snake.py
 │   ├── deauth.py
 │   ├── fast_wifi_switcher.py
 │   └── wifi_manager_payload.py
