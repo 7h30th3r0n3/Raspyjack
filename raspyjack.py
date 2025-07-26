@@ -1578,7 +1578,7 @@ MENU_ICONS = {
     " WiFi Manager": "\uf1eb",     # wifi
     " Other features": "\uf085",   # cogs
     " Read file": "\uf15c",        # file-alt
-    " Payload": "\uf3e2",          # payload (updated)
+    " Payload": "\uf121",          # code/terminal icon
 }
 
 ### Menu Descriptions for Carousel View ###
