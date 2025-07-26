@@ -464,6 +464,11 @@ def GetMenuString(inlist, duplicates=False):
                     font=text_font,
                     fill=fill
                 )
+        
+        # Display current view mode indicator
+        draw.text((2, 2), "List", font=text_font, fill=color.text)
+        draw.text((2, 115), "KEY1: Grid View", font=text_font, fill=color.text)
+        
         time.sleep(0.12)
 
         # -- 4/ Lecture des boutons -----------------------------------------
@@ -481,6 +486,10 @@ def GetMenuString(inlist, duplicates=False):
                 idx, txt = raw.split('#', 1)
                 return int(idx), txt
             return raw
+        elif btn == "KEY1_PIN":
+            # Toggle to grid view
+            toggle_view_mode()
+            return (-1, "") if duplicates else ""
         elif btn == "KEY_LEFT_PIN":
             return (-1, "") if duplicates else ""
 
@@ -1433,6 +1442,7 @@ class DisposableMenu:
     select = 0       # Current selection index
     char   = "> "    # Indentation character
     max_len = 17     # Max chars per line
+    view_mode = "list"  # "list" or "grid" - current view mode
 
     menu = {
         "a": (
@@ -1572,6 +1582,114 @@ MENU_ICONS = {
 }
 
 
+def GetMenuGrid(inlist, duplicates=False):
+    """
+    Display menu items in a grid layout (2 columns x 4 rows = 8 items visible).
+    - Grid navigation: UP/DOWN/LEFT/RIGHT
+    - Returns selected item or empty string
+    """
+    GRID_COLS = 2
+    GRID_ROWS = 4
+    GRID_ITEMS = GRID_COLS * GRID_ROWS
+    
+    if not inlist:
+        inlist = ["Nothing here :("]
+    
+    if duplicates:
+        inlist = [f"{i}#{txt}" for i, txt in enumerate(inlist)]
+    
+    total = len(inlist)
+    index = m.select if m.select < total else 0
+    
+    while True:
+        # Calculate grid window
+        start_idx = (index // GRID_ITEMS) * GRID_ITEMS
+        window = inlist[start_idx:start_idx + GRID_ITEMS]
+        
+        # Draw grid
+        color.DrawMenuBackground()
+        
+        for i, item in enumerate(window):
+            if i >= GRID_ITEMS:
+                break
+                
+            # Calculate grid position
+            row = i // GRID_COLS
+            col = i % GRID_COLS
+            
+            # Grid item position
+            x = default.start_text[0] + (col * 55)  # 55px per column
+            y = default.start_text[1] + (row * 25)  # 25px per row
+            
+            # Check if this item is selected
+            is_selected = (start_idx + i == index)
+            
+            if is_selected:
+                # Draw selection rectangle
+                draw.rectangle(
+                    (x - 2, y - 2, x + 53, y + 23),
+                    fill=color.select
+                )
+                fill_color = color.selected_text
+            else:
+                fill_color = color.text
+            
+            # Draw icon and text
+            txt = item if not duplicates else item.split('#', 1)[1]
+            icon = MENU_ICONS.get(txt, "")
+            
+            if icon:
+                # Draw icon
+                draw.text((x + 2, y), icon, font=icon_font, fill=fill_color)
+                # Draw short text label
+                short_text = txt.strip()[:8]  # Limit text length for grid
+                draw.text((x, y + 13), short_text, font=text_font, fill=fill_color)
+            else:
+                # Draw text only
+                short_text = txt.strip()[:10]
+                draw.text((x, y + 8), short_text, font=text_font, fill=fill_color)
+        
+        # Display current view mode indicator
+        draw.text((2, 2), "Grid", font=text_font, fill=color.text)
+        draw.text((2, 115), "KEY1: List View", font=text_font, fill=color.text)
+        
+        time.sleep(0.12)
+        
+        # Handle button input
+        btn = getButton()
+        if btn == "KEY_UP_PIN":
+            if index >= GRID_COLS:
+                index -= GRID_COLS
+        elif btn == "KEY_DOWN_PIN":
+            if index + GRID_COLS < total:
+                index += GRID_COLS
+        elif btn == "KEY_LEFT_PIN":
+            if index > 0 and index % GRID_COLS != 0:
+                index -= 1
+        elif btn == "KEY_RIGHT_PIN":
+            if index < total - 1 and (index + 1) % GRID_COLS != 0:
+                index += 1
+        elif btn == "KEY_PRESS_PIN":
+            if index < total:
+                m.select = index
+                return inlist[index] if not duplicates else inlist[index].split('#', 1)[1]
+        elif btn == "KEY1_PIN":
+            # Toggle to list view
+            toggle_view_mode()
+            return ""
+        elif btn == "KEY3_PIN":
+            return ""  # Go back
+
+
+def toggle_view_mode():
+    """Toggle between list and grid view modes."""
+    if m.view_mode == "list":
+        m.view_mode = "grid"
+    else:
+        m.view_mode = "list"
+    m.select = 0  # Reset selection when switching views
+
+
 def main():
     # Draw background once
     color.DrawMenuBackground()
@@ -1584,7 +1702,22 @@ def main():
     # Menu handling
     # Running functions from menu structure
     while True:
-        x = m.GetMenuIndex(m.GetMenuList())
+        # Use grid or list view based on current mode
+        if m.view_mode == "grid":
+            selected_item = GetMenuGrid(m.GetMenuList())
+            if selected_item:
+                # Find the index of the selected item
+                menu_list = m.GetMenuList()
+                x = -1
+                for i, item in enumerate(menu_list):
+                    if item == selected_item:
+                        x = i
+                        break
+            else:
+                x = -1
+        else:
+            x = m.GetMenuIndex(m.GetMenuList())
+            
         if x >= 0:
             m.select = x
             if isinstance(m.menu[m.which][m.select][1], str):
