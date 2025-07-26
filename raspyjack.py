@@ -425,7 +425,7 @@ def GetMenuString(inlist, duplicates=False):
         color.DrawMenuBackground()
         for i, raw in enumerate(window):
             txt = raw if not duplicates else raw.split('#', 1)[1]
-            line = CURSOR_MARK + txt if i == (index - offset) else txt
+            line = txt  # Remove cursor mark, use rectangle highlight only
             fill = color.selected_text if i == (index - offset) else color.text
             # zone de surbrillance
             if i == (index - offset):
