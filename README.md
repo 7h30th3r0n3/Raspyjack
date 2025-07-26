@@ -198,7 +198,35 @@ python3 fast_wifi_switcher.py
 | ↑ / ↓ | navigate |
 | → or OK | enter / validate |
 | ← or BACK | go back |
-| Q (KEY1) | extra in dialogs |
+| Q (KEY1) | toggle view mode / extra in dialogs |
+
+---
+
+## 🎨  View Modes
+
+RaspyJack now features **three different view modes** to navigate the main menu! Press **KEY1** to cycle through them:
+
+### 📋  **List View** (Default)
+- Classic vertical scrolling list
+- Shows 7 items at once with smooth scrolling
+- Perfect for quick navigation
+- Displays icons alongside menu text
+
+### 🔲  **Grid View** 
+- Compact 2×4 grid layout showing 8 items
+- Great for seeing multiple options at once
+- Navigate with directional arrows
+- Ideal for overview of all tools
+
+### 🎠  **Carousel View**
+- **Single-item display** with icons centered
+- Shows one tool at a time with detailed focus
+- **Wraparound navigation** - seamlessly cycle from last to first
+- Features prominent icons and clear tool names
+
+**How to switch:** Simply press the **KEY1** while on the main menu to cycle through: **List → Grid → Carousel → List**
+
+Choose the one that fits your workflow best! 🚀
 
 ---
 
