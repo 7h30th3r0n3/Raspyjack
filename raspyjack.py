@@ -467,7 +467,6 @@ def GetMenuString(inlist, duplicates=False):
         
         # Display current view mode indicator
         draw.text((2, 2), "List", font=text_font, fill=color.text)
-        draw.text((2, 115), "KEY1: Grid View", font=text_font, fill=color.text)
         
         time.sleep(0.12)
 
@@ -1600,6 +1599,7 @@ def GetMenuGrid(inlist, duplicates=False):
     
     total = len(inlist)
     index = m.select if m.select < total else 0
+    scroll_offset = 0  # For text scrolling animation
     
     while True:
         # Calculate grid window
@@ -1641,17 +1641,44 @@ def GetMenuGrid(inlist, duplicates=False):
             if icon:
                 # Draw icon
                 draw.text((x + 2, y), icon, font=icon_font, fill=fill_color)
-                # Draw short text label
-                short_text = txt.strip()[:8]  # Limit text length for grid
-                draw.text((x, y + 13), short_text, font=text_font, fill=fill_color)
+                # Draw scrolling text label
+                clean_text = txt.strip()
+                if len(clean_text) <= 8:
+                    # Short text, no scrolling needed
+                    draw.text((x, y + 13), clean_text, font=text_font, fill=fill_color)
+                else:
+                    # Long text, implement scrolling
+                    if is_selected:
+                        # Scroll text for selected item
+                        extended_text = clean_text + "   " + clean_text  # Add padding and repeat
+                        scroll_pos = (scroll_offset // 3) % len(clean_text + 3)  # Slow scroll
+                        visible_text = extended_text[scroll_pos:scroll_pos + 8]
+                        draw.text((x, y + 13), visible_text, font=text_font, fill=fill_color)
+                    else:
+                        # Static text for non-selected items
+                        draw.text((x, y + 13), clean_text[:8], font=text_font, fill=fill_color)
             else:
                 # Draw text only
-                short_text = txt.strip()[:10]
-                draw.text((x, y + 8), short_text, font=text_font, fill=fill_color)
+                clean_text = txt.strip()
+                if len(clean_text) <= 10:
+                    draw.text((x, y + 8), clean_text, font=text_font, fill=fill_color)
+                else:
+                    if is_selected:
+                        # Scroll text for selected item
+                        extended_text = clean_text + "   " + clean_text
+                        scroll_pos = (scroll_offset // 3) % len(clean_text + 3)
+                        visible_text = extended_text[scroll_pos:scroll_pos + 10]
+                        draw.text((x, y + 8), visible_text, font=text_font, fill=fill_color)
+                    else:
+                        draw.text((x, y + 8), clean_text[:10], font=text_font, fill=fill_color)
         
         # Display current view mode indicator
         draw.text((2, 2), "Grid", font=text_font, fill=color.text)
-        draw.text((2, 115), "KEY1: List View", font=text_font, fill=color.text)
+        
+        # Increment scroll offset for animation
+        scroll_offset += 1
+        if scroll_offset > 300:  # Reset to prevent overflow
+            scroll_offset = 0
         
         time.sleep(0.12)
         
