@@ -710,64 +710,109 @@ def Gamepad():
 ### Basic info screen ###
 def ShowInfo():
     """Display network information using scrollable text view."""
-    while True:
-        try:
-            # Get best available interface (WiFi or ethernet)
-            interface = get_best_interface()
-            
-            # Retrieve configuration information for active interface
-            interface_config = netifaces.ifaddresses(interface)
-            interface_ipv4 = interface_config[netifaces.AF_INET][0]['addr']
-            interface_subnet_mask = interface_config[netifaces.AF_INET][0]['netmask']
-            interface_gateway = netifaces.gateways()["default"][netifaces.AF_INET][0]
-            output = subprocess.check_output(f"ip addr show dev {interface} | awk '/inet / {{ print $2 }}'", shell=True)
-            address = output.decode().strip().split('\\')[0]
+    # Collect network information once
+    try:
+        # Get best available interface (WiFi or ethernet)
+        interface = get_best_interface()
+        
+        # Retrieve configuration information for active interface
+        interface_config = netifaces.ifaddresses(interface)
+        interface_ipv4 = interface_config[netifaces.AF_INET][0]['addr']
+        interface_subnet_mask = interface_config[netifaces.AF_INET][0]['netmask']
+        interface_gateway = netifaces.gateways()["default"][netifaces.AF_INET][0]
+        output = subprocess.check_output(f"ip addr show dev {interface} | awk '/inet / {{ print $2 }}'", shell=True)
+        address = output.decode().strip().split('\\')[0]
 
-            if interface_ipv4:
-                # Connected - create scrollable information display
-                info_lines = [
-                    f"Interface: {interface}",
-                    f"IP: {interface_ipv4}",
-                    f"Subnet: {interface_subnet_mask}",
-                    f"Gateway: {interface_gateway}",
-                    f"Attack: {address}",
-                ]
-                
-                # Add WiFi-specific info if applicable
-                if interface.startswith('wlan') and WIFI_AVAILABLE:
-                    try:
-                        from wifi.wifi_manager import wifi_manager
-                        status = wifi_manager.get_connection_status(interface)
-                        if status["ssid"]:
-                            info_lines.append(f"SSID: {status['ssid']}")
-                    except:
-                        pass
-            else:
-                # Not connected
-                info_lines = [
-                    f"Interface: {interface}",
-                    "Status: No connection",
-                    "Check network cable",
-                    "or try WiFi manager"
-                ]
-        except (KeyError, IndexError, ValueError, OSError) as e:
-            # Handle exceptions with detailed error info
+        if interface_ipv4:
+            # Connected - create scrollable information display
             info_lines = [
-                "Network Error",
-                f"Details: {str(e)[:15]}...",
-                "Check ethernet cable",
-                "or use WiFi Manager"
+                f"Interface: {interface}",
+                f"IP: {interface_ipv4}",
+                f"Subnet: {interface_subnet_mask}",
+                f"Gateway: {interface_gateway}",
+                f"Attack: {address}",
             ]
-        
-        # Reset selection to start at first item (Interface)
-        m.select = 0
-        
-        # Use the existing scrollable text display
-        result = GetMenuString(info_lines)
-        
-        # If user pressed back/left, exit the info screen
-        if result == "":
-            break
+            
+            # Add WiFi-specific info if applicable
+            if interface.startswith('wlan') and WIFI_AVAILABLE:
+                try:
+                    from wifi.wifi_manager import wifi_manager
+                    status = wifi_manager.get_connection_status(interface)
+                    if status["ssid"]:
+                        info_lines.append(f"SSID: {status['ssid']}")
+                except:
+                    pass
+        else:
+            # Not connected
+            info_lines = [
+                f"Interface: {interface}",
+                "Status: No connection",
+                "Check network cable",
+                "or try WiFi manager"
+            ]
+    except (KeyError, IndexError, ValueError, OSError) as e:
+        # Handle exceptions with detailed error info
+        info_lines = [
+            "Network Error",
+            f"Details: {str(e)[:15]}...",
+            "Check ethernet cable",
+            "or use WiFi Manager"
+        ]
+    
+    # Display scrollable network info
+    DisplayScrollableInfo(info_lines)
+
+
+def DisplayScrollableInfo(info_lines):
+    """Display scrollable text information - view only, no selection."""
+    WINDOW = 7  # lines visible simultaneously
+    total = len(info_lines)
+    index = 0   # current position
+    offset = 0  # window offset
+
+    while True:
+        # Calculate window for scrolling
+        if index < offset:
+            offset = index
+        elif index >= offset + WINDOW:
+            offset = index - WINDOW + 1
+
+        # Get visible window
+        window = info_lines[offset:offset + WINDOW]
+
+        # Draw display
+        color.DrawMenuBackground()
+        for i, line in enumerate(window):
+            fill = color.selected_text if i == (index - offset) else color.text
+            # Highlight current line
+            if i == (index - offset):
+                draw.rectangle(
+                    (default.start_text[0] - 5,
+                     default.start_text[1] + default.text_gap * i,
+                     120,
+                     default.start_text[1] + default.text_gap * i + 10),
+                    fill=color.select
+                )
+            
+            # Draw the text without truncation
+            draw.text(
+                (default.start_text[0],
+                 default.start_text[1] + default.text_gap * i),
+                line,  # No truncation - show full text
+                font=text_font,
+                fill=fill
+            )
+
+        time.sleep(0.12)
+
+        # Handle button input
+        btn = getButton()
+        if btn == "KEY_DOWN_PIN":
+            index = (index + 1) % total  # wrap to beginning
+        elif btn == "KEY_UP_PIN":
+            index = (index - 1) % total  # wrap to end
+        elif btn in ("KEY_LEFT_PIN", "KEY3_PIN"):
+            return  # Exit on back/left button
 
 
 def Explorer(path="/",extensions=""):
