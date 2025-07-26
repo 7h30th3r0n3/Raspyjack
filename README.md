@@ -230,6 +230,54 @@ Choose the one that fits your workflow best! 🚀
 
 ---
 
+## 📡 Discord Webhook Integration
+
+RaspyJack now supports **Discord webhook notifications** for Nmap scan results! Get instant notifications on your Discord server when scans complete.
+
+### 🔧 Setup Instructions
+
+1. **Create a Discord Webhook:**
+   - Go to your Discord server
+   - Right-click on a channel → **Edit Channel** → **Integrations** → **Webhooks**
+   - Click **"New Webhook"**
+   - Copy the webhook URL
+
+2. **Configure RaspyJack:**
+   - Edit `/root/Raspyjack/discord_webhook.txt`
+   - Replace the placeholder with your actual webhook URL:
+   ```
+   https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_WEBHOOK_TOKEN
+   ```
+
+3. **Restart RaspyJack** to load the configuration
+
+### 📊 What You'll Receive
+
+When any Nmap scan completes, you'll get a Discord message with:
+- **Scan type** and target network
+- **Interface** used for scanning
+- **Timestamp** of completion
+- **Scan results** (first 1000 characters)
+- **Color-coded** embed for easy identification
+
+### ✅ Status Check
+
+Check your webhook status in **Network Info**:
+- **✅ Webhook configured** - Ready to send notifications
+- **❌ No webhook** - Configuration needed
+
+### 🔄 Supported Scans
+
+Works with **all Nmap scan types**:
+- Quick Scan, Full Port Scan, Service Scan
+- Vulnerability Scan, OS Scan, Intensive Scan
+- Stealth SYN Scan, UDP Scan, Ping Sweep
+- Top100 Scan, HTTP Enumeration
+
+**Note:** If no webhook is configured, scans will still save results locally - no functionality is lost!
+
+---
+
 ## 📂  Layout
 
 ```

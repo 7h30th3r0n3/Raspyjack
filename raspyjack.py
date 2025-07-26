@@ -17,6 +17,7 @@ import signal
 from functools import partial
 import time
 import sys
+import requests  # For Discord webhook integration
 
 # WiFi Integration - Add dual interface support
 try:
@@ -757,6 +758,19 @@ def ShowInfo():
                         ])
                 except:
                     pass
+            
+            # Add Discord webhook status
+            webhook_url = get_discord_webhook()
+            if webhook_url:
+                info_lines.extend([
+                    "Discord:",
+                    "  ✅ Webhook configured"
+                ])
+            else:
+                info_lines.extend([
+                    "Discord:",
+                    "  ❌ No webhook"
+                ])
         else:
             # Not connected
             info_lines = [
@@ -926,6 +940,61 @@ def ImageExplorer() -> None:
 
 
 WAIT_TXT = "Scan in progess..."
+
+def get_discord_webhook():
+    """Read Discord webhook URL from configuration file."""
+    webhook_file = "/root/Raspyjack/discord_webhook.txt"
+    try:
+        if os.path.exists(webhook_file):
+            with open(webhook_file, 'r') as f:
+                webhook_url = f.read().strip()
+                if webhook_url and webhook_url.startswith("https://discord.com/api/webhooks/"):
+                    return webhook_url
+    except Exception as e:
+        print(f"Error reading Discord webhook: {e}")
+    return None
+
+def send_to_discord(scan_label: str, scan_results: str, target_network: str, interface: str):
+    """Send Nmap scan results to Discord webhook."""
+    webhook_url = get_discord_webhook()
+    if not webhook_url:
+        print("Discord webhook not configured - skipping webhook notification")
+        return
+    
+    try:
+        # Create Discord embed
+        embed = {
+            "title": f"🔍 Nmap Scan Complete: {scan_label}",
+            "description": f"**Target Network:** `{target_network}`\n**Interface:** `{interface}`\n**Timestamp:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            "color": 0x00ff00,  # Green color
+            "fields": [
+                {
+                    "name": "📊 Scan Results",
+                    "value": f"```\n{scan_results[:1000]}{'...' if len(scan_results) > 1000 else ''}\n```",
+                    "inline": False
+                }
+            ],
+            "footer": {
+                "text": "RaspyJack Nmap Scanner"
+            },
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        # Prepare the payload
+        payload = {
+            "embeds": [embed]
+        }
+        
+        # Send to Discord
+        response = requests.post(webhook_url, json=payload, timeout=10)
+        if response.status_code == 204:
+            print("✅ Discord webhook sent successfully")
+        else:
+            print(f"❌ Discord webhook failed: {response.status_code}")
+            
+    except Exception as e:
+        print(f"❌ Error sending Discord webhook: {e}")
+
 def run_scan(label: str, nmap_args: list[str]):
     Dialog_info(f"      {label}\n        Running\n      wait please...", wait=True)
 
@@ -952,6 +1021,19 @@ def run_scan(label: str, nmap_args: list[str]):
     
     subprocess.run(cmd)
     subprocess.run(["sed", "-i", "s/Nmap scan report for //g", path])
+
+    # Read scan results and send to Discord (non-blocking)
+    def send_results_to_discord():
+        try:
+            if os.path.exists(path):
+                with open(path, 'r') as f:
+                    scan_results = f.read()
+                send_to_discord(label, scan_results, ip_with_mask, interface)
+        except Exception as e:
+            print(f"Error reading scan results for Discord: {e}")
+    
+    # Send to Discord in background thread
+    threading.Thread(target=send_results_to_discord, daemon=True).start()
 
     Dialog_info(f"      {label}\n      Finished !!!\n   Interface: {interface}", wait=True)
     time.sleep(2)
