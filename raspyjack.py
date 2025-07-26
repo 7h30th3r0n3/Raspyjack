@@ -729,8 +729,10 @@ def ShowInfo():
                 f"Interface: {interface}",
                 f"IP: {interface_ipv4}",
                 f"Subnet: {interface_subnet_mask}",
-                f"Gateway: {interface_gateway}",
-                f"Attack: {address}",
+                "Gateway:",
+                f"  {interface_gateway}",
+                "Attack:",
+                f"  {address}",
             ]
             
             # Add WiFi-specific info if applicable
@@ -739,7 +741,10 @@ def ShowInfo():
                     from wifi.wifi_manager import wifi_manager
                     status = wifi_manager.get_connection_status(interface)
                     if status["ssid"]:
-                        info_lines.append(f"SSID: {status['ssid']}")
+                        info_lines.extend([
+                            "SSID:",
+                            f"  {status['ssid']}"
+                        ])
                 except:
                     pass
         else:
