@@ -465,8 +465,9 @@ def GetMenuString(inlist, duplicates=False):
                     fill=fill
                 )
         
-        # Display current view mode indicator
-        draw.text((2, 2), "List", font=text_font, fill=color.text)
+        # Display current view mode indicator (only on main menu)
+        if m.which == "a":
+            draw.text((2, 2), "List", font=text_font, fill=color.text)
         
         time.sleep(0.12)
 
@@ -485,8 +486,8 @@ def GetMenuString(inlist, duplicates=False):
                 idx, txt = raw.split('#', 1)
                 return int(idx), txt
             return raw
-        elif btn == "KEY1_PIN":
-            # Toggle to grid view
+        elif btn == "KEY1_PIN" and m.which == "a":
+            # Toggle to grid view (only on main menu)
             toggle_view_mode()
             return (-1, "") if duplicates else ""
         elif btn == "KEY_LEFT_PIN":
@@ -1700,8 +1701,8 @@ def main():
     # Menu handling
     # Running functions from menu structure
     while True:
-        # Use grid or list view based on current mode
-        if m.view_mode == "grid":
+        # Use grid view only for main menu ("a"), list view for all submenus
+        if m.view_mode == "grid" and m.which == "a":
             selected_item = GetMenuGrid(m.GetMenuList())
             if selected_item:
                 # Find the index of the selected item
