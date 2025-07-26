@@ -466,8 +466,8 @@ def GetMenuString(inlist, duplicates=False):
                 )
         
         # Display current view mode indicator (only on main menu)
-        if m.which == "a":
-            draw.text((2, 2), "List", font=text_font, fill=color.text)
+        # if m.which == "a":
+        #     draw.text((2, 2), "List", font=text_font, fill=color.text)
         
         time.sleep(0.12)
 
@@ -1650,7 +1650,7 @@ def GetMenuGrid(inlist, duplicates=False):
                 draw.text((x, y + 8), short_text, font=text_font, fill=fill_color)
         
         # Display current view mode indicator
-        draw.text((2, 2), "Grid", font=text_font, fill=color.text)
+        # draw.text((2, 2), "Grid", font=text_font, fill=color.text)
         
         time.sleep(0.12)
         
