@@ -146,6 +146,16 @@ class template():
     def DrawMenuBackground(self):
         draw.rectangle((3, 14, 124, 124), fill=self.background)
 
+    # Buffered versions for double buffering
+    def DrawBorderBuffered(self):
+        buffer_draw.line([(127, 12), (127, 127)], fill=self.border, width=5)
+        buffer_draw.line([(127, 127), (0, 127)], fill=self.border, width=5)
+        buffer_draw.line([(0, 127), (0, 12)], fill=self.border, width=5)
+        buffer_draw.line([(0, 12), (128, 12)], fill=self.border, width=5)
+
+    def DrawMenuBackgroundBuffered(self):
+        buffer_draw.rectangle((3, 14, 124, 124), fill=self.background)
+
     # I don't know how to python pass 'class.variable' as reference properly
     def Set(self, index, color):
         if index == 0:
@@ -422,14 +432,15 @@ def GetMenuString(inlist, duplicates=False):
         window = inlist[offset:offset + WINDOW]
 
         # -- 3/ Rendu --------------------------------------------------------
-        color.DrawMenuBackground()
+        clear_buffer()
+        color.DrawMenuBackgroundBuffered()
         for i, raw in enumerate(window):
             txt = raw if not duplicates else raw.split('#', 1)[1]
             line = CURSOR_MARK + txt if i == (index - offset) else txt
             fill = color.selected_text if i == (index - offset) else color.text
             # zone de surbrillance
             if i == (index - offset):
-                draw.rectangle(
+                buffer_draw.rectangle(
                     (default.start_text[0] - 5,
                      default.start_text[1] + default.text_gap * i,
                      120,
@@ -440,7 +451,7 @@ def GetMenuString(inlist, duplicates=False):
             # Draw Font Awesome icon if available
             icon = MENU_ICONS.get(txt, "")
             if icon:
-                draw.text(
+                buffer_draw.text(
                     (default.start_text[0] - 2,
                      default.start_text[1] + default.text_gap * i),
                     icon,
@@ -448,7 +459,7 @@ def GetMenuString(inlist, duplicates=False):
                     fill=fill
                 )
                 # Draw text with offset for icon
-                draw.text(
+                buffer_draw.text(
                     (default.start_text[0] + 12,
                      default.start_text[1] + default.text_gap * i),
                     line[:m.max_len],
@@ -457,7 +468,7 @@ def GetMenuString(inlist, duplicates=False):
                 )
             else:
                 # Draw text normally if no icon
-                draw.text(
+                buffer_draw.text(
                     (default.start_text[0],
                      default.start_text[1] + default.text_gap * i),
                     line[:m.max_len],
@@ -467,8 +478,10 @@ def GetMenuString(inlist, duplicates=False):
         
         # Display current view mode indicator (only on main menu)
         # if m.which == "a":
-        #     draw.text((2, 2), "List", font=text_font, fill=color.text)
+        #     buffer_draw.text((2, 2), "List", font=text_font, fill=color.text)
         
+        # Swap buffer to display
+        swap_buffer()
         time.sleep(0.12)
 
         # -- 4/ Lecture des boutons -----------------------------------------
@@ -1607,7 +1620,8 @@ def GetMenuGrid(inlist, duplicates=False):
         window = inlist[start_idx:start_idx + GRID_ITEMS]
         
         # Draw grid
-        color.DrawMenuBackground()
+        clear_buffer()
+        color.DrawMenuBackgroundBuffered()
         
         for i, item in enumerate(window):
             if i >= GRID_ITEMS:
@@ -1626,7 +1640,7 @@ def GetMenuGrid(inlist, duplicates=False):
             
             if is_selected:
                 # Draw selection rectangle
-                draw.rectangle(
+                buffer_draw.rectangle(
                     (x - 2, y - 2, x + 53, y + 23),
                     fill=color.select
                 )
@@ -1640,18 +1654,20 @@ def GetMenuGrid(inlist, duplicates=False):
             
             if icon:
                 # Draw icon
-                draw.text((x + 2, y), icon, font=icon_font, fill=fill_color)
+                buffer_draw.text((x + 2, y), icon, font=icon_font, fill=fill_color)
                 # Draw short text label
                 short_text = txt.strip()[:8]  # Limit text length for grid
-                draw.text((x, y + 13), short_text, font=text_font, fill=fill_color)
+                buffer_draw.text((x, y + 13), short_text, font=text_font, fill=fill_color)
             else:
                 # Draw text only
                 short_text = txt.strip()[:10]
-                draw.text((x, y + 8), short_text, font=text_font, fill=fill_color)
+                buffer_draw.text((x, y + 8), short_text, font=text_font, fill=fill_color)
         
         # Display current view mode indicator
-        # draw.text((2, 2), "Grid", font=text_font, fill=color.text)
+        # buffer_draw.text((2, 2), "Grid", font=text_font, fill=color.text)
         
+        # Swap buffer to display
+        swap_buffer()
         time.sleep(0.12)
         
         # Handle button input
@@ -1743,11 +1759,25 @@ image = Image.open(default.install_path + 'img/logo.bmp')
 LCD.LCD_ShowImage(image, 0, 0)
 
 # Create draw objects BEFORE main() so color functions can use them
+# Main display canvas (what's shown on LCD)
 image = Image.new("RGB", (LCD.width, LCD.height), "WHITE")
+# Off-screen buffer (where we draw everything first)
+buffer_image = Image.new("RGB", (LCD.width, LCD.height), "WHITE")
+buffer_draw = ImageDraw.Draw(buffer_image)
+# Keep original draw for compatibility
 draw = ImageDraw.Draw(image)
 text_font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 9)
 icon_font = ImageFont.truetype('/usr/share/fonts/truetype/fontawesome/fa-solid-900.ttf', 12)
 font = text_font  # Keep backward compatibility
+
+def swap_buffer():
+    """Copy the off-screen buffer to main display and show on LCD."""
+    image.paste(buffer_image)
+    LCD.LCD_ShowImage(image, 0, 0)
+
+def clear_buffer():
+    """Clear the off-screen buffer for next frame."""
+    buffer_draw.rectangle((0, 0, LCD.width, LCD.height), fill="black")
 
 ### Defining PINS, threads, loading JSON ###
 PINS = {
