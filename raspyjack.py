@@ -436,12 +436,34 @@ def GetMenuString(inlist, duplicates=False):
                      default.start_text[1] + default.text_gap * i + 10),
                     fill=color.select
                 )
-            draw.text(
-                (default.start_text[0],
-                 default.start_text[1] + default.text_gap * i),
-                line[:m.max_len],
-                fill=fill
-            )
+            
+            # Draw Font Awesome icon if available
+            icon = MENU_ICONS.get(txt, "")
+            if icon:
+                draw.text(
+                    (default.start_text[0] - 2,
+                     default.start_text[1] + default.text_gap * i),
+                    icon,
+                    font=icon_font,
+                    fill=fill
+                )
+                # Draw text with offset for icon
+                draw.text(
+                    (default.start_text[0] + 12,
+                     default.start_text[1] + default.text_gap * i),
+                    line[:m.max_len],
+                    font=text_font,
+                    fill=fill
+                )
+            else:
+                # Draw text normally if no icon
+                draw.text(
+                    (default.start_text[0],
+                     default.start_text[1] + default.text_gap * i),
+                    line[:m.max_len],
+                    font=text_font,
+                    fill=fill
+                )
         time.sleep(0.12)
 
         # -- 4/ Lecture des boutons -----------------------------------------
@@ -1535,6 +1557,21 @@ class DisposableMenu:
         self._build_payload_menu()
 
 
+### Font Awesome Icon Mapping ###
+MENU_ICONS = {
+    " Scan Nmap": "\uf002",        # search
+    " Reverse Shell": "\uf120",    # terminal  
+    " Responder": "\uf0e7",        # bolt
+    " MITM & Sniff": "\uf21b",     # heartbeat
+    " DNS Spoofing": "\uf233",     # server
+    " Network info": "\uf1eb",     # wifi
+    " WiFi Manager": "\uf1eb",     # wifi
+    " Other features": "\uf085",   # cogs
+    " Read file": "\uf15c",        # file-alt
+    " Payload": "\uf1c6",          # file-code
+}
+
+
 def main():
     # Draw background once
     color.DrawMenuBackground()
@@ -1576,7 +1613,9 @@ LCD.LCD_ShowImage(image, 0, 0)
 # Create draw objects BEFORE main() so color functions can use them
 image = Image.new("RGB", (LCD.width, LCD.height), "WHITE")
 draw = ImageDraw.Draw(image)
-font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 8)
+text_font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 8)
+icon_font = ImageFont.truetype('/usr/share/fonts/truetype/font-awesome/fontawesome-webfont.ttf', 10)
+font = text_font  # Keep backward compatibility
 
 ### Defining PINS, threads, loading JSON ###
 PINS = {
