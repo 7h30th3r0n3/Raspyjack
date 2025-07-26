@@ -1629,18 +1629,22 @@ def GetMenuCarousel(inlist, duplicates=False):
         icon = MENU_ICONS.get(txt, "\uf192")  # Default to dot-circle icon
         # Create a larger font for the huge icon
         huge_icon_font = ImageFont.truetype('/usr/share/fonts/truetype/fontawesome/fa-solid-900.ttf', 48)
-        draw.text((main_x, main_y), icon, font=huge_icon_font, fill=color.selected_text, anchor="mm")
+        draw.text((main_x, main_y - 8), icon, font=huge_icon_font, fill=color.selected_text, anchor="mm")
+        
+        # Draw menu item name under the icon
+        title = txt.strip()
+        draw.text((main_x, main_y + 20), title, font=text_font, fill=color.selected_text, anchor="mm")
         
         # Draw navigation arrows only if there are multiple items
         if total > 1:
-            # Left arrow (previous)
+            # Left arrow (previous) - smaller arrows
             if index > 0:
-                arrow_font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 24)
+                arrow_font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 18)
                 draw.text((20, main_y), "◀", font=arrow_font, fill=color.text, anchor="mm")
             
-            # Right arrow (next)  
+            # Right arrow (next) - smaller arrows  
             if index < total - 1:
-                arrow_font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 24)
+                arrow_font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 18)
                 draw.text((108, main_y), "▶", font=arrow_font, fill=color.text, anchor="mm")
         
         time.sleep(0.12)
