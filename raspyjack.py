@@ -1442,7 +1442,7 @@ class DisposableMenu:
     select = 0       # Current selection index
     char   = "> "    # Indentation character
     max_len = 17     # Max chars per line
-    view_mode = "list"  # "list" or "grid" - current view mode
+    view_mode = "list"  # "list", "grid", or "carousel" - current view mode
 
     menu = {
         "a": (
@@ -1581,6 +1581,127 @@ MENU_ICONS = {
     " Payload": "\uf3e2",          # payload (updated)
 }
 
+### Menu Descriptions for Carousel View ###
+MENU_DESCRIPTIONS = {
+    " Scan Nmap": "Network discovery\nand port scanning\nwith Nmap",
+    " Reverse Shell": "Establish reverse\nconnections for\nremote access",
+    " Responder": "LLMNR, NBT-NS &\nMDNS poisoner\nfor credentials",
+    " MITM & Sniff": "Man-in-the-middle\nattacks and traffic\ninterception",
+    " DNS Spoofing": "Redirect DNS\nqueries to fake\nphishing sites",
+    " Network info": "Display current\nnetwork interface\nand IP information",
+    " WiFi Manager": "Manage wireless\nconnections and\ninterface switching",
+    " Other features": "Additional tools\nand system\nconfiguration",
+    " Read file": "View captured\ndata and scan\nresults",
+    " Payload": "Execute custom\nPython scripts\nand tools",
+}
+
+
+def GetMenuCarousel(inlist, duplicates=False):
+    """
+    Display menu items in a carousel layout with single large item and previews.
+    - Carousel navigation: LEFT/RIGHT for main navigation
+    - UP/DOWN for fine adjustment  
+    - Shows current item large with prev/next previews
+    - Returns selected item or empty string
+    """
+    if not inlist:
+        inlist = ["Nothing here :("]
+    
+    if duplicates:
+        inlist = [f"{i}#{txt}" for i, txt in enumerate(inlist)]
+    
+    total = len(inlist)
+    index = m.select if m.select < total else 0
+    
+    while True:
+        # Draw carousel
+        color.DrawMenuBackground()
+        
+        # Current item (center, large)
+        current_item = inlist[index]
+        txt = current_item if not duplicates else current_item.split('#', 1)[1]
+        
+        # Main item display area (center)
+        main_x = 64  # Center of 128px screen
+        main_y = 45  # Center vertically
+        
+        # Draw main selection background
+        draw.rectangle(
+            (15, 25, 113, 85),
+            fill=color.select,
+            outline=color.border,
+            width=2
+        )
+        
+        # Draw main item icon (large)
+        icon = MENU_ICONS.get(txt, "\uf192")  # Default to dot-circle icon
+        draw.text((main_x - 10, main_y - 15), icon, font=icon_font, fill=color.selected_text, anchor="mm")
+        
+        # Draw main item title
+        title = txt.strip()
+        draw.text((main_x, main_y), title, font=text_font, fill=color.selected_text, anchor="mm")
+        
+        # Draw description if available
+        description = MENU_DESCRIPTIONS.get(txt, "")
+        if description:
+            lines = description.split('\n')
+            for i, line in enumerate(lines):
+                draw.text((main_x, main_y + 12 + (i * 8)), line, font=text_font, fill=color.selected_text, anchor="mm")
+        
+        # Draw navigation arrows
+        if total > 1:
+            # Left arrow (previous)
+            if index > 0:
+                draw.text((8, main_y), "◀", font=text_font, fill=color.text, anchor="mm")
+                # Preview of previous item
+                prev_item = inlist[index - 1]
+                prev_txt = prev_item if not duplicates else prev_item.split('#', 1)[1]
+                prev_icon = MENU_ICONS.get(prev_txt, "\uf192")
+                draw.text((8, main_y - 15), prev_icon, font=text_font, fill=color.text, anchor="mm")
+            
+            # Right arrow (next)
+            if index < total - 1:
+                draw.text((120, main_y), "▶", font=text_font, fill=color.text, anchor="mm")
+                # Preview of next item
+                next_item = inlist[index + 1]
+                next_txt = next_item if not duplicates else next_item.split('#', 1)[1]
+                next_icon = MENU_ICONS.get(next_txt, "\uf192")
+                draw.text((120, main_y - 15), next_icon, font=text_font, fill=color.text, anchor="mm")
+        
+        # Draw position indicator
+        position_text = f"{index + 1}/{total}"
+        draw.text((main_x, 95), position_text, font=text_font, fill=color.text, anchor="mm")
+        
+        # Draw view mode indicator
+        draw.text((2, 2), "Carousel", font=text_font, fill=color.text)
+        
+        time.sleep(0.12)
+        
+        # Handle button input
+        btn = getButton()
+        if btn == "KEY_LEFT_PIN":
+            if index > 0:
+                index -= 1
+        elif btn == "KEY_RIGHT_PIN":
+            if index < total - 1:
+                index += 1
+        elif btn == "KEY_UP_PIN":
+            # Fine adjustment - wrap to end
+            index = (index - 1) % total
+        elif btn == "KEY_DOWN_PIN":
+            # Fine adjustment - wrap to beginning  
+            index = (index + 1) % total
+        elif btn == "KEY_PRESS_PIN":
+            if index < total:
+                m.select = index
+                return inlist[index] if not duplicates else inlist[index].split('#', 1)[1]
+        elif btn == "KEY1_PIN":
+            # Toggle to next view mode
+            toggle_view_mode()
+            return ""
+        elif btn == "KEY3_PIN":
+            return ""  # Go back
+
 
 def GetMenuGrid(inlist, duplicates=False):
     """
@@ -1681,10 +1802,12 @@ def GetMenuGrid(inlist, duplicates=False):
 
 
 def toggle_view_mode():
-    """Toggle between list and grid view modes."""
+    """Cycle through list -> grid -> carousel -> list view modes."""
     if m.view_mode == "list":
         m.view_mode = "grid"
-    else:
+    elif m.view_mode == "grid":
+        m.view_mode = "carousel"
+    else:  # carousel
         m.view_mode = "list"
     m.select = 0  # Reset selection when switching views
 
@@ -1701,9 +1824,13 @@ def main():
     # Menu handling
     # Running functions from menu structure
     while True:
-        # Use grid view only for main menu ("a"), list view for all submenus
-        if m.view_mode == "grid" and m.which == "a":
-            selected_item = GetMenuGrid(m.GetMenuList())
+        # Use different view modes only for main menu ("a"), list view for all submenus
+        if m.which == "a" and m.view_mode in ["grid", "carousel"]:
+            if m.view_mode == "grid":
+                selected_item = GetMenuGrid(m.GetMenuList())
+            else:  # carousel
+                selected_item = GetMenuCarousel(m.GetMenuList())
+                
             if selected_item:
                 # Find the index of the selected item
                 menu_list = m.GetMenuList()
