@@ -467,7 +467,6 @@ def GetMenuString(inlist, duplicates=False):
         
         # Display current view mode indicator
         draw.text((2, 2), "List", font=text_font, fill=color.text)
-        draw.text((2, 115), "KEY1: Grid View", font=text_font, fill=color.text)
         
         time.sleep(0.12)
 
@@ -1651,7 +1650,6 @@ def GetMenuGrid(inlist, duplicates=False):
         
         # Display current view mode indicator
         draw.text((2, 2), "Grid", font=text_font, fill=color.text)
-        draw.text((2, 115), "KEY1: List View", font=text_font, fill=color.text)
         
         time.sleep(0.12)
         
