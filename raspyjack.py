@@ -109,7 +109,7 @@ start_time = time.time()
 ### Global mostly static values ###
 class Defaults():
     start_text = [12, 22]
-    text_gap = 12
+    text_gap = 14
 
     updown_center = 52
     updown_pos = [15, updown_center, 88]
