@@ -437,26 +437,36 @@ def GetMenuString(inlist, duplicates=False):
                     fill=color.select
                 )
             
-            # Draw Font Awesome icon if available
-            icon = MENU_ICONS.get(txt, "")
-            if icon:
-                draw.text(
-                    (default.start_text[0] - 2,
-                     default.start_text[1] + default.text_gap * i),
-                    icon,
-                    font=icon_font,
-                    fill=fill
-                )
-                # Draw text with offset for icon
-                draw.text(
-                    (default.start_text[0] + 12,
-                     default.start_text[1] + default.text_gap * i),
-                    line[:m.max_len],
-                    font=text_font,
-                    fill=fill
-                )
+            # Draw Font Awesome icon if available (only on main menu)
+            if m.which == "a":  # Only show icons on main menu
+                icon = MENU_ICONS.get(txt, "")
+                if icon:
+                    draw.text(
+                        (default.start_text[0] - 2,
+                         default.start_text[1] + default.text_gap * i),
+                        icon,
+                        font=icon_font,
+                        fill=fill
+                    )
+                    # Draw text with offset for icon
+                    draw.text(
+                        (default.start_text[0] + 12,
+                         default.start_text[1] + default.text_gap * i),
+                        line[:m.max_len],
+                        font=text_font,
+                        fill=fill
+                    )
+                else:
+                    # Draw text normally if no icon
+                    draw.text(
+                        (default.start_text[0],
+                         default.start_text[1] + default.text_gap * i),
+                        line[:m.max_len],
+                        font=text_font,
+                        fill=fill
+                    )
             else:
-                # Draw text normally if no icon
+                # Submenus: no icons, just text
                 draw.text(
                     (default.start_text[0],
                      default.start_text[1] + default.text_gap * i),
@@ -1615,7 +1625,7 @@ class DisposableMenu:
         ) or ([" <vide>", lambda: None],)  # si aucun script n'est présent
 
     def __init__(self):
-        # cette fois, `default` est déjà instancié → pas d’erreur
+        # cette fois, `default` est déjà instancié → pas d'erreur
         self._build_payload_menu()
 
 
