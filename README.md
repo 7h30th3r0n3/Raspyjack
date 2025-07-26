@@ -218,7 +218,7 @@ RaspyJack now features **three different view modes** to navigate the main menu!
 - Navigate with directional arrows
 - Ideal for overview of all tools
 
-### 🎠  **Carousel View**
+### 🔄  **Carousel View**
 - **Single-item display** with icons centered
 - Shows one tool at a time with detailed focus
 - **Wraparound navigation** - seamlessly cycle from last to first
