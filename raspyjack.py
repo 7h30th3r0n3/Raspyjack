@@ -709,63 +709,87 @@ def Gamepad():
 
 ### Basic info screen ###
 def ShowInfo():
-    color.DrawMenuBackground()
-    m.which = m.which + "1"
-    last = []  # Used to get rid of the flicker
-    while 1:
-        try:
-            # Get best available interface (WiFi or ethernet)
-            interface = get_best_interface()
-            
-            # Retrieve configuration information for active interface
-            interface_config = netifaces.ifaddresses(interface)
-            interface_ipv4 = interface_config[netifaces.AF_INET][0]['addr']
-            interface_subnet_mask = interface_config[netifaces.AF_INET][0]['netmask']
-            interface_gateway = netifaces.gateways()["default"][netifaces.AF_INET][0]
-            output = subprocess.check_output(f"ip addr show dev {interface} | awk '/inet / {{ print $2 }}'", shell=True)
-            address = output.decode().strip().split('\\')[0]
+    """Display network information using scrollable text view."""
+    try:
+        # Get best available interface (WiFi or ethernet)
+        interface = get_best_interface()
+        
+        # Retrieve configuration information for active interface
+        interface_config = netifaces.ifaddresses(interface)
+        interface_ipv4 = interface_config[netifaces.AF_INET][0]['addr']
+        interface_subnet_mask = interface_config[netifaces.AF_INET][0]['netmask']
+        interface_gateway = netifaces.gateways()["default"][netifaces.AF_INET][0]
+        output = subprocess.check_output(f"ip addr show dev {interface} | awk '/inet / {{ print $2 }}'", shell=True)
+        address = output.decode().strip().split('\\')[0]
 
-            if interface_ipv4:
-                # Connected - display configuration information
-                render_array = [f"Interface: {interface}",
-                                f"IP: {interface_ipv4}",
-                                f"Subnet: {interface_subnet_mask}",
-                                f"Gateway: {interface_gateway}",
-                                f"Attack: {address}",]
-                
-                # Add WiFi-specific info if applicable
-                if interface.startswith('wlan') and WIFI_AVAILABLE:
+        if interface_ipv4:
+            # Connected - create scrollable information display
+            info_lines = [
+                "=== Network Info ===",
+                "",
+                f"Interface: {interface}",
+                f"IP Address: {interface_ipv4}",
+                f"Subnet Mask: {interface_subnet_mask}",
+                f"Gateway: {interface_gateway}",
+                f"Attack Target: {address}",
+            ]
+            
+            # Add WiFi-specific info if applicable
+            if interface.startswith('wlan') and WIFI_AVAILABLE:
+                try:
                     from wifi.wifi_manager import wifi_manager
                     status = wifi_manager.get_connection_status(interface)
                     if status["ssid"]:
-                        render_array.append(f"SSID: {status['ssid']}")
-            else:
-                # Not connected
-                render_array = ["No connection",
-                                f"Interface: {interface}",
-                                "Check network",
-                                "or try WiFi manager"]
-        except (KeyError, IndexError, ValueError, OSError):
-            # Handle exceptions
-            render_array = ["                 ",
-                            "-----------------",
-                            "No network conn.",
-                            "   Try WiFi or   ",
-                            " check ethernet ",
-                            "-----------------",
-                            "                 ",
-                            "                 ",]
-        if last != render_array:
-            for i in range(len(render_array)):
-                draw.rectangle([(default.start_text[0]-5, default.start_text[1] + default.text_gap * i),
-                                (120, default.start_text[1] + default.text_gap * i + 10)], fill=color.background)
-                draw.text((default.start_text[0], default.start_text[1] + default.text_gap * i),
-                          render_array[i][:m.max_len], fill=color.text)
-            last = render_array
-        time.sleep(0.2)
-        if GPIO.input(PINS["KEY2_PIN"]) == 0 or GPIO.input(PINS["KEY_LEFT_PIN"]) == 0:
-            m.which = m.which[:-1]
-            return
+                        info_lines.extend([
+                            "",
+                            "=== WiFi Details ===",
+                            f"SSID: {status['ssid']}"
+                        ])
+                except:
+                    pass
+                    
+            # Add separator and instructions
+            info_lines.extend([
+                "",
+                "===================",
+                "Use UP/DOWN to scroll",
+                "Press BACK to exit"
+            ])
+        else:
+            # Not connected
+            info_lines = [
+                "=== Network Info ===",
+                "",
+                "❌ No Connection",
+                f"Interface: {interface}",
+                "",
+                "Please check:",
+                "• Network cable",
+                "• WiFi connection", 
+                "• Try WiFi Manager",
+                "",
+                "===================",
+                "Press BACK to exit"
+            ]
+    except (KeyError, IndexError, ValueError, OSError) as e:
+        # Handle exceptions with detailed error info
+        info_lines = [
+            "=== Network Info ===",
+            "",
+            "❌ Error occurred",
+            f"Details: {str(e)[:20]}...",
+            "",
+            "Possible solutions:",
+            "• Check ethernet cable",
+            "• Use WiFi Manager",
+            "• Restart network",
+            "",
+            "===================",
+            "Press BACK to exit"
+        ]
+    
+    # Use the existing scrollable text display
+    GetMenuString(info_lines)
 
 
 def Explorer(path="/",extensions=""):
