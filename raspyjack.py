@@ -954,23 +954,33 @@ def get_discord_webhook():
         print(f"Error reading Discord webhook: {e}")
     return None
 
-def send_to_discord(scan_label: str, scan_results: str, target_network: str, interface: str):
-    """Send Nmap scan results to Discord webhook."""
+def send_to_discord(scan_label: str, file_path: str, target_network: str, interface: str):
+    """Send Nmap scan results as a file attachment to Discord webhook."""
     webhook_url = get_discord_webhook()
     if not webhook_url:
         print("Discord webhook not configured - skipping webhook notification")
         return
     
     try:
-        # Create Discord embed
+        # Check if file exists and get its size
+        if not os.path.exists(file_path):
+            print(f"Scan file not found: {file_path}")
+            return
+            
+        file_size = os.path.getsize(file_path)
+        if file_size == 0:
+            print("Scan file is empty")
+            return
+            
+        # Create Discord embed with file info
         embed = {
             "title": f"🔍 Nmap Scan Complete: {scan_label}",
             "description": f"**Target Network:** `{target_network}`\n**Interface:** `{interface}`\n**Timestamp:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
             "color": 0x00ff00,  # Green color
             "fields": [
                 {
-                    "name": "📊 Scan Results",
-                    "value": f"```\n{scan_results[:1000]}{'...' if len(scan_results) > 1000 else ''}\n```",
+                    "name": "📁 Scan Results",
+                    "value": f"**File:** `{os.path.basename(file_path)}`\n**Size:** {file_size:,} bytes\n**Download the file below for complete results**",
                     "inline": False
                 }
             ],
@@ -980,20 +990,26 @@ def send_to_discord(scan_label: str, scan_results: str, target_network: str, int
             "timestamp": datetime.now().isoformat()
         }
         
-        # Prepare the payload
-        payload = {
-            "embeds": [embed]
-        }
-        
-        # Send to Discord
-        response = requests.post(webhook_url, json=payload, timeout=10)
+        # Prepare the payload with file
+        with open(file_path, 'rb') as f:
+            files = {
+                'file': (os.path.basename(file_path), f, 'text/plain')
+            }
+            
+            payload = {
+                'payload_json': json.dumps({'embeds': [embed]})
+            }
+            
+            # Send to Discord with file attachment
+            response = requests.post(webhook_url, data=payload, files=files, timeout=30)
+            
         if response.status_code == 204:
-            print("✅ Discord webhook sent successfully")
+            print("✅ Discord webhook with file sent successfully")
         else:
             print(f"❌ Discord webhook failed: {response.status_code}")
             
     except Exception as e:
-        print(f"❌ Error sending Discord webhook: {e}")
+        print(f"❌ Error sending Discord webhook with file: {e}")
 
 def run_scan(label: str, nmap_args: list[str]):
     Dialog_info(f"      {label}\n        Running\n      wait please...", wait=True)
@@ -1022,15 +1038,14 @@ def run_scan(label: str, nmap_args: list[str]):
     subprocess.run(cmd)
     subprocess.run(["sed", "-i", "s/Nmap scan report for //g", path])
 
-    # Read scan results and send to Discord (non-blocking)
+    # Send scan results to Discord (non-blocking)
     def send_results_to_discord():
         try:
             if os.path.exists(path):
-                with open(path, 'r') as f:
-                    scan_results = f.read()
-                send_to_discord(label, scan_results, ip_with_mask, interface)
+                # Send the file directly instead of reading content
+                send_to_discord(label, path, ip_with_mask, interface)
         except Exception as e:
-            print(f"Error reading scan results for Discord: {e}")
+            print(f"Error sending scan results to Discord: {e}")
     
     # Send to Discord in background thread
     threading.Thread(target=send_results_to_discord, daemon=True).start()

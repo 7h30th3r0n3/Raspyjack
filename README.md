@@ -257,8 +257,16 @@ When any Nmap scan completes, you'll get a Discord message with:
 - **Scan type** and target network
 - **Interface** used for scanning
 - **Timestamp** of completion
-- **Scan results** (first 1000 characters)
+- **Complete scan results as a downloadable file attachment** (no more truncated text!)
+- **File information** (filename, size)
 - **Color-coded** embed for easy identification
+
+### 📁 File Attachments
+
+- Scan results are sent as `.txt` files
+- Files are automatically named with scan type and timestamp
+- Discord supports files up to 25MB (plenty for Nmap results)
+- **No more character limits or truncated output!**
 
 ### ✅ Status Check
 
