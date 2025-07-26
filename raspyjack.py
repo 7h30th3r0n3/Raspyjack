@@ -1598,10 +1598,10 @@ MENU_DESCRIPTIONS = {
 
 def GetMenuCarousel(inlist, duplicates=False):
     """
-    Display menu items in a carousel layout with single large item and previews.
+    Display menu items in a carousel layout with huge icon in center and navigation arrows.
     - Carousel navigation: LEFT/RIGHT for main navigation
     - UP/DOWN for fine adjustment  
-    - Shows current item large with prev/next previews
+    - Shows huge icon in center with left/right arrows
     - Returns selected item or empty string
     """
     if not inlist:
@@ -1623,57 +1623,25 @@ def GetMenuCarousel(inlist, duplicates=False):
         
         # Main item display area (center)
         main_x = 64  # Center of 128px screen
-        main_y = 45  # Center vertically
+        main_y = 64  # Center vertically
         
-        # Draw main selection background
-        draw.rectangle(
-            (15, 25, 113, 85),
-            fill=color.select,
-            outline=color.border,
-            width=2
-        )
-        
-        # Draw main item icon (large)
+        # Draw huge icon in center
         icon = MENU_ICONS.get(txt, "\uf192")  # Default to dot-circle icon
-        draw.text((main_x - 10, main_y - 15), icon, font=icon_font, fill=color.selected_text, anchor="mm")
+        # Create a larger font for the huge icon
+        huge_icon_font = ImageFont.truetype('/usr/share/fonts/truetype/fontawesome/fa-solid-900.ttf', 48)
+        draw.text((main_x, main_y), icon, font=huge_icon_font, fill=color.selected_text, anchor="mm")
         
-        # Draw main item title
-        title = txt.strip()
-        draw.text((main_x, main_y), title, font=text_font, fill=color.selected_text, anchor="mm")
-        
-        # Draw description if available
-        description = MENU_DESCRIPTIONS.get(txt, "")
-        if description:
-            lines = description.split('\n')
-            for i, line in enumerate(lines):
-                draw.text((main_x, main_y + 12 + (i * 8)), line, font=text_font, fill=color.selected_text, anchor="mm")
-        
-        # Draw navigation arrows
+        # Draw navigation arrows only if there are multiple items
         if total > 1:
             # Left arrow (previous)
             if index > 0:
-                draw.text((8, main_y), "◀", font=text_font, fill=color.text, anchor="mm")
-                # Preview of previous item
-                prev_item = inlist[index - 1]
-                prev_txt = prev_item if not duplicates else prev_item.split('#', 1)[1]
-                prev_icon = MENU_ICONS.get(prev_txt, "\uf192")
-                draw.text((8, main_y - 15), prev_icon, font=text_font, fill=color.text, anchor="mm")
+                arrow_font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 24)
+                draw.text((20, main_y), "◀", font=arrow_font, fill=color.text, anchor="mm")
             
-            # Right arrow (next)
+            # Right arrow (next)  
             if index < total - 1:
-                draw.text((120, main_y), "▶", font=text_font, fill=color.text, anchor="mm")
-                # Preview of next item
-                next_item = inlist[index + 1]
-                next_txt = next_item if not duplicates else next_item.split('#', 1)[1]
-                next_icon = MENU_ICONS.get(next_txt, "\uf192")
-                draw.text((120, main_y - 15), next_icon, font=text_font, fill=color.text, anchor="mm")
-        
-        # Draw position indicator
-        position_text = f"{index + 1}/{total}"
-        draw.text((main_x, 95), position_text, font=text_font, fill=color.text, anchor="mm")
-        
-        # Draw view mode indicator
-        draw.text((2, 2), "Carousel", font=text_font, fill=color.text)
+                arrow_font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 24)
+                draw.text((108, main_y), "▶", font=arrow_font, fill=color.text, anchor="mm")
         
         time.sleep(0.12)
         
