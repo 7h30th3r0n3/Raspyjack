@@ -232,7 +232,7 @@ Choose the one that fits your workflow best! 🚀
 
 ## 📡 Discord Webhook Integration
 
-**Discord webhook notifications** for Nmap scan results! Get instant notifications on your Discord server when scans complete.
+RaspyJack now supports **Discord webhook notifications** for Nmap scan results! Get instant notifications on your Discord server when scans complete.
 
 ### 🔧 Setup Instructions
 
