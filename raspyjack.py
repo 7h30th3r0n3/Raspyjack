@@ -1561,14 +1561,14 @@ class DisposableMenu:
 MENU_ICONS = {
     " Scan Nmap": "\uf002",        # search
     " Reverse Shell": "\uf120",    # terminal  
-    " Responder": "\uf0e7",        # bolt
-    " MITM & Sniff": "\uf21b",     # heartbeat
+    " Responder": "\uf505",        # responder (updated)
+    " MITM & Sniff": "\uf6ff",     # MITM (updated)
     " DNS Spoofing": "\uf233",     # server
-    " Network info": "\uf1eb",     # wifi
+    " Network info": "\ue012",     # network info (updated)
     " WiFi Manager": "\uf1eb",     # wifi
     " Other features": "\uf085",   # cogs
     " Read file": "\uf15c",        # file-alt
-    " Payload": "\uf1c6",          # file-code
+    " Payload": "\uf3e2",          # payload (updated)
 }
 
 
