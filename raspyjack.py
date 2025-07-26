@@ -437,16 +437,19 @@ def GetMenuString(inlist, duplicates=False):
                     fill=color.select
                 )
             
-            # Draw PNG icon if available
-            icon_path = MENU_ICON_PNGS.get(txt, "")
-            icon_img = load_icon(icon_path) if icon_path else None
-            
-            if icon_img:
-                # Paste the PNG icon
-                image.paste(icon_img, (default.start_text[0] - 2, default.start_text[1] + default.text_gap * i))
+            # Draw Font Awesome icon if available
+            icon = MENU_ICONS.get(txt, "")
+            if icon:
+                draw.text(
+                    (default.start_text[0] - 2,
+                     default.start_text[1] + default.text_gap * i),
+                    icon,
+                    font=icon_font,
+                    fill=fill
+                )
                 # Draw text with offset for icon
                 draw.text(
-                    (default.start_text[0] + 18,
+                    (default.start_text[0] + 12,
                      default.start_text[1] + default.text_gap * i),
                     line[:m.max_len],
                     font=text_font,
@@ -1554,22 +1557,19 @@ class DisposableMenu:
         self._build_payload_menu()
 
 
-### Menu Icon PNG Mapping ###
-MENU_ICON_PNGS = {
-    " Scan Nmap": "icons/png/scan_nmap.png",
-    " Reverse Shell": "icons/png/reverse_shell.png",
-    " Responder": "icons/png/responder.png",
-    " MITM & Sniff": "icons/png/mitm_sniff.png",
-    " DNS Spoofing": "icons/png/dns_spoofing.png",
-    " Network info": "icons/png/network_info.png",
-    " WiFi Manager": "icons/png/wifi_manager.png",
-    " Other features": "icons/png/other_features.png",
-    " Read file": "icons/png/read_files.png",
-    " Payload": "icons/png/payload.png",
+### Font Awesome Icon Mapping ###
+MENU_ICONS = {
+    " Scan Nmap": "\uf002",        # search
+    " Reverse Shell": "\uf120",    # terminal  
+    " Responder": "\uf0e7",        # bolt
+    " MITM & Sniff": "\uf21b",     # heartbeat
+    " DNS Spoofing": "\uf233",     # server
+    " Network info": "\uf1eb",     # wifi
+    " WiFi Manager": "\uf1eb",     # wifi
+    " Other features": "\uf085",   # cogs
+    " Read file": "\uf15c",        # file-alt
+    " Payload": "\uf1c6",          # file-code
 }
-
-# Cache for loaded PNG icons
-ICON_CACHE = {}
 
 
 def main():
@@ -1614,20 +1614,8 @@ LCD.LCD_ShowImage(image, 0, 0)
 image = Image.new("RGB", (LCD.width, LCD.height), "WHITE")
 draw = ImageDraw.Draw(image)
 text_font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 8)
+icon_font = ImageFont.truetype('/usr/share/fonts/truetype/font-awesome/fontawesome-webfont.ttf', 10)
 font = text_font  # Keep backward compatibility
-
-def load_icon(icon_path):
-    """Load and cache a PNG icon"""
-    if icon_path not in ICON_CACHE:
-        try:
-            if os.path.exists(icon_path):
-                ICON_CACHE[icon_path] = Image.open(icon_path)
-            else:
-                ICON_CACHE[icon_path] = None
-        except Exception as e:
-            print(f"Error loading icon {icon_path}: {e}")
-            ICON_CACHE[icon_path] = None
-    return ICON_CACHE[icon_path]
 
 ### Defining PINS, threads, loading JSON ###
 PINS = {
