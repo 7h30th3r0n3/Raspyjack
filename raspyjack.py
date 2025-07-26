@@ -764,11 +764,15 @@ def ShowInfo():
 
 
 def DisplayScrollableInfo(info_lines):
-    """Display scrollable text information - view only, no selection."""
+    """Display scrollable text information with auto-scrolling long lines."""
     WINDOW = 7  # lines visible simultaneously
     total = len(info_lines)
     index = 0   # current position
     offset = 0  # window offset
+    scroll_pos = 0  # horizontal scroll position for long text
+    scroll_direction = 1  # 1 for forward, -1 for backward
+    frames_since_last_scroll = 0
+    SCROLL_DELAY = 10  # frames to wait before scrolling
 
     while True:
         # Calculate window for scrolling
@@ -793,12 +797,33 @@ def DisplayScrollableInfo(info_lines):
                      default.start_text[1] + default.text_gap * i + 10),
                     fill=color.select
                 )
+                
+                # Auto-scroll long text on selected line
+                display_text = line
+                if len(line) > m.max_len:
+                    if frames_since_last_scroll >= SCROLL_DELAY:
+                        # Create scrolling effect
+                        extended_line = line + "  ...  " + line  # Add separator and repeat
+                        start_pos = scroll_pos % len(line + "  ...  ")
+                        display_text = (extended_line + extended_line)[start_pos:start_pos + m.max_len]
+                        scroll_pos += scroll_direction
+                        frames_since_last_scroll = 0
+                    else:
+                        # Show beginning of text while waiting
+                        display_text = line[:m.max_len]
+                        frames_since_last_scroll += 1
+                else:
+                    display_text = line
+                    scroll_pos = 0  # Reset scroll for short lines
+            else:
+                # Non-selected lines: truncate normally
+                display_text = line[:m.max_len]
             
-            # Draw the text without truncation
+            # Draw the text
             draw.text(
                 (default.start_text[0],
                  default.start_text[1] + default.text_gap * i),
-                line,  # No truncation - show full text
+                display_text,
                 font=text_font,
                 fill=fill
             )
@@ -809,8 +834,12 @@ def DisplayScrollableInfo(info_lines):
         btn = getButton()
         if btn == "KEY_DOWN_PIN":
             index = (index + 1) % total  # wrap to beginning
+            scroll_pos = 0  # Reset scroll when changing lines
+            frames_since_last_scroll = 0
         elif btn == "KEY_UP_PIN":
             index = (index - 1) % total  # wrap to end
+            scroll_pos = 0  # Reset scroll when changing lines
+            frames_since_last_scroll = 0
         elif btn in ("KEY_LEFT_PIN", "KEY3_PIN"):
             return  # Exit on back/left button
 
