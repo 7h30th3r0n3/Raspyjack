@@ -1614,7 +1614,7 @@ LCD.LCD_ShowImage(image, 0, 0)
 image = Image.new("RGB", (LCD.width, LCD.height), "WHITE")
 draw = ImageDraw.Draw(image)
 text_font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 8)
-icon_font = ImageFont.truetype('/usr/share/fonts/truetype/font-awesome/fontawesome-webfont.ttf', 10)
+icon_font = ImageFont.truetype('/usr/share/fonts/truetype/fontawesome/fa-solid-900.ttf', 10)
 font = text_font  # Keep backward compatibility
 
 ### Defining PINS, threads, loading JSON ###
