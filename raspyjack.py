@@ -1627,7 +1627,7 @@ def GetMenuCarousel(inlist, duplicates=False):
         
         # Draw huge icon in center
         icon = MENU_ICONS.get(txt, "\uf192")  # Default to dot-circle icon
-        # Create a larger font for the huge icon
+        # Large font for the icon
         huge_icon_font = ImageFont.truetype('/usr/share/fonts/truetype/fontawesome/fa-solid-900.ttf', 48)
         draw.text((main_x, main_y - 12), icon, font=huge_icon_font, fill=color.selected_text, anchor="mm")
         
@@ -1637,33 +1637,29 @@ def GetMenuCarousel(inlist, duplicates=False):
         carousel_text_font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 12)
         draw.text((main_x, main_y + 28), title, font=carousel_text_font, fill=color.selected_text, anchor="mm")
         
-        # Draw navigation arrows only if there are multiple items
+        # Draw navigation arrows - always show if there are multiple items
         if total > 1:
-            # Left arrow (previous) - smaller arrows
-            if index > 0:
-                arrow_font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 18)
-                draw.text((20, main_y), "◀", font=arrow_font, fill=color.text, anchor="mm")
-            
-            # Right arrow (next) - smaller arrows  
-            if index < total - 1:
-                arrow_font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 18)
-                draw.text((108, main_y), "▶", font=arrow_font, fill=color.text, anchor="mm")
+            arrow_font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 18)
+            # Left arrow (always show for wraparound)
+            draw.text((20, main_y), "◀", font=arrow_font, fill=color.text, anchor="mm")
+            # Right arrow (always show for wraparound)  
+            draw.text((108, main_y), "▶", font=arrow_font, fill=color.text, anchor="mm")
         
         time.sleep(0.12)
         
         # Handle button input
         btn = getButton()
         if btn == "KEY_LEFT_PIN":
-            if index > 0:
-                index -= 1
+            # Wraparound navigation - go to last item if at first
+            index = (index - 1) % total
         elif btn == "KEY_RIGHT_PIN":
-            if index < total - 1:
-                index += 1
+            # Wraparound navigation - go to first item if at last
+            index = (index + 1) % total
         elif btn == "KEY_UP_PIN":
-            # Fine adjustment - wrap to end
+            # Fine adjustment - same as left
             index = (index - 1) % total
         elif btn == "KEY_DOWN_PIN":
-            # Fine adjustment - wrap to beginning  
+            # Fine adjustment - same as right  
             index = (index + 1) % total
         elif btn == "KEY_PRESS_PIN":
             if index < total:
