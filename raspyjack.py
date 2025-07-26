@@ -710,86 +710,64 @@ def Gamepad():
 ### Basic info screen ###
 def ShowInfo():
     """Display network information using scrollable text view."""
-    try:
-        # Get best available interface (WiFi or ethernet)
-        interface = get_best_interface()
-        
-        # Retrieve configuration information for active interface
-        interface_config = netifaces.ifaddresses(interface)
-        interface_ipv4 = interface_config[netifaces.AF_INET][0]['addr']
-        interface_subnet_mask = interface_config[netifaces.AF_INET][0]['netmask']
-        interface_gateway = netifaces.gateways()["default"][netifaces.AF_INET][0]
-        output = subprocess.check_output(f"ip addr show dev {interface} | awk '/inet / {{ print $2 }}'", shell=True)
-        address = output.decode().strip().split('\\')[0]
-
-        if interface_ipv4:
-            # Connected - create scrollable information display
-            info_lines = [
-                "=== Network Info ===",
-                "",
-                f"Interface: {interface}",
-                f"IP Address: {interface_ipv4}",
-                f"Subnet Mask: {interface_subnet_mask}",
-                f"Gateway: {interface_gateway}",
-                f"Attack Target: {address}",
-            ]
+    while True:
+        try:
+            # Get best available interface (WiFi or ethernet)
+            interface = get_best_interface()
             
-            # Add WiFi-specific info if applicable
-            if interface.startswith('wlan') and WIFI_AVAILABLE:
-                try:
-                    from wifi.wifi_manager import wifi_manager
-                    status = wifi_manager.get_connection_status(interface)
-                    if status["ssid"]:
-                        info_lines.extend([
-                            "",
-                            "=== WiFi Details ===",
-                            f"SSID: {status['ssid']}"
-                        ])
-                except:
-                    pass
-                    
-            # Add separator and instructions
-            info_lines.extend([
-                "",
-                "===================",
-                "Use UP/DOWN to scroll",
-                "Press BACK to exit"
-            ])
-        else:
-            # Not connected
+            # Retrieve configuration information for active interface
+            interface_config = netifaces.ifaddresses(interface)
+            interface_ipv4 = interface_config[netifaces.AF_INET][0]['addr']
+            interface_subnet_mask = interface_config[netifaces.AF_INET][0]['netmask']
+            interface_gateway = netifaces.gateways()["default"][netifaces.AF_INET][0]
+            output = subprocess.check_output(f"ip addr show dev {interface} | awk '/inet / {{ print $2 }}'", shell=True)
+            address = output.decode().strip().split('\\')[0]
+
+            if interface_ipv4:
+                # Connected - create scrollable information display
+                info_lines = [
+                    f"Interface: {interface}",
+                    f"IP: {interface_ipv4}",
+                    f"Subnet: {interface_subnet_mask}",
+                    f"Gateway: {interface_gateway}",
+                    f"Attack: {address}",
+                ]
+                
+                # Add WiFi-specific info if applicable
+                if interface.startswith('wlan') and WIFI_AVAILABLE:
+                    try:
+                        from wifi.wifi_manager import wifi_manager
+                        status = wifi_manager.get_connection_status(interface)
+                        if status["ssid"]:
+                            info_lines.append(f"SSID: {status['ssid']}")
+                    except:
+                        pass
+            else:
+                # Not connected
+                info_lines = [
+                    f"Interface: {interface}",
+                    "Status: No connection",
+                    "Check network cable",
+                    "or try WiFi manager"
+                ]
+        except (KeyError, IndexError, ValueError, OSError) as e:
+            # Handle exceptions with detailed error info
             info_lines = [
-                "=== Network Info ===",
-                "",
-                "❌ No Connection",
-                f"Interface: {interface}",
-                "",
-                "Please check:",
-                "• Network cable",
-                "• WiFi connection", 
-                "• Try WiFi Manager",
-                "",
-                "===================",
-                "Press BACK to exit"
+                "Network Error",
+                f"Details: {str(e)[:15]}...",
+                "Check ethernet cable",
+                "or use WiFi Manager"
             ]
-    except (KeyError, IndexError, ValueError, OSError) as e:
-        # Handle exceptions with detailed error info
-        info_lines = [
-            "=== Network Info ===",
-            "",
-            "❌ Error occurred",
-            f"Details: {str(e)[:20]}...",
-            "",
-            "Possible solutions:",
-            "• Check ethernet cable",
-            "• Use WiFi Manager",
-            "• Restart network",
-            "",
-            "===================",
-            "Press BACK to exit"
-        ]
-    
-    # Use the existing scrollable text display
-    GetMenuString(info_lines)
+        
+        # Reset selection to start at first item (Interface)
+        m.select = 0
+        
+        # Use the existing scrollable text display
+        result = GetMenuString(info_lines)
+        
+        # If user pressed back/left, exit the info screen
+        if result == "":
+            break
 
 
 def Explorer(path="/",extensions=""):
