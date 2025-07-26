@@ -397,7 +397,7 @@ def GetMenuString(inlist, duplicates=False):
     - Si duplicates=True : retourne (index, valeur) ; sinon retourne valeur.
     - Si la liste est vide : affiche un placeholder et retourne "".
     """
-    WINDOW      = 8                 # lignes visibles simultanément
+    WINDOW      = 7                 # lignes visibles simultanément
     CURSOR_MARK = m.char            # '> '
     empty       = False
 
