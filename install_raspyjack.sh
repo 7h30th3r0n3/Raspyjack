@@ -61,6 +61,10 @@ else
   info "All packages already installed & up‑to‑date."
 fi
 
+mkdir -p /usr/share/fonts/truetype/fontawesome
+cd /usr/share/fonts/truetype/fontawesome
+wget https://use.fontawesome.com/releases/v6.5.1/webfonts/fa-solid-900.ttf
+
 # ───── 3 ▸ enable I²C / SPI & kernel modules ────────────────
 step "Enabling I²C & SPI …"
 add_dtparam dtparam=i2c_arm=on
