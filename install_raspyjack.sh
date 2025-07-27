@@ -40,7 +40,7 @@ PACKAGES=(
   # ‣ python libs
   python3-scapy python3-netifaces python3-pyudev python3-serial \
   python3-smbus python3-rpi.gpio python3-spidev python3-pil python3-numpy \
-  python3-setuptools python3-cryptography fonts-dejavu-core \
+  python3-setuptools python3-cryptography python3-requests fonts-dejavu-core \
   # ‣ network / offensive tools
   nmap ncat tcpdump arp-scan dsniff ettercap-text-only php procps \
   # ‣ WiFi attack tools (NEW)
@@ -60,10 +60,6 @@ if ((${#to_install[@]})); then
 else
   info "All packages already installed & up‑to‑date."
 fi
-
-# ───── 2.5 ▸ install Python pip packages ─────────────────────
-step "Installing Python pip packages …"
-sudo pip3 install requests
 
 # ───── 3 ▸ enable I²C / SPI & kernel modules ────────────────
 step "Enabling I²C & SPI …"
