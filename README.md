@@ -334,6 +334,18 @@ Educational & authorised testing only – use responsibly.
 
 ---
 
-## 📄  License
+## Acknowledgements
 
-MIT
+- [@dagnazty](https://github.com/dagnazty)
+- [@Hosseios](https://github.com/Hosseios)
+- [@m0usem0use](https://github.com/m0usem0use)
+
+---
+
+<div align="center">
+⚠️ NOTE WARNING ! Coffee, coke and lemonade can cause a DoS on the equipment if spilled on it. ⚠️ <br>
+Due to multiple event during the devellopement I recommand to NEVER put any brevage around the project.<br>
+Considering this note we are not reliable to any mistake or miss use of this kind.
+</div>
+
+---
