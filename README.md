@@ -204,7 +204,7 @@ python3 fast_wifi_switcher.py
 
 ## 🎨  View Modes
 
-RaspyJack now features **three different view modes** to navigate the main menu! Press **KEY1** to cycle through them:
+RaspyJack features **three different view modes** to navigate the main menu! Press **KEY1** to cycle through them:
 
 ### 📋  **List View** (Default)
 - Classic vertical scrolling list
@@ -232,7 +232,7 @@ Choose the one that fits your workflow best! 🚀
 
 ## 📡 Discord Webhook Integration
 
-RaspyJack now supports **Discord webhook notifications** for Nmap scan results! Get instant notifications on your Discord server when scans complete.
+RaspyJack supports **Discord webhook integration** for Nmap scan results! Get instant notifications with full scan details and a downloadable .txt file of the Nmap results directly in your Discord server.
 
 ### 🔧 Setup Instructions
 
@@ -257,7 +257,7 @@ When any Nmap scan completes, you'll get a Discord message with:
 - **Scan type** and target network
 - **Interface** used for scanning
 - **Timestamp** of completion
-- **Complete scan results as a downloadable file attachment** (no more truncated text!)
+- **Complete scan results as a downloadable file attachment**
 - **File information** (filename, size)
 - **Color-coded** embed for easy identification
 
