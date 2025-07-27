@@ -1,0 +1,20 @@
+# Discord Webhook Configuration
+# 
+# To set up Discord webhook notifications for Nmap scans:
+# 
+# 1. Create a Discord webhook:
+#    - Go to your Discord server
+#    - Right-click on a channel → Edit Channel → Integrations → Webhooks
+#    - Click "New Webhook"
+#    - Copy the webhook URL
+# 
+# 2. Replace the URL below with your actual webhook URL:
+#    https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_WEBHOOK_TOKEN
+# 
+# 3. Save this file and restart RaspyJack
+# 
+# Example webhook URL (replace with your actual URL):
+# https://discord.com/api/webhooks/1234567890123456789/abcdefghijklmnopqrstuvwxyz1234567890abcdefghijklmnopqrstuvwxyz1234567890
+
+# Your webhook URL goes here (uncomment and replace):
+# https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_WEBHOOK_TOKEN 

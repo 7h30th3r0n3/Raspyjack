@@ -61,6 +61,10 @@ else
   info "All packages already installed & up‑to‑date."
 fi
 
+# ───── 2.5 ▸ install Python pip packages ─────────────────────
+step "Installing Python pip packages …"
+sudo pip3 install requests
+
 # ───── 3 ▸ enable I²C / SPI & kernel modules ────────────────
 step "Enabling I²C & SPI …"
 add_dtparam dtparam=i2c_arm=on
@@ -169,7 +173,7 @@ fi
 # 6‑d python imports
 python3 - <<'PY' || fail "Python dependency test failed"
 import importlib, sys
-for mod in ("scapy", "netifaces", "pyudev", "serial", "smbus2", "RPi.GPIO", "spidev", "PIL"):
+for mod in ("scapy", "netifaces", "pyudev", "serial", "smbus2", "RPi.GPIO", "spidev", "PIL", "requests"):
     try:
         importlib.import_module(mod.split('.')[0])
     except Exception as e:

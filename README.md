@@ -198,7 +198,91 @@ python3 fast_wifi_switcher.py
 | ↑ / ↓ | navigate |
 | → or OK | enter / validate |
 | ← or BACK | go back |
-| Q (KEY1) | extra in dialogs |
+| Q (KEY1) | toggle view mode / extra in dialogs |
+
+---
+
+## 🎨  View Modes
+
+RaspyJack features **three different view modes** to navigate the main menu! Press **KEY1** to cycle through them:
+
+### 📋  **List View** (Default)
+- Classic vertical scrolling list
+- Shows 7 items at once with smooth scrolling
+- Perfect for quick navigation
+- Displays icons alongside menu text
+
+### 🔲  **Grid View** 
+- Compact 2×4 grid layout showing 8 items
+- Great for seeing multiple options at once
+- Navigate with directional arrows
+- Ideal for overview of all tools
+
+### 🔄  **Carousel View**
+- **Single-item display** with icons centered
+- Shows one tool at a time with detailed focus
+- **Wraparound navigation** - seamlessly cycle from last to first
+- Features prominent icons and clear tool names
+
+**How to switch:** Simply press the **KEY1** while on the main menu to cycle through: **List → Grid → Carousel → List**
+
+Choose the one that fits your workflow best! 🚀
+
+---
+
+## 📡 Discord Webhook Integration
+
+RaspyJack supports **Discord webhook integration** for Nmap scan results! Get instant notifications with full scan details and a downloadable .txt file of the Nmap results directly in your Discord server.
+
+### 🔧 Setup Instructions
+
+1. **Create a Discord Webhook:**
+   - Go to your Discord server
+   - Right-click on a channel → **Edit Channel** → **Integrations** → **Webhooks**
+   - Click **"New Webhook"**
+   - Copy the webhook URL
+
+2. **Configure RaspyJack:**
+   - Edit `/root/Raspyjack/discord_webhook.txt`
+   - Replace the placeholder with your actual webhook URL:
+   ```
+   https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_WEBHOOK_TOKEN
+   ```
+
+3. **Restart RaspyJack** to load the configuration
+
+### 📊 What You'll Receive
+
+When any Nmap scan completes, you'll get a Discord message with:
+- **Scan type** and target network
+- **Interface** used for scanning
+- **Timestamp** of completion
+- **Complete scan results as a downloadable file attachment**
+- **File information** (filename, size)
+- **Color-coded** embed for easy identification
+
+### 📁 File Attachments
+
+- Scan results are sent as `.txt` files
+- Files are automatically named with scan type and timestamp
+- Discord supports files up to 25MB (plenty for Nmap results)
+- **No more character limits or truncated output!**
+
+### ✅ Status Check
+
+Check your webhook status in **Network Info**:
+- **✅ Webhook configured** - Ready to send notifications
+- **❌ No webhook** - Configuration needed
+
+### 🔄 Supported Scans
+
+Works with **all Nmap scan types**:
+- Quick Scan, Full Port Scan, Service Scan
+- Vulnerability Scan, OS Scan, Intensive Scan
+- Stealth SYN Scan, UDP Scan, Ping Sweep
+- Top100 Scan, HTTP Enumeration
+
+**Note:** If no webhook is configured, scans will still save results locally - no functionality is lost!
 
 ---
 

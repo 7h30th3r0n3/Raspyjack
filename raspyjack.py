@@ -17,6 +17,7 @@ import signal
 from functools import partial
 import time
 import sys
+import requests  # For Discord webhook integration
 
 # WiFi Integration - Add dual interface support
 try:
@@ -109,7 +110,7 @@ start_time = time.time()
 ### Global mostly static values ###
 class Defaults():
     start_text = [12, 22]
-    text_gap = 12
+    text_gap = 14
 
     updown_center = 52
     updown_pos = [15, updown_center, 88]
@@ -397,7 +398,7 @@ def GetMenuString(inlist, duplicates=False):
     - Si duplicates=True : retourne (index, valeur) ; sinon retourne valeur.
     - Si la liste est vide : affiche un placeholder et retourne "".
     """
-    WINDOW      = 8                 # lignes visibles simultanément
+    WINDOW      = 7                 # lignes visibles simultanément
     CURSOR_MARK = m.char            # '> '
     empty       = False
 
@@ -425,7 +426,7 @@ def GetMenuString(inlist, duplicates=False):
         color.DrawMenuBackground()
         for i, raw in enumerate(window):
             txt = raw if not duplicates else raw.split('#', 1)[1]
-            line = CURSOR_MARK + txt if i == (index - offset) else txt
+            line = txt  # Remove cursor mark, use rectangle highlight only
             fill = color.selected_text if i == (index - offset) else color.text
             # zone de surbrillance
             if i == (index - offset):
@@ -436,12 +437,49 @@ def GetMenuString(inlist, duplicates=False):
                      default.start_text[1] + default.text_gap * i + 10),
                     fill=color.select
                 )
-            draw.text(
-                (default.start_text[0],
-                 default.start_text[1] + default.text_gap * i),
-                line[:m.max_len],
-                fill=fill
-            )
+            
+            # Draw Font Awesome icon if available (only on main menu)
+            if m.which == "a":  # Only show icons on main menu
+                icon = MENU_ICONS.get(txt, "")
+                if icon:
+                    draw.text(
+                        (default.start_text[0] - 2,
+                         default.start_text[1] + default.text_gap * i),
+                        icon,
+                        font=icon_font,
+                        fill=fill
+                    )
+                    # Draw text with offset for icon
+                    draw.text(
+                        (default.start_text[0] + 12,
+                         default.start_text[1] + default.text_gap * i),
+                        line[:m.max_len],
+                        font=text_font,
+                        fill=fill
+                    )
+                else:
+                    # Draw text normally if no icon
+                    draw.text(
+                        (default.start_text[0],
+                         default.start_text[1] + default.text_gap * i),
+                        line[:m.max_len],
+                        font=text_font,
+                        fill=fill
+                    )
+            else:
+                # Submenus: no icons, just text
+                draw.text(
+                    (default.start_text[0],
+                     default.start_text[1] + default.text_gap * i),
+                    line[:m.max_len],
+                    font=text_font,
+                    fill=fill
+                )
+        
+        # Display current view mode indicator (only on main menu)
+        # if m.which == "a":
+        #     draw.text((2, 2), "List", font=text_font, fill=color.text)
+        
         time.sleep(0.12)
 
         # -- 4/ Lecture des boutons -----------------------------------------
@@ -459,6 +497,10 @@ def GetMenuString(inlist, duplicates=False):
                 idx, txt = raw.split('#', 1)
                 return int(idx), txt
             return raw
+        elif btn == "KEY1_PIN" and m.which == "a":
+            # Toggle to grid view (only on main menu)
+            toggle_view_mode()
+            return (-1, "") if duplicates else ""
         elif btn == "KEY_LEFT_PIN":
             return (-1, "") if duplicates else ""
 
@@ -678,63 +720,128 @@ def Gamepad():
 
 ### Basic info screen ###
 def ShowInfo():
-    color.DrawMenuBackground()
-    m.which = m.which + "1"
-    last = []  # Used to get rid of the flicker
-    while 1:
-        try:
-            # Get best available interface (WiFi or ethernet)
-            interface = get_best_interface()
-            
-            # Retrieve configuration information for active interface
-            interface_config = netifaces.ifaddresses(interface)
-            interface_ipv4 = interface_config[netifaces.AF_INET][0]['addr']
-            interface_subnet_mask = interface_config[netifaces.AF_INET][0]['netmask']
-            interface_gateway = netifaces.gateways()["default"][netifaces.AF_INET][0]
-            output = subprocess.check_output(f"ip addr show dev {interface} | awk '/inet / {{ print $2 }}'", shell=True)
-            address = output.decode().strip().split('\\')[0]
+    """Display network information using scrollable text view."""
+    # Collect network information once
+    try:
+        # Get best available interface (WiFi or ethernet)
+        interface = get_best_interface()
+        
+        # Retrieve configuration information for active interface
+        interface_config = netifaces.ifaddresses(interface)
+        interface_ipv4 = interface_config[netifaces.AF_INET][0]['addr']
+        interface_subnet_mask = interface_config[netifaces.AF_INET][0]['netmask']
+        interface_gateway = netifaces.gateways()["default"][netifaces.AF_INET][0]
+        output = subprocess.check_output(f"ip addr show dev {interface} | awk '/inet / {{ print $2 }}'", shell=True)
+        address = output.decode().strip().split('\\')[0]
 
-            if interface_ipv4:
-                # Connected - display configuration information
-                render_array = [f"Interface: {interface}",
-                                f"IP: {interface_ipv4}",
-                                f"Subnet: {interface_subnet_mask}",
-                                f"Gateway: {interface_gateway}",
-                                f"Attack: {address}",]
-                
-                # Add WiFi-specific info if applicable
-                if interface.startswith('wlan') and WIFI_AVAILABLE:
+        if interface_ipv4:
+            # Connected - create scrollable information display
+            info_lines = [
+                f"Interface: {interface}",
+                f"IP: {interface_ipv4}",
+                f"Subnet: {interface_subnet_mask}",
+                "Gateway:",
+                f"  {interface_gateway}",
+                "Attack:",
+                f"  {address}",
+            ]
+            
+            # Add WiFi-specific info if applicable
+            if interface.startswith('wlan') and WIFI_AVAILABLE:
+                try:
                     from wifi.wifi_manager import wifi_manager
                     status = wifi_manager.get_connection_status(interface)
                     if status["ssid"]:
-                        render_array.append(f"SSID: {status['ssid']}")
+                        info_lines.extend([
+                            "SSID:",
+                            f"  {status['ssid']}"
+                        ])
+                except:
+                    pass
+            
+            # Add Discord webhook status
+            webhook_url = get_discord_webhook()
+            if webhook_url:
+                info_lines.extend([
+                    "Discord:",
+                    "  ✅ Webhook configured"
+                ])
             else:
-                # Not connected
-                render_array = ["No connection",
-                                f"Interface: {interface}",
-                                "Check network",
-                                "or try WiFi manager"]
-        except (KeyError, IndexError, ValueError, OSError):
-            # Handle exceptions
-            render_array = ["                 ",
-                            "-----------------",
-                            "No network conn.",
-                            "   Try WiFi or   ",
-                            " check ethernet ",
-                            "-----------------",
-                            "                 ",
-                            "                 ",]
-        if last != render_array:
-            for i in range(len(render_array)):
-                draw.rectangle([(default.start_text[0]-5, default.start_text[1] + default.text_gap * i),
-                                (120, default.start_text[1] + default.text_gap * i + 10)], fill=color.background)
-                draw.text((default.start_text[0], default.start_text[1] + default.text_gap * i),
-                          render_array[i][:m.max_len], fill=color.text)
-            last = render_array
-        time.sleep(0.2)
-        if GPIO.input(PINS["KEY2_PIN"]) == 0 or GPIO.input(PINS["KEY_LEFT_PIN"]) == 0:
-            m.which = m.which[:-1]
-            return
+                info_lines.extend([
+                    "Discord:",
+                    "  ❌ No webhook"
+                ])
+        else:
+            # Not connected
+            info_lines = [
+                f"Interface: {interface}",
+                "Status: No connection",
+                "Check network cable",
+                "or try WiFi manager"
+            ]
+    except (KeyError, IndexError, ValueError, OSError) as e:
+        # Handle exceptions with detailed error info
+        info_lines = [
+            "Network Error",
+            f"Details: {str(e)[:15]}...",
+            "Check ethernet cable",
+            "or use WiFi Manager"
+        ]
+    
+    # Display scrollable network info
+    DisplayScrollableInfo(info_lines)
+
+
+def DisplayScrollableInfo(info_lines):
+    """Display scrollable text information - simple and working."""
+    WINDOW = 7  # lines visible simultaneously
+    total = len(info_lines)
+    index = 0   # current position
+    offset = 0  # window offset
+
+    while True:
+        # Calculate window for scrolling
+        if index < offset:
+            offset = index
+        elif index >= offset + WINDOW:
+            offset = index - WINDOW + 1
+
+        # Get visible window
+        window = info_lines[offset:offset + WINDOW]
+
+        # Draw display
+        color.DrawMenuBackground()
+        for i, line in enumerate(window):
+            fill = color.selected_text if i == (index - offset) else color.text
+            # Highlight current line
+            if i == (index - offset):
+                draw.rectangle(
+                    (default.start_text[0] - 5,
+                     default.start_text[1] + default.text_gap * i,
+                     120,
+                     default.start_text[1] + default.text_gap * i + 10),
+                    fill=color.select
+                )
+            
+            # Draw the text - NO TRUNCATION for network info
+            draw.text(
+                (default.start_text[0],
+                 default.start_text[1] + default.text_gap * i),
+                line,  # Show full text - let it overflow if needed
+                font=text_font,
+                fill=fill
+            )
+
+        time.sleep(0.12)
+
+        # Handle button input
+        btn = getButton()
+        if btn == "KEY_DOWN_PIN":
+            index = (index + 1) % total  # wrap to beginning
+        elif btn == "KEY_UP_PIN":
+            index = (index - 1) % total  # wrap to end
+        elif btn in ("KEY_LEFT_PIN", "KEY3_PIN"):
+            return  # Exit on back/left button
 
 
 def Explorer(path="/",extensions=""):
@@ -833,6 +940,77 @@ def ImageExplorer() -> None:
 
 
 WAIT_TXT = "Scan in progess..."
+
+def get_discord_webhook():
+    """Read Discord webhook URL from configuration file."""
+    webhook_file = "/root/Raspyjack/discord_webhook.txt"
+    try:
+        if os.path.exists(webhook_file):
+            with open(webhook_file, 'r') as f:
+                webhook_url = f.read().strip()
+                if webhook_url and webhook_url.startswith("https://discord.com/api/webhooks/"):
+                    return webhook_url
+    except Exception as e:
+        print(f"Error reading Discord webhook: {e}")
+    return None
+
+def send_to_discord(scan_label: str, file_path: str, target_network: str, interface: str):
+    """Send Nmap scan results as a file attachment to Discord webhook."""
+    webhook_url = get_discord_webhook()
+    if not webhook_url:
+        print("Discord webhook not configured - skipping webhook notification")
+        return
+    
+    try:
+        # Check if file exists and get its size
+        if not os.path.exists(file_path):
+            print(f"Scan file not found: {file_path}")
+            return
+            
+        file_size = os.path.getsize(file_path)
+        if file_size == 0:
+            print("Scan file is empty")
+            return
+            
+        # Create Discord embed with file info
+        embed = {
+            "title": f"🔍 Nmap Scan Complete: {scan_label}",
+            "description": f"**Target Network:** `{target_network}`\n**Interface:** `{interface}`\n**Timestamp:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            "color": 0x00ff00,  # Green color
+            "fields": [
+                {
+                    "name": "📁 Scan Results",
+                    "value": f"**File:** `{os.path.basename(file_path)}`\n**Size:** {file_size:,} bytes\n**Download the file below for complete results**",
+                    "inline": False
+                }
+            ],
+            "footer": {
+                "text": "RaspyJack Nmap Scanner"
+            },
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        # Prepare the payload with file
+        with open(file_path, 'rb') as f:
+            files = {
+                'file': (os.path.basename(file_path), f, 'text/plain')
+            }
+            
+            payload = {
+                'payload_json': json.dumps({'embeds': [embed]})
+            }
+            
+            # Send to Discord with file attachment
+            response = requests.post(webhook_url, data=payload, files=files, timeout=30)
+            
+        if response.status_code == 204:
+            print("✅ Discord webhook with file sent successfully")
+        else:
+            print(f"❌ Discord webhook failed: {response.status_code}")
+            
+    except Exception as e:
+        print(f"❌ Error sending Discord webhook with file: {e}")
+
 def run_scan(label: str, nmap_args: list[str]):
     Dialog_info(f"      {label}\n        Running\n      wait please...", wait=True)
 
@@ -859,6 +1037,18 @@ def run_scan(label: str, nmap_args: list[str]):
     
     subprocess.run(cmd)
     subprocess.run(["sed", "-i", "s/Nmap scan report for //g", path])
+
+    # Send scan results to Discord (non-blocking)
+    def send_results_to_discord():
+        try:
+            if os.path.exists(path):
+                # Send the file directly instead of reading content
+                send_to_discord(label, path, ip_with_mask, interface)
+        except Exception as e:
+            print(f"Error sending scan results to Discord: {e}")
+    
+    # Send to Discord in background thread
+    threading.Thread(target=send_results_to_discord, daemon=True).start()
 
     Dialog_info(f"      {label}\n      Finished !!!\n   Interface: {interface}", wait=True)
     time.sleep(2)
@@ -1411,6 +1601,7 @@ class DisposableMenu:
     select = 0       # Current selection index
     char   = "> "    # Indentation character
     max_len = 17     # Max chars per line
+    view_mode = "list"  # "list", "grid", or "carousel" - current view mode
 
     menu = {
         "a": (
@@ -1531,8 +1722,223 @@ class DisposableMenu:
         ) or ([" <vide>", lambda: None],)  # si aucun script n'est présent
 
     def __init__(self):
-        # cette fois, `default` est déjà instancié → pas d’erreur
+        # cette fois, `default` est déjà instancié → pas d'erreur
         self._build_payload_menu()
+
+
+### Font Awesome Icon Mapping ###
+MENU_ICONS = {
+    " Scan Nmap": "\uf002",        # search
+    " Reverse Shell": "\uf120",    # terminal  
+    " Responder": "\uf505",        # responder (updated)
+    " MITM & Sniff": "\uf6ff",     # MITM (updated)
+    " DNS Spoofing": "\uf233",     # server
+    " Network info": "\ue012",     # network info (updated)
+    " WiFi Manager": "\uf1eb",     # wifi
+    " Other features": "\uf085",   # cogs
+    " Read file": "\uf15c",        # file-alt
+    " Payload": "\uf121",          # code/terminal icon
+}
+
+### Menu Descriptions for Carousel View ###
+MENU_DESCRIPTIONS = {
+    " Scan Nmap": "Network discovery\nand port scanning\nwith Nmap",
+    " Reverse Shell": "Establish reverse\nconnections for\nremote access",
+    " Responder": "LLMNR, NBT-NS &\nMDNS poisoner\nfor credentials",
+    " MITM & Sniff": "Man-in-the-middle\nattacks and traffic\ninterception",
+    " DNS Spoofing": "Redirect DNS\nqueries to fake\nphishing sites",
+    " Network info": "Display current\nnetwork interface\nand IP information",
+    " WiFi Manager": "Manage wireless\nconnections and\ninterface switching",
+    " Other features": "Additional tools\nand system\nconfiguration",
+    " Read file": "View captured\ndata and scan\nresults",
+    " Payload": "Execute custom\nPython scripts\nand tools",
+}
+
+
+def GetMenuCarousel(inlist, duplicates=False):
+    """
+    Display menu items in a carousel layout with huge icon in center and navigation arrows.
+    - Carousel navigation: LEFT/RIGHT for main navigation
+    - UP/DOWN for fine adjustment  
+    - Shows huge icon in center with left/right arrows
+    - Returns selected item or empty string
+    """
+    if not inlist:
+        inlist = ["Nothing here :("]
+    
+    if duplicates:
+        inlist = [f"{i}#{txt}" for i, txt in enumerate(inlist)]
+    
+    total = len(inlist)
+    index = m.select if m.select < total else 0
+    
+    while True:
+        # Draw carousel
+        color.DrawMenuBackground()
+        
+        # Current item (center, large)
+        current_item = inlist[index]
+        txt = current_item if not duplicates else current_item.split('#', 1)[1]
+        
+        # Main item display area (center)
+        main_x = 64  # Center of 128px screen
+        main_y = 64  # Center vertically
+        
+        # Draw huge icon in center
+        icon = MENU_ICONS.get(txt, "\uf192")  # Default to dot-circle icon
+        # Large font for the icon
+        huge_icon_font = ImageFont.truetype('/usr/share/fonts/truetype/fontawesome/fa-solid-900.ttf', 48)
+        draw.text((main_x, main_y - 12), icon, font=huge_icon_font, fill=color.selected_text, anchor="mm")
+        
+        # Draw menu item name under the icon with custom font for carousel view
+        title = txt.strip()
+        # Create a bigger, bolder font specifically for carousel view
+        carousel_text_font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 12)
+        draw.text((main_x, main_y + 28), title, font=carousel_text_font, fill=color.selected_text, anchor="mm")
+        
+        # Draw navigation arrows - always show if there are multiple items
+        if total > 1:
+            arrow_font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 18)
+            # Left arrow (always show for wraparound)
+            draw.text((20, main_y), "◀", font=arrow_font, fill=color.text, anchor="mm")
+            # Right arrow (always show for wraparound)  
+            draw.text((108, main_y), "▶", font=arrow_font, fill=color.text, anchor="mm")
+        
+        time.sleep(0.12)
+        
+        # Handle button input
+        btn = getButton()
+        if btn == "KEY_LEFT_PIN":
+            # Wraparound navigation - go to last item if at first
+            index = (index - 1) % total
+        elif btn == "KEY_RIGHT_PIN":
+            # Wraparound navigation - go to first item if at last
+            index = (index + 1) % total
+        elif btn == "KEY_UP_PIN":
+            # Fine adjustment - same as left
+            index = (index - 1) % total
+        elif btn == "KEY_DOWN_PIN":
+            # Fine adjustment - same as right  
+            index = (index + 1) % total
+        elif btn == "KEY_PRESS_PIN":
+            if index < total:
+                m.select = index
+                return inlist[index] if not duplicates else inlist[index].split('#', 1)[1]
+        elif btn == "KEY1_PIN":
+            # Toggle to next view mode
+            toggle_view_mode()
+            return ""
+        elif btn == "KEY3_PIN":
+            return ""  # Go back
+
+
+def GetMenuGrid(inlist, duplicates=False):
+    """
+    Display menu items in a grid layout (2 columns x 4 rows = 8 items visible).
+    - Grid navigation: UP/DOWN/LEFT/RIGHT
+    - Returns selected item or empty string
+    """
+    GRID_COLS = 2
+    GRID_ROWS = 4
+    GRID_ITEMS = GRID_COLS * GRID_ROWS
+    
+    if not inlist:
+        inlist = ["Nothing here :("]
+    
+    if duplicates:
+        inlist = [f"{i}#{txt}" for i, txt in enumerate(inlist)]
+    
+    total = len(inlist)
+    index = m.select if m.select < total else 0
+    
+    while True:
+        # Calculate grid window
+        start_idx = (index // GRID_ITEMS) * GRID_ITEMS
+        window = inlist[start_idx:start_idx + GRID_ITEMS]
+        
+        # Draw grid
+        color.DrawMenuBackground()
+        
+        for i, item in enumerate(window):
+            if i >= GRID_ITEMS:
+                break
+                
+            # Calculate grid position
+            row = i // GRID_COLS
+            col = i % GRID_COLS
+            
+            # Grid item position
+            x = default.start_text[0] + (col * 55)  # 55px per column
+            y = default.start_text[1] + (row * 25)  # 25px per row
+            
+            # Check if this item is selected
+            is_selected = (start_idx + i == index)
+            
+            if is_selected:
+                # Draw selection rectangle
+                draw.rectangle(
+                    (x - 2, y - 2, x + 53, y + 23),
+                    fill=color.select
+                )
+                fill_color = color.selected_text
+            else:
+                fill_color = color.text
+            
+            # Draw icon and text
+            txt = item if not duplicates else item.split('#', 1)[1]
+            icon = MENU_ICONS.get(txt, "")
+            
+            if icon:
+                # Draw icon
+                draw.text((x + 2, y), icon, font=icon_font, fill=fill_color)
+                # Draw short text label
+                short_text = txt.strip()[:8]  # Limit text length for grid
+                draw.text((x, y + 13), short_text, font=text_font, fill=fill_color)
+            else:
+                # Draw text only
+                short_text = txt.strip()[:10]
+                draw.text((x, y + 8), short_text, font=text_font, fill=fill_color)
+        
+        # Display current view mode indicator
+        # draw.text((2, 2), "Grid", font=text_font, fill=color.text)
+        
+        time.sleep(0.12)
+        
+        # Handle button input
+        btn = getButton()
+        if btn == "KEY_UP_PIN":
+            if index >= GRID_COLS:
+                index -= GRID_COLS
+        elif btn == "KEY_DOWN_PIN":
+            if index + GRID_COLS < total:
+                index += GRID_COLS
+        elif btn == "KEY_LEFT_PIN":
+            if index > 0 and index % GRID_COLS != 0:
+                index -= 1
+        elif btn == "KEY_RIGHT_PIN":
+            if index < total - 1 and (index + 1) % GRID_COLS != 0:
+                index += 1
+        elif btn == "KEY_PRESS_PIN":
+            if index < total:
+                m.select = index
+                return inlist[index] if not duplicates else inlist[index].split('#', 1)[1]
+        elif btn == "KEY1_PIN":
+            # Toggle to list view
+            toggle_view_mode()
+            return ""
+        elif btn == "KEY3_PIN":
+            return ""  # Go back
+
+
+def toggle_view_mode():
+    """Cycle through list -> grid -> carousel -> list view modes."""
+    if m.view_mode == "list":
+        m.view_mode = "grid"
+    elif m.view_mode == "grid":
+        m.view_mode = "carousel"
+    else:  # carousel
+        m.view_mode = "list"
+    m.select = 0  # Reset selection when switching views
 
 
 def main():
@@ -1547,7 +1953,26 @@ def main():
     # Menu handling
     # Running functions from menu structure
     while True:
-        x = m.GetMenuIndex(m.GetMenuList())
+        # Use different view modes only for main menu ("a"), list view for all submenus
+        if m.which == "a" and m.view_mode in ["grid", "carousel"]:
+            if m.view_mode == "grid":
+                selected_item = GetMenuGrid(m.GetMenuList())
+            else:  # carousel
+                selected_item = GetMenuCarousel(m.GetMenuList())
+                
+            if selected_item:
+                # Find the index of the selected item
+                menu_list = m.GetMenuList()
+                x = -1
+                for i, item in enumerate(menu_list):
+                    if item == selected_item:
+                        x = i
+                        break
+            else:
+                x = -1
+        else:
+            x = m.GetMenuIndex(m.GetMenuList())
+            
         if x >= 0:
             m.select = x
             if isinstance(m.menu[m.which][m.select][1], str):
@@ -1576,7 +2001,9 @@ LCD.LCD_ShowImage(image, 0, 0)
 # Create draw objects BEFORE main() so color functions can use them
 image = Image.new("RGB", (LCD.width, LCD.height), "WHITE")
 draw = ImageDraw.Draw(image)
-font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 8)
+text_font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 9)
+icon_font = ImageFont.truetype('/usr/share/fonts/truetype/fontawesome/fa-solid-900.ttf', 12)
+font = text_font  # Keep backward compatibility
 
 ### Defining PINS, threads, loading JSON ###
 PINS = {
