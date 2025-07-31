@@ -125,9 +125,13 @@ fi
 step "Setting up GPS for wardriving …"
 
 # Install GPS dependencies
-GPS_PACKAGES=(gpsd gpsd-clients python3-gpsd python3-gpsd-py3)
+GPS_PACKAGES=(gpsd gpsd-clients)
 info "Installing GPS packages: ${GPS_PACKAGES[*]}"
 sudo apt-get install -y --no-install-recommends "${GPS_PACKAGES[@]}"
+
+# Install GPS Python library via pip (with system override)
+info "Installing gpsd-py3 via pip..."
+sudo pip3 install --break-system-packages gpsd-py3
 
 # Create loot directory for wardriving data
 sudo mkdir -p /root/Raspyjack/loot/wardriving
