@@ -121,7 +121,87 @@ else
   warn "NetworkManager not active - WiFi attacks may need manual setup"
 fi
 
-# ───── 5 ▸ systemd service ───────────────────────────────────
+# ───── 5 ▸ GPS setup ──────────────────────────────────────────
+step "Setting up GPS for wardriving …"
+
+# Install GPS dependencies
+GPS_PACKAGES=(gpsd gpsd-clients python3-gpsd python3-gpsd-py3)
+info "Installing GPS packages: ${GPS_PACKAGES[*]}"
+sudo apt-get install -y --no-install-recommends "${GPS_PACKAGES[@]}"
+
+# Create loot directory for wardriving data
+sudo mkdir -p /root/Raspyjack/loot/wardriving
+sudo chown root:root /root/Raspyjack/loot/wardriving
+sudo chmod 755 /root/Raspyjack/loot/wardriving
+
+# Install raspyjack-gps.service
+GPS_SERVICE=/etc/systemd/system/raspyjack-gps.service
+step "Installing GPS service $GPS_SERVICE …"
+
+sudo tee "$GPS_SERVICE" >/dev/null <<'GPS_UNIT'
+[Unit]
+Description=RaspyJack GPS Service
+After=network.target
+
+[Service]
+Type=forking
+ExecStart=/usr/sbin/gpsd -n /dev/ttyACM1
+Restart=always
+RestartSec=5
+User=root
+
+[Install]
+WantedBy=multi-user.target
+GPS_UNIT
+
+# Enable and start GPS service
+sudo systemctl daemon-reload
+sudo systemctl enable --now raspyjack-gps.service
+
+# Stop and mask default GPS services to prevent conflicts permanently
+sudo systemctl stop gpsd
+sudo systemctl stop gpsd.socket
+sudo systemctl disable gpsd
+sudo systemctl disable gpsd.socket
+sudo systemctl mask gpsd
+sudo systemctl mask gpsd.socket
+
+# Wait for GPS service to start
+sleep 3
+
+# Check GPS service status
+if systemctl is-active --quiet raspyjack-gps.service; then
+  info "GPS service started successfully"
+else
+  warn "GPS service failed to start - check device connection"
+fi
+
+# Detect and configure GPS device
+step "Detecting GPS device..."
+GPS_DEVICE=""
+for device in /dev/ttyACM1 /dev/ttyACM0 /dev/ttyUSB0 /dev/ttyUSB1; do
+  if [ -e "$device" ]; then
+    GPS_DEVICE="$device"
+    info "Found GPS device: $GPS_DEVICE"
+    break
+  fi
+done
+
+if [ -n "$GPS_DEVICE" ]; then
+  # Update service if device is different from configured
+  CURRENT_DEVICE=$(grep -o '/dev/ttyACM[01]' "$GPS_SERVICE" || echo "")
+  if [ "$CURRENT_DEVICE" != "$GPS_DEVICE" ]; then
+    info "Updating GPS service to use $GPS_DEVICE"
+    sudo sed -i "s|/dev/ttyACM[01]|$GPS_DEVICE|g" "$GPS_SERVICE"
+    sudo systemctl daemon-reload
+    sudo systemctl restart raspyjack-gps.service
+    sleep 2
+  fi
+else
+  warn "No GPS device found - service will use default /dev/ttyACM1"
+fi
+
+# ───── 6 ▸ systemd service ───────────────────────────────────
 SERVICE=/etc/systemd/system/raspyjack.service
 step "Installing systemd service $SERVICE …"
 
@@ -196,6 +276,39 @@ except Exception as e:
     sys.exit(1)
 WIFI_TEST
 
+# 6‑f GPS service and device check
+if systemctl is-active --quiet raspyjack-gps.service; then
+  info "GPS service is running"
+else
+  warn "GPS service not running - check: sudo systemctl status raspyjack-gps.service"
+fi
+
+# Check for GPS devices
+if ls /dev/ttyACM* 2>/dev/null | grep -q ttyACM; then
+  info "GPS devices found: $(ls /dev/ttyACM* | xargs)"
+else
+  warn "No GPS devices found - check USB connection"
+fi
+
+# Test GPS data access
+python3 - <<'GPS_TEST' || warn "GPS test failed - check device connection"
+import gpsd
+import time
+try:
+    gpsd.connect()
+    time.sleep(2)
+    packet = gpsd.get_current()
+    if hasattr(packet, 'mode') and packet.mode >= 2:
+        print(f"[OK] GPS working - {packet.mode}D fix at {packet.lat:.4f},{packet.lon:.4f}")
+    else:
+        print("[WARN] GPS connected but no fix - move to clear sky view")
+        print("[INFO] GPS will work once you get a satellite fix")
+except Exception as e:
+    print(f"[WARN] GPS test failed: {e}")
+    print("[INFO] GPS may work after reboot or when device is connected")
+GPS_TEST
+
 step "Installation finished successfully!"
 info "⚠️  Reboot is recommended to ensure overlays & services start cleanly."
 info "📡 For WiFi attacks: Plug in USB WiFi dongle and run payloads/deauth.py"
+info "🗺️  For wardriving: Run payloads/wardriving.py (GPS should work automatically)"
