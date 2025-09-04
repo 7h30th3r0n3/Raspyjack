@@ -1,0 +1,70 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+DISCORD_MESSAGE - Send text messages to Discord webhook
+Usage: 
+    DISCORD_MESSAGE "Simple message"
+    DISCORD_MESSAGE "Message content" --title "Alert Title"
+    DISCORD_MESSAGE "Error occurred" --title "System Error" --color ff0000
+    DISCORD_MESSAGE "Success!" --color 00ff00
+"""
+import argparse
+import sys
+
+from plugins.discord_notifier_plugin.helpers.discord_utils import send_message_to_discord
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Send a text message to Discord webhook",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  %(prog)s "System started successfully"
+  %(prog)s "Low battery warning" --title "Battery Alert" 
+  %(prog)s "Error in process" --title "System Error" --color ff0000
+  %(prog)s "Task completed" --title "Success" --color 00ff00
+  
+Color codes (hex without #):
+  ff0000 = Red, 00ff00 = Green, 0000ff = Blue, ffff00 = Yellow
+  ffa500 = Orange, 800080 = Purple, 00ffff = Cyan
+        """
+    )
+    
+    parser.add_argument(
+        "message",
+        help="Message content to send"
+    )
+    
+    parser.add_argument(
+        "--title", "-t",
+        help="Optional title for embed format"
+    )
+    
+    parser.add_argument(
+        "--color", "-c",
+        help="Optional color for embed (hex without #, e.g., ff0000 for red)"
+    )
+    
+    args = parser.parse_args()
+    
+    # Convert color from hex string to int if provided
+    color = None
+    if args.color:
+        try:
+            color = int(args.color, 16)
+        except ValueError:
+            print(f"Error: Invalid color format '{args.color}'. Use hex format without # (e.g., ff0000)")
+            sys.exit(1)
+    
+    # Send the message
+    success = send_message_to_discord(
+        message=args.message,
+        title=args.title,
+        color=color
+    )
+    
+    if not success:
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

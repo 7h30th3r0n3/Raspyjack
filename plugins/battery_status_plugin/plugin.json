@@ -1,0 +1,103 @@
+{
+  "name": "Battery Status",
+  "version": "0.1.0",
+  "author": "tcpassos",
+  "description": "Display battery voltage-derived percentage & icon overlay using INA219 sensor",
+  "priority": 40,
+  "requires": [],
+  "permissions": {
+    "i2c": true
+  },
+  "events": {
+    "emits": [
+      "battery.updated",
+      "battery.low",
+      "battery.critical",
+      "battery.recovered",
+      "battery.sensor_error",
+      "battery.charging",
+      "battery.discharging"
+    ],
+    "listens": []
+  },
+  "config_schema": {
+    "show_percentage": {
+      "type": "boolean",
+      "label": "Show Battery Percentage",
+      "description": "Display battery percentage text in overlay",
+      "default": true
+    },
+    "show_icon": {
+      "type": "boolean",
+      "label": "Show Battery Icon",
+      "description": "Display battery icon graphic in overlay",
+      "default": true
+    },
+    "enable_monitoring": {
+      "type": "boolean",
+      "label": "Enable Battery Monitoring",
+      "description": "Enable battery status monitoring and overlay display",
+      "default": true
+    },
+    "i2c_bus": {
+      "type": "number",
+      "label": "I2C Bus",
+      "description": "I2C bus index used by INA219",
+      "default": 1
+    },
+    "address": {
+      "type": "number",
+      "label": "INA219 Address",
+      "description": "I2C address in decimal (e.g. 67 for 0x43)",
+      "default": 67
+    },
+    "refresh_interval": {
+      "type": "number",
+      "label": "Refresh Interval (s)",
+      "description": "Base polling interval in seconds",
+      "default": 2.0
+    },
+    "voltage_min": {
+      "type": "number",
+      "label": "Voltage Min",
+      "description": "Voltage corresponding to 0%",
+      "default": 3.0
+    },
+    "voltage_max": {
+      "type": "number",
+      "label": "Voltage Max",
+      "description": "Voltage corresponding to 100%",
+      "default": 4.2
+    },
+    "warn_threshold": {
+      "type": "number",
+      "label": "Warn Threshold %",
+      "description": "Battery percentage for low warning",
+      "default": 25
+    },
+    "crit_threshold": {
+      "type": "number",
+      "label": "Critical Threshold %",
+      "description": "Battery percentage for critical alert",
+      "default": 10
+    },
+    "colorize": {
+      "type": "boolean",
+      "label": "Colorize Overlay",
+      "description": "Use dynamic colors and blink on critical level",
+      "default": true
+    },
+    "battery_align": {
+      "type": "string",
+      "label": "Battery Overlay Alignment",
+      "description": "Horizontal alignment of battery overlay: left | center | right",
+      "default": "right"
+    },
+    "battery_offset": {
+      "type": "number",
+      "label": "Battery Overlay Offset",
+      "description": "Horizontal pixel offset applied after alignment (can be negative)",
+      "default": 0
+    }
+  }
+}

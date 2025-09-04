@@ -1,0 +1,141 @@
+#!/usr/bin/env python3
+"""
+WAIT_FOR_KEY - Timed hardware button wait macro for Raspyjack
+-------------------------------------------------------------
+Usage:
+  WAIT_FOR_KEY <KEY> [TIMEOUT] [MESSAGE...]
+
+Examples:
+  WAIT_FOR_KEY KEY1               # waits indefinitely for KEY1 press
+  WAIT_FOR_KEY KEY2 10s Continue  # waits up to 10 seconds
+  WAIT_FOR_KEY UP 1m Press UP     # waits up to 1 minute
+  WAIT_FOR_KEY PRESS 750ms Go     # waits 750 milliseconds
+
+Timeout formats:
+  <number> or <number>s    seconds  (e.g. 10 or 10s)
+  <number>ms               milliseconds (e.g. 500ms)
+  <number>m                minutes  (e.g. 1m)
+  <number>h                hours    (e.g. 2h)
+  <number>d                days     (e.g. 1d)
+
+Exit codes:
+  0  -> key was pressed before timeout / end
+  1  -> timeout expired (key not pressed)
+  2  -> invalid / unknown key name
+  3  -> usage or internal error
+
+Behavior:
+  Sends an initial SERIAL_WRITE ("Waiting for <KEY> ...") and, when pressed,
+  sends "<KEY> PRESSED". On timeout sends "<KEY> TIMEOUT".
+
+NOTE: This script performs the blocking wait itself so the orchestrator stays responsive.
+"""
+import sys, time, os
+
+# Add main directory to path for centralized GPIO configuration
+sys.path.append(os.path.dirname(os.path.dirname(__file__)))
+
+from gpio_config import gpio_config
+
+KEY_NAME_TO_PIN = {
+    'UP': gpio_config.key_up_pin,
+    'DOWN': gpio_config.key_down_pin,
+    'LEFT': gpio_config.key_left_pin,
+    'RIGHT': gpio_config.key_right_pin,
+    'PRESS': gpio_config.key_press_pin,
+    'KEY1': gpio_config.key1_pin,
+    'KEY2': gpio_config.key2_pin,
+    'KEY3': gpio_config.key3_pin,
+}
+
+PIPE = "/tmp/raspyjack.pipe"
+
+def write_pipe(msg: str):
+  if os.path.exists(PIPE) and stat_is_fifo(PIPE):
+    try:
+      with open(PIPE, 'w') as f:
+        f.write(msg + "\n")
+    except Exception:
+      pass
+
+def stat_is_fifo(path: str) -> bool:
+  try:
+    import stat
+    st = os.stat(path).st_mode
+    return stat.S_ISFIFO(st)
+  except Exception:
+    return False
+
+def parse_timeout(tok: str):
+  if tok is None:
+    return None
+  t = tok.lower()
+  try:
+    if t.endswith('ms'):
+      return float(t[:-2]) / 1000.0
+    if t.endswith('s'):
+      return float(t[:-1])
+    if t.endswith('m'):
+      return float(t[:-1]) * 60.0
+    if t.endswith('h'):
+      return float(t[:-1]) * 3600.0
+    if t.endswith('d'):
+      return float(t[:-1]) * 86400.0
+    # plain number defaults to seconds
+    return float(t)
+  except ValueError:
+    return None
+
+def main():
+  # Args: KEY [TIMEOUT] [MESSAGE...]
+  args = sys.argv[1:]
+  if not args:
+    print("Usage: WAIT_FOR_KEY <KEY> [TIMEOUT] [MESSAGE...]", file=sys.stderr)
+    sys.exit(3)
+
+  key = args[0].upper()
+  timeout = None
+  message_start_index = 1
+  if len(args) > 1:
+    maybe_timeout = parse_timeout(args[1])
+    if maybe_timeout is not None:
+      timeout = maybe_timeout
+      message_start_index = 2
+  message = " ".join(args[message_start_index:]) if len(args) > message_start_index else f"Waiting for {key}"
+
+  # GPIO import and setup only when used to keep script cheap in failure cases
+  import RPi.GPIO as GPIO
+  pin = KEY_NAME_TO_PIN.get(key)
+  if pin is None:
+    write_pipe(f"SERIAL_WRITE: WAIT_FOR_KEY INVALID KEY {key}")
+    sys.exit(2)
+
+  try:
+    GPIO.setmode(GPIO.BCM)
+    GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+  except Exception:
+    write_pipe(f"SERIAL_WRITE: WAIT_FOR_KEY GPIO ERROR")
+    sys.exit(3)
+
+  write_pipe(f"SERIAL_WRITE: {message}")
+
+  start = time.time()
+  last_state = GPIO.input(pin)
+  pressed = False
+  while True:
+    try:
+      state = GPIO.input(pin)
+    except Exception:
+      break
+    if last_state == 1 and state == 0:
+      pressed = True
+      break
+    last_state = state
+    if timeout is not None and (time.time() - start) >= timeout:
+      break
+    time.sleep(0.05)
+
+  sys.exit(0 if pressed else 1 if timeout is not None else 3)
+
+if __name__ == '__main__':
+  main()

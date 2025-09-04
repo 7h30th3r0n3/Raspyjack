@@ -1,0 +1,54 @@
+{
+  "name": "Discord Notifier",
+  "version": "0.1.0",
+  "author": "Hosseios & tcpassos",
+  "description": "Send Discord webhooks for completed scans and provide loot upload actions",
+  "priority": 200,
+  "requires": [],
+  "permissions": {
+    "network": true,
+    "filesystem": true
+  },
+  "events": {
+    "emits": [
+      "discord.message.sent",
+      "discord.message.failed",
+      "discord.webhook.configured",
+      "discord.webhook.updated"
+    ],
+    "listens": ["scan.after"]
+  },
+  "payload_extensions": ["DISCORD_EXFIL", "DISCORD_MESSAGE"],
+  "config_schema": {
+    "webhook_url": {
+      "type": "string",
+      "label": "Discord Webhook URL",
+      "description": "Discord webhook URL for sending notifications",
+      "default": "",
+      "sensitive": true
+    },
+    "nmap_notifications": {
+      "type": "boolean",
+      "label": "Nmap Notifications",
+      "description": "Send Discord notifications when Nmap scans complete",
+      "default": true
+    },
+    "event_hooks": {
+      "type": "list",
+      "label": "Event Hooks",
+      "description": "List of event hook rules (trigger + message/embed/files templates)",
+      "default": [],
+      "item_schema": {
+        "type": "object",
+        "fields": {
+          "id": { "type": "string", "description": "Optional unique identifier for the hook" },
+          "event": { "type": "string", "required": true, "description": "Event pattern to match (supports *)" },
+          "message": { "type": "string", "description": "Plain message content template (ignored if embed present)" },
+          "embed": { "type": "object", "description": "Discord embed object with templated string fields" },
+          "files": { "type": "list", "description": "List of file path templates to attach" },
+          "enabled": { "type": "boolean", "default": true, "description": "Enable/disable this hook" }
+        }
+      }
+    }
+  }
+}

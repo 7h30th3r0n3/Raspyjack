@@ -1,0 +1,61 @@
+#!/bin/sh
+
+show_usage() {
+    echo "Usage: $0 [DHCP_CLIENT|DHCP_SERVER|AUTO]"
+    echo ""
+}
+
+shut_it_all_down() {
+    /etc/init.d/dnsmasq stop
+    pkill -9 dnsmasq #just in case
+    pkill -9 udhcpc #this is the observed dhcp client
+    pkill -9 odhcpcd #just in case
+}
+
+configure_dhcp_client() {
+    shut_it_all_down
+    uci set network.lan.proto='dhcp'
+}
+
+configure_dhcp_server() {
+    shut_it_all_down
+    uci set network.lan.proto='static'
+    uci set network.lan.ipaddr='172.16.24.1'
+    uci set network.lan.netmask='255.255.255.0'
+    uci set network.lan.ip6assign='60'
+    #remove old dhcp options before setting new
+    uci -q delete dhcp.lan.dhcp_option
+    uci add_list dhcp.lan.dhcp_option="3,172.16.24.1"
+    #disables gateway
+    #uci add_list dhcp.lan.dhcp_option="3"
+    /etc/init.d/dnsmasq start
+}
+
+case $1 in
+    "DHCP_CLIENT")
+        configure_dhcp_client
+        ;;
+    "DHCP_SERVER")
+        configure_dhcp_server
+        ;;
+    "AUTO")
+        #make sure nothing interferes
+        shut_it_all_down
+        #this will exit 0 if a dhcp discovery/request packet is seen, and 124 if not
+        sniffed="$(timeout -t 15 tcpdump -Z nobody -i eth0 -c 3 udp src port 68 and udp dst port 67 -v 2>&1)"
+        if echo "${sniffed}" | grep -q 'DHCP-Message Option 53, length 1: Discover' && \
+          ! echo "${sniffed}" | grep -q 'DHCP-Message Option 53, length 1: Request'; then
+            #we saw a dhcp discover but no dhcp request, so someone wants a dhcp server and didn't find one
+            configure_dhcp_server
+        else
+            configure_dhcp_client
+        fi
+        ;;
+    *)
+        show_usage
+        exit 0
+        ;;
+esac
+
+uci commit network
+/etc/init.d/network restart

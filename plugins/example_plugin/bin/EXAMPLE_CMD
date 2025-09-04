@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Example exposed command from the example_plugin.
+# When the plugin is enabled and loaded, the plugin manager will attempt to
+# create a symlink or copy of this file into the top-level `bin/` directory,
+# making it invokable as:
+#   ./bin/EXAMPLE_CMD
+# Keep scripts short and side-effect free unless intentionally performing an action.
+
+echo "[EXAMPLE_CMD] Hello from example_plugin bin command!"

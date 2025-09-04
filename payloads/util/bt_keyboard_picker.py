@@ -25,7 +25,7 @@ UP/DOWN : navigation OK : sélectionner KEY3 : retour/menu RaspyJack.
 import os, sys, subprocess, signal, time, re
 from select import select
 from typing import List, Tuple
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
+sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..', '..')))
 
 # ---------------------------- Third‑party libs ----------------------------
 import RPi.GPIO as GPIO               # Raspberry Pi GPIO access

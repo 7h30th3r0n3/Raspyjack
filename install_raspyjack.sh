@@ -196,6 +196,13 @@ except Exception as e:
     sys.exit(1)
 WIFI_TEST
 
+# 7 ▸ set permissions for binaries
+step "Setting executable permissions for binaries in bin/..."
+if [ -d "/root/Raspyjack/bin" ]; then
+    sudo chmod +x /root/Raspyjack/bin/*
+    info "Permissions set for files in /root/Raspyjack/bin/"
+fi
+
 step "Installation finished successfully!"
 info "⚠️  Reboot is recommended to ensure overlays & services start cleanly."
 info "📡 For WiFi attacks: Plug in USB WiFi dongle and run payloads/deauth.py"

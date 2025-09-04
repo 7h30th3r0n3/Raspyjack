@@ -202,6 +202,38 @@ python3 fast_wifi_switcher.py
 
 ---
 
+## 🧩 Plugin System
+
+RaspyJack features a **modular plugin system** that allows adding custom functionality without modifying the main code.
+
+### Key Features:
+- 🔧 **Event callbacks** (buttons, render, payloads, scans)
+- 📦 **Executable commands** exposed globally via `bin/`
+- ⚙️ **Flexible JSON configuration** per plugin
+- 🎨 **Customizable HUD overlays**
+- 🔄 **Configurable priorities** for execution order
+
+### Basic structure:
+```
+plugins/
+  my_plugin/
+    __init__.py      # Entry point
+    _impl.py         # Implementation
+    bin/             # Exposed commands
+    helpers/         # Auxiliary modules
+```
+
+### Included plugins:
+- **`battery_status_plugin`** - Battery monitor in HUD
+- **`temperature_plugin`** - CPU temperature monitor  
+- **`discord_notifier_plugin`** - Discord notifications + exfiltration commands
+
+📖 **Complete documentation**: [`plugins/README.md`](plugins/README.md)
+
+---
+
+---
+
 ## 🎨  View Modes
 
 RaspyJack features **three different view modes** to navigate the main menu! Press **KEY1** to cycle through them:
@@ -314,6 +346,20 @@ raspyjack/
 │   ├── deauth.py
 │   ├── fast_wifi_switcher.py
 │   └── wifi_manager_payload.py
+|
+├── plugins/
+│   ├── base.py
+│   ├── battery_status_plugin/
+│   │   ├── __init__.py
+│   │   └── _impl.py
+│   ├── temperature_plugin/
+│   │   ├── __init__.py
+│   │   └── _impl.py
+│   ├── discord_notifier_plugin/
+│   │   ├── __init__.py
+│   │   ├── _impl.py
+│   │   └── bin/
+│   │       └── DISCORD_TEST
 │
 ├── DNSSpoof/
 │   ├── captures/
@@ -323,6 +369,7 @@ raspyjack/
 │   ├── MITM/
 │   └── Nmap/
 │
+└── bin/
 └── Responder/
 ```
 

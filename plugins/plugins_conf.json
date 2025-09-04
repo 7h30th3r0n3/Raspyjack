@@ -1,0 +1,15 @@
+{
+  "temperature_plugin": {
+    "enabled": true,
+    "priority": 100,
+    "options": {
+      "refresh_interval": 2.0,
+      "text_color": "white",
+      "show_unit": true
+    }
+  },
+  "discord_notifier_plugin": {
+    "enabled": true,
+    "priority": 200
+  }
+}

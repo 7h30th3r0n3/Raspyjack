@@ -1,0 +1,11 @@
+#!/bin/bash
+
+# ===================================================================
+# LED - Raspyjack LED Controller
+# -------------------------------------------------------------------
+# This script controls the LED indicators on the Raspyjack device.
+# ===================================================================
+
+if [ -p /tmp/raspyjack.pipe ]; then
+    echo "LED:$@" > /tmp/raspyjack.pipe
+fi

@@ -1,0 +1,48 @@
+{
+  "name": "EthernetHook",
+  "version": "0.1.0",
+  "author": "tcpassos",
+  "description": "Monitor ethernet interface, emit connect/disconnect events, run payloads, draw icon",
+  "priority": 160,
+  "requires": [],
+  "permissions": {
+    "network": true,
+    "filesystem": true
+  },
+  "events": {
+    "emits": ["ethernet.connected", "ethernet.disconnected"],
+    "listens": []
+  },
+  "config_schema": {
+    "interface": {
+      "type": "string",
+      "label": "Ethernet Interface",
+      "description": "Interface name to monitor (edit JSON to change)",
+      "default": "eth0"
+    },
+    "show_status_icon": {
+      "type": "boolean",
+      "label": "Show Ethernet Icon",
+      "description": "Display icon when Ethernet has IP",
+      "default": true
+    },
+    "icon_horizontal_pos": {
+      "type": "number",
+      "label": "Icon Horizontal Pos",
+      "description": "Horizontal x coordinate (pixels) for Ethernet icon (0 = left)",
+      "default": 30
+    },
+    "on_ethernet_connected": {
+      "type": "list",
+      "label": "Payloads On Connect",
+      "description": "List of payload names to run when interface gains IPv4 (edit JSON)",
+      "default": []
+    },
+    "on_ethernet_disconnected": {
+      "type": "list",
+      "label": "Payloads On Disconnect",
+      "description": "List of payload names to run when interface loses IPv4 (edit JSON)",
+      "default": []
+    }
+  }
+}

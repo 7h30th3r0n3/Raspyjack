@@ -1,0 +1,6 @@
+#!/bin/bash
+
+# Placeholder for the SWITCH command.
+# In a real implementation, this would check the SWITCH status.
+
+SERIAL_WRITE "Feature not supported: SWITCH"

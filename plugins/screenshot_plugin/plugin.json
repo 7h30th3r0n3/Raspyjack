@@ -1,0 +1,35 @@
+{
+  "name": "Screenshot",
+  "version": "0.1.0",
+  "author": "tcpassos",
+  "description": "Capture framebuffer to PNG on LONG_PRESS KEY2_PIN",
+  "priority": 120,
+  "requires": [],
+  "permissions": {
+    "filesystem": true
+  },
+  "events": {
+      "emits": [
+        "screenshot.capture.start",
+        "screenshot.captured",
+        "screenshot.capture.failed",
+        "screenshot.directory.ready",
+        "screenshot.directory.error"
+      ],
+      "listens": []
+  },
+  "config_schema": {
+    "periodic_enabled": {
+      "type": "boolean",
+      "label": "Periodic Screenshots",
+      "description": "Enable automatic periodic screenshot capture",
+      "default": false
+    },
+    "periodic_interval": {
+      "type": "number",
+      "label": "Periodic Interval (s)",
+      "description": "Seconds between automatic captures (min 5)",
+      "default": 60
+    }
+  }
+}

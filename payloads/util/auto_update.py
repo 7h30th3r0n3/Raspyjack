@@ -3,13 +3,21 @@
 RaspyJack *payload* – Auto‑Update (LCD‑friendly)
 ===============================================
 Backs‑up the current **/root/Raspyjack** folder, pulls the latest changes
-from GitHub and restarts the *raspyjack* systemd service – while showing a
-simple progress UI on the 1.44‑inch LCD.
+from GitHub, sets execute permissions for bin files, and restarts the 
+*raspyjack* systemd service – while showing a simple progress UI on the 
+1.44‑inch LCD.
 
 Controls
 --------
 * **KEY1**  ‑ launch update immediately.
 * **KEY3**  ‑ abort and return to menu.
+
+Update Process
+--------------
+1. Create timestamped backup of current installation
+2. Pull latest changes from GitHub (git reset --hard)
+3. Set execute permissions for all files in bin/ directory
+4. Restart raspyjack systemd service
 
 The script mirrors the button/LCD logic of *Periodic Nmap Scan* so the
 screen stays informative throughout.
@@ -21,7 +29,7 @@ screen stays informative throughout.
 import os, sys, time, signal, subprocess, tarfile
 from datetime import datetime
 
-sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..")))
+sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..", "..")))
 
 # ---------------------------- Third‑party libs ----------------------------
 import RPi.GPIO as GPIO
@@ -110,6 +118,20 @@ def git_update() -> tuple[bool, str]:
         return False, f"git error {exc.returncode}"
 
 
+def fix_bin_permissions() -> tuple[bool, str]:
+    """Set execute permissions for all files in bin directory."""
+    bin_dir = os.path.join(RASPYJACK_DIR, "bin")
+    try:
+        if os.path.exists(bin_dir):
+            # Set execute permissions for all files in bin/
+            subprocess.run(["chmod", "+x", f"{bin_dir}/*"], shell=True, check=True)
+            return True, "permissions set"
+        else:
+            return True, "no bin dir"
+    except subprocess.CalledProcessError as exc:
+        return False, f"chmod error {exc.returncode}"
+
+
 def restart_service() -> tuple[bool, str]:
     try:
         subprocess.run(["systemctl", "restart", SERVICE_NAME], check=True)
@@ -143,7 +165,12 @@ try:
             ok, info = git_update()
             if not ok:
                 show(["Update failed", info], invert=True); time.sleep(4); break
-            # 3. Restart service
+            # 3. Fix bin permissions
+            show(["Setting permissions…"])
+            ok, info = fix_bin_permissions()
+            if not ok:
+                show(["Permissions failed", info], invert=True); time.sleep(4); break
+            # 4. Restart service
             show(["Restarting…"])
             ok, info = restart_service()
             if not ok:

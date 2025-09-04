@@ -1,0 +1,11 @@
+#!/bin/bash
+
+# ===================================================================
+# SERIAL_WRITE - Raspyjack Serial Write Controller
+# -------------------------------------------------------------------
+# This script sends messages to the Raspyjack serial interface.
+# ===================================================================
+
+if [ -p /tmp/raspyjack.pipe ]; then
+    echo "SERIAL_WRITE:$@" > /tmp/raspyjack.pipe
+fi

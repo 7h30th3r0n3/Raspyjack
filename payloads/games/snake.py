@@ -21,7 +21,7 @@ The code is *heavily commented* so beginners can follow the logic step by step.
 # 0) Ensure local helper modules are importable when launched directly
 # ---------------------------------------------------------------------------
 import os, sys
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
+sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..', '..')))
 
 # ---------------------------- Standard library ----------------------------
 import time

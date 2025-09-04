@@ -27,7 +27,7 @@ Enjoy!
 # 0) Make example_show_buttons.py helpers available when launched directly
 # ---------------------------------------------------------------------------
 import os, sys, signal, time, random
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
+sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..', '..')))
 
 # ---------------------------- Standard library ----------------------------
 from typing import List, Tuple

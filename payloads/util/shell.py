@@ -16,7 +16,7 @@ Quit : *Esc* on keyboard **or** **KEY3** on the HAT.
 # 0) Imports & path tweaks
 # ---------------------------------------------------------
 import os, sys, time, signal, select, fcntl, pty, re
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
+sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..', '..')))
 
 import LCD_1in44, LCD_Config          # Waveshare LCD driver
 from PIL import Image, ImageDraw, ImageFont

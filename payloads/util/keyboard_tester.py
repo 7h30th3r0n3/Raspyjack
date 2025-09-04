@@ -23,7 +23,7 @@ sudo apt install python3-evdev
 # 0) Ensure we can import RaspyJack helpers when launched directly
 # ---------------------------------------------------------------------------
 import os, sys, time, signal, select, fcntl
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
+sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..', '..')))
 
 # ---------------------------- Third‑party libs -----------------------------
 import LCD_1in44, LCD_Config          # Waveshare LCD driver

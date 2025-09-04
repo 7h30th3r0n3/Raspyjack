@@ -1,0 +1,27 @@
+{
+  "name": "ExamplePlugin",
+  "version": "0.1.0",
+  "author": "tcpassos",
+  "description": "Demonstration plugin showing standard hooks and config",
+  "priority": 150,
+  "requires": [],
+  "permissions": {},
+  "events": {
+    "emits": ["example.counter.updated"],
+    "listens": ["button.CLICK"]
+  },
+  "config_schema": {
+    "show_counter": {
+      "type": "boolean",
+      "label": "Show Counter HUD",
+      "description": "Display a simple incrementing counter on screen",
+      "default": true
+    },
+    "enable_runtime_feature": {
+      "type": "boolean",
+      "label": "Runtime Feature",
+      "description": "Example toggle demonstrating on_config_changed()",
+      "default": true
+    }
+  }
+}

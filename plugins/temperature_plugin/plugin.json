@@ -1,0 +1,73 @@
+{
+  "name": "Temperature",
+  "version": "0.1.0",
+  "author": "tcpassos",
+  "description": "Display CPU temperature overlay",
+  "priority": 30,
+  "requires": [],
+  "permissions": {
+    "filesystem": true
+  },
+  "events": {
+    "emits": [
+      "temperature.updated",
+      "temperature.sensor.error",
+      "temperature.read.failed",
+      "temperature.threshold.warn",
+      "temperature.threshold.critical",
+      "temperature.threshold.warn.cleared",
+      "temperature.threshold.critical.cleared"
+    ],
+    "listens": []
+  },
+  "config_schema": {
+    "enable_display": {
+      "type": "boolean",
+      "label": "Enable Display",
+      "description": "Enable temperature overlay rendering",
+      "default": true
+    },
+    "refresh_interval": {
+      "type": "number",
+      "label": "Refresh Interval (s)",
+      "description": "Polling interval for temperature sensor",
+      "default": 2.0
+    },
+    "colorize": {
+      "type": "boolean",
+      "label": "Colorize",
+      "description": "Automatically color text by thresholds (cool/warn/critical)",
+      "default": true
+    },
+    "show_unit": {
+      "type": "boolean",
+      "label": "Show Unit",
+      "description": "Display degree unit",
+      "default": true
+    },
+    "warn_threshold": {
+      "type": "number",
+      "label": "Warn Threshold (°C)",
+      "description": "Temperature that triggers a warning event",
+      "default": 55.0
+    },
+    "critical_threshold": {
+      "type": "number",
+      "label": "Critical Threshold (°C)",
+      "description": "Temperature that triggers a critical event",
+      "default": 70.0
+    },
+    "temp_align": {
+      "type": "string",
+      "label": "Overlay Alignment",
+      "description": "Horizontal alignment: left | center | right",
+      "default": "left"
+    },
+    "temp_offset": {
+      "type": "number",
+      "label": "Overlay Offset",
+      "description": "Horizontal pixel offset applied after alignment (can be negative)",
+      "default": 0
+    }
+  }
+}

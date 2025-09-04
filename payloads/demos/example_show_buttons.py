@@ -27,7 +27,7 @@ import os, sys
 # «…/Raspyjack/» is two directories up from this script. Add it to sys.path so
 # that `import LCD_1in44` works even when we run the script manually from
 # inside the “payloads” folder.
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
+sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..', '..' )))
 
 # ---------------------------- Standard library ----------------------------
 import time           # sleep() for timing / debouncing
@@ -38,7 +38,7 @@ import sys            # print exceptions to stderr
 # These come pre‑installed on RaspyJack; on a vanilla Pi OS you’d need:
 #   sudo apt install python3-pil python3-rpi.gpio
 import RPi.GPIO as GPIO               # Raspberry Pi GPIO access
-import LCD_1in44, LCD_Config          # Waveshare driver helpers for the LCD
+import LCD_1in44                      # Waveshare driver helpers for the LCD
 from PIL import Image, ImageDraw, ImageFont  # Pillow – draw text on images
 
 # ---------------------------------------------------------------------------
