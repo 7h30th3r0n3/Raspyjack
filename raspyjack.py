@@ -67,32 +67,43 @@ except ImportError as e:
         return False
 _stop_evt = threading.Event()
 screen_lock = threading.Event()
+# Flicker control
+_status_text = ""
+_temp_c = 0.0
+draw_lock = threading.Lock()
 
 # https://www.waveshare.com/wiki/File:1.44inch-LCD-HAT-Code.7z
 
 def _stats_loop():
+    global _status_text, _temp_c
     while not _stop_evt.is_set():
-        if screen_lock.is_set():          # ← payload actif → on saute le dessin
+        if screen_lock.is_set():
             time.sleep(0.5)
             continue
-        draw.line([(0, 4), (128, 4)], fill="#222", width=10)
-        draw.text((0, 0), f"{temp():.0f} °C ", fill="WHITE", font=font)
-        status = ""
-        if subprocess.call(['pgrep', 'nmap'], stdout=subprocess.DEVNULL) == 0:
-            status = "(Scan in progress)"
-        elif is_mitm_running():
-            status = "(MITM & sniff)"
-        elif subprocess.call(['pgrep', 'ettercap'], stdout=subprocess.DEVNULL) == 0:
-            status = "(DNSSpoof)"
-        if is_responder_running():
-            status = "(Responder)"
-        draw.text((30, 0), status, fill="WHITE", font=font)
+        try:
+            _temp_c = temp()
+            status = ""
+            if subprocess.call(['pgrep', 'nmap'], stdout=subprocess.DEVNULL) == 0:
+                status = "(Scan in progress)"
+            elif is_mitm_running():
+                status = "(MITM & sniff)"
+            elif subprocess.call(['pgrep', 'ettercap'], stdout=subprocess.DEVNULL) == 0:
+                status = "(DNSSpoof)"
+            if is_responder_running():
+                status = "(Responder)"
+            _status_text = status
+        except Exception:
+            pass
         time.sleep(2)
 
 def _display_loop():
     while not _stop_evt.is_set():
         if not screen_lock.is_set():
-            LCD.LCD_ShowImage(image, 0, 0)
+            try:
+                draw_lock.acquire()
+                LCD.LCD_ShowImage(image, 0, 0)
+            finally:
+                draw_lock.release()
         time.sleep(0.1)
 
 def start_background_loops():
@@ -296,46 +307,75 @@ def LoadConfig():
 
 ####### Drawing functions #######
 
+def _draw_toolbar():
+    try:
+        draw.line([(0, 4), (128, 4)], fill="#222", width=10)
+        draw.text((0, 0), f"{_temp_c:.0f} °C ", fill="WHITE", font=font)
+        if _status_text:
+            draw.text((30, 0), _status_text, fill="WHITE", font=font)
+    except Exception:
+        pass
+
 ### Simple message box ###
 # (Text, Wait for confirmation)  #
 def Dialog(a, wait=True):
-    draw.rectangle([7, 35, 120, 95], fill="#ADADAD")
-    draw.text((35 - len(a), 45), a, fill="#000000")
-    draw.rectangle([45, 65, 70, 80], fill="#FF0000")
+    try:
+        draw_lock.acquire()
+        _draw_toolbar()
+        draw.rectangle([7, 35, 120, 95], fill="#ADADAD")
+        draw.text((35 - len(a), 45), a, fill="#000000")
+        draw.rectangle([45, 65, 70, 80], fill="#FF0000")
 
-    draw.text((50, 68), "OK", fill=color.selected_text)
+        draw.text((50, 68), "OK", fill=color.selected_text)
+    finally:
+        draw_lock.release()
     if wait:
         time.sleep(0.25)
         getButton()
 
 def Dialog_info(a, wait=True):
-    draw.rectangle([3, 14, 124, 124], fill="#00A321")
-    draw.text((35 - len(a), 45), a, fill="#000000")
+    try:
+        draw_lock.acquire()
+        _draw_toolbar()
+        draw.rectangle([3, 14, 124, 124], fill="#00A321")
+        draw.text((35 - len(a), 45), a, fill="#000000")
+    finally:
+        draw_lock.release()
 
 ### Yes or no dialog ###
 # (b is second text line)
 def YNDialog(a="Are you sure?", y="Yes", n="No",b=""):
-    draw.rectangle([7, 35, 120, 95], fill="#ADADAD")
-    draw.text((35 - len(a), 40), a, fill="#000000")
-    draw.text((12, 52), b, fill="#000000")
+    try:
+        draw_lock.acquire()
+        _draw_toolbar()
+        draw.rectangle([7, 35, 120, 95], fill="#ADADAD")
+        draw.text((35 - len(a), 40), a, fill="#000000")
+        draw.text((12, 52), b, fill="#000000")
+    finally:
+        draw_lock.release()
     time.sleep(0.25)
     answer = False
     while 1:
-        render_color = "#000000"
-        render_bg_color = "#ADADAD"
-        if answer:
-            render_bg_color = "#FF0000"
-            render_color = color.selected_text
-        draw.rectangle([15, 65, 45, 80], fill=render_bg_color)
-        draw.text((20, 68), y, fill=render_color)
+        try:
+            draw_lock.acquire()
+            _draw_toolbar()
+            render_color = "#000000"
+            render_bg_color = "#ADADAD"
+            if answer:
+                render_bg_color = "#FF0000"
+                render_color = color.selected_text
+            draw.rectangle([15, 65, 45, 80], fill=render_bg_color)
+            draw.text((20, 68), y, fill=render_color)
 
-        render_color = "#000000"
-        render_bg_color = "#ADADAD"
-        if not answer:
-            render_bg_color = "#FF0000"
-            render_color = color.selected_text
-        draw.rectangle([76, 65, 106, 80], fill=render_bg_color)
-        draw.text((86, 68), n, fill=render_color)
+            render_color = "#000000"
+            render_bg_color = "#ADADAD"
+            if not answer:
+                render_bg_color = "#FF0000"
+                render_color = color.selected_text
+            draw.rectangle([76, 65, 106, 80], fill=render_bg_color)
+            draw.text((86, 68), n, fill=render_color)
+        finally:
+            draw_lock.release()
 
         button = getButton()
         if button == "KEY_LEFT_PIN" or button == "KEY1_PIN":
@@ -353,12 +393,17 @@ def GetMenuPic(a):
     slide=0
     while 1:
         arr=a[slide]
-        color.DrawMenuBackground()
-        for i in range(0, len(arr)):
-            render_text = arr[i]
-            render_color = color.text
-            draw.text((default.start_text[0], default.start_text[1] + default.text_gap * i),
-                      render_text[:m.max_len], fill=render_color)
+        try:
+            draw_lock.acquire()
+            _draw_toolbar()
+            color.DrawMenuBackground()
+            for i in range(0, len(arr)):
+                render_text = arr[i]
+                render_color = color.text
+                draw.text((default.start_text[0], default.start_text[1] + default.text_gap * i),
+                          render_text[:m.max_len], fill=render_color)
+        finally:
+            draw_lock.release()
         time.sleep(0.1)
         button = getButton()
         if button == "KEY_UP_PIN":
@@ -377,18 +422,23 @@ def GetMenuPic(a):
 ### Render first lines of array ###
 # Kinda useless but whatever
 def ShowLines(arr,bold=[]):
-    color.DrawMenuBackground()
-    arr = arr[-8:]
-    for i in range(0, len(arr)):
-        render_text = arr[i]
-        render_color = color.text
-        if i in bold:
-            render_text = m.char + render_text
-            render_color = color.selected_text
-            draw.rectangle([(default.start_text[0]-5, default.start_text[1] + default.text_gap * i),
-                            (120, default.start_text[1] + default.text_gap * i + 10)], fill=color.select)
-        draw.text((default.start_text[0], default.start_text[1] + default.text_gap * i),
-                    render_text[:m.max_len], fill=render_color)
+    try:
+        draw_lock.acquire()
+        _draw_toolbar()
+        color.DrawMenuBackground()
+        arr = arr[-8:]
+        for i in range(0, len(arr)):
+            render_text = arr[i]
+            render_color = color.text
+            if i in bold:
+                render_text = m.char + render_text
+                render_color = color.selected_text
+                draw.rectangle([(default.start_text[0]-5, default.start_text[1] + default.text_gap * i),
+                                (120, default.start_text[1] + default.text_gap * i + 10)], fill=color.select)
+            draw.text((default.start_text[0], default.start_text[1] + default.text_gap * i),
+                        render_text[:m.max_len], fill=render_color)
+    finally:
+        draw_lock.release()
 
 def GetMenuString(inlist, duplicates=False):
     """
@@ -423,42 +473,54 @@ def GetMenuString(inlist, duplicates=False):
         window = inlist[offset:offset + WINDOW]
 
         # -- 3/ Rendu --------------------------------------------------------
-        color.DrawMenuBackground()
-        for i, raw in enumerate(window):
-            txt = raw if not duplicates else raw.split('#', 1)[1]
-            line = txt  # Remove cursor mark, use rectangle highlight only
-            fill = color.selected_text if i == (index - offset) else color.text
-            # zone de surbrillance
-            if i == (index - offset):
-                draw.rectangle(
-                    (default.start_text[0] - 5,
-                     default.start_text[1] + default.text_gap * i,
-                     120,
-                     default.start_text[1] + default.text_gap * i + 10),
-                    fill=color.select
-                )
-            
-            # Draw Font Awesome icon if available (only on main menu)
-            if m.which == "a":  # Only show icons on main menu
-                icon = MENU_ICONS.get(txt, "")
-                if icon:
-                    draw.text(
-                        (default.start_text[0] - 2,
-                         default.start_text[1] + default.text_gap * i),
-                        icon,
-                        font=icon_font,
-                        fill=fill
+        try:
+            draw_lock.acquire()
+            _draw_toolbar()
+            color.DrawMenuBackground()
+            for i, raw in enumerate(window):
+                txt = raw if not duplicates else raw.split('#', 1)[1]
+                line = txt  # Remove cursor mark, use rectangle highlight only
+                fill = color.selected_text if i == (index - offset) else color.text
+                # zone de surbrillance
+                if i == (index - offset):
+                    draw.rectangle(
+                        (default.start_text[0] - 5,
+                         default.start_text[1] + default.text_gap * i,
+                         120,
+                         default.start_text[1] + default.text_gap * i + 10),
+                        fill=color.select
                     )
-                    # Draw text with offset for icon
-                    draw.text(
-                        (default.start_text[0] + 12,
-                         default.start_text[1] + default.text_gap * i),
-                        line[:m.max_len],
-                        font=text_font,
-                        fill=fill
-                    )
+                
+                # Draw Font Awesome icon if available (only on main menu)
+                if m.which == "a":  # Only show icons on main menu
+                    icon = MENU_ICONS.get(txt, "")
+                    if icon:
+                        draw.text(
+                            (default.start_text[0] - 2,
+                             default.start_text[1] + default.text_gap * i),
+                            icon,
+                            font=icon_font,
+                            fill=fill
+                        )
+                        # Draw text with offset for icon
+                        draw.text(
+                            (default.start_text[0] + 12,
+                             default.start_text[1] + default.text_gap * i),
+                            line[:m.max_len],
+                            font=text_font,
+                            fill=fill
+                        )
+                    else:
+                        # Draw text normally if no icon
+                        draw.text(
+                            (default.start_text[0],
+                             default.start_text[1] + default.text_gap * i),
+                            line[:m.max_len],
+                            font=text_font,
+                            fill=fill
+                        )
                 else:
-                    # Draw text normally if no icon
+                    # Submenus: no icons, just text
                     draw.text(
                         (default.start_text[0],
                          default.start_text[1] + default.text_gap * i),
@@ -466,15 +528,8 @@ def GetMenuString(inlist, duplicates=False):
                         font=text_font,
                         fill=fill
                     )
-            else:
-                # Submenus: no icons, just text
-                draw.text(
-                    (default.start_text[0],
-                     default.start_text[1] + default.text_gap * i),
-                    line[:m.max_len],
-                    font=text_font,
-                    fill=fill
-                )
+        finally:
+            draw_lock.release()
         
         # Display current view mode indicator (only on main menu)
         # if m.which == "a":
@@ -810,27 +865,32 @@ def DisplayScrollableInfo(info_lines):
         window = info_lines[offset:offset + WINDOW]
 
         # Draw display
-        color.DrawMenuBackground()
-        for i, line in enumerate(window):
-            fill = color.selected_text if i == (index - offset) else color.text
-            # Highlight current line
-            if i == (index - offset):
-                draw.rectangle(
-                    (default.start_text[0] - 5,
-                     default.start_text[1] + default.text_gap * i,
-                     120,
-                     default.start_text[1] + default.text_gap * i + 10),
-                    fill=color.select
+        try:
+            draw_lock.acquire()
+            _draw_toolbar()
+            color.DrawMenuBackground()
+            for i, line in enumerate(window):
+                fill = color.selected_text if i == (index - offset) else color.text
+                # Highlight current line
+                if i == (index - offset):
+                    draw.rectangle(
+                        (default.start_text[0] - 5,
+                         default.start_text[1] + default.text_gap * i,
+                         120,
+                         default.start_text[1] + default.text_gap * i + 10),
+                        fill=color.select
+                    )
+                
+                # Draw the text - NO TRUNCATION for network info
+                draw.text(
+                    (default.start_text[0],
+                     default.start_text[1] + default.text_gap * i),
+                    line,  # Show full text - let it overflow if needed
+                    font=text_font,
+                    fill=fill
                 )
-            
-            # Draw the text - NO TRUNCATION for network info
-            draw.text(
-                (default.start_text[0],
-                 default.start_text[1] + default.text_gap * i),
-                line,  # Show full text - let it overflow if needed
-                font=text_font,
-                fill=fill
-            )
+        finally:
+            draw_lock.release()
 
         time.sleep(0.12)
 
@@ -1774,35 +1834,40 @@ def GetMenuCarousel(inlist, duplicates=False):
     
     while True:
         # Draw carousel
-        color.DrawMenuBackground()
-        
-        # Current item (center, large)
-        current_item = inlist[index]
-        txt = current_item if not duplicates else current_item.split('#', 1)[1]
-        
-        # Main item display area (center)
-        main_x = 64  # Center of 128px screen
-        main_y = 64  # Center vertically
-        
-        # Draw huge icon in center
-        icon = MENU_ICONS.get(txt, "\uf192")  # Default to dot-circle icon
-        # Large font for the icon
-        huge_icon_font = ImageFont.truetype('/usr/share/fonts/truetype/fontawesome/fa-solid-900.ttf', 48)
-        draw.text((main_x, main_y - 12), icon, font=huge_icon_font, fill=color.selected_text, anchor="mm")
-        
-        # Draw menu item name under the icon with custom font for carousel view
-        title = txt.strip()
-        # Create a bigger, bolder font specifically for carousel view
-        carousel_text_font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 12)
-        draw.text((main_x, main_y + 28), title, font=carousel_text_font, fill=color.selected_text, anchor="mm")
-        
-        # Draw navigation arrows - always show if there are multiple items
-        if total > 1:
-            arrow_font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 18)
-            # Left arrow (always show for wraparound)
-            draw.text((20, main_y), "◀", font=arrow_font, fill=color.text, anchor="mm")
-            # Right arrow (always show for wraparound)  
-            draw.text((108, main_y), "▶", font=arrow_font, fill=color.text, anchor="mm")
+        try:
+            draw_lock.acquire()
+            _draw_toolbar()
+            color.DrawMenuBackground()
+            
+            # Current item (center, large)
+            current_item = inlist[index]
+            txt = current_item if not duplicates else current_item.split('#', 1)[1]
+            
+            # Main item display area (center)
+            main_x = 64  # Center of 128px screen
+            main_y = 64  # Center vertically
+            
+            # Draw huge icon in center
+            icon = MENU_ICONS.get(txt, "\uf192")  # Default to dot-circle icon
+            # Large font for the icon
+            huge_icon_font = ImageFont.truetype('/usr/share/fonts/truetype/fontawesome/fa-solid-900.ttf', 48)
+            draw.text((main_x, main_y - 12), icon, font=huge_icon_font, fill=color.selected_text, anchor="mm")
+            
+            # Draw menu item name under the icon with custom font for carousel view
+            title = txt.strip()
+            # Create a bigger, bolder font specifically for carousel view
+            carousel_text_font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 12)
+            draw.text((main_x, main_y + 28), title, font=carousel_text_font, fill=color.selected_text, anchor="mm")
+            
+            # Draw navigation arrows - always show if there are multiple items
+            if total > 1:
+                arrow_font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 18)
+                # Left arrow (always show for wraparound)
+                draw.text((20, main_y), "◀", font=arrow_font, fill=color.text, anchor="mm")
+                # Right arrow (always show for wraparound)  
+                draw.text((108, main_y), "▶", font=arrow_font, fill=color.text, anchor="mm")
+        finally:
+            draw_lock.release()
         
         time.sleep(0.12)
         
@@ -1857,47 +1922,52 @@ def GetMenuGrid(inlist, duplicates=False):
         window = inlist[start_idx:start_idx + GRID_ITEMS]
         
         # Draw grid
-        color.DrawMenuBackground()
-        
-        for i, item in enumerate(window):
-            if i >= GRID_ITEMS:
-                break
+        try:
+            draw_lock.acquire()
+            _draw_toolbar()
+            color.DrawMenuBackground()
+            
+            for i, item in enumerate(window):
+                if i >= GRID_ITEMS:
+                    break
+                    
+                # Calculate grid position
+                row = i // GRID_COLS
+                col = i % GRID_COLS
                 
-            # Calculate grid position
-            row = i // GRID_COLS
-            col = i % GRID_COLS
-            
-            # Grid item position
-            x = default.start_text[0] + (col * 55)  # 55px per column
-            y = default.start_text[1] + (row * 25)  # 25px per row
-            
-            # Check if this item is selected
-            is_selected = (start_idx + i == index)
-            
-            if is_selected:
-                # Draw selection rectangle
-                draw.rectangle(
-                    (x - 2, y - 2, x + 53, y + 23),
-                    fill=color.select
-                )
-                fill_color = color.selected_text
-            else:
-                fill_color = color.text
-            
-            # Draw icon and text
-            txt = item if not duplicates else item.split('#', 1)[1]
-            icon = MENU_ICONS.get(txt, "")
-            
-            if icon:
-                # Draw icon
-                draw.text((x + 2, y), icon, font=icon_font, fill=fill_color)
-                # Draw short text label
-                short_text = txt.strip()[:8]  # Limit text length for grid
-                draw.text((x, y + 13), short_text, font=text_font, fill=fill_color)
-            else:
-                # Draw text only
-                short_text = txt.strip()[:10]
-                draw.text((x, y + 8), short_text, font=text_font, fill=fill_color)
+                # Grid item position
+                x = default.start_text[0] + (col * 55)  # 55px per column
+                y = default.start_text[1] + (row * 25)  # 25px per row
+                
+                # Check if this item is selected
+                is_selected = (start_idx + i == index)
+                
+                if is_selected:
+                    # Draw selection rectangle
+                    draw.rectangle(
+                        (x - 2, y - 2, x + 53, y + 23),
+                        fill=color.select
+                    )
+                    fill_color = color.selected_text
+                else:
+                    fill_color = color.text
+                
+                # Draw icon and text
+                txt = item if not duplicates else item.split('#', 1)[1]
+                icon = MENU_ICONS.get(txt, "")
+                
+                if icon:
+                    # Draw icon
+                    draw.text((x + 2, y), icon, font=icon_font, fill=fill_color)
+                    # Draw short text label
+                    short_text = txt.strip()[:8]  # Limit text length for grid
+                    draw.text((x, y + 13), short_text, font=text_font, fill=fill_color)
+                else:
+                    # Draw text only
+                    short_text = txt.strip()[:10]
+                    draw.text((x, y + 8), short_text, font=text_font, fill=fill_color)
+        finally:
+            draw_lock.release()
         
         # Display current view mode indicator
         # draw.text((2, 2), "Grid", font=text_font, fill=color.text)
@@ -1943,8 +2013,13 @@ def toggle_view_mode():
 
 def main():
     # Draw background once
-    color.DrawMenuBackground()
-    color.DrawBorder()
+    try:
+        draw_lock.acquire()
+        _draw_toolbar()
+        color.DrawMenuBackground()
+        color.DrawBorder()
+    finally:
+        draw_lock.release()
 
     start_background_loops()
 
