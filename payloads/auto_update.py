@@ -18,7 +18,7 @@ screen stays informative throughout.
 # ---------------------------------------------------------------------------
 # 0) Imports & path tweak
 # ---------------------------------------------------------------------------
-import os, sys, time, signal, subprocess, tarfile
+import os, sys, time, signal, subprocess, tarfile, shutil
 from datetime import datetime
 
 sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..")))
@@ -95,19 +95,119 @@ def backup() -> tuple[bool, str]:
         with tarfile.open(archive, "w:gz") as tar:
             # add Raspyjack root (includes payloads) *and* explicit payloads path
             tar.add(RASPYJACK_DIR, arcname=os.path.basename(RASPYJACK_DIR))
-        return True, archive
+        if os.path.exists(archive) and os.path.getsize(archive) > 0:
+            return True, archive
+        return False, "backup empty"
     except Exception as exc:
         return False, str(exc)
 
+def check_space(min_mb: int = 200) -> tuple[bool, str]:
+    try:
+        usage = shutil.disk_usage(BACKUP_DIR)
+        free_mb = usage.free // (1024 * 1024)
+        if free_mb < min_mb:
+            return False, f"low space: {free_mb}MB"
+        return True, f"{free_mb}MB free"
+    except Exception as exc:
+        return False, f"disk {exc}"
+
+def ensure_dependencies() -> tuple[bool, str]:
+    """Install missing dependencies via apt when needed."""
+    cmd_map = {
+        "git": "git",
+        "tar": "tar",
+        "systemctl": "systemd",
+        "nmap": "nmap",
+        "tcpdump": "tcpdump",
+        "arp-scan": "arp-scan",
+        "ettercap": "ettercap-text-only",
+        "php": "php",
+        "tshark": "tshark",
+        "dnsmasq": "dnsmasq",
+        "airmon-ng": "aircrack-ng",
+        "aireplay-ng": "aircrack-ng",
+        "airodump-ng": "aircrack-ng",
+    }
+    missing_cmds = [c for c in cmd_map if shutil.which(c) is None]
+    missing_pkgs = sorted({cmd_map[c] for c in missing_cmds})
+
+    py_pkgs = {
+        "evdev": "python3-evdev",
+        "requests": "python3-requests",
+        "PIL": "python3-pil",
+        "RPi": "python3-rpi.gpio",
+        "netifaces": "python3-netifaces",
+        "scapy": "python3-scapy",
+        "pyudev": "python3-pyudev",
+    }
+    missing_py = []
+    try:
+        import importlib
+        for mod, pkg in py_pkgs.items():
+            try:
+                importlib.import_module(mod)
+            except Exception:
+                missing_py.append(pkg)
+    except Exception:
+        pass
+
+    to_install = sorted(set(missing_pkgs + missing_py))
+    if to_install:
+        try:
+            subprocess.run(["apt-get", "update", "-qq"], check=True)
+            subprocess.run(["apt-get", "install", "-y", "--no-install-recommends"] + to_install, check=True)
+        except subprocess.CalledProcessError as exc:
+            return False, f"apt failed {exc.returncode}"
+
+    return True, "ok"
+
+def backup_payloads() -> tuple[bool, str]:
+    """Copy current payloads to a temp dir for restore after update."""
+    ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    dst = f"/tmp/raspyjack_payloads_backup_{ts}"
+    try:
+        if not os.path.isdir(PAYLOADS_DIR):
+            return False, "payloads dir missing"
+        shutil.copytree(PAYLOADS_DIR, dst)
+        return True, dst
+    except Exception as exc:
+        return False, str(exc)
+
+def restore_custom_payloads(backup_dir: str) -> tuple[bool, str]:
+    """Restore only payloads that are not present in the repo version."""
+    try:
+        if not os.path.isdir(backup_dir):
+            return False, "payloads backup missing"
+        os.makedirs(PAYLOADS_DIR, exist_ok=True)
+        current = set(os.listdir(PAYLOADS_DIR))
+        restored = 0
+        for name in os.listdir(backup_dir):
+            if name.startswith("."):
+                continue
+            src = os.path.join(backup_dir, name)
+            dst = os.path.join(PAYLOADS_DIR, name)
+            if name not in current and os.path.isfile(src):
+                shutil.copy2(src, dst)
+                restored += 1
+        return True, f"restored {restored}"
+    except Exception as exc:
+        return False, str(exc)
 
 def git_update() -> tuple[bool, str]:
     """Fast‑forward pull the latest changes."""
     try:
-        subprocess.run(["git", "-C", RASPYJACK_DIR, "fetch", GIT_REMOTE], check=True)
-        subprocess.run(["git", "-C", RASPYJACK_DIR, "reset", "--hard", f"{GIT_REMOTE}/{GIT_BRANCH}"], check=True)
+        subprocess.run(
+            ["git", "-C", RASPYJACK_DIR, "fetch", GIT_REMOTE],
+            check=True, capture_output=True, text=True
+        )
+        subprocess.run(
+            ["git", "-C", RASPYJACK_DIR, "reset", "--hard", f"{GIT_REMOTE}/{GIT_BRANCH}"],
+            check=True, capture_output=True, text=True
+        )
         return True, "OK"
     except subprocess.CalledProcessError as exc:
-        return False, f"git error {exc.returncode}"
+        msg = exc.stderr.strip() if exc.stderr else f"git error {exc.returncode}"
+        return False, msg
 
 
 def restart_service() -> tuple[bool, str]:
@@ -133,16 +233,33 @@ try:
         if btn == "KEY1":
             while pressed() == "KEY1":
                 time.sleep(0.05)
+            # 0. Prechecks
+            ok, info = check_space()
+            if not ok:
+                show(["No space", info], invert=True); time.sleep(4); break
+            ok, info = ensure_dependencies()
+            if not ok:
+                show(["Deps install", info], invert=True); time.sleep(4); break
             # 1. Backup
             show(["Backing‑up…"])
             ok, info = backup()
             if not ok:
                 show(["Backup failed", info], invert=True); time.sleep(4); break
+            # 1b. Backup payloads for restore
+            show(["Saving payloads…"])
+            ok, payloads_backup = backup_payloads()
+            if not ok:
+                show(["Payload save fail", payloads_backup], invert=True); time.sleep(4); break
             # 2. Pull latest
             show(["Updating…"])
             ok, info = git_update()
             if not ok:
                 show(["Update failed", info], invert=True); time.sleep(4); break
+            # 2b. Restore custom payloads
+            show(["Restoring payloads…"])
+            ok, info = restore_custom_payloads(payloads_backup)
+            if not ok:
+                show(["Restore failed", info], invert=True); time.sleep(4); break
             # 3. Restart service
             show(["Restarting…"])
             ok, info = restart_service()
