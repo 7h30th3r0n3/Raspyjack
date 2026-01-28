@@ -23,8 +23,8 @@ import requests  # For Discord webhook integration
 try:
     sys.path.append('/root/Raspyjack/wifi/')
     from wifi.raspyjack_integration import (
-        get_best_interface, 
-        get_interface_ip, 
+        get_best_interface,
+        get_interface_ip,
         get_interface_network,
         get_nmap_target_network,
         get_mitm_interface,
@@ -39,7 +39,7 @@ except ImportError as e:
     print(f"⚠️  WiFi integration not available: {e}")
     print("   Using ethernet-only mode")
     WIFI_AVAILABLE = False
-    
+
     # Fallback functions for ethernet-only mode
     def get_best_interface():
         return "eth0"
@@ -48,18 +48,20 @@ except ImportError as e:
             return subprocess.check_output(f"ip addr show dev {interface} | awk '/inet / {{ print $2 }}'", shell=True).decode().strip().split('/')[0]
         except:
             return None
-    def get_nmap_target_network():
+    def get_nmap_target_network(interface=None):
         try:
-            return subprocess.check_output("ip -4 addr show eth0 | awk '/inet / { print $2 }'", shell=True).decode().strip()
+            iface = interface or "eth0"
+            return subprocess.check_output(f"ip -4 addr show {iface} | awk '/inet / {{ print $2 }}'", shell=True).decode().strip()
         except:
             return None
     def get_mitm_interface():
         return "eth0"
     def get_responder_interface():
-        return "eth0"  
-    def get_dns_spoof_ip():
+        return "eth0"
+    def get_dns_spoof_ip(interface=None):
         try:
-            return subprocess.check_output("ip -4 addr show eth0 | awk '/inet / {split($2, a, \"/\"); print a[1]}'", shell=True).decode().strip()
+            iface = interface or "eth0"
+            return subprocess.check_output(f"ip -4 addr show {iface} | awk '/inet / {{split($2, a, \"/\"); print a[1]}}'", shell=True).decode().strip()
         except:
             return None
     def set_raspyjack_interface(interface):
@@ -67,32 +69,60 @@ except ImportError as e:
         return False
 _stop_evt = threading.Event()
 screen_lock = threading.Event()
+# Flicker control
+_status_text = ""
+_temp_c = 0.0
+draw_lock = threading.Lock()
+_last_button = None
+_last_button_time = 0.0
+_debounce_seconds = 0.10
+_button_down_since = 0.0
+_repeat_delay = 0.25
+_repeat_interval = 0.08
+
+def _set_last_button(name, ts):
+    global _last_button, _last_button_time, _button_down_since
+    _last_button = name
+    _last_button_time = ts
+    _button_down_since = ts
 
 # https://www.waveshare.com/wiki/File:1.44inch-LCD-HAT-Code.7z
 
 def _stats_loop():
+    global _status_text, _temp_c
     while not _stop_evt.is_set():
-        if screen_lock.is_set():          # ← payload actif → on saute le dessin
+        if screen_lock.is_set():
             time.sleep(0.5)
             continue
-        draw.line([(0, 4), (128, 4)], fill="#222", width=10)
-        draw.text((0, 0), f"{temp():.0f} °C ", fill="WHITE", font=font)
-        status = ""
-        if subprocess.call(['pgrep', 'nmap'], stdout=subprocess.DEVNULL) == 0:
-            status = "(Scan in progress)"
-        elif is_mitm_running():
-            status = "(MITM & sniff)"
-        elif subprocess.call(['pgrep', 'ettercap'], stdout=subprocess.DEVNULL) == 0:
-            status = "(DNSSpoof)"
-        if is_responder_running():
-            status = "(Responder)"
-        draw.text((30, 0), status, fill="WHITE", font=font)
+        try:
+            _temp_c = temp()
+            status = ""
+            if subprocess.call(['pgrep', 'nmap'], stdout=subprocess.DEVNULL) == 0:
+                status = "(Scan in progress)"
+            elif is_mitm_running():
+                status = "(MITM & sniff)"
+            elif subprocess.call(['pgrep', 'ettercap'], stdout=subprocess.DEVNULL) == 0:
+                status = "(DNSSpoof)"
+            if is_responder_running():
+                status = "(Responder)"
+            _status_text = status
+            try:
+                draw_lock.acquire()
+                _draw_toolbar()
+            finally:
+                draw_lock.release()
+        except Exception:
+            pass
         time.sleep(2)
 
 def _display_loop():
     while not _stop_evt.is_set():
         if not screen_lock.is_set():
-            LCD.LCD_ShowImage(image, 0, 0)
+            try:
+                draw_lock.acquire()
+                LCD.LCD_ShowImage(image, 0, 0)
+            finally:
+                draw_lock.release()
         time.sleep(0.1)
 
 def start_background_loops():
@@ -205,15 +235,58 @@ class template():
 ####### Simple methods #######
 ### Get any button press ###
 def getButton():
+    global _last_button, _last_button_time, _button_down_since
     while 1:
+        pressed = None
         for item in PINS:
             if GPIO.input(PINS[item]) == 0:
-                return item
+                pressed = item
+                break
+        if pressed is None:
+            if _last_button is not None:
+                _set_last_button(None, time.time())
+            time.sleep(0.01)
+            continue
+
+        now = time.time()
+        if pressed != _last_button:
+            _set_last_button(pressed, now)
+            return pressed
+
+        # Same button still held: debounce first, then allow auto-repeat
+        if (now - _last_button_time) < _debounce_seconds:
+            time.sleep(0.01)
+            continue
+        if (now - _button_down_since) >= _repeat_delay and (now - _last_button_time) >= _repeat_interval:
+            _last_button_time = now
+            return pressed
         time.sleep(0.01)
 
 def temp() -> float:
     with open("/sys/class/thermal/thermal_zone0/temp") as f:
         return int(f.read()) / 1000
+
+
+def _iface_carrier_up(name: str) -> bool:
+    try:
+        with open(f"/sys/class/net/{name}/carrier", "r") as f:
+            return f.read().strip() == "1"
+    except Exception:
+        return False
+
+
+def get_best_interface_prefer_eth() -> str:
+    """Prefer wired interface when link is up, otherwise fall back."""
+    eth_candidate = None
+    for name in ("eth0", "eth1"):
+        if _iface_carrier_up(name):
+            ip = get_interface_ip(name)
+            if ip:
+                return name
+            eth_candidate = eth_candidate or name
+    if eth_candidate:
+        return eth_candidate
+    return get_best_interface()
 
 
 def Leave(poweroff: bool = False) -> None:
@@ -296,46 +369,180 @@ def LoadConfig():
 
 ####### Drawing functions #######
 
+def _draw_toolbar():
+    try:
+        draw.line([(0, 4), (128, 4)], fill="#222", width=10)
+        draw.text((0, 0), f"{_temp_c:.0f} °C ", fill="WHITE", font=font)
+        if _status_text:
+            draw.text((30, 0), _status_text, fill="WHITE", font=font)
+    except Exception:
+        pass
+
+def _wrap_text_to_width(text, max_width, font=None):
+    if font is None:
+        font = text_font
+    lines = []
+    for raw_line in (text.splitlines() if text else [""]):
+        words = raw_line.split(" ")
+        if not words:
+            lines.append("")
+            continue
+        current = ""
+        for word in words:
+            trial = word if current == "" else current + " " + word
+            bbox = draw.textbbox((0, 0), trial, font=font)
+            if bbox[2] - bbox[0] <= max_width:
+                current = trial
+                continue
+            if current:
+                lines.append(current)
+                current = word
+            else:
+                # Single word too long: split by characters
+                chunk = ""
+                for ch in word:
+                    trial_chunk = chunk + ch
+                    bbox = draw.textbbox((0, 0), trial_chunk, font=font)
+                    if bbox[2] - bbox[0] <= max_width:
+                        chunk = trial_chunk
+                    else:
+                        if chunk:
+                            lines.append(chunk)
+                        chunk = ch
+                current = chunk
+        lines.append(current)
+    return lines
+
+def _truncate_to_width(text, max_width, font=None, ellipsis="…"):
+    if font is None:
+        font = text_font
+    if text is None:
+        return ""
+    if max_width <= 0:
+        return ""
+    if draw.textbbox((0, 0), text, font=font)[2] <= max_width:
+        return text
+    # Leave room for ellipsis
+    ell_w = draw.textbbox((0, 0), ellipsis, font=font)[2]
+    if ell_w >= max_width:
+        return ellipsis
+    lo, hi = 0, len(text)
+    best = ""
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        candidate = text[:mid]
+        w = draw.textbbox((0, 0), candidate, font=font)[2]
+        if w + ell_w <= max_width:
+            best = candidate
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    return best + ellipsis
+
+def _draw_centered_text(box, text, fill="WHITE", font=None, line_gap=2):
+    """Draw text centered in a box (x0,y0,x1,y1). Supports multiline."""
+    if font is None:
+        font = text_font
+    x0, y0, x1, y1 = box
+    max_width = x1 - x0
+    lines = _wrap_text_to_width(text, max_width, font)
+    line_sizes = []
+    total_h = 0
+    for line in lines:
+        bbox = draw.textbbox((0, 0), line, font=font)
+        w = bbox[2] - bbox[0]
+        h = bbox[3] - bbox[1]
+        line_sizes.append((line, w, h))
+        total_h += h
+    if len(lines) > 1:
+        total_h += line_gap * (len(lines) - 1)
+
+    box_w = x1 - x0
+    box_h = y1 - y0
+    y = y0 + max(0, (box_h - total_h) // 2)
+    for line, w, h in line_sizes:
+        x = x0 + max(0, (box_w - w) // 2)
+        draw.text((x, y), line, fill=fill, font=font)
+        y += h + line_gap
+
 ### Simple message box ###
 # (Text, Wait for confirmation)  #
 def Dialog(a, wait=True):
-    draw.rectangle([7, 35, 120, 95], fill="#ADADAD")
-    draw.text((35 - len(a), 45), a, fill="#000000")
-    draw.rectangle([45, 65, 70, 80], fill="#FF0000")
+    try:
+        draw_lock.acquire()
+        _draw_toolbar()
+        draw.rectangle([7, 35, 120, 95], fill="#ADADAD")
+        _draw_centered_text((7, 35, 120, 63), a, fill="#000000", font=text_font)
+        draw.rectangle([45, 65, 70, 80], fill="#FF0000")
 
-    draw.text((50, 68), "OK", fill=color.selected_text)
+        _draw_centered_text((45, 65, 70, 80), "OK", fill=color.selected_text, font=text_font)
+    finally:
+        draw_lock.release()
     if wait:
         time.sleep(0.25)
         getButton()
 
-def Dialog_info(a, wait=True):
-    draw.rectangle([3, 14, 124, 124], fill="#00A321")
-    draw.text((35 - len(a), 45), a, fill="#000000")
+def Dialog_info(a, wait=True, timeout=None):
+    try:
+        draw_lock.acquire()
+        _draw_toolbar()
+        draw.rectangle([3, 14, 124, 124], fill="#00A321")
+        _draw_centered_text((3, 14, 124, 124), a, fill="#000000", font=text_font)
+    finally:
+        draw_lock.release()
+    if not wait and timeout:
+        start = time.time()
+        while time.time() - start < timeout:
+            try:
+                draw_lock.acquire()
+                _draw_toolbar()
+                draw.rectangle([3, 14, 124, 124], fill="#00A321")
+                _draw_centered_text((3, 14, 124, 124), a, fill="#000000", font=text_font)
+                # Progress bar at bottom
+                pct = min(1.0, (time.time() - start) / timeout)
+                bar_x0, bar_y0, bar_x1, bar_y1 = 10, 110, 118, 118
+                draw.rectangle([bar_x0, bar_y0, bar_x1, bar_y1], outline="#004d12", fill="#00A321")
+                fill_w = int((bar_x1 - bar_x0) * pct)
+                draw.rectangle([bar_x0, bar_y0, bar_x0 + fill_w, bar_y1], fill="#004d12")
+            finally:
+                draw_lock.release()
+            time.sleep(0.1)
 
 ### Yes or no dialog ###
 # (b is second text line)
 def YNDialog(a="Are you sure?", y="Yes", n="No",b=""):
-    draw.rectangle([7, 35, 120, 95], fill="#ADADAD")
-    draw.text((35 - len(a), 40), a, fill="#000000")
-    draw.text((12, 52), b, fill="#000000")
+    try:
+        draw_lock.acquire()
+        _draw_toolbar()
+        draw.rectangle([7, 35, 120, 95], fill="#ADADAD")
+        _draw_centered_text((7, 35, 120, 52), a, fill="#000000", font=text_font)
+        if b:
+            _draw_centered_text((7, 50, 120, 65), b, fill="#000000", font=text_font)
+    finally:
+        draw_lock.release()
     time.sleep(0.25)
     answer = False
     while 1:
-        render_color = "#000000"
-        render_bg_color = "#ADADAD"
-        if answer:
-            render_bg_color = "#FF0000"
-            render_color = color.selected_text
-        draw.rectangle([15, 65, 45, 80], fill=render_bg_color)
-        draw.text((20, 68), y, fill=render_color)
+        try:
+            draw_lock.acquire()
+            _draw_toolbar()
+            render_color = "#000000"
+            render_bg_color = "#ADADAD"
+            if answer:
+                render_bg_color = "#FF0000"
+                render_color = color.selected_text
+            draw.rectangle([15, 65, 45, 80], fill=render_bg_color)
+            draw.text((20, 68), y, fill=render_color)
 
-        render_color = "#000000"
-        render_bg_color = "#ADADAD"
-        if not answer:
-            render_bg_color = "#FF0000"
-            render_color = color.selected_text
-        draw.rectangle([76, 65, 106, 80], fill=render_bg_color)
-        draw.text((86, 68), n, fill=render_color)
+            render_color = "#000000"
+            render_bg_color = "#ADADAD"
+            if not answer:
+                render_bg_color = "#FF0000"
+                render_color = color.selected_text
+            draw.rectangle([76, 65, 106, 80], fill=render_bg_color)
+            draw.text((86, 68), n, fill=render_color)
+        finally:
+            draw_lock.release()
 
         button = getButton()
         if button == "KEY_LEFT_PIN" or button == "KEY1_PIN":
@@ -353,12 +560,17 @@ def GetMenuPic(a):
     slide=0
     while 1:
         arr=a[slide]
-        color.DrawMenuBackground()
-        for i in range(0, len(arr)):
-            render_text = arr[i]
-            render_color = color.text
-            draw.text((default.start_text[0], default.start_text[1] + default.text_gap * i),
-                      render_text[:m.max_len], fill=render_color)
+        try:
+            draw_lock.acquire()
+            _draw_toolbar()
+            color.DrawMenuBackground()
+            for i in range(0, len(arr)):
+                render_text = arr[i]
+                render_color = color.text
+                draw.text((default.start_text[0], default.start_text[1] + default.text_gap * i),
+                          render_text[:m.max_len], fill=render_color)
+        finally:
+            draw_lock.release()
         time.sleep(0.1)
         button = getButton()
         if button == "KEY_UP_PIN":
@@ -377,18 +589,23 @@ def GetMenuPic(a):
 ### Render first lines of array ###
 # Kinda useless but whatever
 def ShowLines(arr,bold=[]):
-    color.DrawMenuBackground()
-    arr = arr[-8:]
-    for i in range(0, len(arr)):
-        render_text = arr[i]
-        render_color = color.text
-        if i in bold:
-            render_text = m.char + render_text
-            render_color = color.selected_text
-            draw.rectangle([(default.start_text[0]-5, default.start_text[1] + default.text_gap * i),
-                            (120, default.start_text[1] + default.text_gap * i + 10)], fill=color.select)
-        draw.text((default.start_text[0], default.start_text[1] + default.text_gap * i),
-                    render_text[:m.max_len], fill=render_color)
+    try:
+        draw_lock.acquire()
+        _draw_toolbar()
+        color.DrawMenuBackground()
+        arr = arr[-8:]
+        for i in range(0, len(arr)):
+            render_text = arr[i]
+            render_color = color.text
+            if i in bold:
+                render_text = m.char + render_text
+                render_color = color.selected_text
+                draw.rectangle([(default.start_text[0]-5, default.start_text[1] + default.text_gap * i),
+                                (120, default.start_text[1] + default.text_gap * i + 10)], fill=color.select)
+            draw.text((default.start_text[0], default.start_text[1] + default.text_gap * i),
+                        render_text[:m.max_len], fill=render_color)
+    finally:
+        draw_lock.release()
 
 def GetMenuString(inlist, duplicates=False):
     """
@@ -423,63 +640,74 @@ def GetMenuString(inlist, duplicates=False):
         window = inlist[offset:offset + WINDOW]
 
         # -- 3/ Rendu --------------------------------------------------------
-        color.DrawMenuBackground()
-        for i, raw in enumerate(window):
-            txt = raw if not duplicates else raw.split('#', 1)[1]
-            line = txt  # Remove cursor mark, use rectangle highlight only
-            fill = color.selected_text if i == (index - offset) else color.text
-            # zone de surbrillance
-            if i == (index - offset):
-                draw.rectangle(
-                    (default.start_text[0] - 5,
-                     default.start_text[1] + default.text_gap * i,
-                     120,
-                     default.start_text[1] + default.text_gap * i + 10),
-                    fill=color.select
-                )
-            
-            # Draw Font Awesome icon if available (only on main menu)
-            if m.which == "a":  # Only show icons on main menu
-                icon = MENU_ICONS.get(txt, "")
-                if icon:
-                    draw.text(
-                        (default.start_text[0] - 2,
-                         default.start_text[1] + default.text_gap * i),
-                        icon,
-                        font=icon_font,
-                        fill=fill
+        try:
+            draw_lock.acquire()
+            _draw_toolbar()
+            color.DrawMenuBackground()
+            for i, raw in enumerate(window):
+                txt = raw if not duplicates else raw.split('#', 1)[1]
+                line = txt  # Remove cursor mark, use rectangle highlight only
+                fill = color.selected_text if i == (index - offset) else color.text
+                # zone de surbrillance
+                if i == (index - offset):
+                    draw.rectangle(
+                        (default.start_text[0] - 5,
+                         default.start_text[1] + default.text_gap * i,
+                         120,
+                         default.start_text[1] + default.text_gap * i + 10),
+                        fill=color.select
                     )
-                    # Draw text with offset for icon
-                    draw.text(
-                        (default.start_text[0] + 12,
-                         default.start_text[1] + default.text_gap * i),
-                        line[:m.max_len],
-                        font=text_font,
-                        fill=fill
-                    )
+
+                # Draw Font Awesome icon if available (only on main menu)
+                if m.which == "a":  # Only show icons on main menu
+                    icon = MENU_ICONS.get(txt, "")
+                    if icon:
+                        draw.text(
+                            (default.start_text[0] - 2,
+                             default.start_text[1] + default.text_gap * i),
+                            icon,
+                            font=icon_font,
+                            fill=fill
+                        )
+                        # Draw text with offset for icon
+                        max_w = 120 - (default.start_text[0] + 12)
+                        line = _truncate_to_width(line, max_w, text_font)
+                        draw.text(
+                            (default.start_text[0] + 12,
+                             default.start_text[1] + default.text_gap * i),
+                            line,
+                            font=text_font,
+                            fill=fill
+                        )
+                    else:
+                        # Draw text normally if no icon
+                        max_w = 120 - default.start_text[0]
+                        line = _truncate_to_width(line, max_w, text_font)
+                        draw.text(
+                            (default.start_text[0],
+                             default.start_text[1] + default.text_gap * i),
+                            line,
+                            font=text_font,
+                            fill=fill
+                        )
                 else:
-                    # Draw text normally if no icon
+                    # Submenus: no icons, just text
+                    max_w = 120 - default.start_text[0]
+                    line = _truncate_to_width(line, max_w, text_font)
                     draw.text(
                         (default.start_text[0],
                          default.start_text[1] + default.text_gap * i),
-                        line[:m.max_len],
+                        line,
                         font=text_font,
                         fill=fill
                     )
-            else:
-                # Submenus: no icons, just text
-                draw.text(
-                    (default.start_text[0],
-                     default.start_text[1] + default.text_gap * i),
-                    line[:m.max_len],
-                    font=text_font,
-                    fill=fill
-                )
-        
+        finally:
+            draw_lock.release()
+
         # Display current view mode indicator (only on main menu)
         # if m.which == "a":
         #     draw.text((2, 2), "List", font=text_font, fill=color.text)
-        
+
         time.sleep(0.12)
 
         # -- 4/ Lecture des boutons -----------------------------------------
@@ -719,87 +947,238 @@ def Gamepad():
     time.sleep(0.25)
 
 ### Basic info screen ###
+def _get_operstate(interface):
+    try:
+        with open(f"/sys/class/net/{interface}/operstate", "r") as f:
+            return f.read().strip()
+    except Exception:
+        return None
+
+def _get_interface_ipv4(interface):
+    try:
+        cfg = netifaces.ifaddresses(interface)
+        ipv4_list = cfg.get(netifaces.AF_INET, [])
+        if not ipv4_list:
+            return None, None
+        return ipv4_list[0].get("addr"), ipv4_list[0].get("netmask")
+    except Exception:
+        return None, None
+
+def _get_routed_info():
+    try:
+        out = subprocess.check_output("ip route get 1.1.1.1", shell=True).decode().strip()
+        parts = out.split()
+        iface = None
+        gw = None
+        if "dev" in parts:
+            iface = parts[parts.index("dev") + 1]
+        if "via" in parts:
+            gw = parts[parts.index("via") + 1]
+        return iface, gw
+    except Exception:
+        return None, None
+
+def _get_interface_candidates(preferred, routed):
+    candidates = []
+    for name in [preferred, routed, "eth0", "eth1", "wlan0", "wlan1"]:
+        if name and name not in candidates:
+            candidates.append(name)
+    try:
+        for name in netifaces.interfaces():
+            if name not in candidates:
+                candidates.append(name)
+    except Exception:
+        pass
+    return candidates
+
+def _list_eth_wlan_interfaces(preferred=None, routed=None):
+    names = []
+    for name in [preferred, routed]:
+        if name:
+            names.append(name)
+    try:
+        names.extend(netifaces.interfaces())
+    except Exception:
+        pass
+    ordered = []
+    for name in names:
+        if name and name.startswith(("eth", "wlan")) and name not in ordered:
+            ordered.append(name)
+    infos = []
+    for name in ordered:
+        ip, mask = _get_interface_ipv4(name)
+        infos.append({"name": name, "ip": ip, "mask": mask, "oper": _get_operstate(name)})
+    return infos
+
+def _choose_interface_for_action(preferred=None):
+    routed_iface, _ = _get_routed_info()
+    interfaces = _list_eth_wlan_interfaces(preferred, routed_iface)
+    if len(interfaces) <= 1:
+        if interfaces:
+            return interfaces[0]["name"]
+        return preferred or routed_iface or "eth0"
+
+    labels = [f" Auto (routed: {routed_iface or 'none'})"]
+    for info in interfaces:
+        ip = info["ip"] or "no ip"
+        labels.append(f" {info['name']} ({ip})")
+
+    idx, _ = GetMenuString(labels, duplicates=True)
+    if idx == -1:
+        return "__back__"
+    if idx == 0:
+        if routed_iface:
+            for info in interfaces:
+                if info["name"] == routed_iface and info["ip"]:
+                    return routed_iface
+        for info in interfaces:
+            if info["ip"]:
+                return info["name"]
+        return preferred or interfaces[0]["name"]
+    return interfaces[idx - 1]["name"]
+
+def _select_interface_menu(active_ifaces, routed_iface):
+    if len(active_ifaces) <= 1:
+        return active_ifaces[0]["name"] if active_ifaces else None
+    labels = [f" Auto (routed: {routed_iface or 'none'})"]
+    for info in active_ifaces:
+        labels.append(f" {info['name']} ({info['ip']})")
+    idx, _ = GetMenuString(labels, duplicates=True)
+    if idx == -1:
+        return "__back__"
+    if idx == 0:
+        return None
+    return active_ifaces[idx - 1]["name"]
+
+def _build_network_info_lines(selected_iface=None, preferred=None):
+    routed_iface, routed_gw = _get_routed_info()
+    candidates = _get_interface_candidates(preferred, routed_iface)
+    active_ifaces = []
+    for name in candidates:
+        ip, mask = _get_interface_ipv4(name)
+        if ip:
+            active_ifaces.append({"name": name, "ip": ip, "mask": mask})
+
+    # Choose interface
+    if selected_iface:
+        interface = selected_iface
+    else:
+        interface = routed_iface or (active_ifaces[0]["name"] if active_ifaces else (preferred or "eth0"))
+
+    interface_ipv4, interface_subnet_mask = _get_interface_ipv4(interface)
+    operstate = _get_operstate(interface)
+    try:
+        output = subprocess.check_output(
+            f"ip addr show dev {interface} | awk '/inet / {{ print $2 }}'",
+            shell=True
+        )
+        address = output.decode().strip().split('\\')[0]
+    except Exception:
+        address = ""
+
+    interface_gateway = netifaces.gateways().get("default", {}).get(netifaces.AF_INET, [None])[0]
+    interface_gateway = routed_gw or interface_gateway
+
+    info_lines = [
+        f"Interface: {interface}",
+        f"Routed: {routed_iface or 'None'}",
+    ]
+
+    if interface_ipv4:
+        info_lines.extend([
+            f"IP: {interface_ipv4}",
+            f"Subnet: {interface_subnet_mask}",
+            "Gateway:",
+            f"  {interface_gateway or 'None'}",
+            "Attack:",
+            f"  {address or 'N/A'}",
+        ])
+        if interface.startswith('wlan') and WIFI_AVAILABLE:
+            try:
+                from wifi.wifi_manager import wifi_manager
+                status = wifi_manager.get_connection_status(interface)
+                if status.get("ssid"):
+                    info_lines.extend([
+                        "SSID:",
+                        f"  {status['ssid']}"
+                    ])
+            except Exception:
+                pass
+    else:
+        info_lines.extend([
+            "Status: No IPv4",
+            "Check connection",
+        ])
+
+    if operstate and operstate != "up":
+        if interface.startswith("wlan"):
+            info_lines.append("WiFi: down")
+        elif interface.startswith("eth"):
+            info_lines.append("Cable: down")
+        else:
+            info_lines.append(f"Link: {operstate}")
+
+    return info_lines, active_ifaces, routed_iface
+
 def ShowInfo():
     """Display network information using scrollable text view."""
-    # Collect network information once
     try:
-        # Get best available interface (WiFi or ethernet)
-        interface = get_best_interface()
-        
-        # Retrieve configuration information for active interface
-        interface_config = netifaces.ifaddresses(interface)
-        interface_ipv4 = interface_config[netifaces.AF_INET][0]['addr']
-        interface_subnet_mask = interface_config[netifaces.AF_INET][0]['netmask']
-        interface_gateway = netifaces.gateways()["default"][netifaces.AF_INET][0]
-        output = subprocess.check_output(f"ip addr show dev {interface} | awk '/inet / {{ print $2 }}'", shell=True)
-        address = output.decode().strip().split('\\')[0]
+        preferred = get_best_interface_prefer_eth()
+        info_lines, active_ifaces, routed_iface = _build_network_info_lines(None, preferred)
+        chosen = _select_interface_menu(active_ifaces, routed_iface)
+        if chosen == "__back__":
+            return
+        selected_iface = chosen
 
-        if interface_ipv4:
-            # Connected - create scrollable information display
-            info_lines = [
-                f"Interface: {interface}",
-                f"IP: {interface_ipv4}",
-                f"Subnet: {interface_subnet_mask}",
-                "Gateway:",
-                f"  {interface_gateway}",
-                "Attack:",
-                f"  {address}",
-            ]
-            
-            # Add WiFi-specific info if applicable
-            if interface.startswith('wlan') and WIFI_AVAILABLE:
-                try:
-                    from wifi.wifi_manager import wifi_manager
-                    status = wifi_manager.get_connection_status(interface)
-                    if status["ssid"]:
-                        info_lines.extend([
-                            "SSID:",
-                            f"  {status['ssid']}"
-                        ])
-                except:
-                    pass
-            
-            # Add Discord webhook status
-            webhook_url = get_discord_webhook()
-            if webhook_url:
-                info_lines.extend([
-                    "Discord:",
-                    "  ✅ Webhook configured"
-                ])
-            else:
-                info_lines.extend([
-                    "Discord:",
-                    "  ❌ No webhook"
-                ])
-        else:
-            # Not connected
-            info_lines = [
-                f"Interface: {interface}",
-                "Status: No connection",
-                "Check network cable",
-                "or try WiFi manager"
-            ]
+        def _refresh():
+            lines, _, _ = _build_network_info_lines(selected_iface, preferred)
+            return lines
+
+        DisplayScrollableInfo(info_lines, refresh_fn=_refresh, refresh_interval=2.0)
     except (KeyError, IndexError, ValueError, OSError) as e:
-        # Handle exceptions with detailed error info
         info_lines = [
             "Network Error",
             f"Details: {str(e)[:15]}...",
             "Check ethernet cable",
             "or use WiFi Manager"
         ]
-    
-    # Display scrollable network info
-    DisplayScrollableInfo(info_lines)
+        DisplayScrollableInfo(info_lines)
 
 
-def DisplayScrollableInfo(info_lines):
+def DisplayScrollableInfo(info_lines, refresh_fn=None, refresh_interval=2.0):
     """Display scrollable text information - simple and working."""
     WINDOW = 7  # lines visible simultaneously
-    total = len(info_lines)
+    max_width = 120 - default.start_text[0]
+
+    def _build_display_lines(lines):
+        display = []
+        for line in lines:
+            wrapped = _wrap_text_to_width(line, max_width, text_font)
+            display.extend(wrapped if wrapped else [""])
+        return display
+
+    if refresh_fn:
+        info_lines = refresh_fn() or info_lines
+    display_lines = _build_display_lines(info_lines)
+    total = len(display_lines)
     index = 0   # current position
     offset = 0  # window offset
+    last_refresh = time.time()
 
     while True:
+        if refresh_fn and (time.time() - last_refresh) >= refresh_interval:
+            new_lines = refresh_fn()
+            if new_lines:
+                info_lines = new_lines
+                display_lines = _build_display_lines(info_lines)
+                total = len(display_lines)
+                index = min(index, total - 1)
+                if total <= WINDOW:
+                    offset = 0
+                else:
+                    offset = min(offset, total - WINDOW)
+            last_refresh = time.time()
+
         # Calculate window for scrolling
         if index < offset:
             offset = index
@@ -807,30 +1186,35 @@ def DisplayScrollableInfo(info_lines):
             offset = index - WINDOW + 1
 
         # Get visible window
-        window = info_lines[offset:offset + WINDOW]
+        window = display_lines[offset:offset + WINDOW]
 
         # Draw display
-        color.DrawMenuBackground()
-        for i, line in enumerate(window):
-            fill = color.selected_text if i == (index - offset) else color.text
-            # Highlight current line
-            if i == (index - offset):
-                draw.rectangle(
-                    (default.start_text[0] - 5,
-                     default.start_text[1] + default.text_gap * i,
-                     120,
-                     default.start_text[1] + default.text_gap * i + 10),
-                    fill=color.select
+        try:
+            draw_lock.acquire()
+            _draw_toolbar()
+            color.DrawMenuBackground()
+            for i, line in enumerate(window):
+                fill = color.selected_text if i == (index - offset) else color.text
+                # Highlight current line
+                if i == (index - offset):
+                    draw.rectangle(
+                        (default.start_text[0] - 5,
+                         default.start_text[1] + default.text_gap * i,
+                         120,
+                         default.start_text[1] + default.text_gap * i + 10),
+                        fill=color.select
+                    )
+
+                # Draw the text - NO TRUNCATION for network info
+                draw.text(
+                    (default.start_text[0],
+                     default.start_text[1] + default.text_gap * i),
+                    line,  # Show full text - let it overflow if needed
+                    font=text_font,
+                    fill=fill
                 )
-            
-            # Draw the text - NO TRUNCATION for network info
-            draw.text(
-                (default.start_text[0],
-                 default.start_text[1] + default.text_gap * i),
-                line,  # Show full text - let it overflow if needed
-                font=text_font,
-                fill=fill
-            )
+        finally:
+            draw_lock.release()
 
         time.sleep(0.12)
 
@@ -844,10 +1228,36 @@ def DisplayScrollableInfo(info_lines):
             return  # Exit on back/left button
 
 
+def ShowDiscordInfo():
+    """Display Discord webhook status in a dedicated screen."""
+    try:
+        webhook_url = get_discord_webhook()
+        if webhook_url:
+            short = webhook_url[:32] + "..." if len(webhook_url) > 32 else webhook_url
+            info_lines = [
+                "Discord:",
+                "Webhook configured",
+                "URL:",
+                f"  {short}",
+            ]
+        else:
+            info_lines = [
+                "Discord:",
+                "No webhook set",
+                "Configure in options",
+            ]
+    except Exception as e:
+        info_lines = [
+            "Discord Error",
+            f"{str(e)[:20]}",
+        ]
+    DisplayScrollableInfo(info_lines)
+
+
 def Explorer(path="/",extensions=""):
     # ".gif\|.png\|.bmp\|.jpg\|.tiff\|.jpeg"
     while 1:
-        arr = ["../"] + os.popen("ls --format=single-column -F " + path + (" | grep \"" + extensions + "\|/\"","")[extensions==""] ).read().replace("*","").split("\n")[:-1]
+        arr = ["../"] + os.popen("ls --format=single-column -F " + path + (" | grep \"" + extensions + "\\|/\"","")[extensions==""] ).read().replace("*","").split("\n")[:-1]
         output = GetMenuString(arr,False)
         if output != "":
             if output == "../":
@@ -873,7 +1283,7 @@ def Explorer(path="/",extensions=""):
 
 def ReadTextFileNmap():
     while 1:
-        rfile = Explorer("/root/Raspyjack/loot/Nmap/",extensions=".txt\|.json\|.conf\|.pcap")
+        rfile = Explorer("/root/Raspyjack/loot/Nmap/",extensions=".txt\\|.json\\|.conf\\|.pcap")
         if rfile == "":
             break
         with open(rfile) as f:
@@ -882,7 +1292,7 @@ def ReadTextFileNmap():
 
 def ReadTextFileResponder():
     while 1:
-        rfile = Explorer("/root/Raspyjack/Responder/logs/",extensions=".log\|.txt\|.pcap")
+        rfile = Explorer("/root/Raspyjack/Responder/logs/",extensions=".log\\|.txt\\|.pcap")
         if rfile == "":
             break
         with open(rfile) as f:
@@ -891,7 +1301,7 @@ def ReadTextFileResponder():
 
 def ReadTextFileDNSSpoof():
     while 1:
-        rfile = Explorer("/root/Raspyjack/DNSSpoof/captures/",extensions=".log\|.txt\|.pcap")
+        rfile = Explorer("/root/Raspyjack/DNSSpoof/captures/",extensions=".log\\|.txt\\|.pcap")
         if rfile == "":
             break
         with open(rfile) as f:
@@ -960,18 +1370,18 @@ def send_to_discord(scan_label: str, file_path: str, target_network: str, interf
     if not webhook_url:
         print("Discord webhook not configured - skipping webhook notification")
         return
-    
+
     try:
         # Check if file exists and get its size
         if not os.path.exists(file_path):
             print(f"Scan file not found: {file_path}")
             return
-            
+
         file_size = os.path.getsize(file_path)
         if file_size == 0:
             print("Scan file is empty")
             return
-            
+
         # Create Discord embed with file info
         embed = {
             "title": f"🔍 Nmap Scan Complete: {scan_label}",
@@ -989,52 +1399,78 @@ def send_to_discord(scan_label: str, file_path: str, target_network: str, interf
             },
             "timestamp": datetime.now().isoformat()
         }
-        
+
         # Prepare the payload with file
         with open(file_path, 'rb') as f:
             files = {
                 'file': (os.path.basename(file_path), f, 'text/plain')
             }
-            
+
             payload = {
                 'payload_json': json.dumps({'embeds': [embed]})
             }
-            
+
             # Send to Discord with file attachment
             response = requests.post(webhook_url, data=payload, files=files, timeout=30)
-            
+
         if response.status_code == 204:
             print("✅ Discord webhook with file sent successfully")
         else:
             print(f"❌ Discord webhook failed: {response.status_code}")
-            
+
     except Exception as e:
         print(f"❌ Error sending Discord webhook with file: {e}")
 
 def run_scan(label: str, nmap_args: list[str]):
-    Dialog_info(f"      {label}\n        Running\n      wait please...", wait=True)
-
     # Get target network from best available interface
-    interface = get_best_interface()
+    interface = _choose_interface_for_action(get_best_interface_prefer_eth())
+    if interface == "__back__":
+        return
     ip_with_mask = get_nmap_target_network(interface)
-    
+
     if not ip_with_mask:
         Dialog_info("Network Error\nNo interface available", wait=True)
         return
+
+    # If not /24, offer quick mask choices
+    try:
+        detected_net = ipaddress.ip_network(ip_with_mask, strict=False)
+        if detected_net.prefixlen != 24:
+            interface_ip = get_interface_ip(interface)
+            choices = [
+                f" Use detected {detected_net.with_prefixlen}",
+                " Force /24",
+                " Force /16",
+                " Force /8",
+            ]
+            idx, _ = GetMenuString(choices, duplicates=True)
+            if idx == -1:
+                return
+            if idx == 0:
+                ip_with_mask = detected_net.with_prefixlen
+            else:
+                if interface_ip:
+                    forced_mask = {1: 24, 2: 16, 3: 8}[idx]
+                    forced_net = ipaddress.ip_network(f"{interface_ip}/{forced_mask}", strict=False)
+                    ip_with_mask = forced_net.with_prefixlen
+    except Exception:
+        pass
 
     ts   = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     path = f"/root/Raspyjack/loot/Nmap/{label.lower().replace(' ', '_')}_{ts}.txt"
 
     # Build nmap command with interface specification
     cmd = ["nmap"] + nmap_args + ["-oN", path]
-    
+
     # Add interface-specific parameters for better results
+    Dialog_info(f"      {label}\n        Running\n      wait please...", wait=True)
+
     interface_ip = get_interface_ip(interface)
     if interface_ip:
-        cmd.extend(["-S", interface_ip, "-e", interface])
-    
+        cmd.extend(["-S", interface_ip, "-e", interface, "-Pn"])
+
     cmd.append(ip_with_mask)
-    
+
     subprocess.run(cmd)
     subprocess.run(["sed", "-i", "s/Nmap scan report for //g", path])
 
@@ -1046,7 +1482,7 @@ def run_scan(label: str, nmap_args: list[str]):
                 send_to_discord(label, path, ip_with_mask, interface)
         except Exception as e:
             print(f"Error sending scan results to Discord: {e}")
-    
+
     # Send to Discord in background thread
     threading.Thread(target=send_results_to_discord, daemon=True).start()
 
@@ -1080,8 +1516,10 @@ globals().update({
 
 def defaut_Reverse():
     # Get best available interface and its IP
-    interface = get_best_interface()
-    
+    interface = _choose_interface_for_action(get_best_interface_prefer_eth())
+    if interface == "__back__":
+        return
+
     try:
         default_ip_bytes = subprocess.check_output(f"ip addr show dev {interface} | awk '/inet / {{ print $2 }}'|cut -d'.' -f1-3", shell=True)
         default_ip = default_ip_bytes.decode('utf-8').strip()
@@ -1113,7 +1551,9 @@ def responder_on():
         time.sleep(2)
     else:
         # Get best interface for Responder
-        interface = get_responder_interface()
+        interface = _choose_interface_for_action(get_responder_interface())
+        if interface == "__back__":
+            return
         os.system(f'python3 /root/Raspyjack/Responder/Responder.py -Q -I {interface} &')
         Dialog_info(f"     Responder \n      started !!\n   Interface: {interface}", wait=True)
         time.sleep(2)
@@ -1124,28 +1564,119 @@ def responder_off():
     time.sleep(2)
 
 
-def get_default_gateway_ip():
+def _get_gateway_for_interface(interface):
+    try:
+        gateways = netifaces.gateways()
+        default_gw = gateways.get("default", {}).get(netifaces.AF_INET)
+        if default_gw and default_gw[1] == interface:
+            return default_gw[0]
+        for gw, iface, _ in gateways.get(netifaces.AF_INET, []):
+            if iface == interface:
+                return gw
+    except Exception:
+        pass
+    return None
+
+def get_default_gateway_ip(interface=None):
+    if interface:
+        gw = _get_gateway_for_interface(interface)
+        if gw:
+            return gw
     gateways = netifaces.gateways()
     return gateways['default'][netifaces.AF_INET][0]
 
-def get_local_network():
-    default_gateway_ip = get_default_gateway_ip()
-    ip_parts = default_gateway_ip.split('.')
-    ip_parts[-1] = '0'
-    return '.'.join(ip_parts) + '/24'
+def get_local_network(interface=None):
+    if interface:
+        ip, mask = _get_interface_ipv4(interface)
+        if ip and mask:
+            try:
+                net = ipaddress.ip_network(f"{ip}/{mask}", strict=False)
+                return net.with_prefixlen
+            except Exception:
+                pass
+    default_gateway_ip = get_default_gateway_ip(interface)
+    if default_gateway_ip:
+        ip_parts = default_gateway_ip.split('.')
+        ip_parts[-1] = '0'
+        return '.'.join(ip_parts) + '/24'
+    if interface:
+        ip, _ = _get_interface_ipv4(interface)
+        if ip:
+            ip_parts = ip.split('.')
+            ip_parts[-1] = '0'
+            return '.'.join(ip_parts) + '/24'
+    return None
 
 def Start_MITM():
     safe_kill("arpspoof", "tcpdump")
     Dialog_info("                    Lancement\n                  MITM & Sniff\n                   En cours\n                  Patientez...", wait=True)
-    
+
     # Get best interface for MITM attack
-    interface = get_mitm_interface()
-    local_network = get_local_network()
+    interface = _choose_interface_for_action(get_mitm_interface())
+    if interface == "__back__":
+        return
+    Dialog_info(f"Interface: {interface}", wait=False)
+    local_network = get_local_network(interface)
+    if not local_network:
+        Dialog_info("MITM Error\nNo network\nfor interface", wait=True)
+        return
+    # Offer /24 or /16 if prefix is larger than /24
+    try:
+        net = ipaddress.ip_network(local_network, strict=False)
+        if net.prefixlen < 24:
+            ip, _mask = _get_interface_ipv4(interface)
+            base24 = None
+            base16 = None
+            if ip:
+                try:
+                    base24 = str(ipaddress.ip_network(f"{ip}/24", strict=False).network_address)
+                    base16 = str(ipaddress.ip_network(f"{ip}/16", strict=False).network_address)
+                except Exception:
+                    pass
+            base24 = base24 or str(net.network_address)
+            base16 = base16 or str(net.network_address)
+            options = [("/24", base24), ("/16", base16)]
+            idx = 0
+            while True:
+                lines = ["Select mask"]
+                for i, (opt, base) in enumerate(options):
+                    mark = ">" if i == idx else " "
+                    lines.append(f"{mark}{base}{opt}")
+                lines.append("KEY3=Back")
+                draw_lock.acquire()
+                try:
+                    _draw_toolbar()
+                    color.DrawMenuBackground()
+                    for i, line in enumerate(lines[:7]):
+                        draw.text(
+                            (default.start_text[0],
+                             default.start_text[1] + default.text_gap * i),
+                            line[:m.max_len],
+                            font=text_font,
+                            fill=color.text
+                        )
+                finally:
+                    draw_lock.release()
+                time.sleep(0.12)
+                btn = getButton()
+                if btn == "KEY_UP_PIN":
+                    idx = max(0, idx - 1)
+                elif btn == "KEY_DOWN_PIN":
+                    idx = min(len(options) - 1, idx + 1)
+                elif btn == "KEY3_PIN" or btn == "KEY_LEFT_PIN":
+                    return
+                elif btn == "KEY_PRESS_PIN":
+                    chosen_opt, chosen_base = options[idx]
+                    local_network = f"{chosen_base}{chosen_opt}"
+                    break
+    except Exception:
+        pass
+    Dialog_info(f"Network: {local_network}", wait=False)
     print(f"[*] Starting MITM attack on local network {local_network} via {interface}...")
 
 # Scan hosts on the network
     print("[*] Scanning hosts on network...")
-    cmd = f"arp-scan --localnet --quiet|grep -v 'Interface\|Starting\|packets\|Ending'"
+    cmd = f"arp-scan --localnet --interface {interface} --quiet|grep -v 'Interface\\|Starting\\|packets\\|Ending'"
     result = os.popen(cmd).readlines()
 
 # Display IP and MAC addresses of hosts
@@ -1157,7 +1688,7 @@ def Start_MITM():
             print(f"[+] Host: {parts[0]} ({parts[1]})")
 
 # Retrieve the gateway IP address
-    gateway_ip = get_default_gateway_ip()
+    gateway_ip = get_default_gateway_ip(interface)
     print(f"[*] Default gateway IP: {gateway_ip}")
 
 # If at least one host is found, launch the ARP MITM attack
@@ -1226,12 +1757,14 @@ ettercap_dns_file = "/etc/ettercap/etter.dns"
 
 def Start_DNSSpoofing():
     # Get best interface for DNS spoofing
-    interface = get_best_interface()
-    
+    interface = _choose_interface_for_action(get_best_interface_prefer_eth())
+    if interface == "__back__":
+        return
+
     # Get gateway and current IP automatically
-    gateway_ip = subprocess.check_output("ip route | awk '/default/ {print $3}'", shell=True).decode().strip()
+    gateway_ip = get_default_gateway_ip(interface)
     current_ip = get_dns_spoof_ip(interface)
-    
+
     if not current_ip:
         Dialog_info("DNS Spoof Error\nNo IP available", wait=True)
         return
@@ -1240,7 +1773,7 @@ def Start_DNSSpoofing():
     escaped_ip = current_ip.replace(".", r"\.")
 
     # Use sed to modify IP addresses in etter.dns file
-    sed_command = f"sed -i 's/[0-9]\+\.[0-9]\+\.[0-9]\+\.[0-9]\+/{escaped_ip}/g' {ettercap_dns_file}"
+    sed_command = f"sed -i 's/[0-9]\\+\\.[0-9]\\+\\.[0-9]\\+\\.[0-9]\\+/{escaped_ip}/g' {ettercap_dns_file}"
     subprocess.run(sed_command, shell=True)
 
     print("------------------------------- ")
@@ -1278,7 +1811,7 @@ def launch_wifi_manager():
     if not WIFI_AVAILABLE:
         Dialog_info("WiFi system not found\nRun wifi_manager_payload", wait=True)
         return
-    
+
     Dialog_info("Loading FAST WiFi\nSwitcher...", wait=True)
     exec_payload("fast_wifi_switcher.py")
 
@@ -1287,21 +1820,21 @@ def show_interface_info():
     if not WIFI_AVAILABLE:
         Dialog_info("WiFi system not found", wait=True)
         return
-        
+
     try:
         from wifi.raspyjack_integration import show_interface_info as show_info
-        
+
         # Create a text display of interface info
-        current_interface = get_best_interface()
+        current_interface = get_best_interface_prefer_eth()
         interface_ip = get_interface_ip(current_interface)
-        
+
         info_lines = [
             f"Current: {current_interface}",
             f"IP: {interface_ip or 'None'}",
             "",
             "Press any key to exit"
         ]
-        
+
         if current_interface.startswith('wlan'):
             try:
                 from wifi.wifi_manager import wifi_manager
@@ -1310,9 +1843,9 @@ def show_interface_info():
                     info_lines.insert(2, f"SSID: {status['ssid']}")
             except:
                 pass
-        
+
         GetMenuString(info_lines)
-        
+
     except Exception as e:
         Dialog_info(f"Interface Info Error\n{str(e)[:20]}", wait=True)
 
@@ -1321,25 +1854,25 @@ def switch_interface_menu():
     if not WIFI_AVAILABLE:
         Dialog_info("WiFi system not found", wait=True)
         return
-        
+
     try:
         from wifi.raspyjack_integration import (
-            list_wifi_interfaces_with_status, 
+            list_wifi_interfaces_with_status,
             get_current_raspyjack_interface,
             set_raspyjack_interface
         )
-        
+
         # Get current interface
         current = get_current_raspyjack_interface()
-        
+
         # Get WiFi interfaces with status
         wifi_interfaces = list_wifi_interfaces_with_status()
-        
+
         if not wifi_interfaces:
             Dialog_info("No WiFi interfaces\nfound!", wait=True)
             return
-        
-        # Create menu with interface status  
+
+        # Create menu with interface status
         interface_list = []
         for iface_info in wifi_interfaces:
             name = iface_info['name']
@@ -1347,29 +1880,29 @@ def switch_interface_menu():
             conn_status = "UP" if iface_info['connected'] else "DOWN"
             ip = iface_info['ip'][:10] if iface_info['ip'] else "No IP"
             interface_list.append(f"{current_mark} {name} ({conn_status}) {ip}")
-        
+
         interface_list.append("")
         interface_list.append("Select WiFi interface")
-        
+
         selection = GetMenuString(interface_list)
-        
+
         if selection and not selection.startswith("Select") and selection.strip() and not selection.startswith(" "):
             # Extract interface name from selection
             parts = selection.split()
             if len(parts) >= 2:
                 selected_iface = parts[1]  # Get the wlan0/wlan1 part
-                
+
                 if selected_iface.startswith('wlan'):
                     Dialog_info(f"Switching to\n{selected_iface}\nConfiguring routes...", wait=True)
-                    
+
                     # Actually perform the switch
                     success = set_raspyjack_interface(selected_iface)
-                    
+
                     if success:
                         Dialog_info(f"✓ SUCCESS!\nRaspyJack now using\n{selected_iface}\nAll tools updated", wait=True)
                     else:
                         Dialog_info(f"✗ FAILED!\nCould not switch to\n{selected_iface}\nCheck connection", wait=True)
-        
+
     except Exception as e:
         Dialog_info(f"Switch Error\n{str(e)[:20]}", wait=True)
 
@@ -1378,13 +1911,13 @@ def show_routing_status():
     if not WIFI_AVAILABLE:
         Dialog_info("WiFi system not found", wait=True)
         return
-        
+
     try:
         from wifi.raspyjack_integration import get_current_default_route
-        
+
         current_route = get_current_default_route()
-        current_interface = get_best_interface()
-        
+        current_interface = get_best_interface_prefer_eth()
+
         if current_route:
             info_lines = [
                 "Routing Status:",
@@ -1402,9 +1935,9 @@ def show_routing_status():
                 "",
                 "Press any key to exit"
             ]
-        
+
         GetMenuString(info_lines)
-        
+
     except Exception as e:
         Dialog_info(f"Routing Error\n{str(e)[:20]}", wait=True)
 
@@ -1413,29 +1946,29 @@ def switch_to_wifi():
     if not WIFI_AVAILABLE:
         Dialog_info("WiFi system not found", wait=True)
         return
-        
+
     try:
         from wifi.raspyjack_integration import get_available_interfaces, ensure_interface_default
-        
+
         # Find WiFi interfaces
         interfaces = get_available_interfaces()
         wifi_interfaces = [iface for iface in interfaces if iface.startswith('wlan')]
-        
+
         if not wifi_interfaces:
             Dialog_info("No WiFi interfaces\nfound", wait=True)
             return
-        
+
         # Use first available WiFi interface
         wifi_iface = wifi_interfaces[0]
         Dialog_info(f"Switching to WiFi\n{wifi_iface}\nPlease wait...", wait=True)
-        
+
         success = ensure_interface_default(wifi_iface)
-        
+
         if success:
             Dialog_info(f"✓ Switched to WiFi\n{wifi_iface}\nAll tools use WiFi", wait=True)
         else:
             Dialog_info(f"✗ Switch failed\nCheck WiFi connection", wait=True)
-            
+
     except Exception as e:
         Dialog_info(f"WiFi Switch Error\n{str(e)[:20]}", wait=True)
 
@@ -1444,19 +1977,19 @@ def switch_to_ethernet():
     if not WIFI_AVAILABLE:
         Dialog_info("WiFi system not found", wait=True)
         return
-        
+
     try:
         from wifi.raspyjack_integration import ensure_interface_default
-        
+
         Dialog_info("Switching to Ethernet\neth0\nPlease wait...", wait=True)
-        
+
         success = ensure_interface_default("eth0")
-        
+
         if success:
             Dialog_info("✓ Switched to Ethernet\neth0\nAll tools use ethernet", wait=True)
         else:
             Dialog_info("✗ Switch failed\nCheck ethernet connection", wait=True)
-            
+
     except Exception as e:
         Dialog_info(f"Ethernet Switch Error\n{str(e)[:20]}", wait=True)
 
@@ -1465,7 +1998,7 @@ def launch_interface_switcher():
     if not WIFI_AVAILABLE:
         Dialog_info("WiFi system not found", wait=True)
         return
-    
+
     Dialog_info("Loading Interface\nSwitcher...", wait=True)
     exec_payload("interface_switcher_payload.py")
 
@@ -1474,15 +2007,15 @@ def quick_wifi_toggle():
     if not WIFI_AVAILABLE:
         Dialog_info("WiFi system not found", wait=True)
         return
-        
+
     try:
         from wifi.raspyjack_integration import (
             get_current_raspyjack_interface,
             set_raspyjack_interface
         )
-        
+
         current = get_current_raspyjack_interface()
-        
+
         # Determine target interface immediately
         if current == 'wlan0':
             target = 'wlan1'
@@ -1491,17 +2024,17 @@ def quick_wifi_toggle():
         else:
             # Default to wlan1 if not using either
             target = 'wlan1'
-        
+
         Dialog_info(f"FAST SWITCH:\n{current} -> {target}\nSwitching now...", wait=True)
-        
+
         # IMMEDIATE switch with force
         success = set_raspyjack_interface(target)
-        
+
         if success:
             Dialog_info(f"✓ SWITCHED!\n{target} active\n\nAll tools now\nuse {target}", wait=True)
         else:
             Dialog_info(f"✗ FAILED!\n{target} not ready\nCheck connection", wait=True)
-            
+
     except Exception as e:
         Dialog_info(f"Error: {str(e)[:20]}", wait=True)
 
@@ -1633,6 +2166,7 @@ class DisposableMenu:
         ),
         "ag": (
             [" Browse Images", ImageExplorer],
+            [" Discord status", ShowDiscordInfo],
             [" Options",       "ae"],   # e
             [" System",        "af"]    # f
         ),
@@ -1684,7 +2218,7 @@ class DisposableMenu:
             [" FAST WiFi Switcher", launch_wifi_manager],
             [" INSTANT Toggle 0↔1", quick_wifi_toggle],
             [" Switch Interface", switch_interface_menu],
-            [" Show Interface Info", show_interface_info],  
+            [" Show Interface Info", show_interface_info],
             [" Route Control", "awr"],
         ) if WIFI_AVAILABLE else (
             [" WiFi Not Available", lambda: Dialog_info("WiFi system not found\nRun wifi_manager_payload", wait=True)],
@@ -1729,7 +2263,7 @@ class DisposableMenu:
 ### Font Awesome Icon Mapping ###
 MENU_ICONS = {
     " Scan Nmap": "\uf002",        # search
-    " Reverse Shell": "\uf120",    # terminal  
+    " Reverse Shell": "\uf120",    # terminal
     " Responder": "\uf505",        # responder (updated)
     " MITM & Sniff": "\uf6ff",     # MITM (updated)
     " DNS Spoofing": "\uf233",     # server
@@ -1759,53 +2293,58 @@ def GetMenuCarousel(inlist, duplicates=False):
     """
     Display menu items in a carousel layout with huge icon in center and navigation arrows.
     - Carousel navigation: LEFT/RIGHT for main navigation
-    - UP/DOWN for fine adjustment  
+    - UP/DOWN for fine adjustment
     - Shows huge icon in center with left/right arrows
     - Returns selected item or empty string
     """
     if not inlist:
         inlist = ["Nothing here :("]
-    
+
     if duplicates:
         inlist = [f"{i}#{txt}" for i, txt in enumerate(inlist)]
-    
+
     total = len(inlist)
     index = m.select if m.select < total else 0
-    
+
     while True:
         # Draw carousel
-        color.DrawMenuBackground()
-        
-        # Current item (center, large)
-        current_item = inlist[index]
-        txt = current_item if not duplicates else current_item.split('#', 1)[1]
-        
-        # Main item display area (center)
-        main_x = 64  # Center of 128px screen
-        main_y = 64  # Center vertically
-        
-        # Draw huge icon in center
-        icon = MENU_ICONS.get(txt, "\uf192")  # Default to dot-circle icon
-        # Large font for the icon
-        huge_icon_font = ImageFont.truetype('/usr/share/fonts/truetype/fontawesome/fa-solid-900.ttf', 48)
-        draw.text((main_x, main_y - 12), icon, font=huge_icon_font, fill=color.selected_text, anchor="mm")
-        
-        # Draw menu item name under the icon with custom font for carousel view
-        title = txt.strip()
-        # Create a bigger, bolder font specifically for carousel view
-        carousel_text_font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 12)
-        draw.text((main_x, main_y + 28), title, font=carousel_text_font, fill=color.selected_text, anchor="mm")
-        
-        # Draw navigation arrows - always show if there are multiple items
-        if total > 1:
-            arrow_font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 18)
-            # Left arrow (always show for wraparound)
-            draw.text((20, main_y), "◀", font=arrow_font, fill=color.text, anchor="mm")
-            # Right arrow (always show for wraparound)  
-            draw.text((108, main_y), "▶", font=arrow_font, fill=color.text, anchor="mm")
-        
-        time.sleep(0.12)
-        
+        try:
+            draw_lock.acquire()
+            _draw_toolbar()
+            color.DrawMenuBackground()
+
+            # Current item (center, large)
+            current_item = inlist[index]
+            txt = current_item if not duplicates else current_item.split('#', 1)[1]
+
+            # Main item display area (center)
+            main_x = 64  # Center of 128px screen
+            main_y = 64  # Center vertically
+
+            # Draw huge icon in center
+            icon = MENU_ICONS.get(txt, "\uf192")  # Default to dot-circle icon
+            # Large font for the icon
+            huge_icon_font = ImageFont.truetype('/usr/share/fonts/truetype/fontawesome/fa-solid-900.ttf', 48)
+            draw.text((main_x, main_y - 12), icon, font=huge_icon_font, fill=color.selected_text, anchor="mm")
+
+            # Draw menu item name under the icon with custom font for carousel view
+            title = txt.strip()
+            # Create a bigger, bolder font specifically for carousel view
+            carousel_text_font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 12)
+            draw.text((main_x, main_y + 28), title, font=carousel_text_font, fill=color.selected_text, anchor="mm")
+
+            # Draw navigation arrows - always show if there are multiple items
+            if total > 1:
+                arrow_font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 18)
+                # Left arrow (always show for wraparound)
+                draw.text((20, main_y), "◀", font=arrow_font, fill=color.text, anchor="mm")
+                # Right arrow (always show for wraparound)
+                draw.text((108, main_y), "▶", font=arrow_font, fill=color.text, anchor="mm")
+        finally:
+            draw_lock.release()
+
+        time.sleep(0.08)
+
         # Handle button input
         btn = getButton()
         if btn == "KEY_LEFT_PIN":
@@ -1818,7 +2357,7 @@ def GetMenuCarousel(inlist, duplicates=False):
             # Fine adjustment - same as left
             index = (index - 1) % total
         elif btn == "KEY_DOWN_PIN":
-            # Fine adjustment - same as right  
+            # Fine adjustment - same as right
             index = (index + 1) % total
         elif btn == "KEY_PRESS_PIN":
             if index < total:
@@ -1841,69 +2380,74 @@ def GetMenuGrid(inlist, duplicates=False):
     GRID_COLS = 2
     GRID_ROWS = 4
     GRID_ITEMS = GRID_COLS * GRID_ROWS
-    
+
     if not inlist:
         inlist = ["Nothing here :("]
-    
+
     if duplicates:
         inlist = [f"{i}#{txt}" for i, txt in enumerate(inlist)]
-    
+
     total = len(inlist)
     index = m.select if m.select < total else 0
-    
+
     while True:
         # Calculate grid window
         start_idx = (index // GRID_ITEMS) * GRID_ITEMS
         window = inlist[start_idx:start_idx + GRID_ITEMS]
-        
+
         # Draw grid
-        color.DrawMenuBackground()
-        
-        for i, item in enumerate(window):
-            if i >= GRID_ITEMS:
-                break
-                
-            # Calculate grid position
-            row = i // GRID_COLS
-            col = i % GRID_COLS
-            
-            # Grid item position
-            x = default.start_text[0] + (col * 55)  # 55px per column
-            y = default.start_text[1] + (row * 25)  # 25px per row
-            
-            # Check if this item is selected
-            is_selected = (start_idx + i == index)
-            
-            if is_selected:
-                # Draw selection rectangle
-                draw.rectangle(
-                    (x - 2, y - 2, x + 53, y + 23),
-                    fill=color.select
-                )
-                fill_color = color.selected_text
-            else:
-                fill_color = color.text
-            
-            # Draw icon and text
-            txt = item if not duplicates else item.split('#', 1)[1]
-            icon = MENU_ICONS.get(txt, "")
-            
-            if icon:
-                # Draw icon
-                draw.text((x + 2, y), icon, font=icon_font, fill=fill_color)
-                # Draw short text label
-                short_text = txt.strip()[:8]  # Limit text length for grid
-                draw.text((x, y + 13), short_text, font=text_font, fill=fill_color)
-            else:
-                # Draw text only
-                short_text = txt.strip()[:10]
-                draw.text((x, y + 8), short_text, font=text_font, fill=fill_color)
-        
+        try:
+            draw_lock.acquire()
+            _draw_toolbar()
+            color.DrawMenuBackground()
+
+            for i, item in enumerate(window):
+                if i >= GRID_ITEMS:
+                    break
+
+                # Calculate grid position
+                row = i // GRID_COLS
+                col = i % GRID_COLS
+
+                # Grid item position
+                x = default.start_text[0] + (col * 55)  # 55px per column
+                y = default.start_text[1] + (row * 25)  # 25px per row
+
+                # Check if this item is selected
+                is_selected = (start_idx + i == index)
+
+                if is_selected:
+                    # Draw selection rectangle
+                    draw.rectangle(
+                        (x - 2, y - 2, x + 53, y + 23),
+                        fill=color.select
+                    )
+                    fill_color = color.selected_text
+                else:
+                    fill_color = color.text
+
+                # Draw icon and text
+                txt = item if not duplicates else item.split('#', 1)[1]
+                icon = MENU_ICONS.get(txt, "")
+
+                if icon:
+                    # Draw icon
+                    draw.text((x + 2, y), icon, font=icon_font, fill=fill_color)
+                    # Draw short text label
+                    short_text = txt.strip()[:8]  # Limit text length for grid
+                    draw.text((x, y + 13), short_text, font=text_font, fill=fill_color)
+                else:
+                    # Draw text only
+                    short_text = txt.strip()[:10]
+                    draw.text((x, y + 8), short_text, font=text_font, fill=fill_color)
+        finally:
+            draw_lock.release()
+
         # Display current view mode indicator
         # draw.text((2, 2), "Grid", font=text_font, fill=color.text)
-        
-        time.sleep(0.12)
-        
+
+        time.sleep(0.08)
+
         # Handle button input
         btn = getButton()
         if btn == "KEY_UP_PIN":
@@ -1941,12 +2485,34 @@ def toggle_view_mode():
     m.select = 0  # Reset selection when switching views
 
 
+def boot_health_check():
+    """Quick boot-time health check (temp + routed interface/IP)."""
+    try:
+        routed_iface, _ = _get_routed_info()
+        ip, _ = _get_interface_ipv4(routed_iface) if routed_iface else (None, None)
+        msg = (
+            "[HEALTH] "
+            f"Temp: {temp():.0f}C | "
+            f"Routed: {routed_iface or 'None'} | "
+            f"IP: {ip or 'None'}"
+        )
+        print(msg)
+    except Exception:
+        pass
+
+
 def main():
     # Draw background once
-    color.DrawMenuBackground()
-    color.DrawBorder()
+    try:
+        draw_lock.acquire()
+        _draw_toolbar()
+        color.DrawMenuBackground()
+        color.DrawBorder()
+    finally:
+        draw_lock.release()
 
     start_background_loops()
+    threading.Thread(target=boot_health_check, daemon=True).start()
 
     print("Booted in %s seconds! :)" % (time.time() - start_time))
 
@@ -1959,7 +2525,7 @@ def main():
                 selected_item = GetMenuGrid(m.GetMenuList())
             else:  # carousel
                 selected_item = GetMenuCarousel(m.GetMenuList())
-                
+
             if selected_item:
                 # Find the index of the selected item
                 menu_list = m.GetMenuList()
@@ -1972,7 +2538,7 @@ def main():
                 x = -1
         else:
             x = m.GetMenuIndex(m.GetMenuList())
-            
+
         if x >= 0:
             m.select = x
             if isinstance(m.menu[m.which][m.select][1], str):

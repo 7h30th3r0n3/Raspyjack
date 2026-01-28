@@ -52,7 +52,7 @@
 
 | Item | Description | Buy|
 |------|-------------|-------------------|
-| **Waveshare 1.44″ LCD HAT** | SPI TFT + joystick + 3 buttons | [Buy 🔗](https://s.click.aliexpress.com/e/_oEmEUZW) |
+| **Waveshare 1.44″ LCD HAT** | SPI TFT + joystick + 3 buttons | [Buy 🔗](https://s.click.aliexpress.com/e/_oEmEUZW) <br>or  <br>[Buy 🔗](https://s.click.aliexpress.com/e/_EwDqSv4)|
 | **Raspberry Pi Zero 2 WH** | Quad-core 1 GHz, 512 MB RAM – super compact | [Buy 🔗](https://s.click.aliexpress.com/e/_omuGisy) |
 | **RPI 0w with Waveshare Ethernet/USB HUB HAT** | 3 USB + 1 Ethernet | [Buy 🔗](https://s.click.aliexpress.com/e/_oDK0eYc) |
 | **Alternative : Dual Ethernet/USB HUB HAT** | 2 USB + 2 Ethernet | [Buy 🔗](https://s.click.aliexpress.com/e/_oCX3pUA) |
@@ -349,3 +349,4 @@ Considering this note we are not reliable to any mistake or miss use of this kin
 </div>
 
 ---
+
