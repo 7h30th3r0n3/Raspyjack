@@ -41,7 +41,7 @@ PACKAGES=(
   # ‣ python libs
   python3-scapy python3-netifaces python3-pyudev python3-serial \
   python3-smbus python3-rpi.gpio python3-spidev python3-pil python3-numpy \
-  python3-setuptools python3-cryptography python3-requests python3-evdev \
+  python3-setuptools python3-cryptography python3-requests python3-evdev python3-websockets \
   fonts-dejavu-core \
   # ‣ network / offensive tools
   nmap ncat tcpdump arp-scan dsniff ettercap-text-only php procps tshark dnsmasq \
