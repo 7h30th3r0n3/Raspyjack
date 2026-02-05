@@ -18,6 +18,7 @@ from functools import partial
 import time
 import sys
 import requests  # For Discord webhook integration
+import rj_input  # Virtual input bridge (WebSocket → Unix socket)
 
 # WiFi Integration - Add dual interface support
 try:
@@ -34,7 +35,7 @@ try:
         set_raspyjack_interface
     )
     WIFI_AVAILABLE = True
-    print("✅ WiFi integration loaded - dual interface support enabled")
+    # print("✅ WiFi integration loaded - dual interface support enabled")
 except ImportError as e:
     print(f"⚠️  WiFi integration not available: {e}")
     print("   Using ethernet-only mode")
@@ -237,6 +238,10 @@ class template():
 def getButton():
     global _last_button, _last_button_time, _button_down_since
     while 1:
+        # 1) virtual buttons from Web UI
+        v = rj_input.get_virtual_button()
+        if v:
+            return v
         pressed = None
         for item in PINS:
             if GPIO.input(PINS[item]) == 0:
@@ -2002,6 +2007,11 @@ def launch_interface_switcher():
     Dialog_info("Loading Interface\nSwitcher...", wait=True)
     exec_payload("interface_switcher_payload.py")
 
+def launch_webui():
+    """Launch the WebUI controller payload (start/stop Web UI)."""
+    Dialog_info("Loading WebUI...", wait=True)
+    exec_payload("webui.py")
+
 def quick_wifi_toggle():
     """FAST toggle between wlan0 and wlan1 - immediate switching."""
     if not WIFI_AVAILABLE:
@@ -2112,6 +2122,10 @@ def exec_payload(filename: str) -> None:
     # ---- restore RaspyJack ----------------------------------------------
     print("[PAYLOAD] ◄ Restoring LCD & GPIO…")
     _setup_gpio()                                  # SPI/DC/RST/CS back
+    try:
+        rj_input.restart_listener()                # ensure virtual input socket is back
+    except AttributeError:
+        pass
 
     # rebuild the current menu image
     color.DrawMenuBackground()
@@ -2219,6 +2233,7 @@ class DisposableMenu:
             [" INSTANT Toggle 0↔1", quick_wifi_toggle],
             [" Switch Interface", switch_interface_menu],
             [" Show Interface Info", show_interface_info],
+            [" WebUI", launch_webui],
             [" Route Control", "awr"],
         ) if WIFI_AVAILABLE else (
             [" WiFi Not Available", lambda: Dialog_info("WiFi system not found\nRun wifi_manager_payload", wait=True)],
