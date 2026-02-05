@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RaspyJack WebUi</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    :root { color-scheme: dark; }
+    body { background: radial-gradient(1200px 800px at 50% -10%, #0f1b2d 0%, #07090f 55%, #05060a 100%); }
+    .neon { box-shadow: 0 0 0 1px rgba(116,255,180,.2), 0 0 25px rgba(18,255,120,.15) inset, 0 0 40px rgba(18,255,120,.15); }
+    .neon-btn { box-shadow: 0 0 0 1px rgba(160,160,255,.25), 0 0 18px rgba(120,120,255,.18) inset; }
+    .neon-btn:active, .neon-btn.active { filter: brightness(1.2); }
+  </style>
+</head>
+<body class="min-h-screen text-slate-200">
+  <div class="mx-auto max-w-4xl px-4 py-6">
+    <div class="flex items-center justify-center mb-6 select-none">
+      <div class="flex flex-row md:flex-col items-center justify-center gap-3 flex-nowrap">
+        <img src="./raspyjack.png" alt="RaspyJack" class="order-1 md:order-2 h-12 md:h-24 drop-shadow-[0_0_20px_rgba(18,255,120,0.25)]"/>
+        <div class="order-2 md:order-1 text-center">
+          <div class="text-4xl md:text-5xl font-black tracking-wide"><span class="text-emerald-400">R</span>ASPY<span class="text-rose-400">J</span>ACK</div>
+          <div class="mt-1 text-xs md:text-sm text-slate-400">Remote Control Interface</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Device card -->
+    <div class="neon rounded-3xl ring-1 ring-emerald-500/20 bg-gradient-to-br from-slate-900/60 to-slate-900/30 backdrop-blur-md p-4 md:p-5 w-fit mx-auto shadow-xl shadow-emerald-500/10">
+      <!-- Mobile: 2 columns (screen spans 2) → row below has pad (left) and keys (right)
+           Desktop: 3 columns (pad | screen | keys) -->
+      <div class="grid grid-cols-[140px_140px] md:grid-cols-[120px_auto_120px] gap-3 md:gap-4 justify-items-center items-center">
+        <!-- Left pad -->
+        <div class="order-2 md:order-1 flex md:block justify-center justify-self-start">
+          <div class="grid grid-cols-3 grid-rows-3 gap-1.5 w-[120px]">
+            <div></div>
+            <button class="neon-btn rounded-xl bg-slate-800/70 hover:bg-slate-700/70 w-10 h-10 flex items-center justify-center backdrop-blur ring-1 ring-white/10 hover:ring-emerald-400/30 transition" data-btn="UP">▲</button>
+            <div></div>
+            <button class="neon-btn rounded-xl bg-slate-800/70 hover:bg-slate-700/70 w-10 h-10 flex items-center justify-center backdrop-blur ring-1 ring-white/10 hover:ring-emerald-400/30 transition" data-btn="LEFT">◄</button>
+            <button class="neon-btn rounded-xl bg-emerald-600/80 hover:bg-emerald-500/80 w-10 h-10 flex items-center justify-center ring-1 ring-emerald-300/40 transition" data-btn="OK" aria-label="OK"></button>
+            <button class="neon-btn rounded-xl bg-slate-800/70 hover:bg-slate-700/70 w-10 h-10 flex items-center justify-center backdrop-blur ring-1 ring-white/10 hover:ring-emerald-400/30 transition" data-btn="RIGHT">►</button>
+            <div></div>
+            <button class="neon-btn rounded-xl bg-slate-800/70 hover:bg-slate-700/70 w-10 h-10 flex items-center justify-center backdrop-blur ring-1 ring-white/10 hover:ring-emerald-400/30 transition" data-btn="DOWN">▼</button>
+            <div></div>
+          </div>
+        </div>
+
+        <!-- Screen -->
+        <div class="order-1 md:order-2 col-span-2 md:col-span-1">
+          <div class="rounded-2xl ring-1 ring-emerald-500/30 bg-black/80 p-2 shadow-[0_0_40px_rgba(18,255,120,0.18)]">
+            <div class="flex items-center justify-center">
+              <canvas id="screen" width="128" height="128" class="w-[240px] md:w-[300px] aspect-square"></canvas>
+            </div>
+          </div>
+          <div class="mt-3 text-center text-xs text-slate-400">OK = Enter · KEY3 = Esc</div>
+          <div id="status" class="mt-1 text-center text-[11px] text-slate-500">Connecting…</div>
+        </div>
+
+        <!-- Right buttons -->
+        <div class="order-3 md:order-3 flex flex-col items-center gap-2 md:items-stretch justify-self-end">
+          <button class="neon-btn rounded-xl bg-fuchsia-700/80 hover:bg-fuchsia-600/80 px-3 py-2 w-24 ring-1 ring-white/10 transition" data-btn="KEY1">KEY1</button>
+          <button class="neon-btn rounded-xl bg-fuchsia-700/80 hover:bg-fuchsia-600/80 px-3 py-2 w-24 ring-1 ring-white/10 transition" data-btn="KEY2">KEY2</button>
+          <button class="neon-btn rounded-xl bg-fuchsia-700/80 hover:bg-fuchsia-600/80 px-3 py-2 w-24 ring-1 ring-white/10 transition" data-btn="KEY3">KEY3</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="./app.js"></script>
+</body>
+</html>
+
