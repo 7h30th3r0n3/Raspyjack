@@ -22,6 +22,9 @@ import RPi.GPIO as GPIO  # type: ignore
 import LCD_1in44, LCD_Config  # type: ignore
 from PIL import Image, ImageDraw, ImageFont  # type: ignore
 
+# Shared input helper (WebUI virtual + GPIO)
+from payloads._input_helper import get_button
+
 WIDTH, HEIGHT = 128, 128
 KEY_UP = 6
 KEY_DOWN = 19
@@ -110,17 +113,18 @@ def select_interface_menu(lcd):
         lines.append("KEY3=Back")
         draw_lines(lcd, lines)
         time.sleep(0.1)
-        if GPIO.input(KEY3) == 0:
+        btn = get_button({"UP": KEY_UP, "DOWN": KEY_DOWN, "OK": KEY_PRESS, "KEY3": KEY3}, GPIO)
+        if btn == "KEY3":
             return None, None
-        if GPIO.input(KEY_UP) == 0:
+        if btn == "UP":
             idx = max(0, idx - 1)
-        elif GPIO.input(KEY_DOWN) == 0:
+        elif btn == "DOWN":
             idx = min(len(ifaces) - 1, idx + 1)
         if idx < offset:
             offset = idx
         elif idx >= offset + 5:
             offset = idx - 4
-        if GPIO.input(KEY_PRESS) == 0:
+        if btn == "OK":
             name, cidr = ifaces[idx]
             return name, cidr
 
@@ -141,13 +145,14 @@ def select_mask_menu(lcd, cidr):
         lines.append("KEY3=Back")
         draw_lines(lcd, lines)
         time.sleep(0.1)
-        if GPIO.input(KEY3) == 0:
+        btn = get_button({"UP": KEY_UP, "DOWN": KEY_DOWN, "OK": KEY_PRESS, "KEY3": KEY3}, GPIO)
+        if btn == "KEY3":
             return cidr
-        if GPIO.input(KEY_UP) == 0:
+        if btn == "UP":
             idx = max(0, idx - 1)
-        elif GPIO.input(KEY_DOWN) == 0:
+        elif btn == "DOWN":
             idx = min(len(options) - 1, idx + 1)
-        if GPIO.input(KEY_PRESS) == 0:
+        if btn == "OK":
             chosen = options[idx]
             return f"{base_ip}{chosen}"
 
@@ -231,14 +236,18 @@ def main():
 
     if subprocess.call(["which", "dnsmasq"], stdout=subprocess.DEVNULL) != 0:
         draw_lines(lcd, ["dnsmasq missing", "Install first", "", "KEY3=Exit"])
-        while GPIO.input(KEY3) == 1:
+        while True:
+            if get_button({"KEY3": KEY3}, GPIO) == "KEY3":
+                break
             time.sleep(0.1)
         return 1
 
     iface, cidr = select_interface_menu(lcd)
     if not iface or not cidr:
         draw_lines(lcd, ["Rogue DHCP", "No interface", "", "KEY3=Exit"])
-        while GPIO.input(KEY3) == 1:
+        while True:
+            if get_button({"KEY3": KEY3}, GPIO) == "KEY3":
+                break
             time.sleep(0.1)
         return 1
 
@@ -287,7 +296,9 @@ def main():
 
     draw_status(lcd, iface)
     try:
-        while GPIO.input(KEY3) == 1:
+        while True:
+            if get_button({"KEY3": KEY3}, GPIO) == "KEY3":
+                break
             # show popup if any
             draw_status(lcd, iface)
             time.sleep(0.2)

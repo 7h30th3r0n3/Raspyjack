@@ -41,6 +41,9 @@ import RPi.GPIO as GPIO               # Raspberry Pi GPIO access
 import LCD_1in44, LCD_Config          # Waveshare driver helpers for the LCD
 from PIL import Image, ImageDraw, ImageFont  # Pillow – draw text on images
 
+# Shared input helper (WebUI virtual + GPIO)
+from payloads._input_helper import get_button
+
 # ---------------------------------------------------------------------------
 # 1) GPIO pin mapping (BCM numbering) – tweak here if your wiring differs
 # ---------------------------------------------------------------------------
@@ -118,13 +121,7 @@ try:
     draw("Ready!")
 
     while running:
-        pressed: str | None = None  # name of the button currently pressed
-
-        # 6.1 – scan all buttons; break at the first active‑LOW pin
-        for name, pin in PINS.items():
-            if GPIO.input(pin) == 0:  # button pressed
-                pressed = name
-                break
+        pressed: str | None = get_button(PINS, GPIO)  # name of the button pressed
 
         # 6.2 – act on the result
         if pressed:

@@ -19,6 +19,9 @@ import RPi.GPIO as GPIO  # type: ignore
 import LCD_1in44, LCD_Config  # type: ignore
 from PIL import Image, ImageDraw, ImageFont  # type: ignore
 
+# Shared input helper (WebUI virtual + GPIO)
+from payloads._input_helper import get_button
+
 WIDTH, HEIGHT = 128, 128
 KEY_UP = 6
 KEY_DOWN = 19
@@ -190,15 +193,25 @@ def main():
     GPIO.setup(KEY1, GPIO.IN, pull_up_down=GPIO.PUD_UP)
     GPIO.setup(KEY3, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
+    btn_map = {
+        "LEFT": KEY_LEFT,
+        "RIGHT": KEY_RIGHT,
+        "UP": KEY_UP,
+        "DOWN": KEY_DOWN,
+        "KEY1": KEY1,
+        "KEY3": KEY3,
+    }
+
     board = new_board()
     score = 0
     draw_board(lcd, board, score)
 
     try:
         while True:
-            if GPIO.input(KEY3) == 0:
+            btn = get_button(btn_map, GPIO)
+            if btn == "KEY3":
                 break
-            if GPIO.input(KEY1) == 0:
+            if btn == "KEY1":
                 board = new_board()
                 score = 0
                 draw_board(lcd, board, score)
@@ -208,13 +221,13 @@ def main():
             direction = None
             # Standard controls
             # Standard mapping
-            if GPIO.input(KEY_LEFT) == 0:
+            if btn == "LEFT":
                 direction = 0  # left
-            elif GPIO.input(KEY_RIGHT) == 0:
+            elif btn == "RIGHT":
                 direction = 2  # right
-            elif GPIO.input(KEY_UP) == 0:
+            elif btn == "UP":
                 direction = 3  # invert up/down
-            elif GPIO.input(KEY_DOWN) == 0:
+            elif btn == "DOWN":
                 direction = 1  # invert up/down
 
             if direction is not None:
@@ -238,12 +251,13 @@ def main():
                 d.text((10, 82), "KEY3=Exit", font=font, fill="white")
                 lcd.LCD_ShowImage(img, 0, 0)
                 while True:
-                    if GPIO.input(KEY1) == 0:
+                    btn = get_button({"KEY1": KEY1, "KEY3": KEY3}, GPIO)
+                    if btn == "KEY1":
                         board = new_board()
                         score = 0
                         draw_board(lcd, board, score)
                         break
-                    if GPIO.input(KEY3) == 0:
+                    if btn == "KEY3":
                         return 0
                     time.sleep(0.1)
 

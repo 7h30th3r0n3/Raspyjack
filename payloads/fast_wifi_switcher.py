@@ -34,6 +34,7 @@ try:
     import LCD_1in44, LCD_Config
     import RPi.GPIO as GPIO
     from PIL import Image, ImageDraw, ImageFont
+    from payloads._input_helper import get_virtual_button
     
     # Import WiFi integration functions
     from wifi.raspyjack_integration import (
@@ -178,6 +179,11 @@ class FastWiFiSwitcher:
         """Ultra-fast button reading with debouncing."""
         current_time = time.time()
         pressed_buttons = []
+
+        virtual = get_virtual_button()
+        if virtual:
+            pressed_buttons.append(virtual)
+            return pressed_buttons
         
         for button_name, pin in self.buttons.items():
             current_state = GPIO.input(pin)

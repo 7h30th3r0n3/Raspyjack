@@ -33,6 +33,9 @@ import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 
+# Shared input helper (WebUI virtual + GPIO)
+from payloads._input_helper import get_button
+
 # ---------------------------------------------------------------------------
 # 1) Configuration – GPIO pins (BCM numbering) & constants
 # ---------------------------------------------------------------------------
@@ -188,10 +191,7 @@ signal.signal(signal.SIGTERM, cleanup)    # RaspyJack UI stop
 
 def pressed_button() -> str | None:
     """Return the *name* of the first button currently pressed (active-LOW)."""
-    for name, pin in PINS.items():
-        if GPIO.input(pin) == 0:
-            return name
-    return None
+    return get_button(PINS, GPIO)
 
 # ---------------------------------------------------------------------------
 # 10) Main event loop

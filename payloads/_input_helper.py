@@ -20,20 +20,27 @@ _VIRTUAL_TO_BTN = {
 }
 
 
+def get_virtual_button():
+    """Return a WebUI virtual button name or None."""
+    if rj_input is None:
+        return None
+    try:
+        name = rj_input.get_virtual_button()
+    except Exception:
+        return None
+    if not name:
+        return None
+    return _VIRTUAL_TO_BTN.get(name)
+
+
 def get_button(pins, gpio):
     """
     Return a button name using WebUI virtual input if available,
     otherwise fall back to GPIO.
     """
-    if rj_input is not None:
-        try:
-            name = rj_input.get_virtual_button()
-        except Exception:
-            name = None
-        if name:
-            mapped = _VIRTUAL_TO_BTN.get(name)
-            if mapped:
-                return mapped
+    mapped = get_virtual_button()
+    if mapped:
+        return mapped
     for btn, pin in pins.items():
         if gpio.input(pin) == 0:
             return btn

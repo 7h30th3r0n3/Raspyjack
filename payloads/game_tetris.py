@@ -20,6 +20,9 @@ import RPi.GPIO as GPIO  # type: ignore
 import LCD_1in44, LCD_Config  # type: ignore
 from PIL import Image, ImageDraw, ImageFont  # type: ignore
 
+# Shared input helper (WebUI virtual + GPIO)
+from payloads._input_helper import get_button
+
 WIDTH, HEIGHT = 128, 128
 KEY_UP = 6
 KEY_DOWN = 19
@@ -146,6 +149,15 @@ def main():
     for pin in (KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT, KEY1, KEY3):
         GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
+    btn_map = {
+        "LEFT": KEY_LEFT,
+        "RIGHT": KEY_RIGHT,
+        "UP": KEY_UP,
+        "DOWN": KEY_DOWN,
+        "KEY1": KEY1,
+        "KEY3": KEY3,
+    }
+
     board = [[None] * BOARD_W for _ in range(BOARD_H)]
     shape, color = new_piece()
     sx, sy = 3, -2
@@ -156,25 +168,26 @@ def main():
 
     try:
         while True:
-            if GPIO.input(KEY3) == 0:
+            btn = get_button(btn_map, GPIO)
+            if btn == "KEY3":
                 break
 
             moved = False
-            if GPIO.input(KEY_LEFT) == 0 and can_place(board, shape, sx - 1, sy):
+            if btn == "LEFT" and can_place(board, shape, sx - 1, sy):
                 sx -= 1
                 moved = True
-            elif GPIO.input(KEY_RIGHT) == 0 and can_place(board, shape, sx + 1, sy):
+            elif btn == "RIGHT" and can_place(board, shape, sx + 1, sy):
                 sx += 1
                 moved = True
-            elif GPIO.input(KEY_UP) == 0:
+            elif btn == "UP":
                 r = rotate(shape)
                 if can_place(board, r, sx, sy):
                     shape = r
                     moved = True
-            elif GPIO.input(KEY_DOWN) == 0 and can_place(board, shape, sx, sy + 1):
+            elif btn == "DOWN" and can_place(board, shape, sx, sy + 1):
                 sy += 1
                 moved = True
-            elif GPIO.input(KEY1) == 0:
+            elif btn == "KEY1":
                 while can_place(board, shape, sx, sy + 1):
                     sy += 1
                 moved = True
@@ -204,13 +217,14 @@ def main():
                         d.text((20, 78), "KEY3=Exit", font=font, fill="white")
                         lcd.LCD_ShowImage(img, 0, 0)
                         while True:
-                            if GPIO.input(KEY1) == 0:
+                            btn = get_button({"KEY1": KEY1, "KEY3": KEY3}, GPIO)
+                            if btn == "KEY1":
                                 board = [[None] * BOARD_W for _ in range(BOARD_H)]
                                 shape, color = new_piece()
                                 sx, sy = 3, -2
                                 score = 0
                                 break
-                            if GPIO.input(KEY3) == 0:
+                            if btn == "KEY3":
                                 return 0
                             time.sleep(0.1)
 

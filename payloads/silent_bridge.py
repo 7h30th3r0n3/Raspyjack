@@ -24,6 +24,9 @@ import RPi.GPIO as GPIO  # type: ignore
 import LCD_1in44, LCD_Config  # type: ignore
 from PIL import Image, ImageDraw, ImageFont  # type: ignore
 
+# Shared input helper (WebUI virtual + GPIO)
+from payloads._input_helper import get_button
+
 KEY3_PIN = 16
 WIDTH, HEIGHT = 128, 128
 BRIDGE = "br0"
@@ -163,7 +166,9 @@ def draw_stats(lcd, if1, if2):
 
 
 def wait_key3():
-    while GPIO.input(KEY3_PIN) == 1:
+    while True:
+        if get_button({"KEY3": KEY3_PIN}, GPIO) == "KEY3":
+            break
         time.sleep(0.1)
 
 
@@ -294,7 +299,9 @@ def main():
     stats_thread.start()
 
     try:
-        while GPIO.input(KEY3_PIN) == 1:
+        while True:
+            if get_button({"KEY3": KEY3_PIN}, GPIO) == "KEY3":
+                break
             draw_stats(lcd, if1, if2)
             time.sleep(REFRESH_SEC)
     finally:

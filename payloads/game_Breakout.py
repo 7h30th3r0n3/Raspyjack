@@ -37,6 +37,9 @@ import RPi.GPIO as GPIO               # Raspberry Pi GPIO access
 import LCD_1in44, LCD_Config          # Waveshare driver helpers for the LCD
 from PIL import Image, ImageDraw, ImageFont
 
+# Shared input helper (WebUI virtual + GPIO)
+from payloads._input_helper import get_button
+
 # ---------------------------------------------------------------------------
 # 1) GPIO pin mapping (BCM numbering)
 # ---------------------------------------------------------------------------
@@ -189,16 +192,17 @@ def main():
         frame_start = time.perf_counter()
 
         # -------------------------------- Input --------------------------------
-        if GPIO.input(PINS["LEFT"]) == 0 or GPIO.input(PINS["UP"]) == 0:
+        btn = get_button(PINS, GPIO)
+        if btn in ("LEFT", "UP"):
             paddle.move(-1)
-        if GPIO.input(PINS["RIGHT"]) == 0 or GPIO.input(PINS["DOWN"]) == 0:
+        if btn in ("RIGHT", "DOWN"):
             paddle.move(1)
 
-        if GPIO.input(PINS["KEY3"]) == 0:  # immediate quit on KEY3
+        if btn == "KEY3":  # immediate quit on KEY3
             break
 
         # Start/reset on KEY1 when ball is out of play
-        if GPIO.input(PINS["KEY1"]) == 0 and (ball.y > HEIGHT or not bricks):
+        if btn == "KEY1" and (ball.y > HEIGHT or not bricks):
             paddle = Paddle()
             ball = Ball()
             bricks = create_bricks()
