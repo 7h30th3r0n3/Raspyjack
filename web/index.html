@@ -8,9 +8,264 @@
   <style>
     :root { color-scheme: dark; }
     body { background: radial-gradient(1200px 800px at 50% -10%, #0f1b2d 0%, #07090f 55%, #05060a 100%); }
-    .neon { box-shadow: 0 0 0 1px rgba(116,255,180,.2), 0 0 25px rgba(18,255,120,.15) inset, 0 0 40px rgba(18,255,120,.15); }
-    .neon-btn { box-shadow: 0 0 0 1px rgba(160,160,255,.25), 0 0 18px rgba(120,120,255,.18) inset; }
-    .neon-btn:active, .neon-btn.active { filter: brightness(1.2); }
+    .device-shell {
+      position: relative;
+      transition: all 0.2s ease;
+    }
+
+    /* Theme: Neon (default) */
+    .device-shell.theme-neon,
+    .device-shell[data-theme="neon"] {
+      box-shadow: 0 0 0 1px rgba(116,255,180,.2), 0 0 25px rgba(18,255,120,.15) inset, 0 0 40px rgba(18,255,120,.15);
+      background: linear-gradient(145deg, rgba(15,23,42,.65), rgba(15,23,42,.35));
+      border: 1px solid rgba(16,185,129,.2);
+      backdrop-filter: blur(8px);
+    }
+    .device-shell.theme-neon .rj-btn,
+    .device-shell[data-theme="neon"] .rj-btn {
+      box-shadow: 0 0 0 1px rgba(160,160,255,.25), 0 0 18px rgba(120,120,255,.18) inset;
+    }
+    .device-shell.theme-neon .rj-btn:active,
+    .device-shell.theme-neon .rj-btn.active,
+    .device-shell[data-theme="neon"] .rj-btn:active,
+    .device-shell[data-theme="neon"] .rj-btn.active {
+      filter: brightness(1.2);
+    }
+    .device-shell.theme-neon .screen-frame,
+    .device-shell[data-theme="neon"] .screen-frame {
+      border: 1px solid rgba(16,185,129,.3);
+      background: rgba(0,0,0,.8);
+      box-shadow: 0 0 40px rgba(18,255,120,0.18);
+    }
+
+    /* Theme: Game Boy */
+    .device-shell.theme-gameboy,
+    .device-shell[data-theme="gameboy"] {
+      background: linear-gradient(145deg, #a3a3a3, #7d7d7d);
+      border-radius: 16px;
+      padding: 20px;
+      width: fit-content;
+      box-shadow:
+        inset -4px -4px 10px rgba(0,0,0,0.2),
+        inset 4px 4px 10px rgba(255,255,255,0.05),
+        0 8px 20px rgba(0,0,0,0.5);
+    }
+    .device-shell.theme-gameboy::before,
+    .device-shell[data-theme="gameboy"]::before {
+      content: '';
+      position: absolute;
+      top: 12px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 80px;
+      height: 6px;
+      background: #222;
+      border-radius: 3px;
+    }
+    .device-shell.theme-gameboy::after,
+    .device-shell[data-theme="gameboy"]::after {
+      content: '';
+      position: absolute;
+      right: 12px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 6px;
+      height: 60px;
+      background: #333;
+      border-radius: 3px;
+    }
+    .device-shell.theme-gameboy .screen-frame,
+    .device-shell[data-theme="gameboy"] .screen-frame {
+      background: #111;
+      border: 4px solid #444;
+      border-radius: 8px;
+      padding: 4px;
+      margin-bottom: 16px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      box-shadow:
+        inset -2px -2px 5px rgba(0,0,0,0.3),
+        inset 2px 2px 5px rgba(255,255,255,0.05);
+    }
+    .device-shell.theme-gameboy .rj-btn,
+    .device-shell[data-theme="gameboy"] .rj-btn {
+      background: #222 !important;
+      color: #fff;
+      border-radius: 8px;
+      width: 40px;
+      height: 40px;
+      font-weight: bold;
+      cursor: pointer;
+      box-shadow:
+        inset -2px -2px 4px rgba(0,0,0,0.3),
+        inset 2px 2px 4px rgba(255,255,255,0.05);
+      transition: all 0.1s;
+    }
+    .device-shell.theme-gameboy .rj-btn:active,
+    .device-shell.theme-gameboy .rj-btn.active,
+    .device-shell[data-theme="gameboy"] .rj-btn:active,
+    .device-shell[data-theme="gameboy"] .rj-btn.active {
+      transform: translateY(2px);
+      box-shadow:
+        inset 2px 2px 4px rgba(0,0,0,0.3),
+        inset -2px -2px 4px rgba(255,255,255,0.05);
+    }
+    .device-shell.theme-gameboy .key-btn,
+    .device-shell[data-theme="gameboy"] .key-btn {
+      width: 96px;
+      height: 36px;
+      border-radius: 8px;
+      font-size: 0.9rem;
+    }
+    .device-shell.theme-gameboy .screen-frame,
+    .device-shell[data-theme="gameboy"] .screen-frame {
+      margin-bottom: 16px;
+    }
+    .device-shell.theme-gameboy .side-buttons button,
+    .device-shell[data-theme="gameboy"] .side-buttons button {
+      width: 96px;
+      height: 36px;
+      border-radius: 8px;
+      font-size: 0.9rem;
+    }
+    .device-shell.theme-gameboy .layout-gameboy,
+    .device-shell[data-theme="gameboy"] .layout-gameboy {
+      display: block;
+    }
+    .device-shell.theme-gameboy .layout-default,
+    .device-shell[data-theme="gameboy"] .layout-default {
+      display: none;
+    }
+    .device-shell.theme-gameboy .layout-default,
+    .device-shell[data-theme="gameboy"] .layout-default {
+      display: none;
+    }
+    .device-shell.theme-gameboy .layout-gameboy,
+    .device-shell[data-theme="gameboy"] .layout-gameboy {
+      display: block;
+    }
+
+    /* Theme: Pager */
+    .device-shell.theme-pager,
+    .device-shell[data-theme="pager"] {
+      background: #c9c9c9;
+      border-radius: 18px;
+      border: 3px solid #9a9a9a;
+      box-shadow:
+        inset -6px -6px 10px rgba(0,0,0,.25),
+        inset 6px 6px 10px rgba(255,255,255,.25),
+        0 20px 40px rgba(0,0,0,.6);
+    }
+    .device-shell.theme-pager .pager-brand,
+    .device-shell[data-theme="pager"] .pager-brand { display: block; }
+    .device-shell.theme-pager .pager-speaker,
+    .device-shell[data-theme="pager"] .pager-speaker { display: flex; }
+    .device-shell.theme-pager .pager-clip,
+    .device-shell[data-theme="pager"] .pager-clip { display: block; }
+
+    .device-shell.theme-pager .screen-frame,
+    .device-shell[data-theme="pager"] .screen-frame {
+      background: #2b3a2f;
+      padding: 10px;
+      border-radius: 8px;
+      border: 3px solid #555;
+      box-shadow:
+        inset 0 0 12px rgba(0,0,0,.8),
+        0 0 6px rgba(0,255,120,.2);
+    }
+    .device-shell.theme-pager canvas,
+    .device-shell[data-theme="pager"] canvas {
+      image-rendering: pixelated;
+    }
+    .device-shell.theme-pager .rj-btn,
+    .device-shell[data-theme="pager"] .rj-btn {
+      width: 40px;
+      height: 40px;
+      background: #2a2a2a !important;
+      color: #9aff9a;
+      border-radius: 6px;
+      border: 2px solid #111;
+      box-shadow:
+        inset -3px -3px 6px rgba(255,255,255,.08),
+        inset 3px 3px 6px rgba(0,0,0,.6);
+    }
+    .device-shell.theme-pager .rj-btn:active,
+    .device-shell.theme-pager .rj-btn.active,
+    .device-shell[data-theme="pager"] .rj-btn:active,
+    .device-shell[data-theme="pager"] .rj-btn.active {
+      transform: translateY(2px);
+      box-shadow:
+        inset 3px 3px 6px rgba(255,255,255,.08),
+        inset -3px -3px 6px rgba(0,0,0,.6);
+    }
+    .device-shell.theme-pager .key-btn,
+    .device-shell[data-theme="pager"] .key-btn {
+      width: 95px;
+      height: 34px;
+      font-size: 12px;
+      letter-spacing: 1px;
+    }
+    .device-shell.theme-pager .pager-text,
+    .device-shell[data-theme="pager"] .pager-text {
+      color: #111 !important;
+    }
+    .device-shell.theme-pager .layout-default,
+    .device-shell[data-theme="pager"] .layout-default {
+      display: none;
+    }
+    .device-shell.theme-pager .layout-pager,
+    .device-shell[data-theme="pager"] .layout-pager {
+      display: block;
+    }
+
+    .pager-brand {
+      display: none;
+      text-align: center;
+      font-weight: bold;
+      font-size: 13px;
+      color: #222;
+      letter-spacing: 2px;
+      margin-bottom: 10px;
+    }
+    .pager-speaker {
+      display: none;
+      gap: 4px;
+      justify-content: center;
+      margin-bottom: 10px;
+    }
+    .pager-speaker span {
+      width: 6px;
+      height: 6px;
+      background: #444;
+      border-radius: 50%;
+      display: block;
+    }
+    .pager-clip {
+      display: none;
+      position: absolute;
+      right: -10px;
+      top: 40px;
+      width: 8px;
+      height: 90px;
+      background: #777;
+      border-radius: 4px;
+      box-shadow: inset 0 0 4px #000;
+    }
+
+    .theme-nav-btn {
+      width: 36px;
+      height: 36px;
+      border-radius: 9999px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(30,41,59,0.6);
+      border: 1px solid rgba(148,163,184,0.25);
+      transition: all 0.15s ease;
+    }
+    .theme-nav-btn:hover { background: rgba(51,65,85,0.8); }
+    .theme-label { min-width: 120px; text-align: center; }
   </style>
 </head>
 <body class="min-h-screen text-slate-200">
@@ -25,43 +280,108 @@
       </div>
     </div>
 
+    <!-- Theme switcher (handheld only) -->
+    <div class="flex items-center justify-center gap-3 mb-4 select-none">
+      <button id="themePrev" type="button" class="theme-nav-btn" aria-label="Previous theme">◄</button>
+      <div class="text-xs text-slate-400 theme-label">Theme: <span id="themeName">Neon</span></div>
+      <button id="themeNext" type="button" class="theme-nav-btn" aria-label="Next theme">►</button>
+    </div>
+
     <!-- Device card -->
-    <div class="neon rounded-3xl ring-1 ring-emerald-500/20 bg-gradient-to-br from-slate-900/60 to-slate-900/30 backdrop-blur-md p-4 md:p-5 w-fit mx-auto shadow-xl shadow-emerald-500/10">
-      <!-- Mobile: 2 columns (screen spans 2) → row below has pad (left) and keys (right)
-           Desktop: 3 columns (pad | screen | keys) -->
-      <div class="grid grid-cols-[140px_140px] md:grid-cols-[120px_auto_120px] gap-3 md:gap-4 justify-items-center items-center">
+    <div id="deviceShell" data-theme="neon" class="device-shell theme-neon rounded-3xl p-4 md:p-5 w-fit mx-auto">
+      <div class="pager-clip" aria-hidden="true"></div>
+      <div class="pager-brand">RaspyJack P200</div>
+      <div class="pager-speaker" aria-hidden="true">
+        <span></span><span></span><span></span><span></span><span></span>
+      </div>
+      <!-- Default layout (Neon / Pager) -->
+      <div class="layout-default grid grid-cols-[140px_140px] md:grid-cols-[120px_auto_120px] gap-3 md:gap-4 justify-items-center items-center">
         <!-- Left pad -->
         <div class="order-2 md:order-1 flex md:block justify-center justify-self-start">
           <div class="grid grid-cols-3 grid-rows-3 gap-1.5 w-[120px]">
             <div></div>
-            <button class="neon-btn rounded-xl bg-slate-800/70 hover:bg-slate-700/70 w-10 h-10 flex items-center justify-center backdrop-blur ring-1 ring-white/10 hover:ring-emerald-400/30 transition" data-btn="UP">▲</button>
+            <button class="rj-btn dpad-btn rounded-xl bg-slate-800/70 hover:bg-slate-700/70 w-10 h-10 flex items-center justify-center backdrop-blur ring-1 ring-white/10 hover:ring-emerald-400/30 transition" data-btn="UP">▲</button>
             <div></div>
-            <button class="neon-btn rounded-xl bg-slate-800/70 hover:bg-slate-700/70 w-10 h-10 flex items-center justify-center backdrop-blur ring-1 ring-white/10 hover:ring-emerald-400/30 transition" data-btn="LEFT">◄</button>
-            <button class="neon-btn rounded-xl bg-emerald-600/80 hover:bg-emerald-500/80 w-10 h-10 flex items-center justify-center ring-1 ring-emerald-300/40 transition" data-btn="OK" aria-label="OK"></button>
-            <button class="neon-btn rounded-xl bg-slate-800/70 hover:bg-slate-700/70 w-10 h-10 flex items-center justify-center backdrop-blur ring-1 ring-white/10 hover:ring-emerald-400/30 transition" data-btn="RIGHT">►</button>
+            <button class="rj-btn dpad-btn rounded-xl bg-slate-800/70 hover:bg-slate-700/70 w-10 h-10 flex items-center justify-center backdrop-blur ring-1 ring-white/10 hover:ring-emerald-400/30 transition" data-btn="LEFT">◄</button>
+            <button class="rj-btn ok-btn rounded-xl bg-emerald-600/80 hover:bg-emerald-500/80 w-10 h-10 flex items-center justify-center ring-1 ring-emerald-300/40 transition" data-btn="OK" aria-label="OK"></button>
+            <button class="rj-btn dpad-btn rounded-xl bg-slate-800/70 hover:bg-slate-700/70 w-10 h-10 flex items-center justify-center backdrop-blur ring-1 ring-white/10 hover:ring-emerald-400/30 transition" data-btn="RIGHT">►</button>
             <div></div>
-            <button class="neon-btn rounded-xl bg-slate-800/70 hover:bg-slate-700/70 w-10 h-10 flex items-center justify-center backdrop-blur ring-1 ring-white/10 hover:ring-emerald-400/30 transition" data-btn="DOWN">▼</button>
+            <button class="rj-btn dpad-btn rounded-xl bg-slate-800/70 hover:bg-slate-700/70 w-10 h-10 flex items-center justify-center backdrop-blur ring-1 ring-white/10 hover:ring-emerald-400/30 transition" data-btn="DOWN">▼</button>
             <div></div>
           </div>
         </div>
 
         <!-- Screen -->
         <div class="order-1 md:order-2 col-span-2 md:col-span-1">
-          <div class="rounded-2xl ring-1 ring-emerald-500/30 bg-black/80 p-2 shadow-[0_0_40px_rgba(18,255,120,0.18)]">
+          <div class="screen-frame rounded-2xl p-2">
             <div class="flex items-center justify-center">
               <canvas id="screen" width="128" height="128" class="w-[240px] md:w-[300px] aspect-square"></canvas>
             </div>
           </div>
-          <div class="mt-3 text-center text-xs text-slate-400">OK = Enter · KEY3 = Esc</div>
-          <div id="status" class="mt-1 text-center text-[11px] text-slate-500">Connecting…</div>
+          <div class="pager-text mt-3 text-center text-xs text-slate-400">OK = Enter · KEY3 = Esc</div>
+          <div id="status" class="status-text pager-text mt-1 text-center text-[11px] text-slate-500">Connecting…</div>
         </div>
 
         <!-- Right buttons -->
         <div class="order-3 md:order-3 flex flex-col items-center gap-2 md:items-stretch justify-self-end">
-          <button class="neon-btn rounded-xl bg-fuchsia-700/80 hover:bg-fuchsia-600/80 px-3 py-2 w-24 ring-1 ring-white/10 transition" data-btn="KEY1">KEY1</button>
-          <button class="neon-btn rounded-xl bg-fuchsia-700/80 hover:bg-fuchsia-600/80 px-3 py-2 w-24 ring-1 ring-white/10 transition" data-btn="KEY2">KEY2</button>
-          <button class="neon-btn rounded-xl bg-fuchsia-700/80 hover:bg-fuchsia-600/80 px-3 py-2 w-24 ring-1 ring-white/10 transition" data-btn="KEY3">KEY3</button>
+          <button class="rj-btn key-btn rounded-xl bg-fuchsia-700/80 hover:bg-fuchsia-600/80 px-3 py-2 w-24 ring-1 ring-white/10 transition" data-btn="KEY1">KEY1</button>
+          <button class="rj-btn key-btn rounded-xl bg-fuchsia-700/80 hover:bg-fuchsia-600/80 px-3 py-2 w-24 ring-1 ring-white/10 transition" data-btn="KEY2">KEY2</button>
+          <button class="rj-btn key-btn rounded-xl bg-fuchsia-700/80 hover:bg-fuchsia-600/80 px-3 py-2 w-24 ring-1 ring-white/10 transition" data-btn="KEY3">KEY3</button>
         </div>
+      </div>
+
+      <!-- Game Boy layout -->
+      <div class="layout-gameboy hidden">
+        <div class="screen-frame">
+          <canvas id="screen-gb" width="128" height="128" class="w-[240px] md:w-[300px] aspect-square"></canvas>
+        </div>
+        <div class="flex justify-between mb-4">
+          <div class="grid grid-cols-3 grid-rows-3 gap-2">
+            <div></div>
+            <button class="rj-btn" data-btn="UP">▲</button>
+            <div></div>
+            <button class="rj-btn" data-btn="LEFT">◄</button>
+            <button class="rj-btn" data-btn="OK" aria-label="OK"></button>
+            <button class="rj-btn" data-btn="RIGHT">►</button>
+            <div></div>
+            <button class="rj-btn" data-btn="DOWN">▼</button>
+            <div></div>
+          </div>
+          <div class="flex flex-col gap-2 side-buttons">
+            <button class="rj-btn key-btn" data-btn="KEY1">KEY1</button>
+            <button class="rj-btn key-btn" data-btn="KEY2">KEY2</button>
+            <button class="rj-btn key-btn" data-btn="KEY3">KEY3</button>
+          </div>
+        </div>
+        <div class="text-center text-xs text-gray-300">OK = Enter · KEY3 = Esc</div>
+        <div class="status-text text-center text-[11px] text-gray-500 mt-1">Connecting…</div>
+      </div>
+
+      <!-- Pager layout -->
+      <div class="layout-pager hidden">
+        <div class="screen-frame">
+          <canvas id="screen-pager" width="128" height="128" class="w-[240px] md:w-[300px] aspect-square"></canvas>
+        </div>
+        <div class="flex justify-between mb-4 mt-4">
+          <div class="grid grid-cols-3 grid-rows-3 gap-2">
+            <div></div>
+            <button class="rj-btn" data-btn="UP">▲</button>
+            <div></div>
+            <button class="rj-btn" data-btn="LEFT">◄</button>
+            <button class="rj-btn" data-btn="OK" aria-label="OK"></button>
+            <button class="rj-btn" data-btn="RIGHT">►</button>
+            <div></div>
+            <button class="rj-btn" data-btn="DOWN">▼</button>
+            <div></div>
+          </div>
+          <div class="flex flex-col gap-2 side-buttons">
+            <button class="rj-btn key-btn" data-btn="KEY1">KEY1</button>
+            <button class="rj-btn key-btn" data-btn="KEY2">KEY2</button>
+            <button class="rj-btn key-btn" data-btn="KEY3">KEY3</button>
+          </div>
+        </div>
+        <div class="pager-text text-center text-[11px] mt-4">OK = Enter · KEY3 = Esc</div>
+        <div class="status-text pager-text text-center text-[10px] mt-1">Connecting…</div>
       </div>
     </div>
   </div>

@@ -1,6 +1,10 @@
 (function(){
   const canvas = document.getElementById('screen');
+  const canvasGb = document.getElementById('screen-gb');
+  const canvasPager = document.getElementById('screen-pager');
   const ctx = canvas.getContext('2d');
+  const ctxGb = canvasGb ? canvasGb.getContext('2d') : null;
+  const ctxPager = canvasPager ? canvasPager.getContext('2d') : null;
   // Enable high-DPI backing store and high-quality smoothing
   function setupHiDPI(){
     const DPR = Math.max(1, Math.floor(window.devicePixelRatio || 1));
@@ -9,10 +13,27 @@
     canvas.height = logical * DPR;
     ctx.imageSmoothingEnabled = true;
     try { ctx.imageSmoothingQuality = 'high'; } catch {}
+    if (canvasGb && ctxGb) {
+      canvasGb.width = logical * DPR;
+      canvasGb.height = logical * DPR;
+      ctxGb.imageSmoothingEnabled = true;
+      try { ctxGb.imageSmoothingQuality = 'high'; } catch {}
+    }
+    if (canvasPager && ctxPager) {
+      canvasPager.width = logical * DPR;
+      canvasPager.height = logical * DPR;
+      ctxPager.imageSmoothingEnabled = true;
+      try { ctxPager.imageSmoothingQuality = 'high'; } catch {}
+    }
   }
   setupHiDPI();
   window.addEventListener('resize', setupHiDPI);
   const statusEl = document.getElementById('status');
+  const statusEls = document.querySelectorAll('.status-text');
+  const deviceShell = document.getElementById('deviceShell');
+  const themeNameEl = document.getElementById('themeName');
+  const themePrev = document.getElementById('themePrev');
+  const themeNext = document.getElementById('themeNext');
 
   // Build WS URL from current page host. Supports optional token in page URL (?token=...)
   function getWsUrl(){
@@ -29,7 +50,34 @@
   let reconnectTimer = null;
   const pressed = new Set(); // keyboard pressed state
 
-  function setStatus(txt){ statusEl.textContent = txt; }
+  function setStatus(txt){
+    if (statusEl) statusEl.textContent = txt;
+    if (statusEls && statusEls.length) {
+      statusEls.forEach(el => { el.textContent = txt; });
+    }
+  }
+
+  // Handheld themes (frontend-only)
+  const themes = [
+    { id: 'neon', label: 'Neon' },
+    { id: 'gameboy', label: 'Game Boy' },
+    { id: 'pager', label: 'Pager' },
+  ];
+  let themeIndex = 0;
+
+  function applyTheme(){
+    const t = themes[themeIndex];
+    if (!deviceShell) return;
+    deviceShell.classList.remove('theme-neon', 'theme-gameboy', 'theme-pager');
+    deviceShell.classList.add(`theme-${t.id}`);
+    deviceShell.setAttribute('data-theme', t.id);
+    if (themeNameEl) themeNameEl.textContent = t.label;
+  }
+
+  function nextTheme(dir){
+    themeIndex = (themeIndex + dir + themes.length) % themes.length;
+    applyTheme();
+  }
 
   function connect(){
     if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
@@ -55,6 +103,14 @@
             try {
               ctx.clearRect(0,0,canvas.width,canvas.height);
               ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+              if (ctxGb && canvasGb) {
+                ctxGb.clearRect(0,0,canvasGb.width,canvasGb.height);
+                ctxGb.drawImage(img, 0, 0, canvasGb.width, canvasGb.height);
+              }
+              if (ctxPager && canvasPager) {
+                ctxPager.clearRect(0,0,canvasPager.width,canvasPager.height);
+                ctxPager.drawImage(img, 0, 0, canvasPager.width, canvasPager.height);
+              }
             } catch {}
           };
           img.src = 'data:image/jpeg;base64,' + msg.data;
@@ -142,5 +198,8 @@
 
   bindButtons();
   bindKeyboard();
+  if (themePrev) themePrev.addEventListener('click', () => nextTheme(-1));
+  if (themeNext) themeNext.addEventListener('click', () => nextTheme(1));
+  applyTheme();
   connect();
 })();
