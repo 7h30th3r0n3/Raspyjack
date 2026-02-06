@@ -35,7 +35,7 @@ try:
         set_raspyjack_interface
     )
     WIFI_AVAILABLE = True
-    # print("✅ WiFi integration loaded - dual interface support enabled")
+    print("✅ WiFi integration loaded - dual interface support enabled")
 except ImportError as e:
     print(f"⚠️  WiFi integration not available: {e}")
     print("   Using ethernet-only mode")
@@ -81,6 +81,15 @@ _button_down_since = 0.0
 _repeat_delay = 0.25
 _repeat_interval = 0.08
 
+# WebUI frame mirror (used by device_server.py)
+FRAME_MIRROR_PATH = os.environ.get("RJ_FRAME_PATH", "/dev/shm/raspyjack_last.jpg")
+FRAME_MIRROR_ENABLED = os.environ.get("RJ_FRAME_MIRROR", "1") != "0"
+try:
+    _frame_fps = float(os.environ.get("RJ_FRAME_FPS", "10"))
+    FRAME_MIRROR_INTERVAL = 1.0 / max(1.0, _frame_fps)
+except Exception:
+    FRAME_MIRROR_INTERVAL = 0.1
+
 def _set_last_button(name, ts):
     global _last_button, _last_button_time, _button_down_since
     _last_button = name
@@ -117,13 +126,25 @@ def _stats_loop():
         time.sleep(2)
 
 def _display_loop():
+    last_frame_save = 0.0
     while not _stop_evt.is_set():
         if not screen_lock.is_set():
+            mirror_image = None
             try:
                 draw_lock.acquire()
                 LCD.LCD_ShowImage(image, 0, 0)
+                if FRAME_MIRROR_ENABLED:
+                    now = time.monotonic()
+                    if (now - last_frame_save) >= FRAME_MIRROR_INTERVAL:
+                        mirror_image = image.copy()
+                        last_frame_save = now
             finally:
                 draw_lock.release()
+            if mirror_image is not None:
+                try:
+                    mirror_image.save(FRAME_MIRROR_PATH, "JPEG", quality=80)
+                except Exception:
+                    pass
         time.sleep(0.1)
 
 def start_background_loops():
