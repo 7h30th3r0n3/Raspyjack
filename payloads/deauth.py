@@ -30,6 +30,9 @@ import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 
+# Shared input helper (WebUI virtual + GPIO)
+from payloads._input_helper import get_button
+
 # WiFi Integration - Import dynamic interface support
 try:
     sys.path.append('/root/Raspyjack/wifi/')
@@ -180,10 +183,7 @@ def show_status(message):
 
 def pressed_button():
     """Return pressed button name."""
-    for name, pin in PINS.items():
-        if GPIO.input(pin) == 0:
-            return name
-    return None
+    return get_button(PINS, GPIO)
 
 def run_command(cmd, timeout=None):
     """Execute shell command."""
