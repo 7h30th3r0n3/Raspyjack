@@ -634,8 +634,33 @@ def ShowLines(arr,bold=[]):
                 render_color = color.selected_text
                 draw.rectangle([(default.start_text[0]-5, default.start_text[1] + default.text_gap * i),
                                 (120, default.start_text[1] + default.text_gap * i + 10)], fill=color.select)
-            draw.text((default.start_text[0], default.start_text[1] + default.text_gap * i),
-                        render_text[:m.max_len], fill=render_color)
+            # Draw icons on main menu when available
+            if m.which == "a":
+                icon = MENU_ICONS.get(render_text, "")
+                if icon:
+                    draw.text(
+                        (default.start_text[0] - 2, default.start_text[1] + default.text_gap * i),
+                        icon,
+                        font=icon_font,
+                        fill=render_color
+                    )
+                    max_w = 120 - (default.start_text[0] + 12)
+                    text = _truncate_to_width(render_text, max_w, text_font)
+                    draw.text(
+                        (default.start_text[0] + 12, default.start_text[1] + default.text_gap * i),
+                        text,
+                        font=text_font,
+                        fill=render_color
+                    )
+                else:
+                    draw.text(
+                        (default.start_text[0], default.start_text[1] + default.text_gap * i),
+                        render_text[:m.max_len],
+                        fill=render_color
+                    )
+            else:
+                draw.text((default.start_text[0], default.start_text[1] + default.text_gap * i),
+                            render_text[:m.max_len], fill=render_color)
     finally:
         draw_lock.release()
 
