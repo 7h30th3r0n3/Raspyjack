@@ -174,7 +174,7 @@ Requires=raspyjack-device.service
 [Service]
 Type=simple
 WorkingDirectory=/root/Raspyjack
-ExecStart=/usr/bin/python3 -m http.server 8080 --directory /root/Raspyjack/web
+ExecStart=/usr/bin/python3 /root/Raspyjack/web_server.py
 Restart=on-failure
 User=root
 Environment=PYTHONUNBUFFERED=1

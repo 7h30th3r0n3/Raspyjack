@@ -34,6 +34,15 @@
   const themeNameEl = document.getElementById('themeName');
   const themePrev = document.getElementById('themePrev');
   const themeNext = document.getElementById('themeNext');
+  const themeBar = document.getElementById('themeBar');
+  const tabDevice = document.getElementById('tabDevice');
+  const tabLoot = document.getElementById('tabLoot');
+  const deviceTab = document.getElementById('deviceTab');
+  const lootTab = document.getElementById('lootTab');
+  const lootList = document.getElementById('lootList');
+  const lootPathEl = document.getElementById('lootPath');
+  const lootUpBtn = document.getElementById('lootUp');
+  const lootStatus = document.getElementById('lootStatus');
 
   // Build WS URL from current page host. Supports optional token in page URL (?token=...)
   function getWsUrl(){
@@ -46,9 +55,20 @@
     return `${proto}://${host}:${port}/${q}`.replace(/\/\/\//,'//');
   }
 
+  function getApiUrl(path, params = {}){
+    const p = new URLSearchParams(location.search);
+    const token = p.get('token');
+    if (token) params.token = token;
+    const qs = new URLSearchParams(params).toString();
+    const base = location.origin;
+    return `${base}${path}${qs ? `?${qs}` : ''}`;
+  }
+
   let ws = null;
   let reconnectTimer = null;
   const pressed = new Set(); // keyboard pressed state
+  let activeTab = 'device';
+  let lootState = { path: '', parent: '' };
 
   function setStatus(txt){
     if (statusEl) statusEl.textContent = txt;
@@ -72,6 +92,30 @@
     deviceShell.classList.add(`theme-${t.id}`);
     deviceShell.setAttribute('data-theme', t.id);
     if (themeNameEl) themeNameEl.textContent = t.label;
+  }
+
+  function setActiveTab(tab){
+    activeTab = tab;
+    const isDevice = tab === 'device';
+    if (deviceTab) deviceTab.classList.toggle('hidden', !isDevice);
+    if (lootTab) lootTab.classList.toggle('hidden', isDevice);
+    if (themeBar) themeBar.classList.toggle('hidden', !isDevice);
+    if (tabDevice) {
+      tabDevice.classList.toggle('bg-emerald-500/10', isDevice);
+      tabDevice.classList.toggle('text-emerald-300', isDevice);
+      tabDevice.classList.toggle('border-emerald-400/30', isDevice);
+      tabDevice.classList.toggle('bg-slate-800/40', !isDevice);
+      tabDevice.classList.toggle('text-slate-300', !isDevice);
+      tabDevice.classList.toggle('border-slate-400/20', !isDevice);
+    }
+    if (tabLoot) {
+      tabLoot.classList.toggle('bg-emerald-500/10', !isDevice);
+      tabLoot.classList.toggle('text-emerald-300', !isDevice);
+      tabLoot.classList.toggle('border-emerald-400/30', !isDevice);
+      tabLoot.classList.toggle('bg-slate-800/40', isDevice);
+      tabLoot.classList.toggle('text-slate-300', isDevice);
+      tabLoot.classList.toggle('border-slate-400/20', isDevice);
+    }
   }
 
   function nextTheme(dir){
@@ -134,6 +178,89 @@
       reconnectTimer = null;
       connect();
     }, 1000);
+  }
+
+  function formatBytes(bytes){
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.min(sizes.length - 1, Math.floor(Math.log(bytes) / Math.log(k)));
+    const value = bytes / Math.pow(k, i);
+    return `${value.toFixed(value >= 10 || i === 0 ? 0 : 1)} ${sizes[i]}`;
+  }
+
+  function formatTime(ts){
+    try{
+      const d = new Date(ts * 1000);
+      return d.toLocaleString();
+    }catch{
+      return '';
+    }
+  }
+
+  function buildLootPath(parent, name){
+    return parent ? `${parent}/${name}` : name;
+  }
+
+  function setLootStatus(text){
+    if (lootStatus) lootStatus.textContent = text;
+  }
+
+  function setLootPath(text){
+    if (lootPathEl) lootPathEl.textContent = text ? `/${text}` : '/';
+  }
+
+  function updateLootUp(){
+    if (!lootUpBtn) return;
+    const disabled = !lootState.parent;
+    lootUpBtn.disabled = disabled;
+    lootUpBtn.classList.toggle('opacity-40', disabled);
+    lootUpBtn.classList.toggle('cursor-not-allowed', disabled);
+  }
+
+  function renderLoot(items){
+    if (!lootList) return;
+    if (!items.length){
+      lootList.innerHTML = '<div class="px-3 py-4 text-sm text-slate-400">No files found.</div>';
+      return;
+    }
+    const rows = items.map(item => {
+      const icon = item.type === 'dir' ? '📁' : '📄';
+      const meta = item.type === 'dir' ? 'Folder' : `${formatBytes(item.size)} · ${formatTime(item.mtime)}`;
+      const safeName = item.name.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      const encodedName = encodeURIComponent(item.name);
+      return `
+        <button class="w-full text-left px-3 py-2 flex items-center gap-3 hover:bg-slate-800/60 transition loot-item" data-type="${item.type}" data-name="${encodedName}">
+          <span class="text-lg">${icon}</span>
+          <div class="flex-1 min-w-0">
+            <div class="text-sm text-slate-100 truncate">${safeName}</div>
+            <div class="text-[11px] text-slate-400">${meta}</div>
+          </div>
+          <div class="text-xs text-slate-400">${item.type === 'dir' ? 'Open' : 'Download'}</div>
+        </button>
+      `;
+    }).join('');
+    lootList.innerHTML = rows;
+  }
+
+  async function loadLoot(path = ''){
+    setLootStatus('Loading...');
+    try{
+      const url = getApiUrl('/api/loot/list', { path });
+      const res = await fetch(url, { cache: 'no-store' });
+      const data = await res.json();
+      if (!res.ok){
+        throw new Error(data && data.error ? data.error : 'Failed to load');
+      }
+      lootState = { path: data.path || '', parent: data.parent || '' };
+      setLootPath(lootState.path);
+      updateLootUp();
+      renderLoot(data.items || []);
+      setLootStatus('Ready');
+    }catch(e){
+      setLootStatus('Failed to load loot');
+      renderLoot([]);
+    }
   }
 
   function sendInput(button, state){
@@ -200,6 +327,34 @@
   bindKeyboard();
   if (themePrev) themePrev.addEventListener('click', () => nextTheme(-1));
   if (themeNext) themeNext.addEventListener('click', () => nextTheme(1));
+  if (tabDevice) tabDevice.addEventListener('click', () => setActiveTab('device'));
+  if (tabLoot) tabLoot.addEventListener('click', () => {
+    setActiveTab('loot');
+    if (lootList && !lootList.dataset.loaded){
+      loadLoot('');
+      lootList.dataset.loaded = '1';
+    }
+  });
+  if (lootUpBtn) lootUpBtn.addEventListener('click', () => {
+    if (lootState.parent !== undefined){
+      loadLoot(lootState.parent || '');
+    }
+  });
+  if (lootList) lootList.addEventListener('click', (e) => {
+    const btn = e.target.closest('.loot-item');
+    if (!btn) return;
+    const encoded = btn.getAttribute('data-name') || '';
+    const name = decodeURIComponent(encoded);
+    const type = btn.getAttribute('data-type');
+    const nextPath = buildLootPath(lootState.path, name);
+    if (type === 'dir'){
+      loadLoot(nextPath);
+    } else {
+      const url = getApiUrl('/api/loot/download', { path: nextPath });
+      window.open(url, '_blank');
+    }
+  });
   applyTheme();
+  setActiveTab('device');
   connect();
 })();

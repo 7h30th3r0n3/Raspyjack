@@ -4,7 +4,7 @@ RaspyJack payload – WebUI controller
 ------------------------------------
 Provides a tiny on-device UI to Start/Stop the RaspyJack Web UI stack:
   - device_server.py (WebSocket server broadcasting LCD frames and receiving input)
-  - python -m http.server 8080 serving web/ (static frontend)
+  - web_server.py (static frontend + read-only loot API)
 
 Usage inside RaspyJack:
   From the menu: WiFi Manager → WebUI
@@ -64,6 +64,7 @@ bold = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'
 ROOT_DIR = os.path.abspath(os.path.join(__file__, '..', '..'))
 WEB_DIR = os.path.join(ROOT_DIR, 'web')
 DEVICE_SERVER = os.path.join(ROOT_DIR, 'device_server.py')
+WEB_SERVER = os.path.join(ROOT_DIR, 'web_server.py')
 PID_FILE = '/dev/shm/rj_webui_pids.json'
 
 
@@ -198,7 +199,7 @@ def start_webui() -> str:
     # Kill any stale instances before starting fresh
     try:
         subprocess.run(["pkill", "-f", "device_server.py"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        subprocess.run(["pkill", "-f", "http.server"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(["pkill", "-f", "web_server.py"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception:
         pass
 
@@ -207,9 +208,9 @@ def start_webui() -> str:
     ws_cmd = [sys.executable, "-u", DEVICE_SERVER]
     ws_proc = subprocess.Popen(ws_cmd, cwd=ROOT_DIR, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
 
-    # Start static HTTP server in web/
-    http_cmd = [sys.executable, "-m", "http.server", "8080"]
-    http_proc = subprocess.Popen(http_cmd, cwd=WEB_DIR, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+    # Start WebUI HTTP server (static + API)
+    http_cmd = [sys.executable, "-u", WEB_SERVER]
+    http_proc = subprocess.Popen(http_cmd, cwd=ROOT_DIR, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
 
     write_pids({"ws_pid": ws_proc.pid, "http_pid": http_proc.pid})
     # Small delay to let services bind
@@ -242,7 +243,7 @@ def stop_webui() -> None:
     # Extra safety: kill by pattern
     try:
         subprocess.run(["pkill", "-f", "device_server.py"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        subprocess.run(["pkill", "-f", "http.server"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(["pkill", "-f", "web_server.py"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception:
         pass
 
