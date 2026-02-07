@@ -34,7 +34,6 @@
   const themeNameEl = document.getElementById('themeName');
   const navDevice = document.getElementById('navDevice');
   const navLoot = document.getElementById('navLoot');
-  const navPayloads = document.getElementById('navPayloads');
   const themesToggle = document.getElementById('themesToggle');
   const themesList = document.getElementById('themesList');
   const themeButtons = document.querySelectorAll('[data-theme]');
@@ -43,7 +42,6 @@
   const menuToggle = document.getElementById('menuToggle');
   const deviceTab = document.getElementById('deviceTab');
   const lootTab = document.getElementById('lootTab');
-  const payloadsTab = document.getElementById('payloadsTab');
   const lootList = document.getElementById('lootList');
   const lootPathEl = document.getElementById('lootPath');
   const lootUpBtn = document.getElementById('lootUp');
@@ -54,11 +52,9 @@
   const lootPreviewClose = document.getElementById('lootPreviewClose');
   const lootPreviewDownload = document.getElementById('lootPreviewDownload');
   const lootPreviewMeta = document.getElementById('lootPreviewMeta');
-  const payloadCategories = document.getElementById('payloadCategories');
-  const payloadList = document.getElementById('payloadList');
+  const payloadSidebar = document.getElementById('payloadSidebar');
   const payloadStatus = document.getElementById('payloadStatus');
   const payloadsRefresh = document.getElementById('payloadsRefresh');
-  const payloadStop = document.getElementById('payloadStop');
 
   // Build WS URL from current page host. Supports optional token in page URL (?token=...)
   function getWsUrl(){
@@ -85,7 +81,7 @@
   const pressed = new Set(); // keyboard pressed state
   let activeTab = 'device';
   let lootState = { path: '', parent: '' };
-  let payloadState = { categories: [], active: null };
+  let payloadState = { categories: [], open: {} };
 
   function setStatus(txt){
     if (statusEl) statusEl.textContent = txt;
@@ -149,10 +145,8 @@
     const isDevice = tab === 'device';
     if (deviceTab) deviceTab.classList.toggle('hidden', !isDevice);
     if (lootTab) lootTab.classList.toggle('hidden', tab !== 'loot');
-    if (payloadsTab) payloadsTab.classList.toggle('hidden', tab !== 'payloads');
     setNavActive(navDevice, isDevice);
     setNavActive(navLoot, tab === 'loot');
-    setNavActive(navPayloads, tab === 'payloads');
     setSidebarOpen(false);
   }
 
@@ -353,53 +347,49 @@
         throw new Error(data && data.error ? data.error : 'payloads_failed');
       }
       payloadState.categories = data.categories || [];
-      if (!payloadState.active && payloadState.categories.length){
-        payloadState.active = payloadState.categories[0].id;
-      }
-      renderPayloadCategories();
-      renderPayloadList();
+      payloadState.categories.forEach(cat => {
+        if (payloadState.open[cat.id] === undefined) {
+          payloadState.open[cat.id] = true;
+        }
+      });
+      renderPayloadSidebar();
       setPayloadStatus('Ready');
     }catch(e){
       setPayloadStatus('Failed to load');
-      if (payloadCategories) payloadCategories.innerHTML = '';
-      if (payloadList) payloadList.innerHTML = '<div class="text-xs text-slate-500">No payloads available.</div>';
+      if (payloadSidebar) payloadSidebar.innerHTML = '<div class="text-xs text-slate-500 px-2">No payloads available.</div>';
     }
   }
 
-  function renderPayloadCategories(){
-    if (!payloadCategories) return;
+  function renderPayloadSidebar(){
+    if (!payloadSidebar) return;
     const cats = payloadState.categories || [];
     if (!cats.length){
-      payloadCategories.innerHTML = '<div class="text-xs text-slate-500">No categories.</div>';
+      payloadSidebar.innerHTML = '<div class="text-xs text-slate-500 px-2">No categories.</div>';
       return;
     }
-    payloadCategories.innerHTML = cats.map(cat => {
-      const active = payloadState.active === cat.id;
-      const base = 'w-full px-3 py-2 rounded-xl text-left text-xs font-semibold border transition';
-      const cls = active
-        ? 'border-emerald-400/30 bg-emerald-500/10 text-emerald-300 shadow-[0_0_12px_rgba(16,185,129,0.12)]'
-        : 'border-slate-400/20 bg-slate-800/40 text-slate-300 hover:text-white hover:bg-slate-700/50';
-      return `<button type="button" data-cat="${cat.id}" class="${base} ${cls}">${cat.label}</button>`;
-    }).join('');
-  }
-
-  function renderPayloadList(){
-    if (!payloadList) return;
-    const cat = payloadState.categories.find(c => c.id === payloadState.active);
-    if (!cat || !cat.items || !cat.items.length){
-      payloadList.innerHTML = '<div class="text-xs text-slate-500">No payloads in this category.</div>';
-      return;
-    }
-    payloadList.innerHTML = cat.items.map(item => `
-      <div class="rounded-2xl border border-slate-800/70 bg-slate-950/40 p-3 flex flex-col gap-2 shadow-[0_0_12px_rgba(15,23,42,0.35)]">
-        <div class="text-sm font-semibold text-slate-100">${item.name}</div>
-        <div class="text-[11px] text-slate-500">${cat.label}</div>
-        <div class="flex items-center gap-2">
-          <button type="button" data-start="${item.path}" class="px-3 py-1.5 text-xs rounded-lg bg-emerald-600/80 border border-emerald-300/30 text-white hover:bg-emerald-500/80 transition">Start</button>
-          <button type="button" data-stop="1" class="px-3 py-1.5 text-xs rounded-lg bg-slate-800/70 border border-slate-600/40 text-slate-200 hover:bg-slate-700/70 transition">Stop</button>
+    payloadSidebar.innerHTML = cats.map(cat => {
+      const isOpen = payloadState.open[cat.id];
+      const items = (cat.items || []).map(item => `
+        <div class="flex items-center justify-between gap-2 px-2 py-1 rounded-lg bg-slate-900/40 border border-slate-800/70">
+          <div class="text-[11px] text-slate-200 truncate">${item.name}</div>
+          <div class="flex items-center gap-1">
+            <button type="button" data-start="${item.path}" class="px-2 py-0.5 text-[10px] rounded-md bg-emerald-600/80 border border-emerald-300/30 text-white hover:bg-emerald-500/80 transition">Start</button>
+            <button type="button" data-stop="1" class="px-2 py-0.5 text-[10px] rounded-md bg-slate-800/80 border border-slate-600/40 text-slate-200 hover:bg-slate-700/80 transition">Stop</button>
+          </div>
         </div>
-      </div>
-    `).join('');
+      `).join('');
+      return `
+        <div class="rounded-xl border border-slate-800/70 bg-slate-950/40">
+          <button type="button" data-cat="${cat.id}" class="w-full px-3 py-2 text-left text-xs font-semibold text-slate-200 flex items-center justify-between">
+            <span>${cat.label}</span>
+            <span class="text-slate-400">${isOpen ? '▾' : '▸'}</span>
+          </button>
+          <div class="${isOpen ? '' : 'hidden'} px-2 pb-2 space-y-1">
+            ${items || '<div class="text-[11px] text-slate-500 px-1">Empty</div>'}
+          </div>
+        </div>
+      `;
+    }).join('');
   }
 
   async function startPayload(path){
@@ -496,13 +486,6 @@
       lootList.dataset.loaded = '1';
     }
   });
-  if (navPayloads) navPayloads.addEventListener('click', () => {
-    setActiveTab('payloads');
-    if (payloadList && !payloadList.dataset.loaded){
-      loadPayloads();
-      payloadList.dataset.loaded = '1';
-    }
-  });
   if (themesToggle) themesToggle.addEventListener('click', () => {
     if (themesList) themesList.classList.toggle('hidden');
   });
@@ -532,16 +515,16 @@
       previewLootFile(nextPath, name);
     }
   });
-  if (payloadCategories) payloadCategories.addEventListener('click', (e) => {
-    const btn = e.target.closest('[data-cat]');
-    if (!btn) return;
-    const id = btn.getAttribute('data-cat');
-    if (!id) return;
-    payloadState.active = id;
-    renderPayloadCategories();
-    renderPayloadList();
-  });
-  if (payloadList) payloadList.addEventListener('click', (e) => {
+  if (payloadSidebar) payloadSidebar.addEventListener('click', (e) => {
+    const catBtn = e.target.closest('[data-cat]');
+    if (catBtn){
+      const id = catBtn.getAttribute('data-cat');
+      if (id){
+        payloadState.open[id] = !payloadState.open[id];
+        renderPayloadSidebar();
+      }
+      return;
+    }
     const startBtn = e.target.closest('[data-start]');
     if (startBtn){
       const path = startBtn.getAttribute('data-start');
@@ -554,7 +537,6 @@
     }
   });
   if (payloadsRefresh) payloadsRefresh.addEventListener('click', () => loadPayloads());
-  if (payloadStop) payloadStop.addEventListener('click', () => tapInput('KEY3'));
   if (lootPreviewClose) lootPreviewClose.addEventListener('click', closePreview);
   if (lootPreview) lootPreview.addEventListener('click', (e) => {
     if (e.target === lootPreview) closePreview();
@@ -562,4 +544,5 @@
   applyTheme();
   setActiveTab('device');
   connect();
+  loadPayloads();
 })();
