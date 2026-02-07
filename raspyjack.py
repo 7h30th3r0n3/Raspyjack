@@ -639,6 +639,21 @@ def ShowLines(arr,bold=[]):
     finally:
         draw_lock.release()
 
+def RenderCurrentMenuOnce():
+    """
+    Render the current menu using the active view mode.
+    Used after returning from a payload to restore proper styling/icons.
+    """
+    inlist = m.GetMenuList()
+    if m.which == "a" and m.view_mode in ["grid", "carousel"]:
+        # These draw their own frames; discard selection result
+        if m.view_mode == "grid":
+            GetMenuGrid(inlist)
+        else:
+            GetMenuCarousel(inlist)
+    else:
+        ShowLines(inlist)
+
 def GetMenuString(inlist, duplicates=False):
     """
     Affiche une liste déroulante de taille variable dans une fenêtre de 8 lignes.
@@ -2207,11 +2222,8 @@ def exec_payload(filename: str) -> None:
     except AttributeError:
         pass
 
-    # rebuild the current menu image
-    color.DrawMenuBackground()
-    color.DrawBorder()
-    ShowLines(m.GetMenuList())                     # text + cursor
-    LCD.LCD_ShowImage(image, 0, 0)                 # push *before* unlock
+    # rebuild the current menu image (respect current view mode)
+    RenderCurrentMenuOnce()
 
     # small debounce: 300 ms max
     t0 = time.time()
