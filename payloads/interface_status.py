@@ -17,6 +17,9 @@ import RPi.GPIO as GPIO  # type: ignore
 import LCD_1in44, LCD_Config  # type: ignore
 from PIL import Image, ImageDraw, ImageFont  # type: ignore
 
+# Shared input helper (WebUI virtual + GPIO)
+from payloads._input_helper import get_button
+
 WIDTH, HEIGHT = 128, 128
 KEY3 = 16
 REFRESH = 0.5
@@ -128,7 +131,8 @@ def main():
 
     try:
         while True:
-            if GPIO.input(KEY3) == 0:
+            btn = get_button({"KEY3": KEY3}, GPIO)
+            if btn == "KEY3":
                 break
 
             ip1 = _short_ip(_iface_ip('eth1'))

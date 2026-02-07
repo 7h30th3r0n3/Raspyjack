@@ -29,6 +29,7 @@ import LCD_Config
 import RPi.GPIO as GPIO
 import time
 import numpy as np
+import os
 
 LCD_1IN44 = 1
 LCD_1IN8 = 0
@@ -45,6 +46,16 @@ if LCD_1IN8 == 1:
 
 LCD_X_MAXPIXEL = 132  #LCD width maximum memory 
 LCD_Y_MAXPIXEL = 162  #LCD height maximum memory
+
+# WebUI frame mirror (used by device_server.py)
+_FRAME_MIRROR_PATH = os.environ.get("RJ_FRAME_PATH", "/dev/shm/raspyjack_last.jpg")
+_FRAME_MIRROR_ENABLED = os.environ.get("RJ_FRAME_MIRROR", "1") != "0"
+try:
+	_frame_fps = float(os.environ.get("RJ_FRAME_FPS", "10"))
+	_FRAME_MIRROR_INTERVAL = 1.0 / max(1.0, _frame_fps)
+except Exception:
+	_FRAME_MIRROR_INTERVAL = 0.1
+_last_frame_save = 0.0
 
 #scanning method
 L2R_U2D = 1
@@ -312,3 +323,13 @@ class LCD:
 		GPIO.output(LCD_Config.LCD_DC_PIN, GPIO.HIGH)
 		for i in range(0,len(pix),4096):
 			LCD_Config.SPI_Write_Byte(pix[i:i+4096])
+		# Mirror the LCD frame for WebUI (throttled)
+		if _FRAME_MIRROR_ENABLED:
+			global _last_frame_save
+			try:
+				now = time.monotonic()
+				if (now - _last_frame_save) >= _FRAME_MIRROR_INTERVAL:
+					Image.save(_FRAME_MIRROR_PATH, "JPEG", quality=80)
+					_last_frame_save = now
+			except Exception:
+				pass

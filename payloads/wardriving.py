@@ -38,6 +38,7 @@ try:
     import LCD_1in44, LCD_Config
     from PIL import Image, ImageDraw, ImageFont
     import RPi.GPIO as GPIO
+    from payloads._input_helper import get_virtual_button
     LCD_AVAILABLE = True
 except ImportError:
     LCD_AVAILABLE = False
@@ -1609,6 +1610,23 @@ class WardrivingScanner:
             return
         
         try:
+            virtual = get_virtual_button()
+            if virtual == "KEY1":
+                print("KEY1 pressed - toggling scan (WebUI)")
+                if self.running:
+                    self.stop_scan()
+                else:
+                    self.start_scan()
+                time.sleep(0.2)
+            elif virtual == "KEY2":
+                print("KEY2 pressed - exiting (WebUI)")
+                self.cleanup()
+                sys.exit(0)
+            elif virtual == "KEY3":
+                print("KEY3 pressed - export data (WebUI)")
+                self.export_data()
+                time.sleep(0.2)
+
             # Check KEY1 (Start/Stop) - Pin 21
             if GPIO.input(21) == 0:  # Button pressed (active low)
                 time.sleep(0.05)  # Initial debounce

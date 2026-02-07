@@ -75,6 +75,7 @@ try:
     import RPi.GPIO as GPIO
     import LCD_1in44, LCD_Config
     from PIL import Image, ImageDraw, ImageFont
+    from payloads._input_helper import get_virtual_button
     HAS_LCD = True
 except Exception as _lcd_exc:
     HAS_LCD = False
@@ -672,6 +673,10 @@ class HoneypotLCD:
 
     def _pressed(self, name: str) -> bool:
         now = time.time()
+        virtual = get_virtual_button()
+        if virtual == name and (now - self._last_pressed[name]) > self._debounce_s:
+            self._last_pressed[name] = now
+            return True
         pin = self.PINS[name]
         if GPIO.input(pin) == 0 and (now - self._last_pressed[name]) > self._debounce_s:
             self._last_pressed[name] = now

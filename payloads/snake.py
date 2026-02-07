@@ -34,6 +34,9 @@ import RPi.GPIO as GPIO               # Raspberry Pi GPIO access
 import LCD_1in44, LCD_Config          # Waveshare driver helpers for the LCD
 from PIL import Image, ImageDraw, ImageFont
 
+# Shared input helper (WebUI virtual + GPIO)
+from payloads._input_helper import get_button
+
 # ---------------------------------------------------------------------------
 # 1) GPIO pin mapping (BCM numbering) – same as in *Show Buttons*
 # ---------------------------------------------------------------------------
@@ -151,11 +154,7 @@ def play() -> None:
         start_time = time.time()
 
         # --- Read input ----------------------------------------------------
-        pressed: Optional[str] = None
-        for name, pin in PINS.items():
-            if GPIO.input(pin) == 0:
-                pressed = name
-                break
+        pressed: Optional[str] = get_button(PINS, GPIO)
 
         if pressed == "KEY3":            # user wants to quit game & payload
             cleanup()
@@ -202,10 +201,11 @@ def play() -> None:
 
     # Wait for OK to restart or KEY3 to quit payload
     while running:
-        if GPIO.input(PINS["KEY3"]) == 0:
+        btn = get_button({"OK": PINS["OK"], "KEY3": PINS["KEY3"]}, GPIO)
+        if btn == "KEY3":
             cleanup()
             return
-        if GPIO.input(PINS["OK"]) == 0:
+        if btn == "OK":
             time.sleep(0.3)  # simple debounce
             play()           # recursive restart
             return

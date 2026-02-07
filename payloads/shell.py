@@ -23,6 +23,9 @@ from PIL import Image, ImageDraw, ImageFont
 from evdev import InputDevice, categorize, ecodes, list_devices
 import RPi.GPIO as GPIO               # Raspberry Pi GPIO access
 
+# Shared input helper (WebUI virtual)
+from payloads._input_helper import get_virtual_button
+
 # ---------------------------------------------------------
 # 1) LCD initialisation
 # ---------------------------------------------------------
@@ -207,7 +210,7 @@ def handle_key(event):
         return
     if event.keystate != event.key_down:
         return
-    if key_name == "KEY_ESC" or GPIO.input(KEY3_PIN) == 0:
+    if key_name == "KEY_ESC" or GPIO.input(KEY3_PIN) == 0 or get_virtual_button() == "KEY3":
         running = False
         return
     char = SHIFT_MAP.get(key_name) if shift else KEYMAP.get(key_name)
@@ -230,6 +233,7 @@ try:
                 for ev in keyboard.read():
                     if ev.type == ecodes.EV_KEY:
                         handle_key(categorize(ev))
+        virtual = get_virtual_button()
         # Zoom buttons
         for pin, delta in ((KEY1_PIN, +1), (KEY2_PIN, -1)):
             state = GPIO.input(pin)
@@ -238,8 +242,13 @@ try:
                 draw_buffer(scrollback, current_line)
                 time.sleep(0.15)  # simple debounce
             _prev_state[pin] = state
+        if virtual in ("KEY1", "KEY2"):
+            delta = 1 if virtual == "KEY1" else -1
+            set_font(FONT_SIZE + delta)
+            draw_buffer(scrollback, current_line)
+            time.sleep(0.15)
         # Quit via KEY3 held
-        if GPIO.input(KEY3_PIN) == 0:
+        if GPIO.input(KEY3_PIN) == 0 or virtual == "KEY3":
             running = False
 except Exception as exc:
     print(f"[ERROR] {exc}", file=sys.stderr)

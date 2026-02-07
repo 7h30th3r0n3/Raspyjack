@@ -31,6 +31,9 @@ from PIL import Image, ImageDraw, ImageFont
 from evdev import InputDevice, categorize, ecodes, list_devices
 import RPi.GPIO as GPIO               # Raspberry Pi GPIO access
 
+# Shared input helper (WebUI virtual + GPIO)
+from payloads._input_helper import get_button
+
 # ---------------------------------------------------------------------------
 # 1) GPIO initialisation (only KEY3 used for «Back to menu»)
 # ---------------------------------------------------------------------------
@@ -118,7 +121,7 @@ try:
 
     while running:
         # Alternate exit: KEY3 on the HAT acts as «Back to menu»
-        if GPIO.input(KEY3_PIN) == 0:
+        if get_button({"KEY3": KEY3_PIN}, GPIO) == "KEY3":
             break
 
         # Poll keyboard with 50 ms timeout

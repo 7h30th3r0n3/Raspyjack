@@ -1,2 +1,9 @@
 /payloads/ideas
 /payloads/ref
+__pycache__/
+*.pyc
+*.log
+loot/
+wifi/__pycache__/
+wifi/wifi.log
+wifi/profiles/

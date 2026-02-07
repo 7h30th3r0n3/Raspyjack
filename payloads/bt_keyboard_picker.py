@@ -32,6 +32,9 @@ import RPi.GPIO as GPIO               # Raspberry Pi GPIO access
 import LCD_1in44                      # Waveshare LCD driver
 from PIL import Image, ImageDraw, ImageFont  # Pillow – draw text
 
+# Shared input helper (WebUI virtual + GPIO)
+from payloads._input_helper import get_button
+
 # ---------------------------------------------------------------------------
 # 1) GPIO mapping (BCM)
 # ---------------------------------------------------------------------------
@@ -208,7 +211,9 @@ def pair_trust_connect(mac: str) -> bool:
 def choose(devices: List[Tuple[str, str]]):
     if not devices:
         draw(["No devices", "KEY3 = back"])
-        while running and GPIO.input(PINS["KEY3"]):
+        while running:
+            if get_button({"KEY3": PINS["KEY3"]}, GPIO) == "KEY3":
+                break
             time.sleep(0.1)
         cleanup()  # ensure exit on KEY3
         return None
@@ -217,10 +222,7 @@ def choose(devices: List[Tuple[str, str]]):
     while running:
         mac, name = devices[idx]
         draw([f"{idx+1}/{len(devices)}", name[:16], mac, "UP/DOWN nav", "OK select"])
-        pressed = None
-        for key, pin in PINS.items():
-            if GPIO.input(pin) == 0:
-                pressed = key; break
+        pressed = get_button(PINS, GPIO)
         if pressed == "UP":
             idx = (idx - 1) % len(devices)
         elif pressed == "DOWN":
@@ -246,7 +248,7 @@ try:
         else:
             draw(["Connection failed", name[:16], mac, "KEY3 = quit"])
         while running:
-            if GPIO.input(PINS["KEY3"]) == 0:
+            if get_button({"KEY3": PINS["KEY3"]}, GPIO) == "KEY3":
                 cleanup()
             time.sleep(0.1)
 except Exception as e:

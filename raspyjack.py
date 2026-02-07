@@ -18,6 +18,7 @@ from functools import partial
 import time
 import sys
 import requests  # For Discord webhook integration
+import rj_input  # Virtual input bridge (WebSocket → Unix socket)
 
 # WiFi Integration - Add dual interface support
 try:
@@ -80,6 +81,15 @@ _button_down_since = 0.0
 _repeat_delay = 0.25
 _repeat_interval = 0.08
 
+# WebUI frame mirror (used by device_server.py)
+FRAME_MIRROR_PATH = os.environ.get("RJ_FRAME_PATH", "/dev/shm/raspyjack_last.jpg")
+FRAME_MIRROR_ENABLED = os.environ.get("RJ_FRAME_MIRROR", "1") != "0"
+try:
+    _frame_fps = float(os.environ.get("RJ_FRAME_FPS", "10"))
+    FRAME_MIRROR_INTERVAL = 1.0 / max(1.0, _frame_fps)
+except Exception:
+    FRAME_MIRROR_INTERVAL = 0.1
+
 def _set_last_button(name, ts):
     global _last_button, _last_button_time, _button_down_since
     _last_button = name
@@ -116,13 +126,25 @@ def _stats_loop():
         time.sleep(2)
 
 def _display_loop():
+    last_frame_save = 0.0
     while not _stop_evt.is_set():
         if not screen_lock.is_set():
+            mirror_image = None
             try:
                 draw_lock.acquire()
                 LCD.LCD_ShowImage(image, 0, 0)
+                if FRAME_MIRROR_ENABLED:
+                    now = time.monotonic()
+                    if (now - last_frame_save) >= FRAME_MIRROR_INTERVAL:
+                        mirror_image = image.copy()
+                        last_frame_save = now
             finally:
                 draw_lock.release()
+            if mirror_image is not None:
+                try:
+                    mirror_image.save(FRAME_MIRROR_PATH, "JPEG", quality=80)
+                except Exception:
+                    pass
         time.sleep(0.1)
 
 def start_background_loops():
@@ -237,6 +259,10 @@ class template():
 def getButton():
     global _last_button, _last_button_time, _button_down_since
     while 1:
+        # 1) virtual buttons from Web UI
+        v = rj_input.get_virtual_button()
+        if v:
+            return v
         pressed = None
         for item in PINS:
             if GPIO.input(PINS[item]) == 0:
@@ -2002,6 +2028,11 @@ def launch_interface_switcher():
     Dialog_info("Loading Interface\nSwitcher...", wait=True)
     exec_payload("interface_switcher_payload.py")
 
+def launch_webui():
+    """Launch the WebUI controller payload (start/stop Web UI)."""
+    Dialog_info("Loading WebUI...", wait=True)
+    exec_payload("webui.py")
+
 def quick_wifi_toggle():
     """FAST toggle between wlan0 and wlan1 - immediate switching."""
     if not WIFI_AVAILABLE:
@@ -2112,6 +2143,10 @@ def exec_payload(filename: str) -> None:
     # ---- restore RaspyJack ----------------------------------------------
     print("[PAYLOAD] ◄ Restoring LCD & GPIO…")
     _setup_gpio()                                  # SPI/DC/RST/CS back
+    try:
+        rj_input.restart_listener()                # ensure virtual input socket is back
+    except AttributeError:
+        pass
 
     # rebuild the current menu image
     color.DrawMenuBackground()
@@ -2219,6 +2254,7 @@ class DisposableMenu:
             [" INSTANT Toggle 0↔1", quick_wifi_toggle],
             [" Switch Interface", switch_interface_menu],
             [" Show Interface Info", show_interface_info],
+            [" WebUI", launch_webui],
             [" Route Control", "awr"],
         ) if WIFI_AVAILABLE else (
             [" WiFi Not Available", lambda: Dialog_info("WiFi system not found\nRun wifi_manager_payload", wait=True)],

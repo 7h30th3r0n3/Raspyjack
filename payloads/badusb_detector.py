@@ -19,6 +19,9 @@ import LCD_1in44, LCD_Config  # type: ignore
 from PIL import Image, ImageDraw, ImageFont  # type: ignore
 import RPi.GPIO as GPIO  # type: ignore
 
+# Shared input helper (WebUI virtual + GPIO)
+from payloads._input_helper import get_button
+
 try:
     import pyudev  # type: ignore
 except Exception:
@@ -364,7 +367,7 @@ def main():
     log("Waiting for USB events")
 
     while running:
-        if GPIO.input(KEY3_PIN) == 0:
+        if get_button({"KEY3": KEY3_PIN}, GPIO) == "KEY3":
             log("Exit requested (KEY3)")
             break
 
