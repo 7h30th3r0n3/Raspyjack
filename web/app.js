@@ -374,7 +374,7 @@
           <div class="text-[11px] text-slate-200 truncate">${item.name}</div>
           ${(() => {
             const isActive = payloadState.activePath === item.path;
-            const disabled = payloadState.activePath && !isActive;
+            const disabled = !!payloadState.activePath;
             const startCls = disabled
               ? 'px-2 py-0.5 text-[10px] rounded-md bg-slate-800/80 border border-slate-700/40 text-slate-500 cursor-not-allowed'
               : 'px-2 py-0.5 text-[10px] rounded-md bg-emerald-600/80 border border-emerald-300/30 text-white hover:bg-emerald-500/80 transition';
