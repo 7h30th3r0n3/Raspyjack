@@ -1,0 +1,58 @@
+# Nmap 7.93 scan initiated Sat Feb  7 06:41:36 2026 as: nmap -T5 -oN /root/Raspyjack/loot/Nmap/quick_scan_2026-02-07_06-41-35.txt -S 192.168.0.163 -e eth0 -Pn 192.168.0.163/24
+MyModem (192.168.0.1)
+Host is up (0.0013s latency).
+Not shown: 988 closed tcp ports (reset)
+PORT      STATE    SERVICE
+22/tcp    filtered ssh
+23/tcp    filtered telnet
+80/tcp    open     http
+111/tcp   filtered rpcbind
+1026/tcp  filtered LSA-or-nterm
+1027/tcp  filtered IIS
+1028/tcp  filtered unknown
+1029/tcp  filtered ms-lsa
+2222/tcp  filtered EtherNetIP-1
+9000/tcp  filtered cslistener
+49152/tcp open     unknown
+49154/tcp open     unknown
+MAC Address: 02:10:18:40:89:7C (Unknown)
+
+Tstat-762AB7 (192.168.0.142)
+Host is up (0.0091s latency).
+All 1000 scanned ports on Tstat-762AB7 (192.168.0.142) are in ignored states.
+Not shown: 1000 closed tcp ports (reset)
+MAC Address: B8:2C:A0:76:2A:B7 (Resideo)
+
+DESKTOP-OQ9P3HR (192.168.0.158)
+Host is up (0.014s latency).
+Not shown: 995 filtered tcp ports (no-response)
+PORT     STATE SERVICE
+22/tcp   open  ssh
+135/tcp  open  msrpc
+139/tcp  open  netbios-ssn
+445/tcp  open  microsoft-ds
+5357/tcp open  wsdapi
+MAC Address: 90:E8:68:C7:AE:F5 (AzureWave Technology)
+
+Samsung (192.168.0.174)
+Host is up (0.00026s latency).
+Not shown: 991 closed tcp ports (reset)
+PORT     STATE SERVICE
+7000/tcp open  afs3-fileserver
+7443/tcp open  oracleas-https
+8001/tcp open  vcom-tunnel
+8002/tcp open  teradataordbms
+8008/tcp open  http
+8009/tcp open  ajp13
+8080/tcp open  http-proxy
+9080/tcp open  glrpc
+9999/tcp open  abyss
+MAC Address: 00:7D:3B:DD:91:83 (Unknown)
+
+Galaxy-S24-Ultra (192.168.0.217)
+Host is up (0.018s latency).
+All 1000 scanned ports on Galaxy-S24-Ultra (192.168.0.217) are in ignored states.
+Not shown: 1000 closed tcp ports (reset)
+MAC Address: 0A:07:7C:E1:21:1C (Unknown)
+
+# Nmap done at Sat Feb  7 06:41:49 2026 -- 256 IP addresses (5 hosts up) scanned in 13.33 seconds
