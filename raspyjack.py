@@ -2153,15 +2153,26 @@ def exec_payload(filename: str) -> None:
 
     log = open(default.payload_log, "ab", buffering=0)
     try:
-        subprocess.run(
+        # Ensure payloads can import RaspyJack modules reliably
+        env = os.environ.copy()
+        env["PYTHONPATH"] = default.install_path + os.pathsep + env.get("PYTHONPATH", "")
+        result = subprocess.run(
             ["python3", full],
             cwd=default.install_path,  # same PYTHONPATH as RaspyJack
+            env=env,
             stdout=log,
             stderr=subprocess.STDOUT,
         )
-        print("[PAYLOAD]   • Finished without error.")
+        if log and log.tell() is not None:
+            log.flush()
+        if result.returncode == 0:
+            print("[PAYLOAD]   • Finished without error.")
+        else:
+            print(f"[PAYLOAD]   • ERROR: exit code {result.returncode}")
+            Dialog_info("Payload error\nCheck payload.log", wait=True)
     except Exception as exc:
         print(f"[PAYLOAD]   • ERROR: {exc!r}")
+        Dialog_info("Payload error\nCheck payload.log", wait=True)
 
     # ---- restore RaspyJack ----------------------------------------------
     print("[PAYLOAD] ◄ Restoring LCD & GPIO…")
