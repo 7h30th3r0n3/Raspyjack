@@ -32,11 +32,14 @@
   const statusEls = document.querySelectorAll('.status-text');
   const deviceShell = document.getElementById('deviceShell');
   const themeNameEl = document.getElementById('themeName');
-  const themePrev = document.getElementById('themePrev');
-  const themeNext = document.getElementById('themeNext');
-  const themeBar = document.getElementById('themeBar');
-  const tabDevice = document.getElementById('tabDevice');
-  const tabLoot = document.getElementById('tabLoot');
+  const navDevice = document.getElementById('navDevice');
+  const navLoot = document.getElementById('navLoot');
+  const themesToggle = document.getElementById('themesToggle');
+  const themesList = document.getElementById('themesList');
+  const themeButtons = document.querySelectorAll('[data-theme]');
+  const sidebar = document.getElementById('sidebar');
+  const sidebarBackdrop = document.getElementById('sidebarBackdrop');
+  const menuToggle = document.getElementById('menuToggle');
   const deviceTab = document.getElementById('deviceTab');
   const lootTab = document.getElementById('lootTab');
   const lootList = document.getElementById('lootList');
@@ -98,6 +101,35 @@
     deviceShell.classList.add(`theme-${t.id}`);
     deviceShell.setAttribute('data-theme', t.id);
     if (themeNameEl) themeNameEl.textContent = t.label;
+    themeButtons.forEach(btn => {
+      const isActive = btn.getAttribute('data-theme') === t.id;
+      btn.classList.toggle('bg-emerald-500/20', isActive);
+      btn.classList.toggle('text-emerald-200', isActive);
+      btn.classList.toggle('border-emerald-400/40', isActive);
+      btn.classList.toggle('bg-slate-900/40', !isActive);
+      btn.classList.toggle('text-slate-300', !isActive);
+      btn.classList.toggle('border-slate-500/20', !isActive);
+    });
+  }
+
+  function setSidebarOpen(open){
+    if (!sidebar) return;
+    sidebar.classList.toggle('-translate-x-full', !open);
+    sidebar.classList.toggle('translate-x-0', open);
+    if (sidebarBackdrop) {
+      sidebarBackdrop.classList.toggle('hidden', !open);
+    }
+  }
+
+  function setNavActive(btn, active){
+    if (!btn) return;
+    btn.classList.toggle('bg-emerald-500/10', active);
+    btn.classList.toggle('text-emerald-300', active);
+    btn.classList.toggle('border-emerald-400/30', active);
+    btn.classList.toggle('shadow-[0_0_16px_rgba(16,185,129,0.15)]', active);
+    btn.classList.toggle('bg-slate-800/40', !active);
+    btn.classList.toggle('text-slate-300', !active);
+    btn.classList.toggle('border-slate-400/20', !active);
   }
 
   function setActiveTab(tab){
@@ -105,28 +137,17 @@
     const isDevice = tab === 'device';
     if (deviceTab) deviceTab.classList.toggle('hidden', !isDevice);
     if (lootTab) lootTab.classList.toggle('hidden', isDevice);
-    if (themeBar) themeBar.classList.toggle('hidden', !isDevice);
-    if (tabDevice) {
-      tabDevice.classList.toggle('bg-emerald-500/10', isDevice);
-      tabDevice.classList.toggle('text-emerald-300', isDevice);
-      tabDevice.classList.toggle('border-emerald-400/30', isDevice);
-      tabDevice.classList.toggle('bg-slate-800/40', !isDevice);
-      tabDevice.classList.toggle('text-slate-300', !isDevice);
-      tabDevice.classList.toggle('border-slate-400/20', !isDevice);
-    }
-    if (tabLoot) {
-      tabLoot.classList.toggle('bg-emerald-500/10', !isDevice);
-      tabLoot.classList.toggle('text-emerald-300', !isDevice);
-      tabLoot.classList.toggle('border-emerald-400/30', !isDevice);
-      tabLoot.classList.toggle('bg-slate-800/40', isDevice);
-      tabLoot.classList.toggle('text-slate-300', isDevice);
-      tabLoot.classList.toggle('border-slate-400/20', isDevice);
-    }
+    setNavActive(navDevice, isDevice);
+    setNavActive(navLoot, !isDevice);
+    setSidebarOpen(false);
   }
 
-  function nextTheme(dir){
-    themeIndex = (themeIndex + dir + themes.length) % themes.length;
-    applyTheme();
+  function setThemeById(id){
+    const idx = themes.findIndex(t => t.id === id);
+    if (idx >= 0){
+      themeIndex = idx;
+      applyTheme();
+    }
   }
 
   function connect(){
@@ -370,16 +391,25 @@
 
   bindButtons();
   bindKeyboard();
-  if (themePrev) themePrev.addEventListener('click', () => nextTheme(-1));
-  if (themeNext) themeNext.addEventListener('click', () => nextTheme(1));
-  if (tabDevice) tabDevice.addEventListener('click', () => setActiveTab('device'));
-  if (tabLoot) tabLoot.addEventListener('click', () => {
+  if (navDevice) navDevice.addEventListener('click', () => setActiveTab('device'));
+  if (navLoot) navLoot.addEventListener('click', () => {
     setActiveTab('loot');
     if (lootList && !lootList.dataset.loaded){
       loadLoot('');
       lootList.dataset.loaded = '1';
     }
   });
+  if (themesToggle) themesToggle.addEventListener('click', () => {
+    if (themesList) themesList.classList.toggle('hidden');
+  });
+  themeButtons.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const id = btn.getAttribute('data-theme');
+      if (id) setThemeById(id);
+    });
+  });
+  if (menuToggle) menuToggle.addEventListener('click', () => setSidebarOpen(true));
+  if (sidebarBackdrop) sidebarBackdrop.addEventListener('click', () => setSidebarOpen(false));
   if (lootUpBtn) lootUpBtn.addEventListener('click', () => {
     if (lootState.parent !== undefined){
       loadLoot(lootState.parent || '');

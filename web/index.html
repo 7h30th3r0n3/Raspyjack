@@ -269,33 +269,46 @@
   </style>
 </head>
 <body class="min-h-screen text-slate-200">
-  <div class="mx-auto max-w-4xl px-4 py-6">
-    <div class="flex items-center justify-center mb-6 select-none">
-      <div class="flex flex-row md:flex-col items-center justify-center gap-3 flex-nowrap">
-        <img src="./raspyjack.png" alt="RaspyJack" class="order-1 md:order-2 h-12 md:h-24 drop-shadow-[0_0_20px_rgba(18,255,120,0.25)]"/>
-        <div class="order-2 md:order-1 text-center">
-          <div class="text-4xl md:text-5xl font-black tracking-wide"><span class="text-emerald-400">R</span>ASPY<span class="text-rose-400">J</span>ACK</div>
-          <div class="mt-1 text-xs md:text-sm text-slate-400">Remote Control Interface</div>
+  <div class="min-h-screen md:flex">
+    <div id="sidebarBackdrop" class="hidden fixed inset-0 z-30 bg-black/60"></div>
+    <aside id="sidebar" class="fixed md:static inset-y-0 left-0 z-40 w-64 -translate-x-full md:translate-x-0 transform transition bg-slate-950/60 border-r border-slate-800/70 backdrop-blur">
+      <div class="p-4 border-b border-slate-800/70">
+        <div class="flex items-center gap-3 select-none">
+          <img src="./raspyjack.png" alt="RaspyJack" class="h-10 drop-shadow-[0_0_16px_rgba(18,255,120,0.25)]"/>
+          <div>
+            <div class="text-lg font-black tracking-wide"><span class="text-emerald-400">R</span>ASPY<span class="text-rose-400">J</span>ACK</div>
+            <div class="text-[11px] text-slate-400">Remote Control</div>
+          </div>
         </div>
       </div>
-    </div>
 
-    <!-- Tabs -->
-    <div class="flex items-center justify-center gap-2 mb-4 select-none">
-      <button id="tabDevice" type="button" class="px-4 py-1.5 rounded-full text-xs font-semibold border border-emerald-400/30 bg-emerald-500/10 text-emerald-300 shadow-[0_0_16px_rgba(16,185,129,0.15)]">Device</button>
-      <button id="tabLoot" type="button" class="px-4 py-1.5 rounded-full text-xs font-semibold border border-slate-400/20 bg-slate-800/40 text-slate-300 hover:text-white hover:bg-slate-700/50 transition">Loot</button>
-    </div>
+      <nav class="p-3 space-y-2">
+        <button id="navDevice" type="button" class="w-full px-3 py-2 rounded-xl text-left text-sm font-semibold border border-emerald-400/30 bg-emerald-500/10 text-emerald-300 shadow-[0_0_16px_rgba(16,185,129,0.15)]">Device</button>
+        <button id="navLoot" type="button" class="w-full px-3 py-2 rounded-xl text-left text-sm font-semibold border border-slate-400/20 bg-slate-800/40 text-slate-300 hover:text-white hover:bg-slate-700/50 transition">Loot</button>
 
-    <!-- Theme switcher (handheld only) -->
-    <div id="themeBar" class="flex items-center justify-center gap-3 mb-4 select-none">
-      <button id="themePrev" type="button" class="theme-nav-btn" aria-label="Previous theme">◄</button>
-      <div class="text-xs text-slate-400 theme-label">Theme: <span id="themeName">Neon</span></div>
-      <button id="themeNext" type="button" class="theme-nav-btn" aria-label="Next theme">►</button>
-    </div>
+        <div class="pt-2">
+          <button id="themesToggle" type="button" class="w-full px-3 py-2 rounded-xl text-left text-sm font-semibold border border-slate-400/20 bg-slate-800/40 text-slate-300 hover:text-white hover:bg-slate-700/50 transition">
+            Themes
+            <span class="float-right text-[10px] text-slate-400">Current: <span id="themeName">Neon</span></span>
+          </button>
+          <div id="themesList" class="mt-2 space-y-1 hidden">
+            <button type="button" data-theme="neon" class="w-full px-3 py-2 rounded-lg text-left text-xs font-semibold border border-slate-500/20 bg-slate-900/40 text-slate-300 hover:bg-slate-800/60 transition">Neon</button>
+            <button type="button" data-theme="gameboy" class="w-full px-3 py-2 rounded-lg text-left text-xs font-semibold border border-slate-500/20 bg-slate-900/40 text-slate-300 hover:bg-slate-800/60 transition">Game Boy</button>
+            <button type="button" data-theme="pager" class="w-full px-3 py-2 rounded-lg text-left text-xs font-semibold border border-slate-500/20 bg-slate-900/40 text-slate-300 hover:bg-slate-800/60 transition">Pager</button>
+          </div>
+        </div>
+      </nav>
+    </aside>
 
-    <!-- Device card -->
-    <div id="deviceTab" class="block">
-      <div id="deviceShell" data-theme="neon" class="device-shell theme-neon rounded-3xl p-4 md:p-5 w-fit mx-auto">
+    <main class="flex-1 px-4 py-6 md:px-8">
+      <div class="flex items-center justify-between mb-4 md:mb-6">
+        <button id="menuToggle" type="button" class="md:hidden px-3 py-2 rounded-lg bg-slate-800/60 border border-slate-600/40 text-slate-200">☰</button>
+        <div class="text-[11px] text-slate-400">WebUI</div>
+      </div>
+
+      <!-- Device card -->
+      <div id="deviceTab" class="block">
+        <div id="deviceShell" data-theme="neon" class="device-shell theme-neon rounded-3xl p-4 md:p-5 w-fit mx-auto">
       <div class="pager-clip" aria-hidden="true"></div>
       <div class="pager-brand">RaspyJack P200</div>
       <div class="pager-speaker" aria-hidden="true">
@@ -389,30 +402,31 @@
         </div>
         <div class="pager-text text-center text-[11px] mt-4">OK = Enter · KEY3 = Esc</div>
         <div class="status-text pager-text text-center text-[10px] mt-1">Connecting…</div>
+        </div>
       </div>
-      </div>
-    </div>
 
-    <!-- Loot browser -->
-    <div id="lootTab" class="hidden">
-      <div class="rounded-3xl border border-slate-700/60 bg-slate-900/40 backdrop-blur p-4 md:p-5 max-w-3xl mx-auto shadow-[0_0_30px_rgba(15,23,42,0.35)]">
-        <div class="flex items-center justify-between mb-3">
-          <div class="text-sm font-semibold text-emerald-300">Loot Vault</div>
-          <div id="lootStatus" class="text-[11px] text-slate-400">Ready</div>
+      <!-- Loot browser -->
+      <div id="lootTab" class="hidden">
+        <div class="rounded-3xl border border-slate-700/60 bg-slate-900/40 backdrop-blur p-4 md:p-5 max-w-3xl mx-auto shadow-[0_0_30px_rgba(15,23,42,0.35)]">
+          <div class="flex items-center justify-between mb-3">
+            <div class="text-sm font-semibold text-emerald-300">Loot Vault</div>
+            <div id="lootStatus" class="text-[11px] text-slate-400">Ready</div>
+          </div>
+          <div class="flex items-center gap-2 mb-3">
+            <button id="lootUp" type="button" class="px-3 py-1.5 text-xs rounded-lg bg-slate-800/70 border border-slate-600/40 text-slate-200 hover:bg-slate-700/70 transition">Up</button>
+            <div id="lootPath" class="text-xs text-slate-400 truncate">/</div>
+          </div>
+          <div id="lootList" class="divide-y divide-slate-800/80 border border-slate-800/70 rounded-xl overflow-hidden bg-slate-950/40">
+            <!-- items injected by app.js -->
+          </div>
+          <div class="mt-3 text-[11px] text-slate-500">Tip: click folders to navigate, click files to preview or download.</div>
         </div>
-        <div class="flex items-center gap-2 mb-3">
-          <button id="lootUp" type="button" class="px-3 py-1.5 text-xs rounded-lg bg-slate-800/70 border border-slate-600/40 text-slate-200 hover:bg-slate-700/70 transition">Up</button>
-          <div id="lootPath" class="text-xs text-slate-400 truncate">/</div>
-        </div>
-        <div id="lootList" class="divide-y divide-slate-800/80 border border-slate-800/70 rounded-xl overflow-hidden bg-slate-950/40">
-          <!-- items injected by app.js -->
-        </div>
-        <div class="mt-3 text-[11px] text-slate-500">Tip: click folders to navigate, click files to preview or download.</div>
       </div>
-    </div>
+    </main>
+  </div>
 
-    <!-- Loot preview modal -->
-    <div id="lootPreview" class="hidden fixed inset-0 z-50 bg-black/60 backdrop-blur-sm">
+  <!-- Loot preview modal -->
+  <div id="lootPreview" class="hidden fixed inset-0 z-50 bg-black/60 backdrop-blur-sm">
       <div class="max-w-4xl mx-auto mt-10 md:mt-16 px-4">
         <div class="rounded-2xl border border-slate-700/60 bg-slate-950/90 shadow-[0_0_40px_rgba(15,23,42,0.65)] overflow-hidden">
           <div class="flex items-center justify-between px-4 py-3 border-b border-slate-800/70">
@@ -428,7 +442,6 @@
           </div>
         </div>
       </div>
-    </div>
   </div>
 
   <script src="./app.js"></script>
