@@ -69,12 +69,6 @@ import RPi.GPIO as GPIO  # type: ignore
 import LCD_1in44, LCD_Config  # type: ignore
 from PIL import Image, ImageDraw, ImageFont  # type: ignore
 
-# Optional WebUI virtual input bridge
-try:
-    import rj_input  # type: ignore
-except Exception:
-    rj_input = None
-
 WIDTH, HEIGHT = 128, 128
 
 PINS = {
@@ -165,31 +159,6 @@ def draw_error(lcd, title, lines):
     d.text((2, 115), "KEY3 exit", font=font, fill="white")
     lcd.LCD_ShowImage(img, 0, 0)
 
-def _get_virtual_button():
-    if rj_input is None:
-        return None
-    name = rj_input.get_virtual_button()
-    mapping = {
-        "KEY1_PIN": "KEY1",
-        "KEY2_PIN": "KEY2",
-        "KEY3_PIN": "KEY3",
-    }
-    return mapping.get(name)
-
-def get_button():
-    v = _get_virtual_button()
-    if v:
-        return v
-    for name, pin in PINS.items():
-        if GPIO.input(pin) == 0:
-            return name
-    return None
-
-def wait_release(button):
-    if button in PINS:
-        while GPIO.input(PINS[button]) == 0:
-            time.sleep(0.03)
-
 
 def main():
     LCD_Config.GPIO_Init()
@@ -218,11 +187,10 @@ def main():
 
     try:
         while True:
-            btn = get_button()
-            if btn == "KEY3":
+            if GPIO.input(PINS["KEY3"]) == 0:
                 break
 
-            if btn == "KEY1":
+            if GPIO.input(PINS["KEY1"]) == 0:
                 if _tailscale_installed():
                     rc, out, err = _run(["tailscale", "up"], timeout=8)
                     msg = out.splitlines()[0] if out else err.splitlines()[0] if err else "ok"
@@ -232,9 +200,9 @@ def main():
                 else:
                     last_msg = "tailscale missing"
                 last_msg_at = time.time()
-                wait_release("KEY1")
+                time.sleep(0.25)
 
-            if btn == "KEY2":
+            if GPIO.input(PINS["KEY2"]) == 0:
                 if _tailscale_installed():
                     rc, out, err = _run(["tailscale", "down"])
                     msg = out.splitlines()[0] if out else err.splitlines()[0] if err else "ok"
@@ -242,7 +210,7 @@ def main():
                 else:
                     last_msg = "tailscale missing"
                 last_msg_at = time.time()
-                wait_release("KEY2")
+                time.sleep(0.25)
 
             lines = [
                 f"daemon: {'on' if _daemon_running() else 'off'}",

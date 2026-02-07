@@ -78,12 +78,6 @@ import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 
-# Optional WebUI virtual input bridge
-try:
-    import rj_input  # type: ignore
-except Exception:
-    rj_input = None
-
 from scapy.all import sniff, DNS, DNSQR, IP
 from scapy.layers.netbios import NBNSQueryRequest
 
@@ -97,12 +91,6 @@ PIN_KEY3 = 16   # EXIT
 GPIO.setmode(GPIO.BCM)
 for pin in (PIN_UP, PIN_DOWN, PIN_KEY3):
     GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-
-PINS = {
-    "UP": PIN_UP,
-    "DOWN": PIN_DOWN,
-    "KEY3": PIN_KEY3,
-}
 
 # ==================================================
 # LCD INIT
@@ -154,35 +142,6 @@ def cleanup(*_):
 
 signal.signal(signal.SIGINT, cleanup)
 signal.signal(signal.SIGTERM, cleanup)
-
-# ==================================================
-# INPUT (physical + WebUI virtual)
-# ==================================================
-def _get_virtual_button():
-    if rj_input is None:
-        return None
-    name = rj_input.get_virtual_button()
-    mapping = {
-        "KEY_UP_PIN": "UP",
-        "KEY_DOWN_PIN": "DOWN",
-        "KEY3_PIN": "KEY3",
-        "KEY_PRESS_PIN": "KEY3",
-    }
-    return mapping.get(name)
-
-def get_button():
-    v = _get_virtual_button()
-    if v:
-        return v
-    for name, pin in PINS.items():
-        if GPIO.input(pin) == 0:
-            return name
-    return None
-
-def wait_release(button):
-    if button in PINS:
-        while GPIO.input(PINS[button]) == 0:
-            time.sleep(0.03)
 
 # ==================================================
 # HELPERS
@@ -277,19 +236,18 @@ threading.Thread(target=sniff_thread, daemon=True).start()
 # UI LOOP
 # ==================================================
 while running:
-    btn = get_button()
-    if btn == "KEY3":
+    if GPIO.input(PIN_KEY3) == 0:
         break
 
     sorted_top = sorted(queries.items(), key=lambda x: x[1], reverse=True)
 
-    if btn == "UP" and top_index > 0:
+    if GPIO.input(PIN_UP) == 0 and top_index > 0:
         top_index -= 1
-        wait_release("UP")
+        time.sleep(0.15)
 
-    if btn == "DOWN" and top_index < max(0, len(sorted_top) - 2):
+    if GPIO.input(PIN_DOWN) == 0 and top_index < max(0, len(sorted_top) - 2):
         top_index += 1
-        wait_release("DOWN")
+        time.sleep(0.15)
 
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
     d = ImageDraw.Draw(img)
