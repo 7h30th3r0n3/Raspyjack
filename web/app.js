@@ -43,6 +43,12 @@
   const lootPathEl = document.getElementById('lootPath');
   const lootUpBtn = document.getElementById('lootUp');
   const lootStatus = document.getElementById('lootStatus');
+  const lootPreview = document.getElementById('lootPreview');
+  const lootPreviewTitle = document.getElementById('lootPreviewTitle');
+  const lootPreviewBody = document.getElementById('lootPreviewBody');
+  const lootPreviewClose = document.getElementById('lootPreviewClose');
+  const lootPreviewDownload = document.getElementById('lootPreviewDownload');
+  const lootPreviewMeta = document.getElementById('lootPreviewMeta');
 
   // Build WS URL from current page host. Supports optional token in page URL (?token=...)
   function getWsUrl(){
@@ -212,10 +218,24 @@
 
   function updateLootUp(){
     if (!lootUpBtn) return;
-    const disabled = !lootState.parent;
+    const disabled = !lootState.path;
     lootUpBtn.disabled = disabled;
     lootUpBtn.classList.toggle('opacity-40', disabled);
     lootUpBtn.classList.toggle('cursor-not-allowed', disabled);
+  }
+
+  function openPreview({ title, content, meta, downloadUrl }){
+    if (!lootPreview) return;
+    if (lootPreviewTitle) lootPreviewTitle.textContent = title || 'Preview';
+    if (lootPreviewBody) lootPreviewBody.textContent = content || '';
+    if (lootPreviewMeta) lootPreviewMeta.textContent = meta || '';
+    if (lootPreviewDownload) lootPreviewDownload.href = downloadUrl || '#';
+    lootPreview.classList.remove('hidden');
+  }
+
+  function closePreview(){
+    if (!lootPreview) return;
+    lootPreview.classList.add('hidden');
   }
 
   function renderLoot(items){
@@ -260,6 +280,31 @@
     }catch(e){
       setLootStatus('Failed to load loot');
       renderLoot([]);
+    }
+  }
+
+  async function previewLootFile(path, name){
+    setLootStatus('Loading preview...');
+    try{
+      const url = getApiUrl('/api/loot/view', { path });
+      const res = await fetch(url, { cache: 'no-store' });
+      const data = await res.json();
+      if (!res.ok){
+        throw new Error(data && data.error ? data.error : 'preview_failed');
+      }
+      const meta = `${formatBytes(data.size || 0)} · ${formatTime(data.mtime || 0)}${data.truncated ? ' · truncated' : ''}`;
+      const downloadUrl = getApiUrl('/api/loot/download', { path });
+      openPreview({
+        title: name,
+        content: data.content || '',
+        meta,
+        downloadUrl
+      });
+      setLootStatus('Ready');
+    }catch(e){
+      setLootStatus('Preview unavailable');
+      const downloadUrl = getApiUrl('/api/loot/download', { path });
+      window.open(downloadUrl, '_blank');
     }
   }
 
@@ -350,9 +395,12 @@
     if (type === 'dir'){
       loadLoot(nextPath);
     } else {
-      const url = getApiUrl('/api/loot/download', { path: nextPath });
-      window.open(url, '_blank');
+      previewLootFile(nextPath, name);
     }
+  });
+  if (lootPreviewClose) lootPreviewClose.addEventListener('click', closePreview);
+  if (lootPreview) lootPreview.addEventListener('click', (e) => {
+    if (e.target === lootPreview) closePreview();
   });
   applyTheme();
   setActiveTab('device');

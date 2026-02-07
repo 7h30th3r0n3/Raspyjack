@@ -8,6 +8,7 @@ Routes:
   /                  -> static WebUI (web/)
   /api/loot/list      -> JSON directory listing (read-only)
   /api/loot/download  -> file download (read-only)
+  /api/loot/view      -> text preview (read-only)
 
 Environment:
   RJ_WEB_HOST  Host to bind (default: 0.0.0.0)
@@ -32,6 +33,11 @@ LOOT_DIR = ROOT_DIR / "loot"
 HOST = os.environ.get("RJ_WEB_HOST", "0.0.0.0")
 PORT = int(os.environ.get("RJ_WEB_PORT", "8080"))
 TOKEN = os.environ.get("RJ_WS_TOKEN")
+PREVIEW_MAX_BYTES = int(os.environ.get("RJ_LOOT_PREVIEW_MAX", str(200 * 1024)))
+TEXT_EXTS = {
+    ".txt", ".log", ".md", ".json", ".csv", ".conf", ".ini", ".yaml", ".yml",
+    ".pcapng.txt", ".xml", ".sqlite", ".db", ".out"
+}
 
 
 def _auth_ok(query: dict) -> bool:
@@ -61,6 +67,16 @@ def _json_response(handler: SimpleHTTPRequestHandler, payload: dict, status: int
     handler.wfile.write(body)
 
 
+def _is_text_file(path: Path) -> bool:
+    ctype, _ = mimetypes.guess_type(str(path))
+    if ctype and ctype.startswith("text/"):
+        return True
+    ext = "".join(path.suffixes).lower() or path.suffix.lower()
+    if ext in TEXT_EXTS:
+        return True
+    return False
+
+
 class RaspyJackHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(WEB_DIR), **kwargs)
@@ -78,6 +94,9 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
                 return
             if parsed.path == "/api/loot/download":
                 self._handle_loot_download(query)
+                return
+            if parsed.path == "/api/loot/view":
+                self._handle_loot_view(query)
                 return
 
             _json_response(self, {"error": "not found"}, status=HTTPStatus.NOT_FOUND)
@@ -141,6 +160,33 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
                     if not chunk:
                         break
                     self.wfile.write(chunk)
+        except Exception:
+            _json_response(self, {"error": "read error"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+
+    def _handle_loot_view(self, query: dict) -> None:
+        raw = unquote(query.get("path", [""])[0])
+        target = _safe_loot_path(raw)
+        if target is None or not target.exists() or not target.is_file():
+            _json_response(self, {"error": "not found"}, status=HTTPStatus.NOT_FOUND)
+            return
+        if not _is_text_file(target):
+            _json_response(self, {"error": "not text"}, status=HTTPStatus.UNSUPPORTED_MEDIA_TYPE)
+            return
+
+        try:
+            size = target.stat().st_size
+            read_size = min(size, PREVIEW_MAX_BYTES)
+            with target.open("rb") as f:
+                raw_data = f.read(read_size)
+            text = raw_data.decode("utf-8", errors="replace")
+            _json_response(self, {
+                "name": target.name,
+                "path": raw,
+                "content": text,
+                "truncated": size > PREVIEW_MAX_BYTES,
+                "size": size,
+                "mtime": int(target.stat().st_mtime),
+            })
         except Exception:
             _json_response(self, {"error": "read error"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
 

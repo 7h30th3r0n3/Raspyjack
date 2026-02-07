@@ -407,7 +407,26 @@
         <div id="lootList" class="divide-y divide-slate-800/80 border border-slate-800/70 rounded-xl overflow-hidden bg-slate-950/40">
           <!-- items injected by app.js -->
         </div>
-        <div class="mt-3 text-[11px] text-slate-500">Tip: click folders to navigate, click files to download.</div>
+        <div class="mt-3 text-[11px] text-slate-500">Tip: click folders to navigate, click files to preview or download.</div>
+      </div>
+    </div>
+
+    <!-- Loot preview modal -->
+    <div id="lootPreview" class="hidden fixed inset-0 z-50 bg-black/60 backdrop-blur-sm">
+      <div class="max-w-4xl mx-auto mt-10 md:mt-16 px-4">
+        <div class="rounded-2xl border border-slate-700/60 bg-slate-950/90 shadow-[0_0_40px_rgba(15,23,42,0.65)] overflow-hidden">
+          <div class="flex items-center justify-between px-4 py-3 border-b border-slate-800/70">
+            <div class="text-sm font-semibold text-emerald-300 truncate" id="lootPreviewTitle">Preview</div>
+            <div class="flex items-center gap-2">
+              <a id="lootPreviewDownload" href="#" class="text-xs px-3 py-1.5 rounded-lg bg-slate-800/80 border border-slate-600/40 text-slate-200 hover:bg-slate-700/80 transition">Download</a>
+              <button id="lootPreviewClose" type="button" class="text-xs px-3 py-1.5 rounded-lg bg-emerald-600/80 border border-emerald-300/30 text-white hover:bg-emerald-500/80 transition">Close</button>
+            </div>
+          </div>
+          <div class="px-4 py-3">
+            <div id="lootPreviewMeta" class="text-[11px] text-slate-400 mb-2"></div>
+            <pre id="lootPreviewBody" class="text-xs text-slate-100 whitespace-pre-wrap max-h-[60vh] overflow-auto"></pre>
+          </div>
+        </div>
       </div>
     </div>
   </div>
