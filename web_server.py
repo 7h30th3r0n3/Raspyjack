@@ -30,6 +30,7 @@ ROOT_DIR = Path(__file__).resolve().parent
 WEB_DIR = ROOT_DIR / "web"
 LOOT_DIR = ROOT_DIR / "loot"
 PAYLOADS_DIR = ROOT_DIR / "payloads"
+PAYLOAD_STATE_PATH = Path("/dev/shm/rj_payload_state.json")
 
 HOST = os.environ.get("RJ_WEB_HOST", "0.0.0.0")
 PORT = int(os.environ.get("RJ_WEB_PORT", "8080"))
@@ -92,6 +93,9 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
 
             if parsed.path == "/api/payloads/list":
                 self._handle_payloads_list()
+                return
+            if parsed.path == "/api/payloads/status":
+                self._handle_payloads_status()
                 return
 
             if parsed.path == "/api/loot/list":
@@ -247,6 +251,21 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
             return
 
         _json_response(self, {"ok": True})
+
+    def _handle_payloads_status(self) -> None:
+        try:
+            if not PAYLOAD_STATE_PATH.exists():
+                _json_response(self, {"running": False, "path": None})
+                return
+            raw = PAYLOAD_STATE_PATH.read_text(encoding="utf-8")
+            data = json.loads(raw) if raw else {}
+            _json_response(self, {
+                "running": bool(data.get("running")),
+                "path": data.get("path"),
+                "ts": data.get("ts"),
+            })
+        except Exception:
+            _json_response(self, {"running": False, "path": None})
 
     def _handle_loot_download(self, query: dict) -> None:
         raw = unquote(query.get("path", [""])[0])

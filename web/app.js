@@ -81,7 +81,7 @@
   const pressed = new Set(); // keyboard pressed state
   let activeTab = 'device';
   let lootState = { path: '', parent: '' };
-  let payloadState = { categories: [], open: {} };
+  let payloadState = { categories: [], open: {}, activePath: null };
 
   function setStatus(txt){
     if (statusEl) statusEl.textContent = txt;
@@ -372,10 +372,21 @@
       const items = (cat.items || []).map(item => `
         <div class="flex items-center justify-between gap-2 px-2 py-1 rounded-lg bg-slate-900/40 border border-slate-800/70">
           <div class="text-[11px] text-slate-200 truncate">${item.name}</div>
+          ${(() => {
+            const isActive = payloadState.activePath === item.path;
+            const disabled = payloadState.activePath && !isActive;
+            const startCls = disabled
+              ? 'px-2 py-0.5 text-[10px] rounded-md bg-slate-800/80 border border-slate-700/40 text-slate-500 cursor-not-allowed'
+              : 'px-2 py-0.5 text-[10px] rounded-md bg-emerald-600/80 border border-emerald-300/30 text-white hover:bg-emerald-500/80 transition';
+            const stopBtn = isActive
+              ? '<button type="button" data-stop="1" class="px-2 py-0.5 text-[10px] rounded-md bg-rose-600/80 border border-rose-300/30 text-white hover:bg-rose-500/80 transition">Stop</button>'
+              : '<span class="px-2 py-0.5 text-[10px] rounded-md bg-slate-900/60 border border-slate-800/40 text-slate-600">Idle</span>';
+            return `
           <div class="flex items-center gap-1">
-            <button type="button" data-start="${item.path}" class="px-2 py-0.5 text-[10px] rounded-md bg-emerald-600/80 border border-emerald-300/30 text-white hover:bg-emerald-500/80 transition">Start</button>
-            <button type="button" data-stop="1" class="px-2 py-0.5 text-[10px] rounded-md bg-slate-800/80 border border-slate-600/40 text-slate-200 hover:bg-slate-700/80 transition">Stop</button>
-          </div>
+            <button type="button" data-start="${item.path}" ${disabled ? 'disabled' : ''} class="${startCls}">Start</button>
+            ${stopBtn}
+          </div>`;
+          })()}
         </div>
       `).join('');
       return `
@@ -405,9 +416,31 @@
       if (!res.ok || !data.ok){
         throw new Error(data && data.error ? data.error : 'start_failed');
       }
+      payloadState.activePath = path;
+      renderPayloadSidebar();
       setPayloadStatus('Launched');
     }catch(e){
       setPayloadStatus('Start failed');
+    }
+  }
+
+  async function pollPayloadStatus(){
+    try{
+      const url = getApiUrl('/api/payloads/status');
+      const res = await fetch(url, { cache: 'no-store' });
+      const data = await res.json();
+      if (!res.ok){
+        return;
+      }
+      const running = !!data.running;
+      const path = running ? (data.path || null) : null;
+      if (payloadState.activePath !== path){
+        payloadState.activePath = path;
+        renderPayloadSidebar();
+      }
+      setPayloadStatus(running ? 'Running' : 'Ready');
+    }catch(e){
+      setPayloadStatus('Ready');
     }
   }
 
@@ -533,6 +566,7 @@
     }
     const stopBtn = e.target.closest('[data-stop]');
     if (stopBtn){
+      setPayloadStatus('Stopping...');
       tapInput('KEY3');
     }
   });
@@ -545,4 +579,5 @@
   setActiveTab('device');
   connect();
   loadPayloads();
+  setInterval(pollPayloadStatus, 1500);
 })();

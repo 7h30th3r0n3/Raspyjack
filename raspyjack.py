@@ -2113,6 +2113,23 @@ def list_payloads_by_category():
     return categories
 
 # ---------------------------------------------------------------------------
+# Payload state (for WebUI status)
+# ---------------------------------------------------------------------------
+PAYLOAD_STATE_PATH = "/dev/shm/rj_payload_state.json"
+
+def _write_payload_state(running: bool, path: str | None = None) -> None:
+    try:
+        state = {
+            "running": bool(running),
+            "path": path if running else None,
+            "ts": time.time(),
+        }
+        with open(PAYLOAD_STATE_PATH, "w", encoding="utf-8") as f:
+            json.dump(state, f)
+    except Exception:
+        pass
+
+# ---------------------------------------------------------------------------
 # 1)  Helper – reset GPIO *and* re-initialise the LCD
 # ---------------------------------------------------------------------------
 def _setup_gpio() -> None:
@@ -2154,6 +2171,7 @@ def exec_payload(filename: str) -> None:
         return                                       # nothing to launch
 
     print(f"[PAYLOAD] ► Starting: {filename}")
+    _write_payload_state(True, filename)
     screen_lock.set()                # stop _stats_loop & _display_loop
     LCD.LCD_Clear()                  # give the payload a clean canvas
 
@@ -2182,6 +2200,7 @@ def exec_payload(filename: str) -> None:
 
     # ---- restore RaspyJack ----------------------------------------------
     print("[PAYLOAD] ◄ Restoring LCD & GPIO…")
+    _write_payload_state(False, None)
     _setup_gpio()                                  # SPI/DC/RST/CS back
     try:
         rj_input.restart_listener()                # ensure virtual input socket is back
