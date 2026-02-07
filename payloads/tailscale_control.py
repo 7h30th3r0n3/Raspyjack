@@ -69,6 +69,9 @@ import RPi.GPIO as GPIO  # type: ignore
 import LCD_1in44, LCD_Config  # type: ignore
 from PIL import Image, ImageDraw, ImageFont  # type: ignore
 
+# Shared input helper (WebUI virtual + GPIO)
+from payloads._input_helper import get_button
+
 WIDTH, HEIGHT = 128, 128
 
 PINS = {
@@ -176,7 +179,9 @@ def main():
             "Error",
             ["Tailscale missing", "Download:", "tailscale.com"],
         )
-        while GPIO.input(PINS["KEY3"]) != 0:
+        while True:
+            if get_button({"KEY3": PINS["KEY3"]}, GPIO) == "KEY3":
+                break
             time.sleep(0.1)
         lcd.LCD_Clear()
         GPIO.cleanup()
@@ -187,10 +192,11 @@ def main():
 
     try:
         while True:
-            if GPIO.input(PINS["KEY3"]) == 0:
+            btn = get_button(PINS, GPIO)
+            if btn == "KEY3":
                 break
 
-            if GPIO.input(PINS["KEY1"]) == 0:
+            if btn == "KEY1":
                 if _tailscale_installed():
                     rc, out, err = _run(["tailscale", "up"], timeout=8)
                     msg = out.splitlines()[0] if out else err.splitlines()[0] if err else "ok"
@@ -202,7 +208,7 @@ def main():
                 last_msg_at = time.time()
                 time.sleep(0.25)
 
-            if GPIO.input(PINS["KEY2"]) == 0:
+            if btn == "KEY2":
                 if _tailscale_installed():
                     rc, out, err = _run(["tailscale", "down"])
                     msg = out.splitlines()[0] if out else err.splitlines()[0] if err else "ok"
