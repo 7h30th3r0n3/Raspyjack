@@ -2660,7 +2660,11 @@ def main():
             else:
                 m.menu[m.which][m.select][1]()
         elif len(m.which) > 1:
-            m.which = m.which[:-1]
+            # Handle dynamic payload category menus (ap_<category>)
+            if m.which.startswith("ap_"):
+                m.which = "ap"
+            else:
+                m.which = m.which[:-1]
 
 
 ### Default values + LCD init ###
