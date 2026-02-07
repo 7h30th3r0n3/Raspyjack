@@ -259,6 +259,12 @@ class template():
 def getButton():
     global _last_button, _last_button_time, _button_down_since
     while 1:
+        # WebUI payload requests: launch immediately while waiting for input
+        if not screen_lock.is_set():
+            requested = _check_payload_request()
+            if requested:
+                exec_payload(requested)
+                continue
         # 1) virtual buttons from Web UI
         v = rj_input.get_virtual_button()
         if v:
