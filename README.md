@@ -185,8 +185,7 @@ sudo reboot
 
 **Quick Test:**
 ```bash
-cd /root/Raspyjack/payloads
-python3 fast_wifi_switcher.py
+python3 /root/Raspyjack/payloads/general/fast_wifi_switcher.py
 ```
 
 ---
@@ -351,7 +350,7 @@ if __name__ == "__main__":
     main()
 ```
 
-If you want a starter file, use `payloads/_payload_template.py`.
+If you want a starter file, use `payloads/examples/_payload_template.py`.
 
 ---
 
@@ -377,12 +376,14 @@ raspyjack/
 │   └── profiles/
 │
 ├── payloads/
-│   ├── example_show_buttons.py
-│   ├── exfiltrate_discord.py
-│   ├── snake.py
-│   ├── deauth.py
-│   ├── fast_wifi_switcher.py
-│   └── wifi_manager_payload.py
+│   ├── reconnaissance/
+│   ├── interception/
+│   ├── evil_portal/
+│   ├── exfiltration/
+│   ├── remote_access/
+│   ├── general/
+│   ├── examples/
+│   └── games/
 │
 ├── DNSSpoof/
 │   ├── captures/

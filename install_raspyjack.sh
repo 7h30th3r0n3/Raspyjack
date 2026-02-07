@@ -245,4 +245,4 @@ fi
 
 step "Installation finished successfully!"
 info "⚠️  Reboot is recommended to ensure overlays & services start cleanly."
-info "📡 For WiFi attacks: Plug in USB WiFi dongle and run payloads/deauth.py"
+info "📡 For WiFi attacks: Plug in USB WiFi dongle and run payloads/interception/deauth.py"

@@ -1839,7 +1839,7 @@ def launch_wifi_manager():
         return
 
     Dialog_info("Loading FAST WiFi\nSwitcher...", wait=True)
-    exec_payload("fast_wifi_switcher.py")
+    exec_payload("general/fast_wifi_switcher.py")
 
 def show_interface_info():
     """Show detailed interface information."""
@@ -2031,7 +2031,7 @@ def launch_interface_switcher():
 def launch_webui():
     """Launch the WebUI controller payload (start/stop Web UI)."""
     Dialog_info("Loading WebUI...", wait=True)
-    exec_payload("webui.py")
+    exec_payload("general/webui.py")
 
 def quick_wifi_toggle():
     """FAST toggle between wlan0 and wlan1 - immediate switching."""
@@ -2072,16 +2072,39 @@ def quick_wifi_toggle():
 
 def list_payloads():
     """
-    Returns the list of .py scripts in payload_path, sorted by file name.
+    Returns the list of .py scripts under payload_path, as relative paths.
     """
+    payloads = []
     try:
-        return sorted(
-            f for f in os.listdir(default.payload_path)
-            if f.endswith(".py") and not f.startswith("_")
-        )
+        for root, dirs, files in os.walk(default.payload_path):
+            # Skip cache/hidden folders
+            dirs[:] = [d for d in dirs if not d.startswith(".") and d != "__pycache__"]
+            rel_dir = os.path.relpath(root, default.payload_path)
+            for f in files:
+                if not f.endswith(".py") or f.startswith("_"):
+                    continue
+                rel_path = os.path.join(rel_dir, f) if rel_dir != "." else f
+                payloads.append(rel_path)
     except FileNotFoundError:
         os.makedirs(default.payload_path, exist_ok=True)
         return []
+
+    return sorted(payloads, key=str.lower)
+
+def list_payloads_by_category():
+    """
+    Return payloads grouped by category folder.
+    - Files in payload_path root go to "general".
+    """
+    categories: dict[str, list[str]] = {}
+    for rel_path in list_payloads():
+        parts = rel_path.split(os.sep)
+        if len(parts) > 1:
+            category = parts[0]
+        else:
+            category = "general"
+        categories.setdefault(category, []).append(rel_path)
+    return categories
 
 # ---------------------------------------------------------------------------
 # 1)  Helper – reset GPIO *and* re-initialise the LCD
@@ -2285,11 +2308,52 @@ class DisposableMenu:
         return -1
     # Génération à chaud du sous-menu Payload -------------------------------
     def _build_payload_menu(self):
-        """Crée (ou rafraîchit) le menu 'ap' en fonction du contenu du dossier."""
-        self.menu["ap"] = tuple(
-            [f" {script[:-3]}", partial(exec_payload, script)]
-            for script in list_payloads()
-        ) or ([" <vide>", lambda: None],)  # si aucun script n'est présent
+        """Crée (ou rafraîchit) le menu 'ap' par catégories."""
+        category_order = [
+            "reconnaissance",
+            "interception",
+            "evil_portal",
+            "exfiltration",
+            "remote_access",
+            "general",
+            "examples",
+            "games",
+            "virtual_pager",
+            "incident_response",
+            "known_unstable",
+            "prank",
+        ]
+
+        def _label(cat: str) -> str:
+            return f" {cat.replace('_', ' ').title()}"
+
+        categories = list_payloads_by_category()
+        menu_items = []
+
+        for cat in category_order:
+            scripts = categories.get(cat, [])
+            if not scripts:
+                continue
+            key = f"ap_{cat}"
+            self.menu[key] = tuple(
+                [f" {os.path.splitext(os.path.basename(path))[0]}", partial(exec_payload, path)]
+                for path in scripts
+            )
+            menu_items.append([_label(cat), key])
+
+        # Add any unexpected categories at the end
+        for cat in sorted(categories.keys()):
+            if cat in category_order:
+                continue
+            scripts = categories[cat]
+            key = f"ap_{cat}"
+            self.menu[key] = tuple(
+                [f" {os.path.splitext(os.path.basename(path))[0]}", partial(exec_payload, path)]
+                for path in scripts
+            )
+            menu_items.append([_label(cat), key])
+
+        self.menu["ap"] = tuple(menu_items) or ([" <vide>", lambda: None],)
 
     def __init__(self):
         # cette fois, `default` est déjà instancié → pas d'erreur
