@@ -34,6 +34,7 @@
   const themeNameEl = document.getElementById('themeName');
   const navDevice = document.getElementById('navDevice');
   const navLoot = document.getElementById('navLoot');
+  const navPayloads = document.getElementById('navPayloads');
   const themesToggle = document.getElementById('themesToggle');
   const themesList = document.getElementById('themesList');
   const themeButtons = document.querySelectorAll('[data-theme]');
@@ -42,6 +43,7 @@
   const menuToggle = document.getElementById('menuToggle');
   const deviceTab = document.getElementById('deviceTab');
   const lootTab = document.getElementById('lootTab');
+  const payloadsTab = document.getElementById('payloadsTab');
   const lootList = document.getElementById('lootList');
   const lootPathEl = document.getElementById('lootPath');
   const lootUpBtn = document.getElementById('lootUp');
@@ -52,6 +54,11 @@
   const lootPreviewClose = document.getElementById('lootPreviewClose');
   const lootPreviewDownload = document.getElementById('lootPreviewDownload');
   const lootPreviewMeta = document.getElementById('lootPreviewMeta');
+  const payloadCategories = document.getElementById('payloadCategories');
+  const payloadList = document.getElementById('payloadList');
+  const payloadStatus = document.getElementById('payloadStatus');
+  const payloadsRefresh = document.getElementById('payloadsRefresh');
+  const payloadStop = document.getElementById('payloadStop');
 
   // Build WS URL from current page host. Supports optional token in page URL (?token=...)
   function getWsUrl(){
@@ -78,12 +85,17 @@
   const pressed = new Set(); // keyboard pressed state
   let activeTab = 'device';
   let lootState = { path: '', parent: '' };
+  let payloadState = { categories: [], active: null };
 
   function setStatus(txt){
     if (statusEl) statusEl.textContent = txt;
     if (statusEls && statusEls.length) {
       statusEls.forEach(el => { el.textContent = txt; });
     }
+  }
+
+  function setPayloadStatus(txt){
+    if (payloadStatus) payloadStatus.textContent = txt;
   }
 
   // Handheld themes (frontend-only)
@@ -136,9 +148,11 @@
     activeTab = tab;
     const isDevice = tab === 'device';
     if (deviceTab) deviceTab.classList.toggle('hidden', !isDevice);
-    if (lootTab) lootTab.classList.toggle('hidden', isDevice);
+    if (lootTab) lootTab.classList.toggle('hidden', tab !== 'loot');
+    if (payloadsTab) payloadsTab.classList.toggle('hidden', tab !== 'payloads');
     setNavActive(navDevice, isDevice);
-    setNavActive(navLoot, !isDevice);
+    setNavActive(navLoot, tab === 'loot');
+    setNavActive(navPayloads, tab === 'payloads');
     setSidebarOpen(false);
   }
 
@@ -329,11 +343,94 @@
     }
   }
 
+  async function loadPayloads(){
+    setPayloadStatus('Loading...');
+    try{
+      const url = getApiUrl('/api/payloads/list');
+      const res = await fetch(url, { cache: 'no-store' });
+      const data = await res.json();
+      if (!res.ok){
+        throw new Error(data && data.error ? data.error : 'payloads_failed');
+      }
+      payloadState.categories = data.categories || [];
+      if (!payloadState.active && payloadState.categories.length){
+        payloadState.active = payloadState.categories[0].id;
+      }
+      renderPayloadCategories();
+      renderPayloadList();
+      setPayloadStatus('Ready');
+    }catch(e){
+      setPayloadStatus('Failed to load');
+      if (payloadCategories) payloadCategories.innerHTML = '';
+      if (payloadList) payloadList.innerHTML = '<div class="text-xs text-slate-500">No payloads available.</div>';
+    }
+  }
+
+  function renderPayloadCategories(){
+    if (!payloadCategories) return;
+    const cats = payloadState.categories || [];
+    if (!cats.length){
+      payloadCategories.innerHTML = '<div class="text-xs text-slate-500">No categories.</div>';
+      return;
+    }
+    payloadCategories.innerHTML = cats.map(cat => {
+      const active = payloadState.active === cat.id;
+      const base = 'w-full px-3 py-2 rounded-xl text-left text-xs font-semibold border transition';
+      const cls = active
+        ? 'border-emerald-400/30 bg-emerald-500/10 text-emerald-300 shadow-[0_0_12px_rgba(16,185,129,0.12)]'
+        : 'border-slate-400/20 bg-slate-800/40 text-slate-300 hover:text-white hover:bg-slate-700/50';
+      return `<button type="button" data-cat="${cat.id}" class="${base} ${cls}">${cat.label}</button>`;
+    }).join('');
+  }
+
+  function renderPayloadList(){
+    if (!payloadList) return;
+    const cat = payloadState.categories.find(c => c.id === payloadState.active);
+    if (!cat || !cat.items || !cat.items.length){
+      payloadList.innerHTML = '<div class="text-xs text-slate-500">No payloads in this category.</div>';
+      return;
+    }
+    payloadList.innerHTML = cat.items.map(item => `
+      <div class="rounded-2xl border border-slate-800/70 bg-slate-950/40 p-3 flex flex-col gap-2 shadow-[0_0_12px_rgba(15,23,42,0.35)]">
+        <div class="text-sm font-semibold text-slate-100">${item.name}</div>
+        <div class="text-[11px] text-slate-500">${cat.label}</div>
+        <div class="flex items-center gap-2">
+          <button type="button" data-start="${item.path}" class="px-3 py-1.5 text-xs rounded-lg bg-emerald-600/80 border border-emerald-300/30 text-white hover:bg-emerald-500/80 transition">Start</button>
+          <button type="button" data-stop="1" class="px-3 py-1.5 text-xs rounded-lg bg-slate-800/70 border border-slate-600/40 text-slate-200 hover:bg-slate-700/70 transition">Stop</button>
+        </div>
+      </div>
+    `).join('');
+  }
+
+  async function startPayload(path){
+    setPayloadStatus('Starting...');
+    try{
+      const url = getApiUrl('/api/payloads/start');
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path })
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok){
+        throw new Error(data && data.error ? data.error : 'start_failed');
+      }
+      setPayloadStatus('Launched');
+    }catch(e){
+      setPayloadStatus('Start failed');
+    }
+  }
+
   function sendInput(button, state){
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     try{
       ws.send(JSON.stringify({ type: 'input', button, state }));
     }catch{}
+  }
+
+  function tapInput(button){
+    sendInput(button, 'press');
+    setTimeout(() => sendInput(button, 'release'), 120);
   }
 
   // Mouse/touch buttons
@@ -399,6 +496,13 @@
       lootList.dataset.loaded = '1';
     }
   });
+  if (navPayloads) navPayloads.addEventListener('click', () => {
+    setActiveTab('payloads');
+    if (payloadList && !payloadList.dataset.loaded){
+      loadPayloads();
+      payloadList.dataset.loaded = '1';
+    }
+  });
   if (themesToggle) themesToggle.addEventListener('click', () => {
     if (themesList) themesList.classList.toggle('hidden');
   });
@@ -428,6 +532,29 @@
       previewLootFile(nextPath, name);
     }
   });
+  if (payloadCategories) payloadCategories.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-cat]');
+    if (!btn) return;
+    const id = btn.getAttribute('data-cat');
+    if (!id) return;
+    payloadState.active = id;
+    renderPayloadCategories();
+    renderPayloadList();
+  });
+  if (payloadList) payloadList.addEventListener('click', (e) => {
+    const startBtn = e.target.closest('[data-start]');
+    if (startBtn){
+      const path = startBtn.getAttribute('data-start');
+      if (path) startPayload(path);
+      return;
+    }
+    const stopBtn = e.target.closest('[data-stop]');
+    if (stopBtn){
+      tapInput('KEY3');
+    }
+  });
+  if (payloadsRefresh) payloadsRefresh.addEventListener('click', () => loadPayloads());
+  if (payloadStop) payloadStop.addEventListener('click', () => tapInput('KEY3'));
   if (lootPreviewClose) lootPreviewClose.addEventListener('click', closePreview);
   if (lootPreview) lootPreview.addEventListener('click', (e) => {
     if (e.target === lootPreview) closePreview();

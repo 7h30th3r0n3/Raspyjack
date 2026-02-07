@@ -285,6 +285,7 @@
       <nav class="p-3 space-y-2">
         <button id="navDevice" type="button" class="w-full px-3 py-2 rounded-xl text-left text-sm font-semibold border border-emerald-400/30 bg-emerald-500/10 text-emerald-300 shadow-[0_0_16px_rgba(16,185,129,0.15)]">Device</button>
         <button id="navLoot" type="button" class="w-full px-3 py-2 rounded-xl text-left text-sm font-semibold border border-slate-400/20 bg-slate-800/40 text-slate-300 hover:text-white hover:bg-slate-700/50 transition">Loot</button>
+        <button id="navPayloads" type="button" class="w-full px-3 py-2 rounded-xl text-left text-sm font-semibold border border-slate-400/20 bg-slate-800/40 text-slate-300 hover:text-white hover:bg-slate-700/50 transition">Payloads</button>
 
         <div class="pt-2">
           <button id="themesToggle" type="button" class="w-full px-3 py-2 rounded-xl text-left text-sm font-semibold border border-slate-400/20 bg-slate-800/40 text-slate-300 hover:text-white hover:bg-slate-700/50 transition">
@@ -420,6 +421,33 @@
             <!-- items injected by app.js -->
           </div>
           <div class="mt-3 text-[11px] text-slate-500">Tip: click folders to navigate, click files to preview or download.</div>
+        </div>
+      </div>
+
+      <!-- Payloads -->
+      <div id="payloadsTab" class="hidden">
+        <div class="rounded-3xl border border-slate-700/60 bg-slate-900/40 backdrop-blur p-4 md:p-5 max-w-5xl mx-auto shadow-[0_0_30px_rgba(15,23,42,0.35)]">
+          <div class="flex items-center justify-between mb-4">
+            <div class="text-sm font-semibold text-emerald-300">Payloads</div>
+            <div class="flex items-center gap-2">
+              <div id="payloadStatus" class="text-[11px] text-slate-400">Ready</div>
+              <button id="payloadsRefresh" type="button" class="px-3 py-1.5 text-xs rounded-lg bg-slate-800/70 border border-slate-600/40 text-slate-200 hover:bg-slate-700/70 transition">Refresh</button>
+            </div>
+          </div>
+          <div class="grid md:grid-cols-[200px_1fr] gap-4">
+            <div id="payloadCategories" class="space-y-2">
+              <!-- category buttons injected by app.js -->
+            </div>
+            <div>
+              <div id="payloadList" class="grid gap-3 md:grid-cols-2">
+                <!-- payload cards injected by app.js -->
+              </div>
+              <div class="mt-4 flex items-center justify-between gap-2">
+                <div class="text-[11px] text-slate-500">Start launches the payload on the device. Stop sends KEY3.</div>
+                <button id="payloadStop" type="button" class="px-3 py-1.5 text-xs rounded-lg bg-rose-600/80 border border-rose-300/30 text-white hover:bg-rose-500/80 transition">Stop (KEY3)</button>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </main>

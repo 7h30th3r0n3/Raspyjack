@@ -29,6 +29,7 @@ from urllib.parse import parse_qs, urlparse, unquote
 ROOT_DIR = Path(__file__).resolve().parent
 WEB_DIR = ROOT_DIR / "web"
 LOOT_DIR = ROOT_DIR / "loot"
+PAYLOADS_DIR = ROOT_DIR / "payloads"
 
 HOST = os.environ.get("RJ_WEB_HOST", "0.0.0.0")
 PORT = int(os.environ.get("RJ_WEB_PORT", "8080"))
@@ -83,10 +84,14 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         parsed = urlparse(self.path)
-        if parsed.path.startswith("/api/loot/"):
+        if parsed.path.startswith("/api/loot/") or parsed.path.startswith("/api/payloads/"):
             query = parse_qs(parsed.query or "")
             if not _auth_ok(query):
                 _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
+                return
+
+            if parsed.path == "/api/payloads/list":
+                self._handle_payloads_list()
                 return
 
             if parsed.path == "/api/loot/list":
@@ -103,6 +108,17 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
             return
 
         super().do_GET()
+
+    def do_POST(self):
+        parsed = urlparse(self.path)
+        if parsed.path == "/api/payloads/start":
+            query = parse_qs(parsed.query or "")
+            if not _auth_ok(query):
+                _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
+                return
+            self._handle_payloads_start()
+            return
+        _json_response(self, {"error": "not found"}, status=HTTPStatus.NOT_FOUND)
 
     def _handle_loot_list(self, query: dict) -> None:
         raw = unquote(query.get("path", [""])[0])
@@ -137,6 +153,100 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
             "parent": "" if parent == "." else parent,
             "items": items,
         })
+
+    def _handle_payloads_list(self) -> None:
+        categories: dict[str, list[dict]] = {}
+        if not PAYLOADS_DIR.exists():
+            _json_response(self, {"categories": []})
+            return
+
+        for root, dirs, files in os.walk(PAYLOADS_DIR):
+            dirs[:] = [d for d in dirs if not d.startswith(".") and d != "__pycache__"]
+            rel_dir = os.path.relpath(root, PAYLOADS_DIR)
+            category = rel_dir.split(os.sep)[0] if rel_dir != "." else "general"
+            for name in files:
+                if not name.endswith(".py") or name.startswith("_"):
+                    continue
+                rel_path = os.path.join(rel_dir, name) if rel_dir != "." else name
+                categories.setdefault(category, []).append({
+                    "name": os.path.splitext(name)[0],
+                    "path": rel_path.replace("\\", "/"),
+                })
+
+        order = [
+            "reconnaissance",
+            "interception",
+            "evil_portal",
+            "exfiltration",
+            "remote_access",
+            "general",
+            "examples",
+            "games",
+            "virtual_pager",
+            "incident_response",
+            "known_unstable",
+            "prank",
+        ]
+
+        payload_categories = []
+        for cat in order:
+            items = categories.get(cat, [])
+            if not items:
+                continue
+            payload_categories.append({
+                "id": cat,
+                "label": cat.replace("_", " ").title(),
+                "items": sorted(items, key=lambda x: x["name"].lower()),
+            })
+
+        for cat in sorted(categories.keys()):
+            if cat in order:
+                continue
+            payload_categories.append({
+                "id": cat,
+                "label": cat.replace("_", " ").title(),
+                "items": sorted(categories[cat], key=lambda x: x["name"].lower()),
+            })
+
+        _json_response(self, {"categories": payload_categories})
+
+    def _handle_payloads_start(self) -> None:
+        try:
+            length = int(self.headers.get("Content-Length", "0") or "0")
+        except Exception:
+            length = 0
+        try:
+            raw = self.rfile.read(length) if length > 0 else b"{}"
+            body = json.loads(raw.decode("utf-8", "ignore")) if raw else {}
+        except Exception:
+            _json_response(self, {"error": "invalid json"}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        rel_path = str(body.get("path", "")).strip().lstrip("/").replace("\\", "/")
+        if not rel_path.endswith(".py"):
+            _json_response(self, {"error": "invalid payload path"}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        target = (PAYLOADS_DIR / rel_path).resolve()
+        try:
+            payloads_root = PAYLOADS_DIR.resolve()
+        except FileNotFoundError:
+            payloads_root = PAYLOADS_DIR
+        if payloads_root not in target.parents or not target.exists():
+            _json_response(self, {"error": "not found"}, status=HTTPStatus.NOT_FOUND)
+            return
+
+        try:
+            request_path = Path("/dev/shm/rj_payload_request.json")
+            request_path.write_text(json.dumps({
+                "action": "start",
+                "path": rel_path,
+            }))
+        except Exception as exc:
+            _json_response(self, {"error": f"request failed: {exc}"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+
+        _json_response(self, {"ok": True})
 
     def _handle_loot_download(self, query: dict) -> None:
         raw = unquote(query.get("path", [""])[0])

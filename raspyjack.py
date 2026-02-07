@@ -2612,6 +2612,24 @@ def boot_health_check():
         pass
 
 
+def _check_payload_request():
+    """
+    Check for a WebUI payload request file and return a payload path if present.
+    """
+    request_path = "/dev/shm/rj_payload_request.json"
+    try:
+        if not os.path.isfile(request_path):
+            return None
+        with open(request_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        os.remove(request_path)
+        if data.get("action") == "start" and data.get("path"):
+            return str(data["path"])
+    except Exception:
+        pass
+    return None
+
+
 def main():
     # Draw background once
     try:
@@ -2630,6 +2648,10 @@ def main():
     # Menu handling
     # Running functions from menu structure
     while True:
+        requested = _check_payload_request()
+        if requested:
+            exec_payload(requested)
+            continue
         # Use different view modes only for main menu ("a"), list view for all submenus
         if m.which == "a" and m.view_mode in ["grid", "carousel"]:
             if m.view_mode == "grid":
