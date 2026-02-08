@@ -271,8 +271,13 @@
       });
       term.open(terminalEl);
       term.onData(data => sendShellInput(data));
-      term.onFocus(() => { terminalHasFocus = true; });
-      term.onBlur(() => { terminalHasFocus = false; });
+      if (terminalEl){
+        terminalEl.addEventListener('focusin', () => { terminalHasFocus = true; });
+        terminalEl.addEventListener('focusout', () => { terminalHasFocus = false; });
+        terminalEl.addEventListener('mousedown', () => {
+          try { term.focus(); } catch {}
+        });
+      }
       term.write('RaspyJack shell ready.\\r\\n');
     }
     return term;
