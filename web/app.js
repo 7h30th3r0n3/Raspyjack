@@ -265,7 +265,7 @@
         cursorBlink: true,
         fontSize: 13,
         theme: {
-          background: '#020617',
+          background: 'transparent',
           foreground: '#e2e8f0',
           cursor: '#94a3b8'
         }
