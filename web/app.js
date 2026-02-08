@@ -56,6 +56,10 @@
   const payloadStatus = document.getElementById('payloadStatus');
   const payloadStatusDot = document.getElementById('payloadStatusDot');
   const payloadsRefresh = document.getElementById('payloadsRefresh');
+  const terminalEl = document.getElementById('terminal');
+  const shellStatusEl = document.getElementById('shellStatus');
+  const shellConnectBtn = document.getElementById('shellConnect');
+  const shellDisconnectBtn = document.getElementById('shellDisconnect');
 
   // Build WS URL from current page host. Supports optional token in page URL (?token=...)
   function getWsUrl(){
@@ -83,6 +87,10 @@
   let activeTab = 'device';
   let lootState = { path: '', parent: '' };
   let payloadState = { categories: [], open: {}, activePath: null };
+  let term = null;
+  let shellOpen = false;
+  let terminalHasFocus = false;
+  let shellWanted = false;
 
   function setStatus(txt){
     if (statusEl) statusEl.textContent = txt;
@@ -97,6 +105,10 @@
       const active = /running|starting|stopping|launched/i.test(String(txt || ''));
       payloadStatusDot.classList.toggle('running', active);
     }
+  }
+
+  function setShellStatus(txt){
+    if (shellStatusEl) shellStatusEl.textContent = txt;
   }
 
   // Handheld themes (frontend-only)
@@ -176,6 +188,9 @@
 
     ws.onopen = () => {
       setStatus('Connected');
+      if (shellWanted) {
+        sendShellOpen();
+      }
     };
 
     ws.onmessage = (ev) => {
@@ -198,12 +213,30 @@
             } catch {}
           };
           img.src = 'data:image/jpeg;base64,' + msg.data;
+          return;
+        }
+        if (msg.type === 'shell_ready'){
+          shellOpen = true;
+          setShellStatus('Connected');
+          sendShellResize();
+          return;
+        }
+        if (msg.type === 'shell_out' && msg.data){
+          ensureTerminal();
+          if (term) term.write(msg.data);
+          return;
+        }
+        if (msg.type === 'shell_exit'){
+          shellOpen = false;
+          setShellStatus('Exited');
         }
       }catch{}
     };
 
     ws.onclose = () => {
       setStatus('Disconnected – reconnecting…');
+      setShellStatus('Disconnected');
+      shellOpen = false;
       scheduleReconnect();
     };
 
@@ -218,6 +251,68 @@
       reconnectTimer = null;
       connect();
     }, 1000);
+  }
+
+  function ensureTerminal(){
+    if (!terminalEl) return null;
+    if (!window.Terminal){
+      setShellStatus('xterm missing');
+      return null;
+    }
+    if (!term){
+      term = new window.Terminal({
+        cursorBlink: true,
+        fontSize: 13,
+        theme: {
+          background: '#020617',
+          foreground: '#e2e8f0',
+          cursor: '#94a3b8'
+        }
+      });
+      term.open(terminalEl);
+      term.onData(data => sendShellInput(data));
+      term.onFocus(() => { terminalHasFocus = true; });
+      term.onBlur(() => { terminalHasFocus = false; });
+      term.write('RaspyJack shell ready.\\r\\n');
+    }
+    return term;
+  }
+
+  function sendShellInput(data){
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    if (!shellOpen) return;
+    try{
+      ws.send(JSON.stringify({ type: 'shell_in', data }));
+    }catch{}
+  }
+
+  function sendShellOpen(){
+    shellWanted = true;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ensureTerminal();
+    setShellStatus('Opening...');
+    try{
+      ws.send(JSON.stringify({ type: 'shell_open' }));
+    }catch{}
+  }
+
+  function sendShellClose(){
+    shellWanted = false;
+    if (ws && ws.readyState === WebSocket.OPEN){
+      try{
+        ws.send(JSON.stringify({ type: 'shell_close' }));
+      }catch{}
+    }
+    shellOpen = false;
+    setShellStatus('Closed');
+  }
+
+  function sendShellResize(){
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    if (!shellOpen || !term) return;
+    try{
+      ws.send(JSON.stringify({ type: 'shell_resize', cols: term.cols, rows: term.rows }));
+    }catch{}
   }
 
   function formatBytes(bytes){
@@ -493,6 +588,7 @@
 
   function bindKeyboard(){
     window.addEventListener('keydown', (e)=>{
+      if (terminalHasFocus) return;
       const btn = KEYMAP.get(e.code) || KEYMAP.get(e.key);
       if (!btn) return;
       if (pressed.has(btn)) return; // avoid repeats
@@ -501,6 +597,7 @@
       e.preventDefault();
     });
     window.addEventListener('keyup', (e)=>{
+      if (terminalHasFocus) return;
       const btn = KEYMAP.get(e.code) || KEYMAP.get(e.key);
       if (!btn) return;
       pressed.delete(btn);
@@ -516,6 +613,11 @@
 
   bindButtons();
   bindKeyboard();
+  if (shellConnectBtn) shellConnectBtn.addEventListener('click', sendShellOpen);
+  if (shellDisconnectBtn) shellDisconnectBtn.addEventListener('click', sendShellClose);
+  window.addEventListener('resize', () => {
+    if (shellOpen) sendShellResize();
+  });
   if (navDevice) navDevice.addEventListener('click', () => setActiveTab('device'));
   if (navLoot) navLoot.addEventListener('click', () => {
     setActiveTab('loot');

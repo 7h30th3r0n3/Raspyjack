@@ -10,6 +10,11 @@ import json
 import logging
 import os
 import socket
+import subprocess
+import termios
+import fcntl
+import struct
+import pty
 from pathlib import Path
 from typing import Set
 from urllib.parse import urlparse, parse_qs
@@ -24,6 +29,8 @@ PORT = int(os.environ.get("RJ_WS_PORT", "8765"))
 FPS = float(os.environ.get("RJ_FPS", "10"))
 TOKEN = os.environ.get("RJ_WS_TOKEN")
 INPUT_SOCK = os.environ.get("RJ_INPUT_SOCK", "/dev/shm/rj_input.sock")
+SHELL_CMD = os.environ.get("RJ_SHELL_CMD", "/bin/bash")
+SHELL_CWD = os.environ.get("RJ_SHELL_CWD", "/")
 
 SEND_TIMEOUT = 0.5
 PING_INTERVAL = 15
@@ -39,6 +46,112 @@ log = logging.getLogger("rj-ws")
 # --------------------------- Client Registry ---------------------------------
 clients: Set = set()
 clients_lock = asyncio.Lock()
+
+
+# ----------------------------- Shell Session ----------------------------------
+class ShellSession:
+    def __init__(self, loop: asyncio.AbstractEventLoop, ws):
+        self.loop = loop
+        self.ws = ws
+        self.master_fd, self.slave_fd = pty.openpty()
+        env = os.environ.copy()
+        env.setdefault("TERM", "xterm-256color")
+        self.proc = subprocess.Popen(
+            [SHELL_CMD],
+            stdin=self.slave_fd,
+            stdout=self.slave_fd,
+            stderr=self.slave_fd,
+            cwd=SHELL_CWD,
+            env=env,
+            close_fds=True,
+        )
+        os.close(self.slave_fd)
+        os.set_blocking(self.master_fd, False)
+        self.loop.add_reader(self.master_fd, self._on_output)
+        self._closed = False
+        self._exit_sent = False
+        self._wait_task = self.loop.create_task(self._wait_exit())
+
+    async def _wait_exit(self):
+        try:
+            await asyncio.to_thread(self.proc.wait)
+        except Exception:
+            return
+        await self._send_exit()
+
+    def _on_output(self):
+        if self._closed:
+            return
+        try:
+            data = os.read(self.master_fd, 4096)
+            if not data:
+                self.loop.create_task(self._send_exit())
+                return
+            msg = json.dumps({"type": "shell_out", "data": data.decode("utf-8", "ignore")})
+            self.loop.create_task(self._safe_send(msg))
+        except Exception:
+            self.loop.create_task(self._send_exit())
+
+    async def _safe_send(self, msg: str):
+        try:
+            await self.ws.send(msg)
+        except Exception:
+            self.close()
+
+    async def _send_exit(self):
+        if self._exit_sent:
+            return
+        self._exit_sent = True
+        code = None
+        try:
+            code = self.proc.poll()
+        except Exception:
+            pass
+        try:
+            await self.ws.send(json.dumps({"type": "shell_exit", "code": code}))
+        except Exception:
+            pass
+        self.close()
+
+    def write(self, data: str):
+        if self._closed:
+            return
+        try:
+            os.write(self.master_fd, data.encode())
+        except Exception:
+            self.loop.create_task(self._send_exit())
+
+    def resize(self, cols: int, rows: int):
+        if self._closed:
+            return
+        try:
+            size = struct.pack("HHHH", rows, cols, 0, 0)
+            fcntl.ioctl(self.master_fd, termios.TIOCSWINSZ, size)
+        except Exception:
+            pass
+
+    def close(self):
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self.loop.remove_reader(self.master_fd)
+        except Exception:
+            pass
+        try:
+            os.close(self.master_fd)
+        except Exception:
+            pass
+        try:
+            if self.proc.poll() is None:
+                self.proc.terminate()
+        except Exception:
+            pass
+        try:
+            if self._wait_task:
+                self._wait_task.cancel()
+        except Exception:
+            pass
 
 
 # -------------------------- Frame Broadcasting --------------------------------
@@ -132,6 +245,8 @@ async def handle_client(ws):
     async with clients_lock:
         clients.add(ws)
     log.info("Client connected (%d online)", len(clients))
+    loop = asyncio.get_running_loop()
+    shell = None
 
     try:
         async for raw in ws:
@@ -145,10 +260,44 @@ async def handle_client(ws):
                 state = data.get("state")
                 if btn and state in ("press", "release"):
                     send_input_event(btn, state)
+                continue
+
+            if data.get("type") == "shell_open":
+                if shell:
+                    shell.close()
+                shell = ShellSession(loop, ws)
+                try:
+                    await ws.send(json.dumps({"type": "shell_ready"}))
+                except Exception:
+                    shell.close()
+                continue
+
+            if data.get("type") == "shell_in":
+                if shell:
+                    payload = data.get("data", "")
+                    if payload:
+                        shell.write(payload)
+                continue
+
+            if data.get("type") == "shell_resize":
+                if shell:
+                    cols = int(data.get("cols") or 0)
+                    rows = int(data.get("rows") or 0)
+                    if cols > 0 and rows > 0:
+                        shell.resize(cols, rows)
+                continue
+
+            if data.get("type") == "shell_close":
+                if shell:
+                    shell.close()
+                    shell = None
+                continue
 
     except Exception:
         pass
     finally:
+        if shell:
+            shell.close()
         async with clients_lock:
             clients.discard(ws)
         log.info("Client disconnected (%d online)", len(clients))

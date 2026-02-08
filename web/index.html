@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>RaspyJack WebUi</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.5.0/css/xterm.css">
   <style>
     :root { color-scheme: dark; }
     body { background: radial-gradient(1200px 800px at 50% -10%, #0f1b2d 0%, #07090f 55%, #05060a 100%); }
@@ -285,6 +286,16 @@
       animation: payloadPulse 1.2s ease-in-out infinite;
       opacity: 1;
     }
+
+    .terminal-wrap {
+      background: rgba(2, 6, 23, 0.6);
+      border: 1px solid rgba(148, 163, 184, 0.2);
+      border-radius: 16px;
+      overflow: hidden;
+    }
+    .terminal-body {
+      height: 320px;
+    }
   </style>
 </head>
 <body class="min-h-screen text-slate-200">
@@ -438,6 +449,20 @@
         <div class="status-text pager-text text-center text-[10px] mt-1">Connecting…</div>
       </div>
       </div>
+
+      <div class="mt-6 max-w-4xl mx-auto">
+        <div class="terminal-wrap">
+          <div class="flex items-center justify-between px-4 py-3 border-b border-slate-800/70">
+            <div class="text-sm font-semibold text-emerald-300">Terminal</div>
+            <div class="flex items-center gap-2">
+              <div id="shellStatus" class="text-[11px] text-slate-400">Disconnected</div>
+              <button id="shellConnect" type="button" class="px-3 py-1.5 text-xs rounded-lg bg-emerald-600/80 border border-emerald-300/30 text-white hover:bg-emerald-500/80 transition">Open</button>
+              <button id="shellDisconnect" type="button" class="px-3 py-1.5 text-xs rounded-lg bg-slate-800/80 border border-slate-600/40 text-slate-200 hover:bg-slate-700/80 transition">Close</button>
+            </div>
+          </div>
+          <div id="terminal" class="terminal-body"></div>
+        </div>
+      </div>
       </div>
 
       <!-- Loot browser -->
@@ -480,6 +505,7 @@
       </div>
   </div>
 
+  <script src="https://cdn.jsdelivr.net/npm/xterm@5.5.0/lib/xterm.min.js"></script>
   <script src="./app.js"></script>
 </body>
 </html>
