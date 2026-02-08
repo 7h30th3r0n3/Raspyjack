@@ -2247,6 +2247,18 @@ def exec_payload(filename: str) -> None:
     except AttributeError:
         pass
 
+    # Force a clean full-screen redraw to avoid leftover artifacts/border loss
+    try:
+        LCD.LCD_Clear()
+    except Exception:
+        pass
+    try:
+        draw_lock.acquire()
+        draw.rectangle((0, 0, LCD.width, LCD.height), fill=color.background)
+        color.DrawBorder()
+    finally:
+        draw_lock.release()
+
     # rebuild the current menu image (respect current view mode)
     RenderCurrentMenuOnce()
 
