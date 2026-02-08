@@ -664,6 +664,79 @@ def ShowLines(arr,bold=[]):
     finally:
         draw_lock.release()
 
+def RenderMenuWindowOnce(inlist, selected_index=0):
+    """
+    Render a non-interactive menu window with a selected item highlighted.
+    Keeps the selected index visible without shifting the list unexpectedly.
+    """
+    WINDOW = 7
+    if not inlist:
+        inlist = ["Nothing here :(   "]
+        selected_index = 0
+
+    total = len(inlist)
+    index = max(0, min(selected_index, total - 1))
+    offset = 0
+    if index < offset:
+        offset = index
+    elif index >= offset + WINDOW:
+        offset = index - WINDOW + 1
+
+    window = inlist[offset:offset + WINDOW]
+    try:
+        draw_lock.acquire()
+        _draw_toolbar()
+        color.DrawMenuBackground()
+        for i, txt in enumerate(window):
+            fill = color.selected_text if i == (index - offset) else color.text
+            if i == (index - offset):
+                draw.rectangle(
+                    (default.start_text[0] - 5,
+                     default.start_text[1] + default.text_gap * i,
+                     120,
+                     default.start_text[1] + default.text_gap * i + 10),
+                    fill=color.select
+                )
+            # Draw Font Awesome icon if available (only on main menu)
+            if m.which == "a":
+                icon = MENU_ICONS.get(txt, "")
+                if icon:
+                    draw.text(
+                        (default.start_text[0] - 2,
+                         default.start_text[1] + default.text_gap * i),
+                        icon,
+                        font=icon_font,
+                        fill=fill
+                    )
+                    max_w = 120 - (default.start_text[0] + 12)
+                    line = _truncate_to_width(txt, max_w, text_font)
+                    draw.text(
+                        (default.start_text[0] + 12,
+                         default.start_text[1] + default.text_gap * i),
+                        line,
+                        font=text_font,
+                        fill=fill
+                    )
+                else:
+                    draw.text(
+                        (default.start_text[0],
+                         default.start_text[1] + default.text_gap * i),
+                        txt[:m.max_len],
+                        fill=fill
+                    )
+            else:
+                max_w = 120 - default.start_text[0]
+                line = _truncate_to_width(txt, max_w, text_font)
+                draw.text(
+                    (default.start_text[0],
+                     default.start_text[1] + default.text_gap * i),
+                    line,
+                    font=text_font,
+                    fill=fill
+                )
+    finally:
+        draw_lock.release()
+
 def RenderCurrentMenuOnce():
     """
     Render the current menu using the active view mode.
@@ -677,7 +750,7 @@ def RenderCurrentMenuOnce():
         else:
             GetMenuCarousel(inlist)
     else:
-        ShowLines(inlist)
+        RenderMenuWindowOnce(inlist, m.select)
 
 def GetMenuString(inlist, duplicates=False):
     """
