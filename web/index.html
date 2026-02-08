@@ -266,12 +266,31 @@
     }
     .theme-nav-btn:hover { background: rgba(51,65,85,0.8); }
     .theme-label { min-width: 120px; text-align: center; }
+
+    @keyframes payloadPulse {
+      0%   { transform: scale(0.9); opacity: 0.4; }
+      50%  { transform: scale(1.4); opacity: 1; }
+      100% { transform: scale(0.9); opacity: 0.4; }
+    }
+    .payload-status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 9999px;
+      background: rgba(148,163,184,0.5);
+      opacity: 0.6;
+    }
+    .payload-status-dot.running {
+      background: #34d399;
+      box-shadow: 0 0 8px rgba(16,185,129,0.6);
+      animation: payloadPulse 1.2s ease-in-out infinite;
+      opacity: 1;
+    }
   </style>
 </head>
 <body class="min-h-screen text-slate-200">
   <div class="min-h-screen md:flex">
     <div id="sidebarBackdrop" class="hidden fixed inset-0 z-30 bg-black/60"></div>
-    <aside id="sidebar" class="fixed md:static inset-y-0 left-0 z-40 w-64 -translate-x-full md:translate-x-0 transform transition bg-slate-950/60 border-r border-slate-800/70 backdrop-blur">
+    <aside id="sidebar" class="fixed md:static inset-y-0 left-0 z-40 w-64 -translate-x-full md:translate-x-0 transform transition bg-slate-950/60 border-r border-slate-800/70 backdrop-blur flex flex-col">
       <div class="p-4 border-b border-slate-800/70">
         <div class="flex items-center gap-3 select-none">
           <img src="./raspyjack.png" alt="RaspyJack" class="h-10 drop-shadow-[0_0_16px_rgba(18,255,120,0.25)]"/>
@@ -282,7 +301,7 @@
         </div>
       </div>
 
-      <nav class="p-3 space-y-2">
+      <nav class="p-3 space-y-2 flex-1 min-h-0 overflow-y-auto overscroll-contain">
         <button id="navDevice" type="button" class="w-full px-3 py-2 rounded-xl text-left text-sm font-semibold border border-emerald-400/30 bg-emerald-500/10 text-emerald-300 shadow-[0_0_16px_rgba(16,185,129,0.15)]">Device</button>
         <button id="navLoot" type="button" class="w-full px-3 py-2 rounded-xl text-left text-sm font-semibold border border-slate-400/20 bg-slate-800/40 text-slate-300 hover:text-white hover:bg-slate-700/50 transition">Loot</button>
 
@@ -302,7 +321,10 @@
           <div class="flex items-center justify-between px-3 pb-2">
             <div class="text-xs font-semibold text-emerald-300">Payloads</div>
             <div class="flex items-center gap-2">
-              <div id="payloadStatus" class="text-[10px] text-slate-400">Ready</div>
+              <div class="flex items-center gap-1">
+                <span id="payloadStatusDot" class="payload-status-dot" aria-hidden="true"></span>
+                <div id="payloadStatus" class="text-[10px] text-slate-400">Ready</div>
+              </div>
               <button id="payloadsRefresh" type="button" class="px-2 py-1 text-[10px] rounded-md bg-slate-800/70 border border-slate-600/40 text-slate-200 hover:bg-slate-700/70 transition">Refresh</button>
             </div>
           </div>

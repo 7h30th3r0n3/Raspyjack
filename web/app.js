@@ -54,6 +54,7 @@
   const lootPreviewMeta = document.getElementById('lootPreviewMeta');
   const payloadSidebar = document.getElementById('payloadSidebar');
   const payloadStatus = document.getElementById('payloadStatus');
+  const payloadStatusDot = document.getElementById('payloadStatusDot');
   const payloadsRefresh = document.getElementById('payloadsRefresh');
 
   // Build WS URL from current page host. Supports optional token in page URL (?token=...)
@@ -92,6 +93,10 @@
 
   function setPayloadStatus(txt){
     if (payloadStatus) payloadStatus.textContent = txt;
+    if (payloadStatusDot){
+      const active = /running|starting|stopping|launched/i.test(String(txt || ''));
+      payloadStatusDot.classList.toggle('running', active);
+    }
   }
 
   // Handheld themes (frontend-only)
@@ -347,9 +352,9 @@
         throw new Error(data && data.error ? data.error : 'payloads_failed');
       }
       payloadState.categories = data.categories || [];
-      payloadState.categories.forEach(cat => {
+      payloadState.categories.forEach((cat, idx) => {
         if (payloadState.open[cat.id] === undefined) {
-          payloadState.open[cat.id] = true;
+          payloadState.open[cat.id] = idx === 0;
         }
       });
       renderPayloadSidebar();
