@@ -88,6 +88,7 @@
   let lootState = { path: '', parent: '' };
   let payloadState = { categories: [], open: {}, activePath: null };
   let term = null;
+  let fitAddon = null;
   let shellOpen = false;
   let terminalHasFocus = false;
   let shellWanted = false;
@@ -269,6 +270,10 @@
           cursor: '#94a3b8'
         }
       });
+      if (window.FitAddon && window.FitAddon.FitAddon){
+        fitAddon = new window.FitAddon.FitAddon();
+        term.loadAddon(fitAddon);
+      }
       term.open(terminalEl);
       term.onData(data => sendShellInput(data));
       if (terminalEl){
@@ -277,6 +282,9 @@
         terminalEl.addEventListener('mousedown', () => {
           try { term.focus(); } catch {}
         });
+      }
+      if (fitAddon){
+        try { fitAddon.fit(); } catch {}
       }
       term.write('RaspyJack shell ready.\\r\\n');
     }
@@ -315,6 +323,9 @@
   function sendShellResize(){
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     if (!shellOpen || !term) return;
+    if (fitAddon){
+      try { fitAddon.fit(); } catch {}
+    }
     try{
       ws.send(JSON.stringify({ type: 'shell_resize', cols: term.cols, rows: term.rows }));
     }catch{}
