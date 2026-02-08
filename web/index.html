@@ -304,6 +304,20 @@
     .terminal-body .xterm-scroll-area {
       background: transparent !important;
     }
+    .terminal-body .xterm-viewport {
+      scrollbar-width: thin;
+      scrollbar-color: rgba(148, 163, 184, 0.25) transparent;
+    }
+    .terminal-body .xterm-viewport::-webkit-scrollbar {
+      width: 8px;
+    }
+    .terminal-body .xterm-viewport::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    .terminal-body .xterm-viewport::-webkit-scrollbar-thumb {
+      background: rgba(148, 163, 184, 0.25);
+      border-radius: 8px;
+    }
   </style>
 </head>
 <body class="min-h-screen text-slate-200">
