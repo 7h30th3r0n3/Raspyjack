@@ -288,10 +288,13 @@
     }
 
     .terminal-wrap {
-      background: rgba(2, 6, 23, 0.6);
-      border: 1px solid rgba(148, 163, 184, 0.2);
-      border-radius: 16px;
+      background: transparent;
+      border: none;
+      border-radius: 0;
       overflow: hidden;
+    }
+    .terminal-divider {
+      border-right: 1px solid rgba(148, 163, 184, 0.2);
     }
     .terminal-body {
       height: 320px;
@@ -353,7 +356,23 @@
 
       <!-- Device card -->
       <div id="deviceTab" class="block">
-        <div id="deviceShell" data-theme="neon" class="device-shell theme-neon rounded-3xl p-4 md:p-5 w-fit mx-auto">
+        <div class="flex flex-col md:flex-row md:items-start md:gap-6">
+          <div class="md:order-1 order-2 flex-1 min-w-0">
+            <div class="terminal-wrap terminal-divider md:pr-6">
+              <div class="flex items-center justify-between px-4 py-3 border-b border-slate-800/70">
+                <div class="text-sm font-semibold text-emerald-300">Terminal</div>
+                <div class="flex items-center gap-2">
+                  <div id="shellStatus" class="text-[11px] text-slate-400">Disconnected</div>
+                  <button id="shellConnect" type="button" class="px-3 py-1.5 text-xs rounded-lg bg-emerald-600/80 border border-emerald-300/30 text-white hover:bg-emerald-500/80 transition">Open</button>
+                  <button id="shellDisconnect" type="button" class="px-3 py-1.5 text-xs rounded-lg bg-slate-800/80 border border-slate-600/40 text-slate-200 hover:bg-slate-700/80 transition">Close</button>
+                </div>
+              </div>
+              <div id="terminal" class="terminal-body"></div>
+            </div>
+          </div>
+
+          <div class="md:order-2 order-1 flex justify-center md:justify-end md:pl-6">
+            <div id="deviceShell" data-theme="neon" class="device-shell theme-neon rounded-3xl p-4 md:p-5 w-fit mx-auto md:mx-0">
       <div class="pager-clip" aria-hidden="true"></div>
       <div class="pager-brand">RaspyJack P200</div>
       <div class="pager-speaker" aria-hidden="true">
@@ -447,20 +466,7 @@
         </div>
         <div class="pager-text text-center text-[11px] mt-4">OK = Enter · KEY3 = Esc</div>
         <div class="status-text pager-text text-center text-[10px] mt-1">Connecting…</div>
-      </div>
-      </div>
-
-      <div class="mt-6 w-full">
-        <div class="terminal-wrap">
-          <div class="flex items-center justify-between px-4 py-3 border-b border-slate-800/70">
-            <div class="text-sm font-semibold text-emerald-300">Terminal</div>
-            <div class="flex items-center gap-2">
-              <div id="shellStatus" class="text-[11px] text-slate-400">Disconnected</div>
-              <button id="shellConnect" type="button" class="px-3 py-1.5 text-xs rounded-lg bg-emerald-600/80 border border-emerald-300/30 text-white hover:bg-emerald-500/80 transition">Open</button>
-              <button id="shellDisconnect" type="button" class="px-3 py-1.5 text-xs rounded-lg bg-slate-800/80 border border-slate-600/40 text-slate-200 hover:bg-slate-700/80 transition">Close</button>
-            </div>
           </div>
-          <div id="terminal" class="terminal-body"></div>
         </div>
       </div>
       </div>
