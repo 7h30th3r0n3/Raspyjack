@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>RaspyJack Payload IDE</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/monokai.min.css">
   <style>
@@ -145,6 +146,17 @@
       background: rgba(148, 163, 184, 0.25);
       border-radius: 8px;
     }
+
+    /* File type icons */
+    .file-icon {
+      display: inline-block;
+      width: 16px;
+      text-align: center;
+      font-size: 13px;
+      line-height: 1;
+      opacity: 0.85;
+      color: inherit;
+    }
   </style>
 </head>
 <body class="min-h-screen text-slate-200">
@@ -184,7 +196,7 @@
       </section>
 
       <!-- Center: editor -->
-      <section class="md:w-2/4 flex flex-col min-h-[260px]">
+      <section class="md:w-2/4 flex flex-col min-h-[260px] overflow-hidden">
         <div class="px-4 py-2 border-b border-slate-800/70 bg-slate-950/40 flex items-center justify-between gap-3">
           <div class="flex-1 min-w-0">
             <div id="currentPath" class="text-xs text-slate-400 truncate">No file selected</div>
@@ -195,7 +207,7 @@
             <button id="runBtn" class="px-3 py-1.5 rounded-lg bg-emerald-600/80 border border-emerald-300/30 text-white hover:bg-emerald-500/80 disabled:opacity-40 disabled:cursor-not-allowed">Run</button>
           </div>
         </div>
-        <div class="editor-body bg-transparent h-[720px]">
+        <div class="editor-body bg-transparent h-[800px] border-r border-slate-800/70">
           <textarea id="editor" class="w-full h-full"></textarea>
         </div>
       </section>

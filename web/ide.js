@@ -67,6 +67,51 @@
     return new TextEncoder().encode(s).length;
   }
 
+  function getFileIcon(filename){
+    const ext = filename.split('.').pop()?.toLowerCase() || '';
+    const iconMap = {
+      'py': 'fa-brands fa-python',      // Python
+      'js': 'fa-brands fa-js',          // JavaScript
+      'ts': 'fa-brands fa-js',          // TypeScript
+      'json': 'fa-file-code',           // JSON
+      'md': 'fa-file-lines',            // Markdown
+      'txt': 'fa-file-lines',           // Text
+      'log': 'fa-file-lines',           // Log
+      'sh': 'fa-terminal',              // Shell script
+      'bash': 'fa-terminal',            // Bash
+      'yml': 'fa-file-code',            // YAML
+      'yaml': 'fa-file-code',           // YAML
+      'conf': 'fa-gear',                // Config
+      'ini': 'fa-gear',                 // Config
+      'cfg': 'fa-gear',                 // Config
+      'xml': 'fa-file-code',            // XML
+      'html': 'fa-brands fa-html5',     // HTML
+      'css': 'fa-brands fa-css3-alt',   // CSS
+      'php': 'fa-brands fa-php',        // PHP
+      'sql': 'fa-database',             // SQL
+      'c': 'fa-file-code',              // C
+      'cpp': 'fa-file-code',            // C++
+      'h': 'fa-file-code',              // Header
+      'hpp': 'fa-file-code',            // C++ Header
+      'java': 'fa-brands fa-java',      // Java
+      'go': 'fa-file-code',             // Go
+      'rs': 'fa-file-code',             // Rust
+      'rb': 'fa-gem',                   // Ruby
+      'pl': 'fa-file-code',             // Perl
+      'r': 'fa-file-code',              // R
+      'png': 'fa-image',                // Image
+      'jpg': 'fa-image',                // Image
+      'jpeg': 'fa-image',               // Image
+      'gif': 'fa-image',                // Image
+      'svg': 'fa-image',                // SVG
+      'zip': 'fa-file-zipper',          // Archive
+      'tar': 'fa-file-zipper',          // Archive
+      'gz': 'fa-file-zipper',           // Archive
+      'pdf': 'fa-file-pdf',             // PDF
+    };
+    return iconMap[ext] || 'fa-file'; // default file icon
+  }
+
   // ------------------------ File tree state ------------------------
   let treeData = null;
   let expandedPaths = new Set();
@@ -197,10 +242,9 @@
       });
       row.appendChild(toggle);
     } else {
-      const spacer = document.createElement('span');
-      spacer.className = 'mr-1 inline-block';
-      spacer.textContent = '•';
-      row.appendChild(spacer);
+      const icon = document.createElement('i');
+      icon.className = `file-icon mr-1 ${getFileIcon(node.name)}`;
+      row.appendChild(icon);
     }
 
     const label = document.createElement('div');
