@@ -195,7 +195,7 @@
             <button id="runBtn" class="px-3 py-1.5 rounded-lg bg-emerald-600/80 border border-emerald-300/30 text-white hover:bg-emerald-500/80 disabled:opacity-40 disabled:cursor-not-allowed">Run</button>
           </div>
         </div>
-        <div class="editor-body bg-transparent flex-1 min-h-0">
+        <div class="editor-body bg-transparent h-[560px]">
           <textarea id="editor" class="w-full h-full"></textarea>
         </div>
       </section>
@@ -235,6 +235,14 @@
         </div>
       </section>
     </main>
+  </div>
+
+  <!-- Tree context menu -->
+  <div id="treeContextMenu" class="hidden fixed z-50" style="left:0;top:0;">
+    <div id="treeContextMenuPanel" class="rounded-xl border border-slate-700/70 bg-slate-950/95 shadow-[0_0_20px_rgba(15,23,42,0.7)] py-1 text-xs text-slate-100 min-w-[130px]">
+      <button id="ctxRename" class="w-full px-3 py-1.5 text-left hover:bg-slate-800/80">Rename</button>
+      <button id="ctxDelete" class="w-full px-3 py-1.5 text-left text-rose-300 hover:bg-rose-900/50">Delete</button>
+    </div>
   </div>
 
   <!-- Create file/folder modal -->

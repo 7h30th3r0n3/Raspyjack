@@ -20,6 +20,10 @@
   const entryModalConfirm = document.getElementById('entryModalConfirm');
   const entryModalCancel = document.getElementById('entryModalCancel');
   const entryModalClose = document.getElementById('entryModalClose');
+  const treeContextMenu = document.getElementById('treeContextMenu');
+  const treeContextMenuPanel = document.getElementById('treeContextMenuPanel');
+  const ctxRenameBtn = document.getElementById('ctxRename');
+  const ctxDeleteBtn = document.getElementById('ctxDelete');
 
   // ------------------------ Helpers ------------------------
   function setIdeStatus(text){
@@ -62,13 +66,15 @@
   let expandedPaths = new Set();
   let selectedPath = null;   // currently opened file
   let currentFolder = '';    // folder used for create operations
+  let ctxTargetPath = null;
+  let ctxTargetType = null;
 
   function setCurrentFolder(path){
-    currentFolder = path || '';
+    currentFolder = (path === undefined || path === null) ? '' : path;
     if (treeContainer){
       treeContainer.querySelectorAll('.folder-node').forEach(el => {
         const p = el.getAttribute('data-path') || '';
-        el.classList.toggle('active', !!path && p === path);
+        el.classList.toggle('active', p === currentFolder);
       });
     }
   }
@@ -94,6 +100,38 @@
       const folder = parts.join('/');
       setCurrentFolder(folder);
     }
+  }
+
+  function hideContextMenu(){
+    if (treeContextMenu){
+      treeContextMenu.classList.add('hidden');
+    }
+    ctxTargetPath = null;
+    ctxTargetType = null;
+  }
+
+  function showContextMenu(x, y, path, type){
+    if (!treeContextMenu || !treeContextMenuPanel) return;
+    ctxTargetPath = path;
+    ctxTargetType = type;
+    treeContextMenu.classList.remove('hidden');
+    treeContextMenu.style.left = `${x}px`;
+    treeContextMenu.style.top = `${y}px`;
+
+    // Adjust to keep menu on-screen
+    const rect = treeContextMenuPanel.getBoundingClientRect();
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    let left = x;
+    let top = y;
+    if (rect.right > vw){
+      left = Math.max(0, x - rect.width);
+    }
+    if (rect.bottom > vh){
+      top = Math.max(0, y - rect.height);
+    }
+    treeContextMenu.style.left = `${left}px`;
+    treeContextMenu.style.top = `${top}px`;
   }
 
   // ------------------------ CodeMirror editor ------------------------
@@ -554,22 +592,53 @@
   if (saveBtn) saveBtn.addEventListener('click', () => saveCurrentFile());
   if (runBtn) runBtn.addEventListener('click', () => runCurrentPayload());
 
-  // Context menu for simple rename/delete on file nodes
+  // Context menu for rename/delete on files and folders
   if (treeContainer){
     treeContainer.addEventListener('contextmenu', (e) => {
-      const fileEl = e.target.closest('.file-node');
-      if (!fileEl) return;
+      const node = e.target.closest('.file-node, .folder-node');
+      if (!node) return;
       e.preventDefault();
-      const path = fileEl.getAttribute('data-path') || '';
+      const path = node.getAttribute('data-path') || '';
       if (!path) return;
-      const action = window.prompt('Action: (r)ename, (d)elete, or cancel:', 'r');
-      if (action === 'r'){
-        renameEntry(path);
-      } else if (action === 'd'){
-        deleteEntry(path);
-      }
+      const type = node.classList.contains('folder-node') ? 'dir' : 'file';
+      showContextMenu(e.clientX, e.clientY, path, type);
     });
   }
+
+  if (ctxRenameBtn){
+    ctxRenameBtn.addEventListener('click', () => {
+      if (ctxTargetPath){
+        renameEntry(ctxTargetPath);
+      }
+      hideContextMenu();
+    });
+  }
+
+  if (ctxDeleteBtn){
+    ctxDeleteBtn.addEventListener('click', () => {
+      if (ctxTargetPath){
+        deleteEntry(ctxTargetPath);
+      }
+      hideContextMenu();
+    });
+  }
+
+  document.addEventListener('click', (e) => {
+    if (!treeContextMenu || treeContextMenu.classList.contains('hidden')) return;
+    if (!e.target.closest('#treeContextMenuPanel')){
+      hideContextMenu();
+    }
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape'){
+      hideContextMenu();
+    }
+  });
+
+  window.addEventListener('scroll', () => {
+    hideContextMenu();
+  }, true);
 
   if (entryModalCancel) entryModalCancel.addEventListener('click', () => closeEntryModal());
   if (entryModalClose) entryModalClose.addEventListener('click', () => closeEntryModal());
