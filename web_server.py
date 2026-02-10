@@ -36,9 +36,10 @@ HOST = os.environ.get("RJ_WEB_HOST", "0.0.0.0")
 PORT = int(os.environ.get("RJ_WEB_PORT", "8080"))
 TOKEN = os.environ.get("RJ_WS_TOKEN")
 PREVIEW_MAX_BYTES = int(os.environ.get("RJ_LOOT_PREVIEW_MAX", str(200 * 1024)))
+PAYLOAD_MAX_BYTES = int(os.environ.get("RJ_PAYLOAD_MAX", str(512 * 1024)))
 TEXT_EXTS = {
     ".txt", ".log", ".md", ".json", ".csv", ".conf", ".ini", ".yaml", ".yml",
-    ".pcapng.txt", ".xml", ".sqlite", ".db", ".out"
+    ".pcapng.txt", ".xml", ".sqlite", ".db", ".out", ".py", ".sh"
 }
 
 
@@ -60,6 +61,18 @@ def _safe_loot_path(raw_path: str) -> Path | None:
     return None
 
 
+def _safe_payload_path(raw_path: str) -> Path | None:
+    raw_path = raw_path.strip().lstrip("/")
+    target = (PAYLOADS_DIR / raw_path).resolve()
+    try:
+        payload_root = PAYLOADS_DIR.resolve()
+    except FileNotFoundError:
+        payload_root = PAYLOADS_DIR
+    if payload_root in target.parents or target == payload_root:
+        return target
+    return None
+
+
 def _json_response(handler: SimpleHTTPRequestHandler, payload: dict, status: int = 200) -> None:
     body = json.dumps(payload).encode("utf-8")
     handler.send_response(status)
@@ -67,6 +80,18 @@ def _json_response(handler: SimpleHTTPRequestHandler, payload: dict, status: int
     handler.send_header("Content-Length", str(len(body)))
     handler.end_headers()
     handler.wfile.write(body)
+
+
+def _read_json(handler: SimpleHTTPRequestHandler) -> dict | None:
+    try:
+        length = int(handler.headers.get("Content-Length", "0") or "0")
+    except Exception:
+        length = 0
+    try:
+        raw = handler.rfile.read(length) if length > 0 else b"{}"
+        return json.loads(raw.decode("utf-8", "ignore")) if raw else {}
+    except Exception:
+        return None
 
 
 def _is_text_file(path: Path) -> bool:
@@ -85,6 +110,11 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         parsed = urlparse(self.path)
+        if parsed.path == "/ide":
+            self.path = "/ide.html" + (f"?{parsed.query}" if parsed.query else "")
+            super().do_GET()
+            return
+
         if parsed.path.startswith("/api/loot/") or parsed.path.startswith("/api/payloads/"):
             query = parse_qs(parsed.query or "")
             if not _auth_ok(query):
@@ -96,6 +126,12 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
                 return
             if parsed.path == "/api/payloads/status":
                 self._handle_payloads_status()
+                return
+            if parsed.path == "/api/payloads/tree":
+                self._handle_payloads_tree()
+                return
+            if parsed.path == "/api/payloads/file":
+                self._handle_payloads_file_get(query)
                 return
 
             if parsed.path == "/api/loot/list":
@@ -115,12 +151,52 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         parsed = urlparse(self.path)
-        if parsed.path == "/api/payloads/start":
+        if parsed.path in ("/api/payloads/start", "/api/payloads/run"):
             query = parse_qs(parsed.query or "")
             if not _auth_ok(query):
                 _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
                 return
             self._handle_payloads_start()
+            return
+        if parsed.path == "/api/payloads/entry":
+            query = parse_qs(parsed.query or "")
+            if not _auth_ok(query):
+                _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
+                return
+            self._handle_payloads_entry_create()
+            return
+        _json_response(self, {"error": "not found"}, status=HTTPStatus.NOT_FOUND)
+
+    def do_PUT(self):
+        parsed = urlparse(self.path)
+        if parsed.path == "/api/payloads/file":
+            query = parse_qs(parsed.query or "")
+            if not _auth_ok(query):
+                _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
+                return
+            self._handle_payloads_file_put()
+            return
+        _json_response(self, {"error": "not found"}, status=HTTPStatus.NOT_FOUND)
+
+    def do_PATCH(self):
+        parsed = urlparse(self.path)
+        if parsed.path == "/api/payloads/entry":
+            query = parse_qs(parsed.query or "")
+            if not _auth_ok(query):
+                _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
+                return
+            self._handle_payloads_entry_rename()
+            return
+        _json_response(self, {"error": "not found"}, status=HTTPStatus.NOT_FOUND)
+
+    def do_DELETE(self):
+        parsed = urlparse(self.path)
+        if parsed.path == "/api/payloads/entry":
+            query = parse_qs(parsed.query or "")
+            if not _auth_ok(query):
+                _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
+                return
+            self._handle_payloads_entry_delete(query)
             return
         _json_response(self, {"error": "not found"}, status=HTTPStatus.NOT_FOUND)
 
@@ -215,14 +291,8 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
         _json_response(self, {"categories": payload_categories})
 
     def _handle_payloads_start(self) -> None:
-        try:
-            length = int(self.headers.get("Content-Length", "0") or "0")
-        except Exception:
-            length = 0
-        try:
-            raw = self.rfile.read(length) if length > 0 else b"{}"
-            body = json.loads(raw.decode("utf-8", "ignore")) if raw else {}
-        except Exception:
+        body = _read_json(self)
+        if body is None:
             _json_response(self, {"error": "invalid json"}, status=HTTPStatus.BAD_REQUEST)
             return
 
@@ -266,6 +336,205 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
             })
         except Exception:
             _json_response(self, {"running": False, "path": None})
+
+    def _payload_tree_node(self, base: Path, current: Path) -> dict:
+        rel = "" if current == base else str(current.relative_to(base)).replace("\\", "/")
+        node = {
+            "name": current.name if current != base else base.name,
+            "path": rel,
+            "type": "dir" if current.is_dir() else "file",
+        }
+        if current.is_dir():
+            children = []
+            try:
+                entries = sorted(current.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
+            except Exception:
+                entries = []
+            for entry in entries:
+                if entry.name.startswith(".") or entry.name == "__pycache__":
+                    continue
+                if entry.is_file() and entry.suffix.lower() in (".pyc",):
+                    continue
+                children.append(self._payload_tree_node(base, entry))
+            node["children"] = children
+        return node
+
+    def _handle_payloads_tree(self) -> None:
+        if not PAYLOADS_DIR.exists():
+            _json_response(self, {"name": "payloads", "path": "", "type": "dir", "children": []})
+            return
+        try:
+            _json_response(self, self._payload_tree_node(PAYLOADS_DIR, PAYLOADS_DIR))
+        except Exception as exc:
+            _json_response(self, {"error": f"read error: {exc}"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+
+    def _handle_payloads_file_get(self, query: dict) -> None:
+        raw = unquote(query.get("path", [""])[0])
+        target = _safe_payload_path(raw)
+        if target is None or not target.exists() or not target.is_file():
+            _json_response(self, {"error": "not found"}, status=HTTPStatus.NOT_FOUND)
+            return
+        if target.stat().st_size > PAYLOAD_MAX_BYTES:
+            _json_response(self, {"error": "file too large"}, status=HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
+            return
+        if not _is_text_file(target):
+            _json_response(self, {"error": "not text"}, status=HTTPStatus.UNSUPPORTED_MEDIA_TYPE)
+            return
+        try:
+            content = target.read_text(encoding="utf-8", errors="replace")
+            rel = str(target.relative_to(PAYLOADS_DIR)).replace("\\", "/")
+            st = target.stat()
+            _json_response(self, {
+                "path": rel,
+                "content": content,
+                "size": st.st_size,
+                "mtime": int(st.st_mtime),
+            })
+        except Exception as exc:
+            _json_response(self, {"error": f"read error: {exc}"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+
+    def _handle_payloads_file_put(self) -> None:
+        body = _read_json(self)
+        if body is None:
+            _json_response(self, {"error": "invalid json"}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        rel_path = str(body.get("path", "")).strip().lstrip("/").replace("\\", "/")
+        content = body.get("content", "")
+        if not rel_path:
+            _json_response(self, {"error": "missing path"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        if not isinstance(content, str):
+            _json_response(self, {"error": "content must be string"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        if len(content.encode("utf-8", "ignore")) > PAYLOAD_MAX_BYTES:
+            _json_response(self, {"error": "content too large"}, status=HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
+            return
+
+        target = _safe_payload_path(rel_path)
+        if target is None:
+            _json_response(self, {"error": "invalid path"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        if target.exists() and not target.is_file():
+            _json_response(self, {"error": "not a file"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        if not target.parent.exists():
+            _json_response(self, {"error": "parent folder missing"}, status=HTTPStatus.CONFLICT)
+            return
+        try:
+            target.write_text(content, encoding="utf-8")
+            rel = str(target.relative_to(PAYLOADS_DIR)).replace("\\", "/")
+            st = target.stat()
+            _json_response(self, {"ok": True, "path": rel, "size": st.st_size, "mtime": int(st.st_mtime)})
+        except Exception as exc:
+            _json_response(self, {"error": f"write error: {exc}"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+
+    def _handle_payloads_entry_create(self) -> None:
+        body = _read_json(self)
+        if body is None:
+            _json_response(self, {"error": "invalid json"}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        rel_path = str(body.get("path", "")).strip().lstrip("/").replace("\\", "/")
+        entry_type = str(body.get("type", "")).strip().lower()
+        content = body.get("content", "")
+        if not rel_path or entry_type not in ("file", "dir"):
+            _json_response(self, {"error": "invalid request"}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        target = _safe_payload_path(rel_path)
+        if target is None:
+            _json_response(self, {"error": "invalid path"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        if target.exists():
+            _json_response(self, {"error": "already exists"}, status=HTTPStatus.CONFLICT)
+            return
+
+        try:
+            if entry_type == "dir":
+                target.mkdir(parents=True, exist_ok=False)
+                rel = str(target.relative_to(PAYLOADS_DIR)).replace("\\", "/")
+                _json_response(self, {"ok": True, "type": "dir", "path": rel})
+                return
+
+            if not isinstance(content, str):
+                _json_response(self, {"error": "content must be string"}, status=HTTPStatus.BAD_REQUEST)
+                return
+            if len(content.encode("utf-8", "ignore")) > PAYLOAD_MAX_BYTES:
+                _json_response(self, {"error": "content too large"}, status=HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
+                return
+            if not target.parent.exists():
+                _json_response(self, {"error": "parent folder missing"}, status=HTTPStatus.CONFLICT)
+                return
+            target.write_text(content, encoding="utf-8")
+            rel = str(target.relative_to(PAYLOADS_DIR)).replace("\\", "/")
+            st = target.stat()
+            _json_response(self, {"ok": True, "type": "file", "path": rel, "size": st.st_size, "mtime": int(st.st_mtime)})
+        except Exception as exc:
+            _json_response(self, {"error": f"create error: {exc}"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+
+    def _handle_payloads_entry_rename(self) -> None:
+        body = _read_json(self)
+        if body is None:
+            _json_response(self, {"error": "invalid json"}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        old_rel = str(body.get("old_path", "")).strip().lstrip("/").replace("\\", "/")
+        new_rel = str(body.get("new_path", "")).strip().lstrip("/").replace("\\", "/")
+        if not old_rel or not new_rel:
+            _json_response(self, {"error": "missing path"}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        old_target = _safe_payload_path(old_rel)
+        new_target = _safe_payload_path(new_rel)
+        if old_target is None or new_target is None:
+            _json_response(self, {"error": "invalid path"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        if not old_target.exists():
+            _json_response(self, {"error": "not found"}, status=HTTPStatus.NOT_FOUND)
+            return
+        if new_target.exists():
+            _json_response(self, {"error": "destination exists"}, status=HTTPStatus.CONFLICT)
+            return
+        if not new_target.parent.exists():
+            _json_response(self, {"error": "parent folder missing"}, status=HTTPStatus.CONFLICT)
+            return
+
+        try:
+            old_target.rename(new_target)
+            _json_response(self, {
+                "ok": True,
+                "old_path": str(old_target.relative_to(PAYLOADS_DIR)).replace("\\", "/"),
+                "new_path": str(new_target.relative_to(PAYLOADS_DIR)).replace("\\", "/"),
+            })
+        except Exception as exc:
+            _json_response(self, {"error": f"rename error: {exc}"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+
+    def _handle_payloads_entry_delete(self, query: dict) -> None:
+        raw = unquote(query.get("path", [""])[0])
+        target = _safe_payload_path(raw)
+        if target is None or not target.exists():
+            _json_response(self, {"error": "not found"}, status=HTTPStatus.NOT_FOUND)
+            return
+
+        try:
+            if target.is_dir():
+                try:
+                    next(target.iterdir())
+                    _json_response(self, {"error": "directory not empty"}, status=HTTPStatus.CONFLICT)
+                    return
+                except StopIteration:
+                    pass
+                target.rmdir()
+                rel = "" if target == PAYLOADS_DIR else str(target.relative_to(PAYLOADS_DIR)).replace("\\", "/")
+                _json_response(self, {"ok": True, "type": "dir", "path": rel})
+                return
+
+            target.unlink()
+            rel = str(target.relative_to(PAYLOADS_DIR)).replace("\\", "/")
+            _json_response(self, {"ok": True, "type": "file", "path": rel})
+        except Exception as exc:
+            _json_response(self, {"error": f"delete error: {exc}"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
 
     def _handle_loot_download(self, query: dict) -> None:
         raw = unquote(query.get("path", [""])[0])

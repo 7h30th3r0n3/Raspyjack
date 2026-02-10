@@ -1,0 +1,519 @@
+(function(){
+  // ------------------------ DOM references ------------------------
+  const ideStatusEl = document.getElementById('ideStatus');
+  const treeContainer = document.getElementById('treeContainer');
+  const refreshTreeBtn = document.getElementById('refreshTree');
+  const newFileBtn = document.getElementById('newFileBtn');
+  const newFolderBtn = document.getElementById('newFolderBtn');
+  const currentPathEl = document.getElementById('currentPath');
+  const dirtyFlagEl = document.getElementById('dirtyFlag');
+  const saveBtn = document.getElementById('saveBtn');
+  const runBtn = document.getElementById('runBtn');
+  const editorTextarea = document.getElementById('editor');
+  const wsStatusEl = document.getElementById('wsStatus');
+  const canvas = document.getElementById('screen');
+  const ctx = canvas ? canvas.getContext('2d') : null;
+
+  // ------------------------ Helpers ------------------------
+  function setIdeStatus(text){
+    if (ideStatusEl) ideStatusEl.textContent = text;
+  }
+
+  function getSearchParams(){
+    try {
+      return new URLSearchParams(location.search);
+    } catch {
+      return new URLSearchParams();
+    }
+  }
+
+  function getApiUrl(path, params = {}){
+    const p = getSearchParams();
+    const token = p.get('token');
+    if (token) params.token = token;
+    const qs = new URLSearchParams(params).toString();
+    const base = location.origin;
+    return `${base}${path}${qs ? `?${qs}` : ''}`;
+  }
+
+  function getWsUrl(){
+    const p = getSearchParams();
+    const token = p.get('token');
+    const host = location.hostname || 'raspberrypi.local';
+    const port = p.get('port') || '8765';
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    const q = token ? `?token=${encodeURIComponent(token)}` : '';
+    return `${proto}://${host}:${port}/${q}`.replace(/\/\/\//,'//');
+  }
+
+  function bytesFromString(s){
+    return new TextEncoder().encode(s).length;
+  }
+
+  // ------------------------ File tree state ------------------------
+  let treeData = null;
+  let expandedPaths = new Set();
+  let selectedPath = null;
+
+  function setSelectedPath(path){
+    selectedPath = path || null;
+    if (currentPathEl){
+      currentPathEl.textContent = path ? `payloads/${path}` : 'No file selected';
+    }
+    if (saveBtn) saveBtn.disabled = !path;
+    if (runBtn) runBtn.disabled = !path;
+    // update active highlighting
+    if (treeContainer){
+      treeContainer.querySelectorAll('.file-node').forEach(el => {
+        const p = el.getAttribute('data-path') || '';
+        el.classList.toggle('active', !!path && p === path);
+      });
+    }
+  }
+
+  // ------------------------ CodeMirror editor ------------------------
+  let editor = null;
+  let isDirty = false;
+
+  function setDirty(dirty){
+    isDirty = !!dirty;
+    if (dirtyFlagEl){
+      dirtyFlagEl.classList.toggle('hidden', !dirty);
+    }
+  }
+
+  function ensureEditor(){
+    if (editor || !editorTextarea || !window.CodeMirror) return;
+    editor = CodeMirror.fromTextArea(editorTextarea, {
+      mode: 'python',
+      theme: 'monokai',
+      lineNumbers: true,
+      indentUnit: 4,
+      indentWithTabs: false,
+      lineWrapping: true,
+      autofocus: true,
+    });
+    editor.on('change', () => {
+      if (selectedPath){
+        setDirty(true);
+      }
+    });
+  }
+
+  // ------------------------ Tree rendering ------------------------
+  function renderTreeNode(node, depth){
+    const container = document.createElement('div');
+    const isDir = node.type === 'dir';
+    const indent = depth * 14;
+
+    const row = document.createElement('div');
+    row.className = 'flex items-center text-[11px] text-slate-200 hover:bg-slate-800/60 rounded-md px-1 py-0.5';
+    row.style.paddingLeft = `${indent}px`;
+
+    if (isDir){
+      const toggle = document.createElement('button');
+      toggle.type = 'button';
+      toggle.className = 'mr-1 text-slate-400 hover:text-slate-200';
+      const open = expandedPaths.has(node.path || '');
+      toggle.textContent = open ? '▾' : '▸';
+      toggle.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const key = node.path || '';
+        if (expandedPaths.has(key)){
+          expandedPaths.delete(key);
+        } else {
+          expandedPaths.add(key);
+        }
+        renderTree();
+      });
+      row.appendChild(toggle);
+    } else {
+      const spacer = document.createElement('span');
+      spacer.className = 'mr-1 inline-block';
+      spacer.textContent = '•';
+      row.appendChild(spacer);
+    }
+
+    const label = document.createElement('div');
+    label.className = 'flex-1 min-w-0 truncate';
+    label.textContent = node.name;
+    row.appendChild(label);
+
+    if (!isDir){
+      row.classList.add('file-node');
+      row.setAttribute('data-path', node.path || '');
+      if (selectedPath && node.path === selectedPath){
+        row.classList.add('active');
+      }
+      row.addEventListener('click', () => {
+        onFileSelected(node.path || '');
+      });
+    } else {
+      row.addEventListener('click', () => {
+        const key = node.path || '';
+        if (expandedPaths.has(key)){
+          expandedPaths.delete(key);
+        } else {
+          expandedPaths.add(key);
+        }
+        renderTree();
+      });
+    }
+
+    container.appendChild(row);
+
+    if (isDir && node.children && node.children.length && expandedPaths.has(node.path || '')){
+      const childrenWrapper = document.createElement('div');
+      node.children.forEach(child => {
+        childrenWrapper.appendChild(renderTreeNode(child, depth + 1));
+      });
+      container.appendChild(childrenWrapper);
+    }
+    return container;
+  }
+
+  function renderTree(){
+    if (!treeContainer) return;
+    treeContainer.innerHTML = '';
+    if (!treeData){
+      treeContainer.innerHTML = '<div class="text-[11px] text-slate-500 px-1 py-1">No payloads directory found.</div>';
+      return;
+    }
+    expandedPaths.add(''); // always expand root
+    treeContainer.appendChild(renderTreeNode(treeData, 0));
+  }
+
+  async function loadTree(){
+    setIdeStatus('Loading tree...');
+    try{
+      const url = getApiUrl('/api/payloads/tree');
+      const res = await fetch(url, { cache: 'no-store' });
+      const data = await res.json();
+      if (!res.ok || data.error){
+        throw new Error(data.error || 'tree_failed');
+      }
+      treeData = data;
+      if (!expandedPaths.size){
+        expandedPaths.add('');
+      }
+      renderTree();
+      setIdeStatus('Ready');
+    }catch(e){
+      console.error(e);
+      setIdeStatus('Failed to load tree');
+      if (treeContainer){
+        treeContainer.innerHTML = '<div class="text-[11px] text-rose-400 px-1 py-1">Failed to load payload tree.</div>';
+      }
+    }
+  }
+
+  // ------------------------ File operations ------------------------
+  async function onFileSelected(path){
+    if (!path) return;
+    if (isDirty){
+      const ok = window.confirm('You have unsaved changes. Discard and open another file?');
+      if (!ok) return;
+    }
+    setIdeStatus('Loading file...');
+    try{
+      const url = getApiUrl('/api/payloads/file', { path });
+      const res = await fetch(url, { cache: 'no-store' });
+      const data = await res.json();
+      if (!res.ok || data.error){
+        throw new Error(data.error || 'load_failed');
+      }
+      ensureEditor();
+      if (editor){
+        editor.setValue(data.content || '');
+        editor.focus();
+      }
+      setSelectedPath(data.path || path);
+      setDirty(false);
+      setIdeStatus('Ready');
+    }catch(e){
+      console.error(e);
+      setIdeStatus('Failed to load file');
+    }
+  }
+
+  async function saveCurrentFile(){
+    if (!selectedPath || !editor) return false;
+    const content = editor.getValue();
+    const sizeBytes = bytesFromString(content);
+    if (sizeBytes > 512 * 1024){
+      window.alert('File is too large to save via WebUI (limit 512 KB).');
+      return false;
+    }
+    setIdeStatus('Saving...');
+    try{
+      const url = getApiUrl('/api/payloads/file');
+      const res = await fetch(url, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: selectedPath, content })
+      });
+      const data = await res.json();
+      if (!res.ok || data.error){
+        throw new Error(data.error || 'save_failed');
+      }
+      setDirty(false);
+      setIdeStatus('Saved');
+      return true;
+    }catch(e){
+      console.error(e);
+      setIdeStatus('Save failed');
+      window.alert('Failed to save file.');
+      return false;
+    }
+  }
+
+  async function createEntry(type){
+    const base = selectedPath ? selectedPath.split('/').slice(0, -1).join('/') : '';
+    const name = window.prompt(type === 'dir' ? 'New folder name:' : 'New file name (e.g. script.py):');
+    if (!name) return;
+    const rel = base ? `${base}/${name}` : name;
+    setIdeStatus(`Creating ${type}...`);
+    try{
+      const url = getApiUrl('/api/payloads/entry');
+      const body = { path: rel, type };
+      if (type === 'file'){
+        body.content = '#!/usr/bin/env python3\n\n"""\nRaspyJack payload\n"""\n\n';
+      }
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      const data = await res.json();
+      if (!res.ok || data.error){
+        throw new Error(data.error || 'create_failed');
+      }
+      setIdeStatus('Created');
+      await loadTree();
+    }catch(e){
+      console.error(e);
+      setIdeStatus('Create failed');
+      window.alert(`Failed to create ${type}.`);
+    }
+  }
+
+  async function renameEntry(path){
+    if (!path) return;
+    const parts = path.split('/');
+    const oldName = parts[parts.length - 1];
+    const parent = parts.slice(0, -1).join('/');
+    const newName = window.prompt('New name:', oldName);
+    if (!newName || newName === oldName) return;
+    const newPath = parent ? `${parent}/${newName}` : newName;
+    setIdeStatus('Renaming...');
+    try{
+      const url = getApiUrl('/api/payloads/entry');
+      const res = await fetch(url, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ old_path: path, new_path: newPath })
+      });
+      const data = await res.json();
+      if (!res.ok || data.error){
+        throw new Error(data.error || 'rename_failed');
+      }
+      if (selectedPath === path){
+        setSelectedPath(data.new_path || newPath);
+      }
+      setIdeStatus('Renamed');
+      await loadTree();
+    }catch(e){
+      console.error(e);
+      setIdeStatus('Rename failed');
+      window.alert('Failed to rename entry.');
+    }
+  }
+
+  async function deleteEntry(path){
+    if (!path) return;
+    const ok = window.confirm(`Delete "${path}"? This cannot be undone.`);
+    if (!ok) return;
+    setIdeStatus('Deleting...');
+    try{
+      const url = getApiUrl('/api/payloads/entry', { path });
+      const res = await fetch(url, { method: 'DELETE' });
+      const data = await res.json();
+      if (!res.ok || data.error){
+        throw new Error(data.error || 'delete_failed');
+      }
+      if (selectedPath === path){
+        setSelectedPath(null);
+        if (editor){
+          editor.setValue('');
+        }
+        setDirty(false);
+      }
+      setIdeStatus('Deleted');
+      await loadTree();
+    }catch(e){
+      console.error(e);
+      setIdeStatus('Delete failed');
+      window.alert('Failed to delete entry.');
+    }
+  }
+
+  // ------------------------ Run payload ------------------------
+  async function runCurrentPayload(){
+    if (!selectedPath) return;
+    // if dirty, offer to save first
+    if (isDirty){
+      const ok = window.confirm('Save changes before running?');
+      if (!ok) return;
+      const saved = await saveCurrentFile();
+      if (!saved) return;
+    }
+    setIdeStatus('Starting payload...');
+    try{
+      const url = getApiUrl('/api/payloads/run');
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: selectedPath })
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok){
+        throw new Error(data.error || 'run_failed');
+      }
+      setIdeStatus('Payload launched');
+    }catch(e){
+      console.error(e);
+      setIdeStatus('Run failed');
+      window.alert('Failed to start payload.');
+    }
+  }
+
+  // ------------------------ WebSocket preview & input ------------------------
+  let ws = null;
+  let reconnectTimer = null;
+
+  function setWsStatus(text){
+    if (wsStatusEl) wsStatusEl.textContent = text;
+  }
+
+  function setupHiDPI(){
+    if (!canvas || !ctx) return;
+    const DPR = Math.max(1, Math.floor(window.devicePixelRatio || 1));
+    const logical = 128;
+    canvas.width = logical * DPR;
+    canvas.height = logical * DPR;
+    ctx.imageSmoothingEnabled = true;
+    try { ctx.imageSmoothingQuality = 'high'; } catch {}
+  }
+
+  function sendInput(button, state){
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    try{
+      ws.send(JSON.stringify({ type: 'input', button, state }));
+    }catch{}
+  }
+
+  function bindButtons(){
+    const buttons = document.querySelectorAll('[data-btn]');
+    buttons.forEach(btn => {
+      const name = btn.getAttribute('data-btn');
+      const press = () => { btn.classList.add('active'); sendInput(name, 'press'); };
+      const release = () => { btn.classList.remove('active'); sendInput(name, 'release'); };
+      btn.addEventListener('mousedown', press);
+      btn.addEventListener('mouseup', release);
+      btn.addEventListener('mouseleave', release);
+      btn.addEventListener('touchstart', (e)=>{ e.preventDefault(); press(); }, {passive:false});
+      btn.addEventListener('touchend', (e)=>{ e.preventDefault(); release(); }, {passive:false});
+      btn.addEventListener('touchcancel', (e)=>{ e.preventDefault(); release(); }, {passive:false});
+    });
+  }
+
+  function connectWs(){
+    if (!canvas || !ctx) return;
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+    const url = getWsUrl();
+    try{
+      ws = new WebSocket(url);
+    }catch(e){
+      setWsStatus('WS error');
+      scheduleReconnect();
+      return;
+    }
+
+    ws.onopen = () => {
+      setWsStatus('Connected');
+    };
+
+    ws.onmessage = (ev) => {
+      try{
+        const msg = JSON.parse(ev.data);
+        if (msg.type === 'frame' && msg.data){
+          const img = new Image();
+          img.onload = () => {
+            try{
+              ctx.clearRect(0,0,canvas.width,canvas.height);
+              ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+            }catch{}
+          };
+          img.src = 'data:image/jpeg;base64,' + msg.data;
+        }
+      }catch{}
+    };
+
+    ws.onerror = () => {
+      try { ws.close(); } catch {}
+    };
+
+    ws.onclose = () => {
+      setWsStatus('Disconnected – reconnecting…');
+      scheduleReconnect();
+    };
+  }
+
+  function scheduleReconnect(){
+    if (reconnectTimer) return;
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      connectWs();
+    }, 1200);
+  }
+
+  // ------------------------ Event bindings ------------------------
+  if (refreshTreeBtn) refreshTreeBtn.addEventListener('click', () => loadTree());
+  if (newFileBtn) newFileBtn.addEventListener('click', () => createEntry('file'));
+  if (newFolderBtn) newFolderBtn.addEventListener('click', () => createEntry('dir'));
+  if (saveBtn) saveBtn.addEventListener('click', () => saveCurrentFile());
+  if (runBtn) runBtn.addEventListener('click', () => runCurrentPayload());
+
+  // Context menu for simple rename/delete on file nodes
+  if (treeContainer){
+    treeContainer.addEventListener('contextmenu', (e) => {
+      const fileEl = e.target.closest('.file-node');
+      if (!fileEl) return;
+      e.preventDefault();
+      const path = fileEl.getAttribute('data-path') || '';
+      if (!path) return;
+      const action = window.prompt('Action: (r)ename, (d)elete, or cancel:', 'r');
+      if (action === 'r'){
+        renameEntry(path);
+      } else if (action === 'd'){
+        deleteEntry(path);
+      }
+    });
+  }
+
+  window.addEventListener('beforeunload', (e) => {
+    if (isDirty){
+      e.preventDefault();
+      e.returnValue = '';
+      return '';
+    }
+  });
+
+  // ------------------------ Init ------------------------
+  setupHiDPI();
+  bindButtons();
+  connectWs();
+  loadTree();
+  ensureEditor();
+})();
+
