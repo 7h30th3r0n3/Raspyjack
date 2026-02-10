@@ -58,6 +58,7 @@ DEBUG_LOG = LOOT_DIR / "honeypot_debug.log"
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
+from payloads._input_helper import get_virtual_button
 
 # ---------------------------------------------------------------------------
 # Optional dependencies (Discord + LCD)
@@ -75,7 +76,6 @@ try:
     import RPi.GPIO as GPIO
     import LCD_1in44, LCD_Config
     from PIL import Image, ImageDraw, ImageFont
-    from payloads._input_helper import get_virtual_button
     HAS_LCD = True
 except Exception as _lcd_exc:
     HAS_LCD = False
@@ -864,9 +864,13 @@ async def run_main(args: argparse.Namespace) -> None:
                 loop.add_signal_handler(sig, _stop)
             except NotImplementedError:
                 pass
-        print("[HONEYPOT] Press Ctrl‑C to stop …")
+        print("[HONEYPOT] Press Ctrl‑C or KEY3 to stop …")
         hp.debug("Entering main wait loop …")
         while not stop_event.is_set():
+            if get_virtual_button() == "KEY3":
+                hp.debug("KEY3 (virtual) received; stopping …")
+                stop_event.set()
+                break
             if lcd_thread is not None and not lcd_thread.is_alive():
                 hp.debug("LCD thread exited; stopping server …")
                 break
