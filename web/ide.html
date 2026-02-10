@@ -12,33 +12,138 @@
     body {
       background: radial-gradient(1200px 800px at 50% -10%, #0f1b2d 0%, #07090f 55%, #05060a 100%);
     }
-    .cm-editor, .CodeMirror {
+    .cm-editor,
+    .CodeMirror {
       height: 100%;
+    }
+    .CodeMirror {
+      background: transparent !important;
+    }
+    .CodeMirror-gutters {
+      background: transparent !important;
+      border-right: 1px solid rgba(148, 163, 184, 0.25);
     }
     .file-node {
       cursor: pointer;
     }
-    .file-node.active {
+    .file-node.active,
+    .folder-node.active {
       background-color: rgba(16, 185, 129, 0.18);
     }
     .device-shell {
       position: relative;
-      box-shadow: 0 0 0 1px rgba(116,255,180,.2), 0 0 25px rgba(18,255,120,.15) inset, 0 0 40px rgba(18,255,120,.15);
-      background: linear-gradient(145deg, rgba(15,23,42,.65), rgba(15,23,42,.35));
-      border: 1px solid rgba(16,185,129,.2);
-      backdrop-filter: blur(8px);
+      transition: all 0.2s ease;
     }
-    .device-shell .screen-frame {
-      border: 1px solid rgba(16,185,129,.3);
-      background: rgba(0,0,0,.8);
-      box-shadow: 0 0 40px rgba(18,255,120,0.18);
+    /* Theme: Game Boy (copied from main WebUI) */
+    .device-shell.theme-gameboy,
+    .device-shell[data-theme="gameboy"] {
+      background: linear-gradient(145deg, #a3a3a3, #7d7d7d);
+      border-radius: 16px;
+      padding: 20px;
+      width: fit-content;
+      box-shadow:
+        inset -4px -4px 10px rgba(0,0,0,0.2),
+        inset 4px 4px 10px rgba(255,255,255,0.05),
+        0 8px 20px rgba(0,0,0,0.5);
     }
-    .device-shell .rj-btn {
-      box-shadow: 0 0 0 1px rgba(160,160,255,.25), 0 0 18px rgba(120,120,255,.18) inset;
+    .device-shell.theme-gameboy::before,
+    .device-shell[data-theme="gameboy"]::before {
+      content: '';
+      position: absolute;
+      top: 12px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 80px;
+      height: 6px;
+      background: #222;
+      border-radius: 3px;
     }
-    .device-shell .rj-btn:active,
-    .device-shell .rj-btn.active {
-      filter: brightness(1.2);
+    .device-shell.theme-gameboy::after,
+    .device-shell[data-theme="gameboy"]::after {
+      content: '';
+      position: absolute;
+      right: 12px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 6px;
+      height: 60px;
+      background: #333;
+      border-radius: 3px;
+    }
+    .device-shell.theme-gameboy .screen-frame,
+    .device-shell[data-theme="gameboy"] .screen-frame {
+      background: #111;
+      border: 4px solid #444;
+      border-radius: 8px;
+      padding: 4px;
+      margin-bottom: 16px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      box-shadow:
+        inset -2px -2px 5px rgba(0,0,0,0.3),
+        inset 2px 2px 5px rgba(255,255,255,0.05);
+    }
+    .device-shell.theme-gameboy .rj-btn,
+    .device-shell[data-theme="gameboy"] .rj-btn {
+      background: #222 !important;
+      color: #fff;
+      border-radius: 8px;
+      width: 40px;
+      height: 40px;
+      font-weight: bold;
+      cursor: pointer;
+      box-shadow:
+        inset -2px -2px 4px rgba(0,0,0,0.3),
+        inset 2px 2px 4px rgba(255,255,255,0.05);
+      transition: all 0.1s;
+    }
+    .device-shell.theme-gameboy .rj-btn:active,
+    .device-shell.theme-gameboy .rj-btn.active,
+    .device-shell[data-theme="gameboy"] .rj-btn:active,
+    .device-shell[data-theme="gameboy"] .rj-btn.active {
+      transform: translateY(2px);
+      box-shadow:
+        inset 2px 2px 4px rgba(0,0,0,0.3),
+        inset -2px -2px 4px rgba(255,255,255,0.05);
+    }
+    .device-shell.theme-gameboy .key-btn,
+    .device-shell[data-theme="gameboy"] .key-btn {
+      width: 96px;
+      height: 36px;
+      border-radius: 8px;
+      font-size: 0.9rem;
+    }
+    .device-shell.theme-gameboy .screen-frame,
+    .device-shell[data-theme="gameboy"] .screen-frame {
+      margin-bottom: 16px;
+    }
+    .device-shell.theme-gameboy .side-buttons button,
+    .device-shell[data-theme="gameboy"] .side-buttons button {
+      width: 96px;
+      height: 36px;
+      border-radius: 8px;
+      font-size: 0.9rem;
+    }
+    .device-shell.theme-gameboy .layout-gameboy,
+    .device-shell[data-theme="gameboy"] .layout-gameboy {
+      display: block;
+    }
+
+    /* Editor scroll area – mimic terminal scrollbar */
+    .editor-body .CodeMirror-scroll {
+      scrollbar-width: thin;
+      scrollbar-color: rgba(148, 163, 184, 0.25) transparent;
+    }
+    .editor-body .CodeMirror-scroll::-webkit-scrollbar {
+      width: 8px;
+    }
+    .editor-body .CodeMirror-scroll::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    .editor-body .CodeMirror-scroll::-webkit-scrollbar-thumb {
+      background: rgba(148, 163, 184, 0.25);
+      border-radius: 8px;
     }
   </style>
 </head>
@@ -87,10 +192,10 @@
           <div class="flex items-center gap-2 text-xs">
             <span id="dirtyFlag" class="text-amber-400 hidden">● Unsaved</span>
             <button id="saveBtn" class="px-3 py-1.5 rounded-lg bg-emerald-600/80 border border-emerald-300/30 text-white hover:bg-emerald-500/80 disabled:opacity-40 disabled:cursor-not-allowed">Save</button>
-            <button id="runBtn" class="px-3 py-1.5 rounded-lg bg-fuchsia-600/80 border border-fuchsia-300/30 text-white hover:bg-fuchsia-500/80 disabled:opacity-40 disabled:cursor-not-allowed">Run</button>
+            <button id="runBtn" class="px-3 py-1.5 rounded-lg bg-emerald-600/80 border border-emerald-300/30 text-white hover:bg-emerald-500/80 disabled:opacity-40 disabled:cursor-not-allowed">Run</button>
           </div>
         </div>
-        <div class="flex-1 bg-slate-950/40">
+        <div class="editor-body bg-transparent h-[320px] md:h-[360px]">
           <textarea id="editor" class="w-full h-full"></textarea>
         </div>
       </section>
@@ -101,34 +206,57 @@
           <div class="text-xs font-semibold text-emerald-300">Handheld Preview</div>
           <div id="wsStatus" class="text-[11px] text-slate-400">Connecting…</div>
         </div>
-        <div id="deviceShell" class="device-shell rounded-3xl p-4 w-fit mx-auto">
-          <div class="screen-frame rounded-2xl p-2 mb-3">
-            <canvas id="screen" width="128" height="128" class="w-[200px] md:w-[220px] aspect-square"></canvas>
-          </div>
-          <div class="grid grid-cols-[80px_80px] gap-3 items-center">
-            <div class="flex justify-center">
-              <div class="grid grid-cols-3 grid-rows-3 gap-1.5 w-[96px]">
+        <div id="deviceShell" class="device-shell theme-gameboy rounded-3xl p-4 w-fit mx-auto">
+          <div class="layout-gameboy">
+            <div class="screen-frame">
+              <canvas id="screen-gb" width="128" height="128" class="w-[240px] md:w-[260px] aspect-square"></canvas>
+            </div>
+            <div class="flex justify-between mb-4">
+              <div class="grid grid-cols-3 grid-rows-3 gap-2">
                 <div></div>
-                <button class="rj-btn rounded-xl bg-slate-800/70 hover:bg-slate-700/70 w-8 h-8 flex items-center justify-center text-xs" data-btn="UP">▲</button>
+                <button class="rj-btn" data-btn="UP">▲</button>
                 <div></div>
-                <button class="rj-btn rounded-xl bg-slate-800/70 hover:bg-slate-700/70 w-8 h-8 flex items-center justify-center text-xs" data-btn="LEFT">◄</button>
-                <button class="rj-btn rounded-xl bg-emerald-600/80 hover:bg-emerald-500/80 w-8 h-8 flex items-center justify-center text-[10px]" data-btn="OK">OK</button>
-                <button class="rj-btn rounded-xl bg-slate-800/70 hover:bg-slate-700/70 w-8 h-8 flex items-center justify-center text-xs" data-btn="RIGHT">►</button>
+                <button class="rj-btn" data-btn="LEFT">◄</button>
+                <button class="rj-btn" data-btn="OK" aria-label="OK"></button>
+                <button class="rj-btn" data-btn="RIGHT">►</button>
                 <div></div>
-                <button class="rj-btn rounded-xl bg-slate-800/70 hover:bg-slate-700/70 w-8 h-8 flex items-center justify-center text-xs" data-btn="DOWN">▼</button>
+                <button class="rj-btn" data-btn="DOWN">▼</button>
                 <div></div>
               </div>
+              <div class="flex flex-col gap-2 side-buttons">
+                <button class="rj-btn key-btn" data-btn="KEY1">KEY1</button>
+                <button class="rj-btn key-btn" data-btn="KEY2">KEY2</button>
+                <button class="rj-btn key-btn" data-btn="KEY3">KEY3</button>
+              </div>
             </div>
-            <div class="flex flex-col gap-1">
-              <button class="rj-btn rounded-xl bg-fuchsia-700/80 hover:bg-fuchsia-600/80 px-3 py-1 text-[11px]" data-btn="KEY1">KEY1</button>
-              <button class="rj-btn rounded-xl bg-fuchsia-700/80 hover:bg-fuchsia-600/80 px-3 py-1 text-[11px]" data-btn="KEY2">KEY2</button>
-              <button class="rj-btn rounded-xl bg-fuchsia-700/80 hover:bg-fuchsia-600/80 px-3 py-1 text-[11px]" data-btn="KEY3">KEY3</button>
-            </div>
+            <div class="text-center text-xs text-gray-300">OK = Enter · KEY3 = Esc</div>
+            <div class="status-text text-center text-[11px] text-gray-500 mt-1">Connected</div>
           </div>
-          <div class="mt-2 text-[11px] text-center text-slate-400">OK = Enter · KEY3 = Esc</div>
         </div>
       </section>
     </main>
+  </div>
+
+  <!-- Create file/folder modal -->
+  <div id="entryModal" class="hidden fixed inset-0 z-50 bg-black/60 backdrop-blur-sm">
+    <div class="max-w-sm mx-auto mt-24 px-4">
+      <div class="rounded-2xl border border-slate-700/60 bg-slate-950/95 shadow-[0_0_30px_rgba(15,23,42,0.75)] overflow-hidden">
+        <div class="px-4 py-3 border-b border-slate-800/70 flex items-center justify-between">
+          <div id="entryModalTitle" class="text-sm font-semibold text-emerald-300">New Entry</div>
+          <button id="entryModalClose" class="text-slate-400 hover:text-slate-200 text-xs px-2 py-1 rounded-md bg-slate-900/60 border border-slate-700/60">✕</button>
+        </div>
+        <div class="px-4 py-3 space-y-2 text-xs">
+          <div id="entryModalDesc" class="text-slate-400">
+            Create under: <span id="entryModalFolder" class="text-slate-200 font-mono">payloads/</span>
+          </div>
+          <input id="entryModalName" type="text" class="w-full rounded-lg bg-slate-900/80 border border-slate-700/70 px-3 py-2 text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-1 focus:ring-emerald-400 focus:border-emerald-400" placeholder="Name (e.g. my_payload.py)">
+        </div>
+        <div class="px-4 py-3 border-t border-slate-800/70 flex justify-end gap-2">
+          <button id="entryModalCancel" class="px-3 py-1.5 rounded-lg bg-slate-800/80 border border-slate-600/60 text-slate-200 hover:bg-slate-700/80 text-xs">Cancel</button>
+          <button id="entryModalConfirm" class="px-3 py-1.5 rounded-lg bg-emerald-600/80 border border-emerald-300/30 text-white hover:bg-emerald-500/80 text-xs">Create</button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>

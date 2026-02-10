@@ -11,8 +11,15 @@
   const runBtn = document.getElementById('runBtn');
   const editorTextarea = document.getElementById('editor');
   const wsStatusEl = document.getElementById('wsStatus');
-  const canvas = document.getElementById('screen');
+  const canvas = document.getElementById('screen-gb') || document.getElementById('screen');
   const ctx = canvas ? canvas.getContext('2d') : null;
+  const entryModal = document.getElementById('entryModal');
+  const entryModalTitle = document.getElementById('entryModalTitle');
+  const entryModalFolder = document.getElementById('entryModalFolder');
+  const entryModalName = document.getElementById('entryModalName');
+  const entryModalConfirm = document.getElementById('entryModalConfirm');
+  const entryModalCancel = document.getElementById('entryModalCancel');
+  const entryModalClose = document.getElementById('entryModalClose');
 
   // ------------------------ Helpers ------------------------
   function setIdeStatus(text){
@@ -53,7 +60,18 @@
   // ------------------------ File tree state ------------------------
   let treeData = null;
   let expandedPaths = new Set();
-  let selectedPath = null;
+  let selectedPath = null;   // currently opened file
+  let currentFolder = '';    // folder used for create operations
+
+  function setCurrentFolder(path){
+    currentFolder = path || '';
+    if (treeContainer){
+      treeContainer.querySelectorAll('.folder-node').forEach(el => {
+        const p = el.getAttribute('data-path') || '';
+        el.classList.toggle('active', !!path && p === path);
+      });
+    }
+  }
 
   function setSelectedPath(path){
     selectedPath = path || null;
@@ -68,6 +86,13 @@
         const p = el.getAttribute('data-path') || '';
         el.classList.toggle('active', !!path && p === path);
       });
+    }
+    // when a file is selected, also track its parent folder
+    if (path){
+      const parts = path.split('/');
+      parts.pop();
+      const folder = parts.join('/');
+      setCurrentFolder(folder);
     }
   }
 
@@ -149,14 +174,10 @@
         onFileSelected(node.path || '');
       });
     } else {
+      row.classList.add('folder-node');
+      row.setAttribute('data-path', node.path || '');
       row.addEventListener('click', () => {
-        const key = node.path || '';
-        if (expandedPaths.has(key)){
-          expandedPaths.delete(key);
-        } else {
-          expandedPaths.add(key);
-        }
-        renderTree();
+        setCurrentFolder(node.path || '');
       });
     }
 
@@ -197,6 +218,12 @@
         expandedPaths.add('');
       }
       renderTree();
+      // restore selection highlights after re-render
+      if (selectedPath){
+        setSelectedPath(selectedPath);
+      } else if (currentFolder){
+        setCurrentFolder(currentFolder);
+      }
       setIdeStatus('Ready');
     }catch(e){
       console.error(e);
@@ -267,17 +294,16 @@
     }
   }
 
-  async function createEntry(type){
-    const base = selectedPath ? selectedPath.split('/').slice(0, -1).join('/') : '';
-    const name = window.prompt(type === 'dir' ? 'New folder name:' : 'New file name (e.g. script.py):');
-    if (!name) return;
-    const rel = base ? `${base}/${name}` : name;
+  let pendingEntryType = null;
+  let pendingEntryBase = '';
+
+  async function performCreateEntry(type, rel){
     setIdeStatus(`Creating ${type}...`);
     try{
       const url = getApiUrl('/api/payloads/entry');
       const body = { path: rel, type };
       if (type === 'file'){
-        body.content = '#!/usr/bin/env python3\n\n"""\nRaspyJack payload\n"""\n\n';
+        body.content = '#!/usr/bin/env python3\n\n\"\"\"\nRaspyJack payload\n\"\"\"\n\n';
       }
       const res = await fetch(url, {
         method: 'POST',
@@ -295,6 +321,50 @@
       setIdeStatus('Create failed');
       window.alert(`Failed to create ${type}.`);
     }
+  }
+
+  function openEntryModal(type){
+    pendingEntryType = type;
+    const base = currentFolder || (selectedPath ? selectedPath.split('/').slice(0, -1).join('/') : '');
+    pendingEntryBase = base || '';
+    if (entryModalTitle){
+      entryModalTitle.textContent = type === 'dir' ? 'New Folder' : 'New File';
+    }
+    if (entryModalFolder){
+      const folderLabel = pendingEntryBase ? `payloads/${pendingEntryBase}` : 'payloads/';
+      entryModalFolder.textContent = folderLabel;
+    }
+    if (entryModalName){
+      entryModalName.value = '';
+      entryModalName.placeholder = type === 'dir' ? 'Folder name' : 'Filename (e.g. my_payload.py)';
+    }
+    if (entryModal){
+      entryModal.classList.remove('hidden');
+    }
+    if (entryModalName){
+      setTimeout(() => entryModalName.focus(), 10);
+    }
+  }
+
+  function closeEntryModal(){
+    if (entryModal){
+      entryModal.classList.add('hidden');
+    }
+    pendingEntryType = null;
+    pendingEntryBase = '';
+  }
+
+  async function handleEntryConfirm(){
+    if (!pendingEntryType || !entryModalName) return;
+    const raw = entryModalName.value.trim();
+    if (!raw) return;
+    const rel = pendingEntryBase ? `${pendingEntryBase}/${raw}` : raw;
+    await performCreateEntry(pendingEntryType, rel);
+    closeEntryModal();
+  }
+
+  function createEntry(type){
+    openEntryModal(type);
   }
 
   async function renameEntry(path){
@@ -497,6 +567,24 @@
         renameEntry(path);
       } else if (action === 'd'){
         deleteEntry(path);
+      }
+    });
+  }
+
+  if (entryModalCancel) entryModalCancel.addEventListener('click', () => closeEntryModal());
+  if (entryModalClose) entryModalClose.addEventListener('click', () => closeEntryModal());
+  if (entryModalConfirm) entryModalConfirm.addEventListener('click', () => handleEntryConfirm());
+  if (entryModal && entryModalName){
+    entryModal.addEventListener('click', (e) => {
+      if (e.target === entryModal) closeEntryModal();
+    });
+    entryModalName.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter'){
+        e.preventDefault();
+        handleEntryConfirm();
+      } else if (e.key === 'Escape'){
+        e.preventDefault();
+        closeEntryModal();
       }
     });
   }
