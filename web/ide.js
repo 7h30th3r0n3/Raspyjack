@@ -20,6 +20,12 @@
   const entryModalConfirm = document.getElementById('entryModalConfirm');
   const entryModalCancel = document.getElementById('entryModalCancel');
   const entryModalClose = document.getElementById('entryModalClose');
+  const renameModal = document.getElementById('renameModal');
+  const renameModalPath = document.getElementById('renameModalPath');
+  const renameModalName = document.getElementById('renameModalName');
+  const renameModalConfirm = document.getElementById('renameModalConfirm');
+  const renameModalCancel = document.getElementById('renameModalCancel');
+  const renameModalClose = document.getElementById('renameModalClose');
   const treeContextMenu = document.getElementById('treeContextMenu');
   const treeContextMenuPanel = document.getElementById('treeContextMenuPanel');
   const ctxRenameBtn = document.getElementById('ctxRename');
@@ -215,6 +221,7 @@
       row.classList.add('folder-node');
       row.setAttribute('data-path', node.path || '');
       row.addEventListener('click', () => {
+        setSelectedPath(null);
         setCurrentFolder(node.path || '');
       });
     }
@@ -334,6 +341,7 @@
 
   let pendingEntryType = null;
   let pendingEntryBase = '';
+  let pendingRenamePath = null;
 
   async function performCreateEntry(type, rel){
     setIdeStatus(`Creating ${type}...`);
@@ -405,13 +413,9 @@
     openEntryModal(type);
   }
 
-  async function renameEntry(path){
-    if (!path) return;
-    const parts = path.split('/');
-    const oldName = parts[parts.length - 1];
+  async function performRename(oldPath, newName){
+    const parts = oldPath.split('/');
     const parent = parts.slice(0, -1).join('/');
-    const newName = window.prompt('New name:', oldName);
-    if (!newName || newName === oldName) return;
     const newPath = parent ? `${parent}/${newName}` : newName;
     setIdeStatus('Renaming...');
     try{
@@ -419,13 +423,13 @@
       const res = await fetch(url, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ old_path: path, new_path: newPath })
+        body: JSON.stringify({ old_path: oldPath, new_path: newPath })
       });
       const data = await res.json();
       if (!res.ok || data.error){
         throw new Error(data.error || 'rename_failed');
       }
-      if (selectedPath === path){
+      if (selectedPath === oldPath){
         setSelectedPath(data.new_path || newPath);
       }
       setIdeStatus('Renamed');
@@ -435,6 +439,42 @@
       setIdeStatus('Rename failed');
       window.alert('Failed to rename entry.');
     }
+  }
+
+  function openRenameModal(path){
+    if (!path) return;
+    pendingRenamePath = path;
+    const parts = path.split('/');
+    const oldName = parts[parts.length - 1] || 'payloads';
+    if (renameModalPath){
+      renameModalPath.textContent = path || 'payloads/';
+    }
+    if (renameModalName){
+      renameModalName.value = oldName;
+      renameModalName.select();
+    }
+    if (renameModal){
+      renameModal.classList.remove('hidden');
+    }
+  }
+
+  function closeRenameModal(){
+    if (renameModal){
+      renameModal.classList.add('hidden');
+    }
+    pendingRenamePath = null;
+  }
+
+  async function handleRenameConfirm(){
+    if (!pendingRenamePath || !renameModalName) return;
+    const newName = renameModalName.value.trim();
+    if (!newName) return;
+    await performRename(pendingRenamePath, newName);
+    closeRenameModal();
+  }
+
+  function renameEntry(path){
+    openRenameModal(path);
   }
 
   async function deleteEntry(path){
@@ -654,6 +694,24 @@
       } else if (e.key === 'Escape'){
         e.preventDefault();
         closeEntryModal();
+      }
+    });
+  }
+
+  if (renameModalCancel) renameModalCancel.addEventListener('click', () => closeRenameModal());
+  if (renameModalClose) renameModalClose.addEventListener('click', () => closeRenameModal());
+  if (renameModalConfirm) renameModalConfirm.addEventListener('click', () => handleRenameConfirm());
+  if (renameModal && renameModalName){
+    renameModal.addEventListener('click', (e) => {
+      if (e.target === renameModal) closeRenameModal();
+    });
+    renameModalName.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter'){
+        e.preventDefault();
+        handleRenameConfirm();
+      } else if (e.key === 'Escape'){
+        e.preventDefault();
+        closeRenameModal();
       }
     });
   }
