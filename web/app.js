@@ -34,6 +34,7 @@
   const themeNameEl = document.getElementById('themeName');
   const navDevice = document.getElementById('navDevice');
   const navLoot = document.getElementById('navLoot');
+  const navPayloadStudio = document.getElementById('navPayloadStudio');
   const themesToggle = document.getElementById('themesToggle');
   const themesList = document.getElementById('themesList');
   const themeButtons = document.querySelectorAll('[data-theme]');
@@ -642,6 +643,7 @@
       lootList.dataset.loaded = '1';
     }
   });
+  if (navPayloadStudio) navPayloadStudio.href = './ide.html' + (location.search || '');
   if (themesToggle) themesToggle.addEventListener('click', () => {
     if (themesList) themesList.classList.toggle('hidden');
   });

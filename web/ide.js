@@ -30,6 +30,13 @@
   const treeContextMenuPanel = document.getElementById('treeContextMenuPanel');
   const ctxRenameBtn = document.getElementById('ctxRename');
   const ctxDeleteBtn = document.getElementById('ctxDelete');
+  const deleteModal = document.getElementById('deleteModal');
+  const deleteModalPath = document.getElementById('deleteModalPath');
+  const deleteModalConfirm = document.getElementById('deleteModalConfirm');
+  const deleteModalCancel = document.getElementById('deleteModalCancel');
+  const deleteModalClose = document.getElementById('deleteModalClose');
+  const leftPanel = document.getElementById('leftPanel');
+  const resizeHandle = document.getElementById('resizeHandle');
 
   // ------------------------ Helpers ------------------------
   function setIdeStatus(text){
@@ -521,10 +528,30 @@
     openRenameModal(path);
   }
 
-  async function deleteEntry(path){
+  let pendingDeletePath = null;
+
+  function openDeleteModal(path){
     if (!path) return;
-    const ok = window.confirm(`Delete "${path}"? This cannot be undone.`);
-    if (!ok) return;
+    pendingDeletePath = path;
+    if (deleteModalPath){
+      deleteModalPath.textContent = path || 'payloads/';
+    }
+    if (deleteModal){
+      deleteModal.classList.remove('hidden');
+    }
+  }
+
+  function closeDeleteModal(){
+    if (deleteModal){
+      deleteModal.classList.add('hidden');
+    }
+    pendingDeletePath = null;
+  }
+
+  async function handleDeleteConfirm(){
+    if (!pendingDeletePath) return;
+    const path = pendingDeletePath;
+    closeDeleteModal();
     setIdeStatus('Deleting...');
     try{
       const url = getApiUrl('/api/payloads/entry', { path });
@@ -547,6 +574,10 @@
       setIdeStatus('Delete failed');
       window.alert('Failed to delete entry.');
     }
+  }
+
+  function deleteEntry(path){
+    openDeleteModal(path);
   }
 
   // ------------------------ Run payload ------------------------
@@ -760,6 +791,21 @@
     });
   }
 
+  if (deleteModalCancel) deleteModalCancel.addEventListener('click', () => closeDeleteModal());
+  if (deleteModalClose) deleteModalClose.addEventListener('click', () => closeDeleteModal());
+  if (deleteModalConfirm) deleteModalConfirm.addEventListener('click', () => handleDeleteConfirm());
+  if (deleteModal){
+    deleteModal.addEventListener('click', (e) => {
+      if (e.target === deleteModal) closeDeleteModal();
+    });
+    deleteModal.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape'){
+        e.preventDefault();
+        closeDeleteModal();
+      }
+    });
+  }
+
   window.addEventListener('beforeunload', (e) => {
     if (isDirty){
       e.preventDefault();
@@ -767,6 +813,49 @@
       return '';
     }
   });
+
+  // ------------------------ Resize handle ------------------------
+  let isResizing = false;
+  let startX = 0;
+  let startWidth = 0;
+
+  function startResize(e){
+    if (!leftPanel) return;
+    isResizing = true;
+    startX = e.clientX || (e.touches && e.touches[0].clientX) || 0;
+    startWidth = leftPanel.offsetWidth;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    e.preventDefault();
+  }
+
+  function doResize(e){
+    if (!isResizing || !leftPanel) return;
+    const currentX = e.clientX || (e.touches && e.touches[0].clientX) || 0;
+    const diff = currentX - startX;
+    const newWidth = startWidth + diff;
+    const minWidth = 200;
+    const maxWidth = window.innerWidth * 0.5; // Max 50% of window width
+    const clampedWidth = Math.max(minWidth, Math.min(maxWidth, newWidth));
+    leftPanel.style.width = `${clampedWidth}px`;
+    leftPanel.style.flexShrink = '0';
+    e.preventDefault();
+  }
+
+  function stopResize(){
+    isResizing = false;
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+  }
+
+  if (resizeHandle && leftPanel){
+    resizeHandle.addEventListener('mousedown', startResize);
+    resizeHandle.addEventListener('touchstart', startResize);
+    document.addEventListener('mousemove', doResize);
+    document.addEventListener('touchmove', doResize);
+    document.addEventListener('mouseup', stopResize);
+    document.addEventListener('touchend', stopResize);
+  }
 
   // ------------------------ Init ------------------------
   setupHiDPI();
