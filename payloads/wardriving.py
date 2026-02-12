@@ -457,16 +457,82 @@ class WardrivingScanner:
         except:
             return []
     
+    def _find_monitor_capable_interface(self):
+        """
+        Check each wireless interface's driver to find one that supports
+        monitor mode.  Broadcom brcmfmac does NOT.  RTL88xx / Atheros do.
+        Scans /sys/class/net/ directly (iwconfig misses some interfaces).
+        Returns the best interface name, or None.
+        """
+        # Discover all wireless interfaces via /sys (more reliable than iwconfig)
+        interfaces = []
+        try:
+            for name in os.listdir("/sys/class/net"):
+                if name == "lo":
+                    continue
+                # An interface is wireless if /sys/class/net/<name>/wireless exists
+                if os.path.isdir(f"/sys/class/net/{name}/wireless"):
+                    interfaces.append(name)
+        except Exception:
+            pass
+
+        # Fallback to iwconfig if /sys found nothing
+        if not interfaces:
+            interfaces = self.get_wifi_interfaces()
+
+        if not interfaces:
+            return None
+
+        print(f"  Found wireless interfaces: {interfaces}", flush=True)
+
+        # Drivers known NOT to support monitor mode
+        no_monitor = {'brcmfmac', 'b43', 'wl'}
+
+        capable = []
+        fallback = []
+        for iface in interfaces:
+            driver = ""
+            driver_path = f"/sys/class/net/{iface}/device/driver"
+            try:
+                real = os.path.realpath(driver_path)
+                driver = os.path.basename(real)
+            except Exception:
+                pass
+
+            print(f"  {iface}: driver={driver or 'unknown'}", flush=True)
+
+            if driver and driver in no_monitor:
+                fallback.append(iface)
+            else:
+                capable.append(iface)
+
+        if capable:
+            print(f"Monitor-capable interface: {capable[0]}", flush=True)
+            return capable[0]
+        if fallback:
+            print(f"No confirmed monitor-capable interface, trying: {fallback[0]}", flush=True)
+            return fallback[0]
+        return None
+
     def setup_monitor_mode(self, interface):
         """Comprehensive monitor mode setup"""
         print(f"Setting up monitor mode on {interface}")
         
-        # Step 1: Kill interfering processes
+        # Step 1: Kill interfering processes (with timeouts so we never hang)
         print("Stopping interfering services...")
-        subprocess.run(['sudo', 'systemctl', 'stop', 'NetworkManager'], capture_output=True)
-        subprocess.run(['sudo', 'pkill', '-f', 'wpa_supplicant'], capture_output=True)
-        subprocess.run(['sudo', 'pkill', '-f', 'dhcpcd'], capture_output=True)
-        time.sleep(3)
+        for cmd_label, cmd in [
+            ("NetworkManager", ['sudo', 'systemctl', 'stop', 'NetworkManager']),
+            ("wpa_supplicant", ['sudo', 'pkill', '-f', 'wpa_supplicant']),
+            ("dhcpcd",         ['sudo', 'pkill', '-f', 'dhcpcd']),
+        ]:
+            try:
+                subprocess.run(cmd, capture_output=True, timeout=5)
+                print(f"  {cmd_label} stopped", flush=True)
+            except subprocess.TimeoutExpired:
+                print(f"  {cmd_label} timed out - skipping", flush=True)
+            except Exception:
+                print(f"  {cmd_label} not running", flush=True)
+        time.sleep(1)
         
         # Step 2: Check current interface status
         result = subprocess.run(['iwconfig', interface], capture_output=True, text=True)
@@ -1295,20 +1361,13 @@ class WardrivingScanner:
             self.log(f"Reusing existing monitor interface: {self.monitor_interface}")
             print(f"Reusing monitor interface: {self.monitor_interface}")
         else:
-            # Get available WiFi interfaces
-            interfaces = self.get_wifi_interfaces()
-            if not interfaces:
+            # Auto-detect which interface supports monitor mode
+            print("Detecting monitor-capable WiFi interface...", flush=True)
+            iface = self._find_monitor_capable_interface()
+            if not iface:
                 print("No WiFi interfaces found")
                 return
-            
-            # Use USB WiFi interface (wlan1) instead of built-in (wlan0)
-            # Built-in Raspberry Pi WiFi doesn't support monitor mode
-            if 'wlan1' in interfaces:
-                self.interface = 'wlan1'
-            elif len(interfaces) > 1:
-                self.interface = interfaces[1]  # Second interface if available
-            else:
-                self.interface = interfaces[0]  # Fallback to first
+            self.interface = iface
             print(f"Using interface: {self.interface}")
             
             # Setup monitor mode
