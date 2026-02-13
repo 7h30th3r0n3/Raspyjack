@@ -6,6 +6,8 @@ Compatible websockets v11+ / v12+
 
 import asyncio
 import base64
+import hmac
+import hashlib
 import json
 import logging
 import os
@@ -28,6 +30,8 @@ HOST = os.environ.get("RJ_WS_HOST", "0.0.0.0")
 PORT = int(os.environ.get("RJ_WS_PORT", "8765"))
 FPS = float(os.environ.get("RJ_FPS", "10"))
 TOKEN_FILE = Path(os.environ.get("RJ_WS_TOKEN_FILE", "/root/Raspyjack/.webui_token"))
+AUTH_FILE = Path(os.environ.get("RJ_WEB_AUTH_FILE", "/root/Raspyjack/.webui_auth.json"))
+AUTH_SECRET_FILE = Path(os.environ.get("RJ_WEB_AUTH_SECRET_FILE", "/root/Raspyjack/.webui_session_secret"))
 INPUT_SOCK = os.environ.get("RJ_INPUT_SOCK", "/dev/shm/rj_input.sock")
 SHELL_CMD = os.environ.get("RJ_SHELL_CMD", "/bin/bash")
 SHELL_CWD = os.environ.get("RJ_SHELL_CWD", "/")
@@ -56,6 +60,66 @@ def _load_shared_token():
 
 
 TOKEN = _load_shared_token()
+
+
+def _load_line_secret(path: Path):
+    try:
+        if not path.exists():
+            return None
+        for line in path.read_text(encoding="utf-8").splitlines():
+            value = line.strip()
+            if value and not value.startswith("#"):
+                return value
+    except Exception:
+        pass
+    return None
+
+
+def _auth_initialized() -> bool:
+    try:
+        if not AUTH_FILE.exists():
+            return False
+        raw = AUTH_FILE.read_text(encoding="utf-8")
+        data = json.loads(raw) if raw else {}
+        return bool(data.get("username") and data.get("password_hash"))
+    except Exception:
+        return False
+
+
+AUTH_SECRET = _load_line_secret(AUTH_SECRET_FILE)
+
+
+def _b64url_decode(text: str) -> bytes:
+    padding = "=" * (-len(text) % 4)
+    return base64.urlsafe_b64decode(text + padding)
+
+
+def _b64url_encode(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _hmac_sign(payload: str) -> str:
+    if not AUTH_SECRET:
+        return ""
+    mac = hmac.new(AUTH_SECRET.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).digest()
+    return _b64url_encode(mac)
+
+
+def _read_signed_token(token: str):
+    if not AUTH_SECRET:
+        return None
+    try:
+        payload, sig = token.split(".", 1)
+    except ValueError:
+        return None
+    if not hmac.compare_digest(_hmac_sign(payload), sig):
+        return None
+    try:
+        raw = _b64url_decode(payload)
+        data = json.loads(raw.decode("utf-8"))
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
 
 
 def _get_interface_ip(interface: str):
@@ -94,6 +158,10 @@ if TOKEN:
     log.info("WebSocket token auth enabled")
 else:
     log.warning("WebSocket token auth disabled (set RJ_WS_TOKEN or token file)")
+if AUTH_SECRET:
+    log.info("WebSocket session-ticket auth enabled")
+else:
+    log.warning("WebSocket session-ticket auth disabled (missing auth secret)")
 
 
 # --------------------------- Client Registry ---------------------------------
@@ -292,11 +360,26 @@ def _token_ok(value: str) -> bool:
     return str(value or "").strip() == TOKEN
 
 
+def _ws_ticket_ok(value: str) -> bool:
+    claims = _read_signed_token(str(value or "").strip())
+    if not claims:
+        return False
+    if claims.get("typ") != "ws_ticket":
+        return False
+    try:
+        return int(claims.get("exp", 0)) >= int(time.time())
+    except Exception:
+        return False
+
+
 # ----------------------------- WS Handler -------------------------------------
 async def handle_client(ws):
     # websockets v12+ : path is in ws.request.path
     path = getattr(getattr(ws, "request", None), "path", "/")
-    authenticated = authorize(path) if TOKEN else True
+    if not _auth_initialized():
+        authenticated = True
+    else:
+        authenticated = authorize(path) if TOKEN else False
     if authenticated:
         async with clients_lock:
             clients.add(ws)
@@ -318,9 +401,12 @@ async def handle_client(ws):
                 continue
 
             if not authenticated:
-                if data.get("type") != "auth":
+                msg_type = data.get("type")
+                if msg_type not in ("auth", "auth_session"):
                     continue
-                if _token_ok(data.get("token", "")):
+                token_ok = msg_type == "auth" and _token_ok(data.get("token", ""))
+                sess_ok = msg_type == "auth_session" and _ws_ticket_ok(data.get("ticket", ""))
+                if token_ok or sess_ok:
                     authenticated = True
                     async with clients_lock:
                         clients.add(ws)

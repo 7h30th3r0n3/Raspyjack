@@ -31,8 +31,13 @@ Open in a browser:
 ```
 http://<device-ip>:8080
 ```
-If token auth is enabled, the UI prompts for token and sends it via
-`Authorization: Bearer ...` for API calls and WS auth messages.
+
+## Authentication flow
+- First run: blocking setup overlay asks for admin username/password.
+- After setup: blocking login overlay appears on WebUI and IDE.
+- Successful login creates an HTTP-only session cookie used for API calls.
+- WebSocket access uses a short-lived WS ticket issued by `web_server.py`.
+- Emergency fallback: recovery token auth is still supported.
 
 ## Environment variables (optional)
 `device_server.py` supports:
@@ -42,6 +47,10 @@ If token auth is enabled, the UI prompts for token and sends it via
 - `RJ_FPS` (default `10`)
 - `RJ_WS_TOKEN` (optional shared token)
 - `RJ_WS_TOKEN_FILE` (optional token file; default `/root/Raspyjack/.webui_token`)
+- `RJ_WEB_AUTH_FILE` (default `/root/Raspyjack/.webui_auth.json`)
+- `RJ_WEB_AUTH_SECRET_FILE` (default `/root/Raspyjack/.webui_session_secret`)
+- `RJ_WEB_SESSION_TTL` (default `28800`)
+- `RJ_WEB_WS_TICKET_TTL` (default `120`)
 - `RJ_INPUT_SOCK` (default `/dev/shm/rj_input.sock`)
 
 ## Notes

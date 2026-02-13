@@ -138,6 +138,7 @@ sudo systemctl enable --now raspyjack.service
 # ───── 5‑b ▸ device server & WebUI split services ───────────
 # Shared WebUI token (used by both HTTP + WS servers)
 WEBUI_TOKEN_FILE=/root/Raspyjack/.webui_token
+WEBUI_AUTH_SECRET_FILE=/root/Raspyjack/.webui_session_secret
 step "Configuring shared WebUI token at $WEBUI_TOKEN_FILE …"
 if ! sudo test -s "$WEBUI_TOKEN_FILE"; then
   sudo python3 - <<'PY'
@@ -153,6 +154,22 @@ else
 fi
 sudo chown root:root "$WEBUI_TOKEN_FILE"
 sudo chmod 600 "$WEBUI_TOKEN_FILE"
+
+step "Configuring WebUI auth secret at $WEBUI_AUTH_SECRET_FILE …"
+if ! sudo test -s "$WEBUI_AUTH_SECRET_FILE"; then
+  sudo python3 - <<'PY'
+from pathlib import Path
+import secrets
+
+path = Path("/root/Raspyjack/.webui_session_secret")
+path.write_text(secrets.token_urlsafe(48) + "\n", encoding="utf-8")
+print(f"[OK] Created {path}")
+PY
+else
+  info "Existing WebUI auth secret found, keeping it."
+fi
+sudo chown root:root "$WEBUI_AUTH_SECRET_FILE"
+sudo chmod 600 "$WEBUI_AUTH_SECRET_FILE"
 
 # Device server
 DEVICE_SERVICE=/etc/systemd/system/raspyjack-device.service
@@ -172,6 +189,8 @@ Restart=on-failure
 User=root
 Environment=PYTHONUNBUFFERED=1
 Environment=RJ_WS_TOKEN_FILE=/root/Raspyjack/.webui_token
+Environment=RJ_WEB_AUTH_SECRET_FILE=/root/Raspyjack/.webui_session_secret
+Environment=RJ_WEB_AUTH_FILE=/root/Raspyjack/.webui_auth.json
 
 [Install]
 WantedBy=multi-user.target
@@ -198,6 +217,8 @@ Restart=on-failure
 User=root
 Environment=PYTHONUNBUFFERED=1
 Environment=RJ_WS_TOKEN_FILE=/root/Raspyjack/.webui_token
+Environment=RJ_WEB_AUTH_SECRET_FILE=/root/Raspyjack/.webui_session_secret
+Environment=RJ_WEB_AUTH_FILE=/root/Raspyjack/.webui_auth.json
 
 [Install]
 WantedBy=multi-user.target

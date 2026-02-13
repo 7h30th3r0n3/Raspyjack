@@ -82,8 +82,14 @@
   const shellConnectBtn = document.getElementById('shellConnect');
   const shellDisconnectBtn = document.getElementById('shellDisconnect');
   const authModal = document.getElementById('authModal');
+  const authModalTitle = document.getElementById('authModalTitle');
   const authModalMessage = document.getElementById('authModalMessage');
+  const authModalUsername = document.getElementById('authModalUsername');
+  const authModalPassword = document.getElementById('authModalPassword');
+  const authModalPasswordConfirm = document.getElementById('authModalPasswordConfirm');
   const authModalToken = document.getElementById('authModalToken');
+  const authModalError = document.getElementById('authModalError');
+  const authModalToggleRecovery = document.getElementById('authModalToggleRecovery');
   const authModalConfirm = document.getElementById('authModalConfirm');
   const authModalCancel = document.getElementById('authModalCancel');
   const authModalClose = document.getElementById('authModalClose');
@@ -116,7 +122,10 @@
 
   const AUTH_STORAGE_KEY = 'rj.authToken';
   let authToken = '';
+  let wsTicket = '';
   let authPromptResolver = null;
+  let authMode = 'login';
+  let authRecoveryMode = false;
 
   function saveAuthToken(token){
     authToken = String(token || '').trim();
@@ -147,28 +156,77 @@
     }catch{}
   }
 
-  function resolveAuthPrompt(token){
+  function setAuthError(msg){
+    if (!authModalError) return;
+    const text = String(msg || '').trim();
+    authModalError.textContent = text;
+    authModalError.classList.toggle('hidden', !text);
+  }
+
+  function setAuthMode(mode, message){
+    authMode = mode;
+    if (authModalTitle){
+      authModalTitle.textContent = mode === 'bootstrap' ? 'Create Admin Account' : 'Login Required';
+    }
+    if (authModalMessage){
+      authModalMessage.textContent = message || (mode === 'bootstrap'
+        ? 'Set the first admin account for this device.'
+        : 'Log in to continue.');
+    }
+    const isBootstrap = mode === 'bootstrap';
+    if (authModalPasswordConfirm) authModalPasswordConfirm.classList.toggle('hidden', !isBootstrap);
+    if (authModalUsername) authModalUsername.classList.toggle('hidden', authRecoveryMode);
+    if (authModalPassword) authModalPassword.classList.toggle('hidden', authRecoveryMode);
+    if (authModalToken) authModalToken.classList.toggle('hidden', !authRecoveryMode);
+    if (authModalToggleRecovery){
+      authModalToggleRecovery.classList.toggle('hidden', isBootstrap);
+      authModalToggleRecovery.textContent = authRecoveryMode ? 'Use username/password login' : 'Use recovery token instead';
+    }
+    if (authModalConfirm) authModalConfirm.textContent = isBootstrap ? 'Create Admin' : 'Login';
+  }
+
+  function setRecoveryMode(enabled){
+    authRecoveryMode = !!enabled;
+    setAuthMode(authMode, authModalMessage ? authModalMessage.textContent : '');
+    setAuthError('');
+    if (authRecoveryMode){
+      if (authModalToken) authModalToken.focus();
+    } else if (authModalUsername) {
+      authModalUsername.focus();
+    }
+  }
+
+  function resolveAuthPrompt(payload){
     if (!authPromptResolver) return;
     const resolver = authPromptResolver;
     authPromptResolver = null;
-    const t = String(token || '').trim();
-    if (t) saveAuthToken(t);
     if (authModal) authModal.classList.add('hidden');
-    resolver(t);
+    resolver(payload || null);
   }
 
-  function promptForAuthToken(message = 'Enter your WebUI token to continue.'){
-    if (!authModal || !authModalToken || !authModalConfirm || !authModalCancel || !authModalClose){
-      return Promise.resolve('');
+  function promptForAuth(message, mode = 'login'){
+    if (!authModal || !authModalConfirm || !authModalCancel || !authModalClose){
+      return Promise.resolve(null);
     }
     if (authPromptResolver){
-      return Promise.resolve('');
+      return Promise.resolve(null);
     }
-    if (authModalMessage) authModalMessage.textContent = message;
-    authModalToken.value = authToken || '';
+    if (authModalUsername) authModalUsername.value = '';
+    if (authModalPassword) authModalPassword.value = '';
+    if (authModalPasswordConfirm) authModalPasswordConfirm.value = '';
+    if (authModalToken) authModalToken.value = authToken || '';
+    authRecoveryMode = false;
+    setAuthMode(mode, message);
+    setAuthError('');
     authModal.classList.remove('hidden');
     setTimeout(() => {
-      try { authModalToken.focus(); authModalToken.select(); } catch {}
+      try {
+        if (mode === 'bootstrap'){
+          authModalUsername && authModalUsername.focus();
+        } else if (authModalUsername) {
+          authModalUsername.focus();
+        }
+      } catch {}
     }, 10);
     return new Promise(resolve => {
       authPromptResolver = resolve;
@@ -186,14 +244,142 @@
   async function apiFetch(url, options = {}, allowRetry = true){
     const merged = Object.assign({}, options);
     merged.headers = authHeaders(merged.headers);
+    merged.credentials = 'include';
     const res = await fetch(url, merged);
     if (res.status === 401 && allowRetry){
-      const t = await promptForAuthToken('Authentication required. Enter WebUI token.');
-      if (t){
+      const ok = await ensureAuthenticated('Session expired. Log in again.');
+      if (ok){
         return apiFetch(url, options, false);
       }
     }
     return res;
+  }
+
+  async function fetchBootstrapStatus(){
+    try{
+      const res = await fetch(getApiUrl('/api/auth/bootstrap-status'), { cache: 'no-store' });
+      const data = await res.json();
+      return !!(res.ok && data && data.initialized);
+    }catch{
+      return true;
+    }
+  }
+
+  async function attemptBootstrap(message){
+    const input = await promptForAuth(message || 'Set the first admin account for this device.', 'bootstrap');
+    if (!input) return false;
+    const username = String(input.username || '').trim();
+    const password = String(input.password || '');
+    const confirm = String(input.confirm || '');
+    if (!username || !password){
+      setAuthError('Username and password are required.');
+      return attemptBootstrap(message);
+    }
+    if (password !== confirm){
+      setAuthError('Passwords do not match.');
+      return attemptBootstrap(message);
+    }
+    try{
+      const res = await fetch(getApiUrl('/api/auth/bootstrap'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ username, password }),
+      });
+      const data = await res.json();
+      if (!res.ok){
+        setAuthError(data && data.error ? data.error : 'Bootstrap failed');
+        return attemptBootstrap(message);
+      }
+      saveAuthToken('');
+      return true;
+    }catch{
+      setAuthError('Bootstrap request failed.');
+      return attemptBootstrap(message);
+    }
+  }
+
+  async function attemptLogin(message){
+    const input = await promptForAuth(message || 'Log in to continue.', 'login');
+    if (!input) return false;
+
+    if (input.recovery){
+      const token = String(input.token || '').trim();
+      if (!token){
+        setAuthError('Recovery token is required.');
+        return attemptLogin(message);
+      }
+      saveAuthToken(token);
+      try{
+        const meRes = await fetch(getApiUrl('/api/auth/me'), {
+          cache: 'no-store',
+          headers: authHeaders({}),
+          credentials: 'include',
+        });
+        if (!meRes.ok){
+          setAuthError('Invalid recovery token.');
+          return attemptLogin(message);
+        }
+        return true;
+      }catch{
+        setAuthError('Recovery auth failed.');
+        return attemptLogin(message);
+      }
+    }
+
+    const username = String(input.username || '').trim();
+    const password = String(input.password || '');
+    if (!username || !password){
+      setAuthError('Username and password are required.');
+      return attemptLogin(message);
+    }
+    try{
+      const res = await fetch(getApiUrl('/api/auth/login'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ username, password }),
+      });
+      const data = await res.json();
+      if (!res.ok){
+        setAuthError(data && data.error ? data.error : 'Login failed');
+        return attemptLogin(message);
+      }
+      saveAuthToken('');
+      return true;
+    }catch{
+      setAuthError('Login request failed.');
+      return attemptLogin(message);
+    }
+  }
+
+  async function refreshWsTicket(){
+    wsTicket = '';
+    if (authToken) return;
+    try{
+      const res = await fetch(getApiUrl('/api/auth/ws-ticket'), {
+        method: 'POST',
+        credentials: 'include',
+      });
+      const data = await res.json();
+      if (res.ok && data && data.ticket){
+        wsTicket = String(data.ticket);
+      }
+    }catch{}
+  }
+
+  async function ensureAuthenticated(message){
+    const initialized = await fetchBootstrapStatus();
+    if (!initialized){
+      const bootOk = await attemptBootstrap(message);
+      if (!bootOk) return false;
+      await refreshWsTicket();
+      return true;
+    }
+    const loginOk = await attemptLogin(message);
+    if (!loginOk) return false;
+    await refreshWsTicket();
+    return true;
   }
 
   let ws = null;
@@ -345,7 +531,11 @@
     ws.onopen = () => {
       setStatus('Connected');
       wsAuthenticated = true;
-      if (authToken){
+      if (wsTicket){
+        try{
+          ws.send(JSON.stringify({ type: 'auth_session', ticket: wsTicket }));
+        }catch{}
+      } else if (authToken){
         try{
           ws.send(JSON.stringify({ type: 'auth', token: authToken }));
         }catch{}
@@ -379,23 +569,31 @@
         }
         if (msg.type === 'auth_required'){
           wsAuthenticated = false;
-          if (!authToken){
-            promptForAuthToken('WebSocket authentication required. Enter WebUI token.')
-              .then((t) => {
-                if (!t){
-                  setStatus('Auth required');
-                  return;
-                }
-                if (!ws || ws.readyState !== WebSocket.OPEN) return;
+          if (wsTicket){
+            try{
+              ws.send(JSON.stringify({ type: 'auth_session', ticket: wsTicket }));
+            }catch{}
+            return;
+          }
+          if (authToken){
+            try{
+              ws.send(JSON.stringify({ type: 'auth', token: authToken }));
+            }catch{}
+            return;
+          }
+          ensureAuthenticated('Authentication required to use WebSocket.')
+            .then(() => {
+              if (!ws || ws.readyState !== WebSocket.OPEN) return;
+              if (wsTicket){
+                try{
+                  ws.send(JSON.stringify({ type: 'auth_session', ticket: wsTicket }));
+                }catch{}
+              } else if (authToken){
                 try{
                   ws.send(JSON.stringify({ type: 'auth', token: authToken }));
                 }catch{}
-              });
-            return;
-          }
-          try{
-            ws.send(JSON.stringify({ type: 'auth', token: authToken }));
-          }catch{}
+              }
+            });
           return;
         }
         if (msg.type === 'auth_ok'){
@@ -1016,32 +1214,60 @@
     if (e.target === lootPreview) closePreview();
   });
   if (authModalConfirm) authModalConfirm.addEventListener('click', () => {
-    resolveAuthPrompt(authModalToken ? authModalToken.value : '');
+    resolveAuthPrompt({
+      recovery: authRecoveryMode,
+      token: authModalToken ? authModalToken.value : '',
+      username: authModalUsername ? authModalUsername.value : '',
+      password: authModalPassword ? authModalPassword.value : '',
+      confirm: authModalPasswordConfirm ? authModalPasswordConfirm.value : '',
+    });
   });
-  if (authModalCancel) authModalCancel.addEventListener('click', () => resolveAuthPrompt(''));
-  if (authModalClose) authModalClose.addEventListener('click', () => resolveAuthPrompt(''));
+  if (authModalCancel) authModalCancel.addEventListener('click', () => resolveAuthPrompt(null));
+  if (authModalClose) authModalClose.addEventListener('click', () => resolveAuthPrompt(null));
   if (authModal) authModal.addEventListener('click', (e) => {
-    if (e.target === authModal) resolveAuthPrompt('');
+    if (e.target === authModal) resolveAuthPrompt(null);
   });
-  if (authModalToken) authModalToken.addEventListener('keydown', (e) => {
+  if (authModalToggleRecovery) authModalToggleRecovery.addEventListener('click', () => {
+    setRecoveryMode(!authRecoveryMode);
+  });
+  const authSubmitFromEnter = (e) => {
     if (e.key === 'Enter'){
       e.preventDefault();
-      resolveAuthPrompt(authModalToken.value);
+      resolveAuthPrompt({
+        recovery: authRecoveryMode,
+        token: authModalToken ? authModalToken.value : '',
+        username: authModalUsername ? authModalUsername.value : '',
+        password: authModalPassword ? authModalPassword.value : '',
+        confirm: authModalPasswordConfirm ? authModalPasswordConfirm.value : '',
+      });
     } else if (e.key === 'Escape'){
       e.preventDefault();
-      resolveAuthPrompt('');
+      resolveAuthPrompt(null);
     }
-  });
+  };
+  if (authModalToken) authModalToken.addEventListener('keydown', authSubmitFromEnter);
+  if (authModalUsername) authModalUsername.addEventListener('keydown', authSubmitFromEnter);
+  if (authModalPassword) authModalPassword.addEventListener('keydown', authSubmitFromEnter);
+  if (authModalPasswordConfirm) authModalPasswordConfirm.addEventListener('keydown', authSubmitFromEnter);
   loadAuthToken();
   loadThemePreference();
   applyTheme();
   setActiveTab('device');
-  connect();
-  loadPayloads();
-  setInterval(pollPayloadStatus, 1500);
-  setInterval(() => {
-    if (systemOpen){
-      loadSystemStatus();
-    }
-  }, 3000);
+  const startAfterAuth = () => {
+    ensureAuthenticated('Log in to access RaspyJack WebUI.').then((ok) => {
+      if (!ok){
+        setTimeout(startAfterAuth, 0);
+        return;
+      }
+      connect();
+      loadPayloads();
+      setInterval(pollPayloadStatus, 1500);
+      setInterval(() => {
+        if (systemOpen){
+          loadSystemStatus();
+        }
+      }, 3000);
+    });
+  };
+  startAfterAuth();
 })();

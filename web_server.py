@@ -11,24 +11,34 @@ Routes:
   /api/loot/view      -> text preview (read-only)
   /api/system/status  -> live system monitor metrics
   /api/settings/discord_webhook -> get/save Discord webhook
+  /api/auth/*         -> bootstrap/login/session endpoints
 
 Environment:
   RJ_WEB_HOST  Host to bind (default: 0.0.0.0)
   RJ_WEB_PORT  Port to bind (default: 8080)
   RJ_WS_TOKEN  Optional shared token for API access (Bearer header)
   RJ_WS_TOKEN_FILE Optional token file (default: <repo>/.webui_token)
+  RJ_WEB_AUTH_FILE Auth user storage file (default: /root/Raspyjack/.webui_auth.json)
+  RJ_WEB_AUTH_SECRET_FILE Session signing secret file (default: /root/Raspyjack/.webui_session_secret)
+  RJ_WEB_SESSION_TTL Session lifetime seconds (default: 28800)
+  RJ_WEB_WS_TICKET_TTL WS ticket lifetime seconds (default: 120)
 """
 
 from __future__ import annotations
 
 import json
+import base64
+import hmac
+import hashlib
 import mimetypes
 import os
+import secrets
 import shutil
 import subprocess
 import threading
 import time
 from http import HTTPStatus
+from http.cookies import SimpleCookie
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse, unquote
@@ -40,6 +50,11 @@ PAYLOADS_DIR = ROOT_DIR / "payloads"
 PAYLOAD_STATE_PATH = Path("/dev/shm/rj_payload_state.json")
 DISCORD_WEBHOOK_PATH = ROOT_DIR / "discord_webhook.txt"
 TOKEN_FILE = Path(os.environ.get("RJ_WS_TOKEN_FILE", str(ROOT_DIR / ".webui_token")))
+AUTH_FILE = Path(os.environ.get("RJ_WEB_AUTH_FILE", "/root/Raspyjack/.webui_auth.json"))
+AUTH_SECRET_FILE = Path(os.environ.get("RJ_WEB_AUTH_SECRET_FILE", "/root/Raspyjack/.webui_session_secret"))
+SESSION_COOKIE_NAME = "rj_session"
+SESSION_TTL_SECONDS = int(os.environ.get("RJ_WEB_SESSION_TTL", str(8 * 60 * 60)))
+WS_TICKET_TTL_SECONDS = int(os.environ.get("RJ_WEB_WS_TICKET_TTL", "120"))
 
 
 def _load_shared_token() -> str | None:
@@ -57,9 +72,38 @@ def _load_shared_token() -> str | None:
         pass
     return None
 
+
+def _load_line_secret(path: Path) -> str | None:
+    try:
+        if not path.exists():
+            return None
+        for line in path.read_text(encoding="utf-8").splitlines():
+            value = line.strip()
+            if value and not value.startswith("#"):
+                return value
+    except Exception:
+        pass
+    return None
+
+
+def _load_or_create_auth_secret() -> str:
+    existing = _load_line_secret(AUTH_SECRET_FILE)
+    if existing:
+        return existing
+    generated = secrets.token_urlsafe(48)
+    try:
+        AUTH_SECRET_FILE.parent.mkdir(parents=True, exist_ok=True)
+        AUTH_SECRET_FILE.write_text(generated + "\n", encoding="utf-8")
+        os.chmod(AUTH_SECRET_FILE, 0o600)
+    except Exception:
+        # Fallback for environments where file creation is not possible.
+        pass
+    return generated
+
 HOST = os.environ.get("RJ_WEB_HOST", "0.0.0.0")
 PORT = int(os.environ.get("RJ_WEB_PORT", "8080"))
 TOKEN = _load_shared_token()
+AUTH_SECRET = _load_or_create_auth_secret()
 
 # WebUI only listens on these interfaces — wlan1+ are for attacks/monitor mode
 WEBUI_INTERFACES = ["eth0", "wlan0", "tailscale0"]
@@ -99,6 +143,7 @@ TEXT_EXTS = {
 }
 
 _CPU_SNAPSHOT = None
+_LOGIN_FAILS: dict[str, list[float]] = {}
 
 
 def _is_valid_discord_webhook(url: str) -> bool:
@@ -223,19 +268,162 @@ def _read_ipv4_interfaces() -> list[dict]:
     return out
 
 
-def _auth_ok(handler: SimpleHTTPRequestHandler, query: dict) -> bool:
-    if not TOKEN:
-        return True
+def _b64url_encode(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _b64url_decode(text: str) -> bytes:
+    padding = "=" * (-len(text) % 4)
+    return base64.urlsafe_b64decode(text + padding)
+
+
+def _hmac_sign(payload: str) -> str:
+    mac = hmac.new(AUTH_SECRET.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).digest()
+    return _b64url_encode(mac)
+
+
+def _issue_signed_token(claims: dict) -> str:
+    payload = _b64url_encode(json.dumps(claims, separators=(",", ":")).encode("utf-8"))
+    sig = _hmac_sign(payload)
+    return f"{payload}.{sig}"
+
+
+def _read_signed_token(token: str) -> dict | None:
+    try:
+        payload, sig = token.split(".", 1)
+    except ValueError:
+        return None
+    if not hmac.compare_digest(_hmac_sign(payload), sig):
+        return None
+    try:
+        raw = _b64url_decode(payload)
+        data = json.loads(raw.decode("utf-8"))
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+def _read_auth_config() -> dict | None:
+    try:
+        if not AUTH_FILE.exists():
+            return None
+        data = json.loads(AUTH_FILE.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return None
+        if not data.get("username") or not data.get("password_hash"):
+            return None
+        return data
+    except Exception:
+        return None
+
+
+def _auth_initialized() -> bool:
+    return _read_auth_config() is not None
+
+
+def _hash_password(password: str, salt: str | None = None) -> str:
+    salt = salt or secrets.token_hex(16)
+    rounds = 210000
+    dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), rounds)
+    return f"pbkdf2_sha256${rounds}${salt}${_b64url_encode(dk)}"
+
+
+def _verify_password(password: str, encoded: str) -> bool:
+    try:
+        algo, rounds, salt, digest = encoded.split("$", 3)
+        if algo != "pbkdf2_sha256":
+            return False
+        dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), int(rounds))
+        return hmac.compare_digest(_b64url_encode(dk), digest)
+    except Exception:
+        return False
+
+
+def _write_auth_config(username: str, password: str) -> tuple[bool, str]:
+    user = str(username or "").strip()
+    pwd = str(password or "")
+    if len(user) < 3:
+        return False, "username must be at least 3 characters"
+    if len(user) > 32:
+        return False, "username too long"
+    if len(pwd) < 8:
+        return False, "password must be at least 8 characters"
+    rec = {
+        "username": user,
+        "password_hash": _hash_password(pwd),
+        "created_at": int(time.time()),
+    }
+    try:
+        AUTH_FILE.parent.mkdir(parents=True, exist_ok=True)
+        AUTH_FILE.write_text(json.dumps(rec), encoding="utf-8")
+        os.chmod(AUTH_FILE, 0o600)
+        return True, "ok"
+    except Exception as exc:
+        return False, f"write error: {exc}"
+
+
+def _session_from_cookie(handler: SimpleHTTPRequestHandler) -> dict | None:
+    raw = str(handler.headers.get("Cookie", "") or "")
+    if not raw:
+        return None
+    c = SimpleCookie()
+    try:
+        c.load(raw)
+    except Exception:
+        return None
+    morsel = c.get(SESSION_COOKIE_NAME)
+    if not morsel:
+        return None
+    claims = _read_signed_token(morsel.value)
+    if not claims:
+        return None
+    if claims.get("typ") != "session":
+        return None
+    if int(claims.get("exp", 0)) < int(time.time()):
+        return None
+    if not claims.get("usr"):
+        return None
+    return claims
+
+
+def _bearer_token_from_request(handler: SimpleHTTPRequestHandler, query: dict) -> str:
     try:
         authz = str(handler.headers.get("Authorization", "")).strip()
         if authz.lower().startswith("bearer "):
-            bearer = authz[7:].strip()
-            if bearer == TOKEN:
-                return True
+            return authz[7:].strip()
     except Exception:
         pass
-    # Legacy fallback for older clients still sending ?token=
-    return query.get("token", [None])[0] == TOKEN
+    # Legacy fallback for older links.
+    return str(query.get("token", [""])[0] or "").strip()
+
+
+def _auth_context(handler: SimpleHTTPRequestHandler, query: dict) -> dict | None:
+    sess = _session_from_cookie(handler)
+    if sess:
+        return {"method": "session", "user": str(sess.get("usr")), "claims": sess}
+    bearer = _bearer_token_from_request(handler, query)
+    if TOKEN and bearer and hmac.compare_digest(bearer, TOKEN):
+        return {"method": "token", "user": "token-admin", "claims": None}
+    if not _auth_initialized():
+        return {"method": "bootstrap", "user": "bootstrap", "claims": None}
+    return None
+
+
+def _auth_ok(handler: SimpleHTTPRequestHandler, query: dict) -> bool:
+    ctx = _auth_context(handler, query)
+    return ctx is not None and ctx.get("method") != "bootstrap"
+
+
+def _session_cookie_header(username: str, ttl_seconds: int = SESSION_TTL_SECONDS) -> tuple[str, str]:
+    now = int(time.time())
+    claims = {"typ": "session", "usr": username, "iat": now, "exp": now + int(ttl_seconds)}
+    token = _issue_signed_token(claims)
+    cookie = f"{SESSION_COOKIE_NAME}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={int(ttl_seconds)}"
+    return ("Set-Cookie", cookie)
+
+
+def _clear_session_cookie_header() -> tuple[str, str]:
+    return ("Set-Cookie", f"{SESSION_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0")
 
 
 def _safe_loot_path(raw_path: str) -> Path | None:
@@ -262,9 +450,17 @@ def _safe_payload_path(raw_path: str) -> Path | None:
     return None
 
 
-def _json_response(handler: SimpleHTTPRequestHandler, payload: dict, status: int = 200) -> None:
+def _json_response(
+    handler: SimpleHTTPRequestHandler,
+    payload: dict,
+    status: int = 200,
+    extra_headers: list[tuple[str, str]] | None = None,
+) -> None:
     body = json.dumps(payload).encode("utf-8")
     handler.send_response(status)
+    if extra_headers:
+        for key, value in extra_headers:
+            handler.send_header(key, value)
     handler.send_header("Content-Type", "application/json; charset=utf-8")
     handler.send_header("Content-Length", str(len(body)))
     handler.end_headers()
@@ -309,8 +505,16 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
             or parsed.path.startswith("/api/payloads/")
             or parsed.path.startswith("/api/system/")
             or parsed.path.startswith("/api/settings/")
+            or parsed.path.startswith("/api/auth/")
         ):
             query = parse_qs(parsed.query or "")
+            if parsed.path == "/api/auth/bootstrap-status":
+                self._handle_auth_bootstrap_status()
+                return
+            if parsed.path == "/api/auth/me":
+                self._handle_auth_me(query)
+                return
+
             if not _auth_ok(self, query):
                 _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
                 return
@@ -351,6 +555,20 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         parsed = urlparse(self.path)
+        if parsed.path == "/api/auth/bootstrap":
+            self._handle_auth_bootstrap()
+            return
+        if parsed.path == "/api/auth/login":
+            self._handle_auth_login()
+            return
+        if parsed.path == "/api/auth/logout":
+            self._handle_auth_logout()
+            return
+        if parsed.path == "/api/auth/ws-ticket":
+            query = parse_qs(parsed.query or "")
+            self._handle_auth_ws_ticket(query)
+            return
+
         if parsed.path in ("/api/payloads/start", "/api/payloads/run"):
             query = parse_qs(parsed.query or "")
             if not _auth_ok(self, query):
@@ -830,6 +1048,100 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
             })
         except Exception as exc:
             _json_response(self, {"error": f"status error: {exc}"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+
+    def _client_ip(self) -> str:
+        try:
+            return str(self.client_address[0])
+        except Exception:
+            return "unknown"
+
+    def _handle_auth_bootstrap_status(self) -> None:
+        _json_response(self, {"initialized": _auth_initialized()})
+
+    def _handle_auth_bootstrap(self) -> None:
+        if _auth_initialized():
+            _json_response(self, {"error": "already initialized"}, status=HTTPStatus.CONFLICT)
+            return
+        body = _read_json(self)
+        if body is None:
+            _json_response(self, {"error": "invalid json"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        username = str(body.get("username", "")).strip()
+        password = str(body.get("password", ""))
+        ok, msg = _write_auth_config(username, password)
+        if not ok:
+            _json_response(self, {"error": msg}, status=HTTPStatus.BAD_REQUEST)
+            return
+        _json_response(
+            self,
+            {"ok": True, "initialized": True, "user": username},
+            extra_headers=[_session_cookie_header(username)],
+        )
+
+    def _handle_auth_login(self) -> None:
+        body = _read_json(self)
+        if body is None:
+            _json_response(self, {"error": "invalid json"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        username = str(body.get("username", "")).strip()
+        password = str(body.get("password", ""))
+        now = time.time()
+        ip = self._client_ip()
+        failures = [ts for ts in _LOGIN_FAILS.get(ip, []) if now - ts < 600]
+        _LOGIN_FAILS[ip] = failures
+        if len(failures) >= 6:
+            _json_response(self, {"error": "too many attempts"}, status=HTTPStatus.TOO_MANY_REQUESTS)
+            return
+
+        cfg = _read_auth_config()
+        if not cfg:
+            _json_response(self, {"error": "auth not initialized"}, status=HTTPStatus.PRECONDITION_FAILED)
+            return
+        if username != str(cfg.get("username", "")) or not _verify_password(password, str(cfg.get("password_hash", ""))):
+            failures.append(now)
+            _LOGIN_FAILS[ip] = failures
+            _json_response(self, {"error": "invalid credentials"}, status=HTTPStatus.UNAUTHORIZED)
+            return
+
+        _LOGIN_FAILS[ip] = []
+        _json_response(
+            self,
+            {"ok": True, "user": username},
+            extra_headers=[_session_cookie_header(username)],
+        )
+
+    def _handle_auth_logout(self) -> None:
+        _json_response(self, {"ok": True}, extra_headers=[_clear_session_cookie_header()])
+
+    def _handle_auth_me(self, query: dict) -> None:
+        ctx = _auth_context(self, query)
+        if ctx is None or ctx.get("method") == "bootstrap":
+            _json_response(self, {"authenticated": False}, status=HTTPStatus.UNAUTHORIZED)
+            return
+        _json_response(self, {
+            "authenticated": True,
+            "method": ctx.get("method"),
+            "user": ctx.get("user"),
+            "initialized": _auth_initialized(),
+        })
+
+    def _handle_auth_ws_ticket(self, query: dict) -> None:
+        ctx = _auth_context(self, query)
+        if ctx is None or ctx.get("method") == "bootstrap":
+            _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
+            return
+        now = int(time.time())
+        claims = {
+            "typ": "ws_ticket",
+            "usr": str(ctx.get("user", "user")),
+            "iat": now,
+            "exp": now + int(WS_TICKET_TTL_SECONDS),
+        }
+        _json_response(self, {
+            "ok": True,
+            "ticket": _issue_signed_token(claims),
+            "expires_in": int(WS_TICKET_TTL_SECONDS),
+        })
 
     def _handle_settings_webhook_get(self) -> None:
         webhook_url = _read_discord_webhook_url()
