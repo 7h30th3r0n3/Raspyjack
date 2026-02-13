@@ -470,7 +470,7 @@
         throw new Error(data && data.error ? data.error : 'settings_failed');
       }
       if (discordWebhookInput) discordWebhookInput.value = String(data.url || '');
-      setSettingsStatus(data.configured ? 'Webhook configured' : 'No webhook configured');
+      setSettingsStatus(data.configured ? 'Webhook configured (masked)' : 'No webhook configured');
     } catch(e){
       setSettingsStatus('Failed to load settings');
     }
@@ -489,7 +489,7 @@
       if (!res.ok || !data.ok){
         throw new Error(data && data.error ? data.error : 'save_failed');
       }
-      setSettingsStatus(data.status === 'cleared' ? 'Webhook cleared' : 'Webhook saved');
+      setSettingsStatus(data.status === 'cleared' ? 'Webhook cleared' : 'Webhook saved (masked)');
     } catch(e){
       setSettingsStatus('Failed to save webhook');
     }
