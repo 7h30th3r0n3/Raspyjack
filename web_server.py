@@ -9,6 +9,8 @@ Routes:
   /api/loot/list      -> JSON directory listing (read-only)
   /api/loot/download  -> file download (read-only)
   /api/loot/view      -> text preview (read-only)
+  /api/system/status  -> live system monitor metrics
+  /api/settings/discord_webhook -> get/save Discord webhook
 
 Environment:
   RJ_WEB_HOST  Host to bind (default: 0.0.0.0)
@@ -35,6 +37,7 @@ WEB_DIR = ROOT_DIR / "web"
 LOOT_DIR = ROOT_DIR / "loot"
 PAYLOADS_DIR = ROOT_DIR / "payloads"
 PAYLOAD_STATE_PATH = Path("/dev/shm/rj_payload_state.json")
+DISCORD_WEBHOOK_PATH = ROOT_DIR / "discord_webhook.txt"
 
 HOST = os.environ.get("RJ_WEB_HOST", "0.0.0.0")
 PORT = int(os.environ.get("RJ_WEB_PORT", "8080"))
@@ -78,6 +81,42 @@ TEXT_EXTS = {
 }
 
 _CPU_SNAPSHOT = None
+
+
+def _is_valid_discord_webhook(url: str) -> bool:
+    return url.startswith("https://discord.com/api/webhooks/")
+
+
+def _read_discord_webhook_url() -> str:
+    """Read the configured Discord webhook URL from file."""
+    try:
+        if not DISCORD_WEBHOOK_PATH.exists():
+            return ""
+        for line in DISCORD_WEBHOOK_PATH.read_text(encoding="utf-8").splitlines():
+            value = line.strip()
+            if not value or value.startswith("#"):
+                continue
+            if _is_valid_discord_webhook(value):
+                return value
+        return ""
+    except Exception:
+        return ""
+
+
+def _write_discord_webhook_url(url: str) -> tuple[bool, str]:
+    """Write or clear Discord webhook URL in file."""
+    value = str(url or "").strip()
+    try:
+        if not value:
+            if DISCORD_WEBHOOK_PATH.exists():
+                DISCORD_WEBHOOK_PATH.unlink()
+            return True, "cleared"
+        if not _is_valid_discord_webhook(value):
+            return False, "invalid webhook url"
+        DISCORD_WEBHOOK_PATH.write_text(value + "\n", encoding="utf-8")
+        return True, "saved"
+    except Exception as exc:
+        return False, f"write error: {exc}"
 
 
 def _read_cpu_percent() -> float:
@@ -242,6 +281,7 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
             parsed.path.startswith("/api/loot/")
             or parsed.path.startswith("/api/payloads/")
             or parsed.path.startswith("/api/system/")
+            or parsed.path.startswith("/api/settings/")
         ):
             query = parse_qs(parsed.query or "")
             if not _auth_ok(query):
@@ -272,6 +312,9 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
                 return
             if parsed.path == "/api/system/status":
                 self._handle_system_status()
+                return
+            if parsed.path == "/api/settings/discord_webhook":
+                self._handle_settings_webhook_get()
                 return
 
             _json_response(self, {"error": "not found"}, status=HTTPStatus.NOT_FOUND)
@@ -305,6 +348,13 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
                 _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
                 return
             self._handle_payloads_file_put()
+            return
+        if parsed.path == "/api/settings/discord_webhook":
+            query = parse_qs(parsed.query or "")
+            if not _auth_ok(query):
+                _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
+                return
+            self._handle_settings_webhook_put()
             return
         _json_response(self, {"error": "not found"}, status=HTTPStatus.NOT_FOUND)
 
@@ -753,6 +803,30 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
             })
         except Exception as exc:
             _json_response(self, {"error": f"status error: {exc}"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+
+    def _handle_settings_webhook_get(self) -> None:
+        webhook_url = _read_discord_webhook_url()
+        _json_response(self, {
+            "configured": bool(webhook_url),
+            "url": webhook_url,
+        })
+
+    def _handle_settings_webhook_put(self) -> None:
+        body = _read_json(self)
+        if body is None:
+            _json_response(self, {"error": "invalid json"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        url = str(body.get("url", "")).strip()
+        ok, status = _write_discord_webhook_url(url)
+        if not ok:
+            _json_response(self, {"error": status}, status=HTTPStatus.BAD_REQUEST)
+            return
+        _json_response(self, {
+            "ok": True,
+            "status": status,
+            "configured": bool(url),
+            "url": url if url else "",
+        })
 
 
 def main() -> None:

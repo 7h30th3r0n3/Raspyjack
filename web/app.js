@@ -35,15 +35,15 @@
   const navDevice = document.getElementById('navDevice');
   const navSystem = document.getElementById('navSystem');
   const navLoot = document.getElementById('navLoot');
+  const navSettings = document.getElementById('navSettings');
   const navPayloadStudio = document.getElementById('navPayloadStudio');
-  const themesToggle = document.getElementById('themesToggle');
-  const themesList = document.getElementById('themesList');
   const themeButtons = document.querySelectorAll('[data-theme]');
   const sidebar = document.getElementById('sidebar');
   const sidebarBackdrop = document.getElementById('sidebarBackdrop');
   const menuToggle = document.getElementById('menuToggle');
   const deviceTab = document.getElementById('deviceTab');
   const systemDropdown = document.getElementById('systemDropdown');
+  const settingsTab = document.getElementById('settingsTab');
   const lootTab = document.getElementById('lootTab');
   const systemStatus = document.getElementById('systemStatus');
   const sysCpuValue = document.getElementById('sysCpuValue');
@@ -73,6 +73,10 @@
   const payloadStatus = document.getElementById('payloadStatus');
   const payloadStatusDot = document.getElementById('payloadStatusDot');
   const payloadsRefresh = document.getElementById('payloadsRefresh');
+  const settingsStatus = document.getElementById('settingsStatus');
+  const discordWebhookInput = document.getElementById('discordWebhookInput');
+  const discordWebhookSave = document.getElementById('discordWebhookSave');
+  const discordWebhookClear = document.getElementById('discordWebhookClear');
   const terminalEl = document.getElementById('terminal');
   const shellStatusEl = document.getElementById('shellStatus');
   const shellConnectBtn = document.getElementById('shellConnect');
@@ -134,6 +138,10 @@
     if (shellStatusEl) shellStatusEl.textContent = txt;
   }
 
+  function setSettingsStatus(txt){
+    if (settingsStatus) settingsStatus.textContent = txt;
+  }
+
   // Handheld themes (frontend-only)
   const themes = [
     { id: 'neon', label: 'Neon' },
@@ -184,9 +192,11 @@
     activeTab = tab;
     const isDevice = tab === 'device';
     if (deviceTab) deviceTab.classList.toggle('hidden', !isDevice);
+    if (settingsTab) settingsTab.classList.toggle('hidden', tab !== 'settings');
     if (lootTab) lootTab.classList.toggle('hidden', tab !== 'loot');
     setNavActive(navDevice, isDevice);
     setNavActive(navLoot, tab === 'loot');
+    setNavActive(navSettings, tab === 'settings');
     setSidebarOpen(false);
   }
 
@@ -447,6 +457,41 @@
       setSystemStatus('Live');
     } catch (e){
       setSystemStatus('Unavailable');
+    }
+  }
+
+  async function loadDiscordWebhook(){
+    setSettingsStatus('Loading...');
+    try{
+      const url = getApiUrl('/api/settings/discord_webhook');
+      const res = await fetch(url, { cache: 'no-store' });
+      const data = await res.json();
+      if (!res.ok){
+        throw new Error(data && data.error ? data.error : 'settings_failed');
+      }
+      if (discordWebhookInput) discordWebhookInput.value = String(data.url || '');
+      setSettingsStatus(data.configured ? 'Webhook configured' : 'No webhook configured');
+    } catch(e){
+      setSettingsStatus('Failed to load settings');
+    }
+  }
+
+  async function saveDiscordWebhook(url){
+    setSettingsStatus('Saving...');
+    try{
+      const endpoint = getApiUrl('/api/settings/discord_webhook');
+      const res = await fetch(endpoint, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: String(url || '').trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok){
+        throw new Error(data && data.error ? data.error : 'save_failed');
+      }
+      setSettingsStatus(data.status === 'cleared' ? 'Webhook cleared' : 'Webhook saved');
+    } catch(e){
+      setSettingsStatus('Failed to save webhook');
     }
   }
 
@@ -755,10 +800,11 @@
       lootList.dataset.loaded = '1';
     }
   });
-  if (navPayloadStudio) navPayloadStudio.href = './ide.html' + (location.search || '');
-  if (themesToggle) themesToggle.addEventListener('click', () => {
-    if (themesList) themesList.classList.toggle('hidden');
+  if (navSettings) navSettings.addEventListener('click', () => {
+    setActiveTab('settings');
+    loadDiscordWebhook();
   });
+  if (navPayloadStudio) navPayloadStudio.href = './ide.html' + (location.search || '');
   themeButtons.forEach(btn => {
     btn.addEventListener('click', () => {
       const id = btn.getAttribute('data-theme');
@@ -808,6 +854,13 @@
     }
   });
   if (payloadsRefresh) payloadsRefresh.addEventListener('click', () => loadPayloads());
+  if (discordWebhookSave) discordWebhookSave.addEventListener('click', () => {
+    saveDiscordWebhook(discordWebhookInput ? discordWebhookInput.value : '');
+  });
+  if (discordWebhookClear) discordWebhookClear.addEventListener('click', () => {
+    if (discordWebhookInput) discordWebhookInput.value = '';
+    saveDiscordWebhook('');
+  });
   if (lootPreviewClose) lootPreviewClose.addEventListener('click', closePreview);
   if (lootPreview) lootPreview.addEventListener('click', (e) => {
     if (e.target === lootPreview) closePreview();

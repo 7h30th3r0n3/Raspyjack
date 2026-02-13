@@ -386,19 +386,8 @@
           </div>
         </div>
         <button id="navLoot" type="button" class="w-full px-3 py-2 rounded-xl text-left text-sm font-semibold border border-slate-400/20 bg-slate-800/40 text-slate-300 hover:text-white hover:bg-slate-700/50 transition">Loot</button>
+        <button id="navSettings" type="button" class="w-full px-3 py-2 rounded-xl text-left text-sm font-semibold border border-slate-400/20 bg-slate-800/40 text-slate-300 hover:text-white hover:bg-slate-700/50 transition">Settings</button>
         <a id="navPayloadStudio" href="./ide.html" class="w-full px-3 py-2 rounded-xl text-left text-sm font-semibold border border-slate-400/20 bg-slate-800/40 text-slate-300 hover:text-white hover:bg-slate-700/50 transition block">Payload Studio</a>
-
-        <div class="pt-2">
-          <button id="themesToggle" type="button" class="w-full px-3 py-2 rounded-xl text-left text-sm font-semibold border border-slate-400/20 bg-slate-800/40 text-slate-300 hover:text-white hover:bg-slate-700/50 transition">
-            Themes
-            <span class="float-right text-[10px] text-slate-400">Current: <span id="themeName">Neon</span></span>
-          </button>
-          <div id="themesList" class="mt-2 space-y-1 hidden">
-            <button type="button" data-theme="neon" class="w-full px-3 py-2 rounded-lg text-left text-xs font-semibold border border-slate-500/20 bg-slate-900/40 text-slate-300 hover:bg-slate-800/60 transition">Neon</button>
-            <button type="button" data-theme="gameboy" class="w-full px-3 py-2 rounded-lg text-left text-xs font-semibold border border-slate-500/20 bg-slate-900/40 text-slate-300 hover:bg-slate-800/60 transition">Game Boy</button>
-            <button type="button" data-theme="pager" class="w-full px-3 py-2 rounded-lg text-left text-xs font-semibold border border-slate-500/20 bg-slate-900/40 text-slate-300 hover:bg-slate-800/60 transition">Pager</button>
-          </div>
-        </div>
 
         <div class="pt-2 border-t border-slate-800/70">
           <div class="flex items-center justify-between px-3 pb-2">
@@ -539,6 +528,36 @@
         </div>
       </div>
       </div>
+      </div>
+
+      <!-- Settings -->
+      <div id="settingsTab" class="hidden">
+        <div class="rounded-3xl border border-slate-700/60 bg-slate-900/40 backdrop-blur p-4 md:p-5 max-w-3xl mx-auto shadow-[0_0_30px_rgba(15,23,42,0.35)] space-y-4">
+          <div class="flex items-center justify-between">
+            <div class="text-sm font-semibold text-emerald-300">Settings</div>
+            <div class="text-[11px] text-slate-400">Current theme: <span id="themeName">Neon</span></div>
+          </div>
+
+          <div class="rounded-xl border border-slate-800/70 bg-slate-950/40 p-3">
+            <div class="text-xs font-semibold text-slate-200 mb-2">Themes</div>
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              <button type="button" data-theme="neon" class="px-3 py-2 rounded-lg text-left text-xs font-semibold border border-slate-500/20 bg-slate-900/40 text-slate-300 hover:bg-slate-800/60 transition">Neon</button>
+              <button type="button" data-theme="gameboy" class="px-3 py-2 rounded-lg text-left text-xs font-semibold border border-slate-500/20 bg-slate-900/40 text-slate-300 hover:bg-slate-800/60 transition">Game Boy</button>
+              <button type="button" data-theme="pager" class="px-3 py-2 rounded-lg text-left text-xs font-semibold border border-slate-500/20 bg-slate-900/40 text-slate-300 hover:bg-slate-800/60 transition">Pager</button>
+            </div>
+          </div>
+
+          <div class="rounded-xl border border-slate-800/70 bg-slate-950/40 p-3">
+            <div class="text-xs font-semibold text-slate-200 mb-2">Discord Webhook</div>
+            <label for="discordWebhookInput" class="block text-[11px] text-slate-400 mb-1">Webhook URL</label>
+            <input id="discordWebhookInput" type="url" placeholder="https://discord.com/api/webhooks/..." class="w-full px-3 py-2 rounded-lg bg-slate-900/70 border border-slate-700/60 text-slate-100 text-xs focus:outline-none focus:ring-1 focus:ring-emerald-400/50">
+            <div class="mt-2 flex items-center gap-2">
+              <button id="discordWebhookSave" type="button" class="px-3 py-1.5 text-xs rounded-lg bg-emerald-600/80 border border-emerald-300/30 text-white hover:bg-emerald-500/80 transition">Save</button>
+              <button id="discordWebhookClear" type="button" class="px-3 py-1.5 text-xs rounded-lg bg-slate-800/80 border border-slate-600/40 text-slate-200 hover:bg-slate-700/80 transition">Clear</button>
+              <div id="settingsStatus" class="text-[11px] text-slate-400">Ready</div>
+            </div>
+          </div>
+        </div>
       </div>
 
       <!-- Loot browser -->
