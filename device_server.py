@@ -27,7 +27,7 @@ FRAME_PATH = Path(os.environ.get("RJ_FRAME_PATH", "/dev/shm/raspyjack_last.jpg")
 HOST = os.environ.get("RJ_WS_HOST", "0.0.0.0")
 PORT = int(os.environ.get("RJ_WS_PORT", "8765"))
 FPS = float(os.environ.get("RJ_FPS", "10"))
-TOKEN = os.environ.get("RJ_WS_TOKEN")
+TOKEN_FILE = Path(os.environ.get("RJ_WS_TOKEN_FILE", "/root/Raspyjack/.webui_token"))
 INPUT_SOCK = os.environ.get("RJ_INPUT_SOCK", "/dev/shm/rj_input.sock")
 SHELL_CMD = os.environ.get("RJ_SHELL_CMD", "/bin/bash")
 SHELL_CWD = os.environ.get("RJ_SHELL_CWD", "/")
@@ -37,6 +37,25 @@ PING_INTERVAL = 15
 
 # WebSocket server only listens on these interfaces — wlan1+ are for attacks
 WEBUI_INTERFACES = ["eth0", "wlan0", "tailscale0"]
+
+
+def _load_shared_token():
+    """Load auth token from env first, then token file."""
+    env_token = str(os.environ.get("RJ_WS_TOKEN", "")).strip()
+    if env_token:
+        return env_token
+    try:
+        if TOKEN_FILE.exists():
+            for line in TOKEN_FILE.read_text(encoding="utf-8").splitlines():
+                value = line.strip()
+                if value and not value.startswith("#"):
+                    return value
+    except Exception:
+        pass
+    return None
+
+
+TOKEN = _load_shared_token()
 
 
 def _get_interface_ip(interface: str):
@@ -71,6 +90,10 @@ logging.basicConfig(
     format="[%(asctime)s] %(levelname)s: %(message)s",
 )
 log = logging.getLogger("rj-ws")
+if TOKEN:
+    log.info("WebSocket token auth enabled")
+else:
+    log.warning("WebSocket token auth disabled (set RJ_WS_TOKEN or token file)")
 
 
 # --------------------------- Client Registry ---------------------------------

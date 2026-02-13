@@ -136,6 +136,24 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now raspyjack.service
 
 # ───── 5‑b ▸ device server & WebUI split services ───────────
+# Shared WebUI token (used by both HTTP + WS servers)
+WEBUI_TOKEN_FILE=/root/Raspyjack/.webui_token
+step "Configuring shared WebUI token at $WEBUI_TOKEN_FILE …"
+if ! sudo test -s "$WEBUI_TOKEN_FILE"; then
+  sudo python3 - <<'PY'
+from pathlib import Path
+import secrets
+
+path = Path("/root/Raspyjack/.webui_token")
+path.write_text(secrets.token_urlsafe(32) + "\n", encoding="utf-8")
+print(f"[OK] Created {path}")
+PY
+else
+  info "Existing WebUI token file found, keeping it."
+fi
+sudo chown root:root "$WEBUI_TOKEN_FILE"
+sudo chmod 600 "$WEBUI_TOKEN_FILE"
+
 # Device server
 DEVICE_SERVICE=/etc/systemd/system/raspyjack-device.service
 step "Installing device server systemd service $DEVICE_SERVICE …"
@@ -153,6 +171,7 @@ ExecStart=/usr/bin/python3 /root/Raspyjack/device_server.py
 Restart=on-failure
 User=root
 Environment=PYTHONUNBUFFERED=1
+Environment=RJ_WS_TOKEN_FILE=/root/Raspyjack/.webui_token
 
 [Install]
 WantedBy=multi-user.target
@@ -178,6 +197,7 @@ ExecStart=/usr/bin/python3 /root/Raspyjack/web_server.py
 Restart=on-failure
 User=root
 Environment=PYTHONUNBUFFERED=1
+Environment=RJ_WS_TOKEN_FILE=/root/Raspyjack/.webui_token
 
 [Install]
 WantedBy=multi-user.target

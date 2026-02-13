@@ -31,6 +31,10 @@ Open in a browser:
 ```
 http://<device-ip>:8080
 ```
+If token auth is enabled, use:
+```
+http://<device-ip>:8080/?token=<your-token>
+```
 
 ## Environment variables (optional)
 `device_server.py` supports:
@@ -39,6 +43,7 @@ http://<device-ip>:8080
 - `RJ_WS_PORT` (default `8765`)
 - `RJ_FPS` (default `10`)
 - `RJ_WS_TOKEN` (optional shared token, passed as `?token=...`)
+- `RJ_WS_TOKEN_FILE` (optional token file; default `/root/Raspyjack/.webui_token`)
 - `RJ_INPUT_SOCK` (default `/dev/shm/rj_input.sock`)
 
 ## Notes

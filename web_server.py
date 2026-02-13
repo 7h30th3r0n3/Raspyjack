@@ -16,6 +16,7 @@ Environment:
   RJ_WEB_HOST  Host to bind (default: 0.0.0.0)
   RJ_WEB_PORT  Port to bind (default: 8080)
   RJ_WS_TOKEN  Optional shared token for API access (?token=...)
+  RJ_WS_TOKEN_FILE Optional token file (default: <repo>/.webui_token)
 """
 
 from __future__ import annotations
@@ -38,10 +39,27 @@ LOOT_DIR = ROOT_DIR / "loot"
 PAYLOADS_DIR = ROOT_DIR / "payloads"
 PAYLOAD_STATE_PATH = Path("/dev/shm/rj_payload_state.json")
 DISCORD_WEBHOOK_PATH = ROOT_DIR / "discord_webhook.txt"
+TOKEN_FILE = Path(os.environ.get("RJ_WS_TOKEN_FILE", str(ROOT_DIR / ".webui_token")))
+
+
+def _load_shared_token() -> str | None:
+    """Load auth token from env first, then token file."""
+    env_token = str(os.environ.get("RJ_WS_TOKEN", "")).strip()
+    if env_token:
+        return env_token
+    try:
+        if TOKEN_FILE.exists():
+            for line in TOKEN_FILE.read_text(encoding="utf-8").splitlines():
+                value = line.strip()
+                if value and not value.startswith("#"):
+                    return value
+    except Exception:
+        pass
+    return None
 
 HOST = os.environ.get("RJ_WEB_HOST", "0.0.0.0")
 PORT = int(os.environ.get("RJ_WEB_PORT", "8080"))
-TOKEN = os.environ.get("RJ_WS_TOKEN")
+TOKEN = _load_shared_token()
 
 # WebUI only listens on these interfaces — wlan1+ are for attacks/monitor mode
 WEBUI_INTERFACES = ["eth0", "wlan0", "tailscale0"]
@@ -830,6 +848,11 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
 
 
 def main() -> None:
+    if TOKEN:
+        print("[WebUI] Token auth enabled")
+    else:
+        print("[WebUI] WARNING: Token auth disabled (set RJ_WS_TOKEN or token file)")
+
     # If a specific host was set via env var, honour it as-is (single bind)
     if HOST != "0.0.0.0":
         server = ThreadingHTTPServer((HOST, PORT), RaspyJackHandler)
