@@ -148,7 +148,23 @@
     { id: 'gameboy', label: 'Game Boy' },
     { id: 'pager', label: 'Pager' },
   ];
+  const THEME_STORAGE_KEY = 'rj.defaultTheme';
   let themeIndex = 0;
+
+  function saveThemePreference(themeId){
+    try{
+      localStorage.setItem(THEME_STORAGE_KEY, themeId);
+    }catch{}
+  }
+
+  function loadThemePreference(){
+    try{
+      const saved = localStorage.getItem(THEME_STORAGE_KEY);
+      if (!saved) return;
+      const idx = themes.findIndex(t => t.id === saved);
+      if (idx >= 0) themeIndex = idx;
+    }catch{}
+  }
 
   function applyTheme(){
     const t = themes[themeIndex];
@@ -216,6 +232,7 @@
     if (idx >= 0){
       themeIndex = idx;
       applyTheme();
+      saveThemePreference(id);
     }
   }
 
@@ -470,7 +487,7 @@
         throw new Error(data && data.error ? data.error : 'settings_failed');
       }
       if (discordWebhookInput) discordWebhookInput.value = String(data.url || '');
-      setSettingsStatus(data.configured ? 'Webhook configured (masked)' : 'No webhook configured');
+      setSettingsStatus(data.configured ? 'Webhook configured' : 'No webhook configured');
     } catch(e){
       setSettingsStatus('Failed to load settings');
     }
@@ -489,7 +506,7 @@
       if (!res.ok || !data.ok){
         throw new Error(data && data.error ? data.error : 'save_failed');
       }
-      setSettingsStatus(data.status === 'cleared' ? 'Webhook cleared' : 'Webhook saved (masked)');
+      setSettingsStatus(data.status === 'cleared' ? 'Webhook cleared' : 'Webhook saved');
     } catch(e){
       setSettingsStatus('Failed to save webhook');
     }
@@ -865,6 +882,7 @@
   if (lootPreview) lootPreview.addEventListener('click', (e) => {
     if (e.target === lootPreview) closePreview();
   });
+  loadThemePreference();
   applyTheme();
   setActiveTab('device');
   connect();
