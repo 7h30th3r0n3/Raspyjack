@@ -43,7 +43,7 @@
   const sidebarBackdrop = document.getElementById('sidebarBackdrop');
   const menuToggle = document.getElementById('menuToggle');
   const deviceTab = document.getElementById('deviceTab');
-  const systemTab = document.getElementById('systemTab');
+  const systemDropdown = document.getElementById('systemDropdown');
   const lootTab = document.getElementById('lootTab');
   const systemStatus = document.getElementById('systemStatus');
   const sysCpuValue = document.getElementById('sysCpuValue');
@@ -109,6 +109,7 @@
   let shellOpen = false;
   let terminalHasFocus = false;
   let shellWanted = false;
+  let systemOpen = false;
 
   function setStatus(txt){
     if (statusEl) statusEl.textContent = txt;
@@ -182,14 +183,22 @@
   function setActiveTab(tab){
     activeTab = tab;
     const isDevice = tab === 'device';
-    const isSystem = tab === 'system';
     if (deviceTab) deviceTab.classList.toggle('hidden', !isDevice);
-    if (systemTab) systemTab.classList.toggle('hidden', !isSystem);
     if (lootTab) lootTab.classList.toggle('hidden', tab !== 'loot');
     setNavActive(navDevice, isDevice);
-    setNavActive(navSystem, isSystem);
     setNavActive(navLoot, tab === 'loot');
     setSidebarOpen(false);
+  }
+
+  function setSystemOpen(open){
+    systemOpen = !!open;
+    if (systemDropdown){
+      systemDropdown.classList.toggle('hidden', !systemOpen);
+    }
+    setNavActive(navSystem, systemOpen);
+    if (systemOpen){
+      loadSystemStatus();
+    }
   }
 
   function setThemeById(id){
@@ -737,8 +746,7 @@
   });
   if (navDevice) navDevice.addEventListener('click', () => setActiveTab('device'));
   if (navSystem) navSystem.addEventListener('click', () => {
-    setActiveTab('system');
-    loadSystemStatus();
+    setSystemOpen(!systemOpen);
   });
   if (navLoot) navLoot.addEventListener('click', () => {
     setActiveTab('loot');
@@ -810,7 +818,7 @@
   loadPayloads();
   setInterval(pollPayloadStatus, 1500);
   setInterval(() => {
-    if (activeTab === 'system'){
+    if (systemOpen){
       loadSystemStatus();
     }
   }, 3000);
