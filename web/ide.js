@@ -81,6 +81,7 @@
   let authToken = '';
   let wsTicket = '';
   let authPromptResolver = null;
+  let authInFlight = null;
   let authMode = 'login';
   let authRecoveryMode = false;
 
@@ -221,6 +222,21 @@
     }
   }
 
+  async function fetchAuthMe(){
+    try{
+      const res = await fetch(getApiUrl('/api/auth/me'), {
+        cache: 'no-store',
+        credentials: 'include',
+        headers: authHeaders({}),
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      return data && data.authenticated ? data : null;
+    }catch{
+      return null;
+    }
+  }
+
   async function attemptBootstrap(message){
     const input = await promptForAuth(message || 'Set the first admin account for this device.', 'bootstrap');
     if (!input) return false;
@@ -244,6 +260,9 @@
       });
       const data = await res.json();
       if (!res.ok){
+        if (res.status === 409){
+          return attemptLogin('Admin already exists. Log in to continue.');
+        }
         setAuthError(data && data.error ? data.error : 'Bootstrap failed');
         return attemptBootstrap(message);
       }
@@ -325,6 +344,16 @@
   }
 
   async function ensureAuthenticated(message){
+    if (authInFlight){
+      return authInFlight;
+    }
+    authInFlight = (async () => {
+      const me = await fetchAuthMe();
+      if (me){
+        await refreshWsTicket();
+        return true;
+      }
+
     const initialized = await fetchBootstrapStatus();
     if (!initialized){
       const bootOk = await attemptBootstrap(message);
@@ -336,6 +365,12 @@
     if (!loginOk) return false;
     await refreshWsTicket();
     return true;
+    })();
+    try{
+      return await authInFlight;
+    } finally {
+      authInFlight = null;
+    }
   }
 
   function bytesFromString(s){
