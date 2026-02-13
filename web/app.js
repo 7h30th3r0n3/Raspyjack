@@ -33,6 +33,7 @@
   const deviceShell = document.getElementById('deviceShell');
   const themeNameEl = document.getElementById('themeName');
   const navDevice = document.getElementById('navDevice');
+  const navSystem = document.getElementById('navSystem');
   const navLoot = document.getElementById('navLoot');
   const navPayloadStudio = document.getElementById('navPayloadStudio');
   const themesToggle = document.getElementById('themesToggle');
@@ -42,7 +43,22 @@
   const sidebarBackdrop = document.getElementById('sidebarBackdrop');
   const menuToggle = document.getElementById('menuToggle');
   const deviceTab = document.getElementById('deviceTab');
+  const systemTab = document.getElementById('systemTab');
   const lootTab = document.getElementById('lootTab');
+  const systemStatus = document.getElementById('systemStatus');
+  const sysCpuValue = document.getElementById('sysCpuValue');
+  const sysCpuBar = document.getElementById('sysCpuBar');
+  const sysTempValue = document.getElementById('sysTempValue');
+  const sysMemValue = document.getElementById('sysMemValue');
+  const sysMemMeta = document.getElementById('sysMemMeta');
+  const sysMemBar = document.getElementById('sysMemBar');
+  const sysDiskValue = document.getElementById('sysDiskValue');
+  const sysDiskMeta = document.getElementById('sysDiskMeta');
+  const sysDiskBar = document.getElementById('sysDiskBar');
+  const sysUptime = document.getElementById('sysUptime');
+  const sysLoad = document.getElementById('sysLoad');
+  const sysPayload = document.getElementById('sysPayload');
+  const sysInterfaces = document.getElementById('sysInterfaces');
   const lootList = document.getElementById('lootList');
   const lootPathEl = document.getElementById('lootPath');
   const lootUpBtn = document.getElementById('lootUp');
@@ -109,6 +125,10 @@
     }
   }
 
+  function setSystemStatus(txt){
+    if (systemStatus) systemStatus.textContent = txt;
+  }
+
   function setShellStatus(txt){
     if (shellStatusEl) shellStatusEl.textContent = txt;
   }
@@ -162,9 +182,12 @@
   function setActiveTab(tab){
     activeTab = tab;
     const isDevice = tab === 'device';
+    const isSystem = tab === 'system';
     if (deviceTab) deviceTab.classList.toggle('hidden', !isDevice);
+    if (systemTab) systemTab.classList.toggle('hidden', !isSystem);
     if (lootTab) lootTab.classList.toggle('hidden', tab !== 'loot');
     setNavActive(navDevice, isDevice);
+    setNavActive(navSystem, isSystem);
     setNavActive(navLoot, tab === 'loot');
     setSidebarOpen(false);
   }
@@ -339,6 +362,83 @@
     const i = Math.min(sizes.length - 1, Math.floor(Math.log(bytes) / Math.log(k)));
     const value = bytes / Math.pow(k, i);
     return `${value.toFixed(value >= 10 || i === 0 ? 0 : 1)} ${sizes[i]}`;
+  }
+
+  function formatDuration(totalSec){
+    const s = Math.max(0, Number(totalSec || 0) | 0);
+    const d = Math.floor(s / 86400);
+    const h = Math.floor((s % 86400) / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    if (d > 0) return `${d}d ${h}h ${m}m`;
+    if (h > 0) return `${h}h ${m}m`;
+    return `${m}m`;
+  }
+
+  function pct(used, total){
+    if (!total || total <= 0) return 0;
+    return Math.max(0, Math.min(100, (used / total) * 100));
+  }
+
+  function bar(el, value){
+    if (!el) return;
+    el.style.width = `${Math.max(0, Math.min(100, value)).toFixed(1)}%`;
+  }
+
+  async function loadSystemStatus(){
+    setSystemStatus('Loading...');
+    try{
+      const url = getApiUrl('/api/system/status');
+      const res = await fetch(url, { cache: 'no-store' });
+      const data = await res.json();
+      if (!res.ok){
+        throw new Error(data && data.error ? data.error : 'system_failed');
+      }
+
+      const cpu = Number(data.cpu_percent || 0);
+      const memUsed = Number(data.mem_used || 0);
+      const memTotal = Number(data.mem_total || 0);
+      const diskUsed = Number(data.disk_used || 0);
+      const diskTotal = Number(data.disk_total || 0);
+      const memPct = pct(memUsed, memTotal);
+      const diskPct = pct(diskUsed, diskTotal);
+
+      if (sysCpuValue) sysCpuValue.textContent = `${cpu.toFixed(1)}%`;
+      if (sysTempValue) {
+        if (data.temp_c === null || data.temp_c === undefined){
+          sysTempValue.textContent = '--.- C';
+        } else {
+          sysTempValue.textContent = `${Number(data.temp_c).toFixed(1)} C`;
+        }
+      }
+      bar(sysCpuBar, cpu);
+
+      if (sysMemValue) sysMemValue.textContent = `${memPct.toFixed(1)}%`;
+      if (sysMemMeta) sysMemMeta.textContent = `${formatBytes(memUsed)} / ${formatBytes(memTotal)}`;
+      bar(sysMemBar, memPct);
+
+      if (sysDiskValue) sysDiskValue.textContent = `${diskPct.toFixed(1)}%`;
+      if (sysDiskMeta) sysDiskMeta.textContent = `${formatBytes(diskUsed)} / ${formatBytes(diskTotal)}`;
+      bar(sysDiskBar, diskPct);
+
+      if (sysUptime) sysUptime.textContent = formatDuration(data.uptime_s);
+      if (sysLoad) sysLoad.textContent = Array.isArray(data.load) ? data.load.join(', ') : '-';
+      if (sysPayload) sysPayload.textContent = data.payload_running ? (data.payload_path || 'running') : 'none';
+
+      if (sysInterfaces){
+        const ifaces = Array.isArray(data.interfaces) ? data.interfaces : [];
+        if (!ifaces.length){
+          sysInterfaces.innerHTML = '<div class="text-slate-500">No active interfaces</div>';
+        } else {
+          sysInterfaces.innerHTML = ifaces
+            .map(i => `<div><span class="text-emerald-300">${String(i.name || '-')}</span>: ${String(i.ipv4 || '-')}</div>`)
+            .join('');
+        }
+      }
+
+      setSystemStatus('Live');
+    } catch (e){
+      setSystemStatus('Unavailable');
+    }
   }
 
   function formatTime(ts){
@@ -636,6 +736,10 @@
     if (shellOpen) sendShellResize();
   });
   if (navDevice) navDevice.addEventListener('click', () => setActiveTab('device'));
+  if (navSystem) navSystem.addEventListener('click', () => {
+    setActiveTab('system');
+    loadSystemStatus();
+  });
   if (navLoot) navLoot.addEventListener('click', () => {
     setActiveTab('loot');
     if (lootList && !lootList.dataset.loaded){
@@ -705,4 +809,9 @@
   connect();
   loadPayloads();
   setInterval(pollPayloadStatus, 1500);
+  setInterval(() => {
+    if (activeTab === 'system'){
+      loadSystemStatus();
+    }
+  }, 3000);
 })();

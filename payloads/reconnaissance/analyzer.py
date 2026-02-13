@@ -30,6 +30,7 @@ import struct
 import socket
 import threading
 import subprocess
+import signal
 from collections import deque
 
 sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..")))
@@ -78,14 +79,6 @@ DWELL_MIN  = 0.10      # fastest channel hop  (seconds)
 DWELL_MAX  = 2.00      # slowest channel hop
 DWELL_STEP = 0.05
 
-# Loot directory (handle case-sensitive path differences)
-_loot_paths = [
-    "/root/Raspyjack/loot/Analyzer",
-    "/root/raspyjack/loot/Analyzer",
-]
-LOOT_DIR = next((p for p in _loot_paths if os.path.exists(os.path.dirname(p))), _loot_paths[0])
-os.makedirs(LOOT_DIR, exist_ok=True)
-
 # Bar area geometry (shared by all views)
 BAR_TOP = 15
 BAR_BOT = 107
@@ -95,6 +88,7 @@ BAR_H   = BAR_BOT - BAR_TOP
 # Mutable global state  (threads share via `lock`)
 # ---------------------------------------------------------------------------
 running   = False
+main_running = True    # Flag for main loop exit
 band_idx  = 0
 dwell     = 0.30       # current channel dwell time
 cur_ch    = 1          # channel the adapter is currently on
@@ -128,16 +122,11 @@ def lcd_init():
 # ===================================================================
 
 def find_iface():
-    """Find a monitor-mode capable wireless interface.
-
-    wlan0 is reserved for the WebUI and is never selected here.
-    """
+    """Find a monitor-mode capable wireless interface."""
     ifs = []
     try:
         for n in os.listdir("/sys/class/net"):
-            if n == "lo" or n == "wlan0":
-                continue  # wlan0 reserved for WebUI
-            if os.path.isdir(f"/sys/class/net/{n}/wireless"):
+            if n != "lo" and os.path.isdir(f"/sys/class/net/{n}/wireless"):
                 ifs.append(n)
     except Exception:
         pass
@@ -155,14 +144,12 @@ def find_iface():
 
 
 def monitor_up(iface):
-    """Put *iface* into monitor mode. Returns interface name or None.
-
-    Only stops services for this specific interface — wlan0/WebUI is never touched.
-    """
+    """Put *iface* into monitor mode. Returns interface name or None."""
+    # Kill interfering services (with timeouts so nothing hangs)
     for cmd in [
-        ["nmcli", "device", "set", iface, "managed", "no"],
-        ["sudo", "pkill", "-f", f"wpa_supplicant.*{iface}"],
-        ["sudo", "pkill", "-f", f"dhcpcd.*{iface}"],
+        ["sudo", "systemctl", "stop", "NetworkManager"],
+        ["sudo", "pkill", "-f", "wpa_supplicant"],
+        ["sudo", "pkill", "-f", "dhcpcd"],
     ]:
         try:
             subprocess.run(cmd, capture_output=True, timeout=5)
@@ -218,11 +205,7 @@ def monitor_up(iface):
 
 
 def monitor_down(iface):
-    """Best-effort restore to managed mode.
-
-    Re-manages the interface in NetworkManager instead of restarting the service
-    (which would disrupt wlan0/WebUI).
-    """
+    """Best-effort restore to managed mode."""
     if not iface:
         return
     base = iface.replace("mon", "")
@@ -235,7 +218,7 @@ def monitor_down(iface):
         ["sudo", "ip", "link", "set", base, "down"],
         ["sudo", "iw", base, "set", "type", "managed"],
         ["sudo", "ip", "link", "set", base, "up"],
-        ["nmcli", "device", "set", base, "managed", "yes"],
+        ["sudo", "systemctl", "start", "NetworkManager"],
     ]:
         try:
             subprocess.run(cmd, capture_output=True, timeout=5)
@@ -673,11 +656,25 @@ def reset_stats():
             ble_adv[ch] = 0
 
 # ===================================================================
+# Signal handling for graceful shutdown
+# ===================================================================
+
+def cleanup_handler(signum, frame):
+    """Signal handler: stop the main loop so `finally` can clean up."""
+    global main_running, running
+    main_running = False
+    running = False  # Also stop scanning threads
+
+# Register handlers for Ctrl-C and external termination
+signal.signal(signal.SIGINT, cleanup_handler)
+signal.signal(signal.SIGTERM, cleanup_handler)
+
+# ===================================================================
 # Main entry point
 # ===================================================================
 
 def main():
-    global band_idx, dwell
+    global band_idx, dwell, main_running
 
     lcd = lcd_init()
     GPIO.setmode(GPIO.BCM)
@@ -697,10 +694,11 @@ def main():
     lcd.LCD_ShowImage(img, 0, 0)
 
     try:
-        while True:
+        while main_running:
             btn = get_button(PINS, GPIO)
 
             if btn == "KEY2":
+                main_running = False
                 break
             elif btn == "KEY1":
                 if running:

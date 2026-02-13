@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import mimetypes
 import os
+import shutil
 import subprocess
 import threading
 import time
@@ -40,7 +41,7 @@ PORT = int(os.environ.get("RJ_WEB_PORT", "8080"))
 TOKEN = os.environ.get("RJ_WS_TOKEN")
 
 # WebUI only listens on these interfaces — wlan1+ are for attacks/monitor mode
-WEBUI_INTERFACES = ["eth0", "wlan0"]
+WEBUI_INTERFACES = ["eth0", "wlan0", "tailscale0"]
 
 
 def _get_interface_ip(interface: str) -> str | None:
@@ -75,6 +76,94 @@ TEXT_EXTS = {
     ".txt", ".log", ".md", ".json", ".csv", ".conf", ".ini", ".yaml", ".yml",
     ".pcapng.txt", ".xml", ".sqlite", ".db", ".out", ".py", ".sh"
 }
+
+_CPU_SNAPSHOT = None
+
+
+def _read_cpu_percent() -> float:
+    """Best-effort CPU usage based on /proc/stat delta."""
+    global _CPU_SNAPSHOT
+    try:
+        with open("/proc/stat", "r", encoding="utf-8") as f:
+            line = f.readline().strip()
+        if not line.startswith("cpu "):
+            return 0.0
+        parts = [int(x) for x in line.split()[1:]]
+        idle = parts[3] + (parts[4] if len(parts) > 4 else 0)
+        total = sum(parts)
+        if _CPU_SNAPSHOT is None:
+            _CPU_SNAPSHOT = (idle, total)
+            return 0.0
+        prev_idle, prev_total = _CPU_SNAPSHOT
+        _CPU_SNAPSHOT = (idle, total)
+        idle_delta = idle - prev_idle
+        total_delta = total - prev_total
+        if total_delta <= 0:
+            return 0.0
+        pct = 100.0 * (1.0 - (idle_delta / total_delta))
+        return max(0.0, min(100.0, pct))
+    except Exception:
+        return 0.0
+
+
+def _read_meminfo() -> tuple[int, int]:
+    """Return used_bytes, total_bytes from /proc/meminfo."""
+    try:
+        vals = {}
+        with open("/proc/meminfo", "r", encoding="utf-8") as f:
+            for line in f:
+                key, rest = line.split(":", 1)
+                vals[key.strip()] = int(rest.strip().split()[0]) * 1024
+        total = int(vals.get("MemTotal", 0))
+        available = int(vals.get("MemAvailable", vals.get("MemFree", 0)))
+        used = max(0, total - available)
+        return used, total
+    except Exception:
+        return 0, 0
+
+
+def _read_temp_c() -> float | None:
+    try:
+        raw = Path("/sys/class/thermal/thermal_zone0/temp").read_text(encoding="utf-8").strip()
+        val = float(raw)
+        return val / 1000.0 if val > 1000 else val
+    except Exception:
+        return None
+
+
+def _read_uptime_seconds() -> int:
+    try:
+        with open("/proc/uptime", "r", encoding="utf-8") as f:
+            return int(float(f.read().split()[0]))
+    except Exception:
+        return 0
+
+
+def _read_ipv4_interfaces() -> list[dict]:
+    out = []
+    try:
+        res = subprocess.run(
+            ["ip", "-o", "-4", "addr", "show", "up"],
+            capture_output=True, text=True, timeout=3,
+        )
+        if res.returncode != 0:
+            return out
+        for line in res.stdout.splitlines():
+            parts = line.split()
+            if len(parts) < 4:
+                continue
+            iface = parts[1]
+            if iface == "lo":
+                continue
+            try:
+                inet_idx = parts.index("inet")
+                addr = parts[inet_idx + 1].split("/")[0]
+            except Exception:
+                addr = "-"
+            out.append({"name": iface, "ipv4": addr, "up": True})
+    except Exception:
+        pass
+    return out
 
 
 def _auth_ok(query: dict) -> bool:
@@ -149,7 +238,11 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
             super().do_GET()
             return
 
-        if parsed.path.startswith("/api/loot/") or parsed.path.startswith("/api/payloads/"):
+        if (
+            parsed.path.startswith("/api/loot/")
+            or parsed.path.startswith("/api/payloads/")
+            or parsed.path.startswith("/api/system/")
+        ):
             query = parse_qs(parsed.query or "")
             if not _auth_ok(query):
                 _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
@@ -176,6 +269,9 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
                 return
             if parsed.path == "/api/loot/view":
                 self._handle_loot_view(query)
+                return
+            if parsed.path == "/api/system/status":
+                self._handle_system_status()
                 return
 
             _json_response(self, {"error": "not found"}, status=HTTPStatus.NOT_FOUND)
@@ -621,6 +717,42 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
             })
         except Exception:
             _json_response(self, {"error": "read error"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+
+    def _handle_system_status(self) -> None:
+        try:
+            cpu = _read_cpu_percent()
+            mem_used, mem_total = _read_meminfo()
+            du = shutil.disk_usage("/")
+            temp_c = _read_temp_c()
+            uptime_s = _read_uptime_seconds()
+            ifaces = _read_ipv4_interfaces()
+            load1, load5, load15 = os.getloadavg()
+            payload_running = False
+            payload_path = None
+            try:
+                if PAYLOAD_STATE_PATH.exists():
+                    raw = PAYLOAD_STATE_PATH.read_text(encoding="utf-8")
+                    pdata = json.loads(raw) if raw else {}
+                    payload_running = bool(pdata.get("running"))
+                    payload_path = pdata.get("path")
+            except Exception:
+                pass
+
+            _json_response(self, {
+                "cpu_percent": round(cpu, 1),
+                "mem_used": mem_used,
+                "mem_total": mem_total,
+                "disk_used": int(du.used),
+                "disk_total": int(du.total),
+                "temp_c": (round(temp_c, 1) if temp_c is not None else None),
+                "uptime_s": uptime_s,
+                "load": [round(load1, 2), round(load5, 2), round(load15, 2)],
+                "interfaces": ifaces,
+                "payload_running": payload_running,
+                "payload_path": payload_path,
+            })
+        except Exception as exc:
+            _json_response(self, {"error": f"status error: {exc}"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
 
 
 def main() -> None:
