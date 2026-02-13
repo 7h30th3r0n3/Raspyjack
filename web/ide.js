@@ -52,9 +52,6 @@
   }
 
   function getApiUrl(path, params = {}){
-    const p = getSearchParams();
-    const token = p.get('token');
-    if (token) params.token = token;
     const qs = new URLSearchParams(params).toString();
     const base = location.origin;
     return `${base}${path}${qs ? `?${qs}` : ''}`;
@@ -62,12 +59,70 @@
 
   function getWsUrl(){
     const p = getSearchParams();
-    const token = p.get('token');
     const host = location.hostname || 'raspberrypi.local';
     const port = p.get('port') || '8765';
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    const q = token ? `?token=${encodeURIComponent(token)}` : '';
-    return `${proto}://${host}:${port}/${q}`.replace(/\/\/\//,'//');
+    return `${proto}://${host}:${port}/`.replace(/\/\/\//,'//');
+  }
+
+  const AUTH_STORAGE_KEY = 'rj.authToken';
+  let authToken = '';
+
+  function saveAuthToken(token){
+    authToken = String(token || '').trim();
+    try{
+      if (authToken){
+        sessionStorage.setItem(AUTH_STORAGE_KEY, authToken);
+      } else {
+        sessionStorage.removeItem(AUTH_STORAGE_KEY);
+      }
+    }catch{}
+  }
+
+  function loadAuthToken(){
+    try{
+      const stored = (sessionStorage.getItem(AUTH_STORAGE_KEY) || '').trim();
+      if (stored) authToken = stored;
+    }catch{}
+
+    try{
+      const u = new URL(window.location.href);
+      const token = (u.searchParams.get('token') || '').trim();
+      if (token){
+        saveAuthToken(token);
+        u.searchParams.delete('token');
+        window.history.replaceState({}, '', u.toString());
+      }
+    }catch{}
+  }
+
+  function promptForAuthToken(){
+    const value = window.prompt('Enter WebUI token');
+    const t = String(value || '').trim();
+    if (!t) return '';
+    saveAuthToken(t);
+    return t;
+  }
+
+  function authHeaders(extra){
+    const headers = Object.assign({}, extra || {});
+    if (authToken){
+      headers.Authorization = `Bearer ${authToken}`;
+    }
+    return headers;
+  }
+
+  async function apiFetch(url, options = {}, allowRetry = true){
+    const merged = Object.assign({}, options);
+    merged.headers = authHeaders(merged.headers);
+    const res = await fetch(url, merged);
+    if (res.status === 401 && allowRetry){
+      const t = promptForAuthToken();
+      if (t){
+        return apiFetch(url, options, false);
+      }
+    }
+    return res;
   }
 
   function bytesFromString(s){
@@ -304,7 +359,7 @@
     setIdeStatus('Loading tree...');
     try{
       const url = getApiUrl('/api/payloads/tree');
-      const res = await fetch(url, { cache: 'no-store' });
+      const res = await apiFetch(url, { cache: 'no-store' });
       const data = await res.json();
       if (!res.ok || data.error){
         throw new Error(data.error || 'tree_failed');
@@ -340,7 +395,7 @@
     setIdeStatus('Loading file...');
     try{
       const url = getApiUrl('/api/payloads/file', { path });
-      const res = await fetch(url, { cache: 'no-store' });
+      const res = await apiFetch(url, { cache: 'no-store' });
       const data = await res.json();
       if (!res.ok || data.error){
         throw new Error(data.error || 'load_failed');
@@ -370,7 +425,7 @@
     setIdeStatus('Saving...');
     try{
       const url = getApiUrl('/api/payloads/file');
-      const res = await fetch(url, {
+      const res = await apiFetch(url, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ path: selectedPath, content })
@@ -402,7 +457,7 @@
       if (type === 'file'){
         body.content = '#!/usr/bin/env python3\n\n\"\"\"\nRaspyJack payload\n\"\"\"\n\n';
       }
-      const res = await fetch(url, {
+      const res = await apiFetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
@@ -471,7 +526,7 @@
     setIdeStatus('Renaming...');
     try{
       const url = getApiUrl('/api/payloads/entry');
-      const res = await fetch(url, {
+      const res = await apiFetch(url, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ old_path: oldPath, new_path: newPath })
@@ -555,7 +610,7 @@
     setIdeStatus('Deleting...');
     try{
       const url = getApiUrl('/api/payloads/entry', { path });
-      const res = await fetch(url, { method: 'DELETE' });
+      const res = await apiFetch(url, { method: 'DELETE' });
       const data = await res.json();
       if (!res.ok || data.error){
         throw new Error(data.error || 'delete_failed');
@@ -593,7 +648,7 @@
     setIdeStatus('Starting payload...');
     try{
       const url = getApiUrl('/api/payloads/run');
-      const res = await fetch(url, {
+      const res = await apiFetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ path: selectedPath })
@@ -613,6 +668,7 @@
   // ------------------------ WebSocket preview & input ------------------------
   let ws = null;
   let reconnectTimer = null;
+  let wsAuthenticated = true;
 
   function setWsStatus(text){
     if (wsStatusEl) wsStatusEl.textContent = text;
@@ -664,11 +720,41 @@
 
     ws.onopen = () => {
       setWsStatus('Connected');
+      wsAuthenticated = true;
+      if (authToken){
+        try{
+          ws.send(JSON.stringify({ type: 'auth', token: authToken }));
+        }catch{}
+      }
     };
 
     ws.onmessage = (ev) => {
       try{
         const msg = JSON.parse(ev.data);
+        if (msg.type === 'auth_required'){
+          wsAuthenticated = false;
+          if (!authToken){
+            const t = promptForAuthToken();
+            if (!t){
+              setWsStatus('Auth required');
+              return;
+            }
+          }
+          try{
+            ws.send(JSON.stringify({ type: 'auth', token: authToken }));
+          }catch{}
+          return;
+        }
+        if (msg.type === 'auth_ok'){
+          wsAuthenticated = true;
+          setWsStatus('Authenticated');
+          return;
+        }
+        if (msg.type === 'auth_error'){
+          wsAuthenticated = false;
+          setWsStatus('Auth failed');
+          return;
+        }
         if (msg.type === 'frame' && msg.data){
           const img = new Image();
           img.onload = () => {
@@ -2255,6 +2341,7 @@ if __name__ == "__main__":
   }
 
   // ------------------------ Init ------------------------
+  loadAuthToken();
   setupHiDPI();
   bindButtons();
   connectWs();

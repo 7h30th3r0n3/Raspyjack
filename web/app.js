@@ -82,24 +82,91 @@
   const shellConnectBtn = document.getElementById('shellConnect');
   const shellDisconnectBtn = document.getElementById('shellDisconnect');
 
-  // Build WS URL from current page host. Supports optional token in page URL (?token=...)
+  // Build WS URL from current page host.
   function getWsUrl(){
     const p = new URLSearchParams(location.search);
-    const token = p.get('token');
     const host = location.hostname || 'raspberrypi.local';
     const port = p.get('port') || '8765';
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    const q = token ? `?token=${encodeURIComponent(token)}` : '';
-    return `${proto}://${host}:${port}/${q}`.replace(/\/\/\//,'//');
+    return `${proto}://${host}:${port}/`.replace(/\/\/\//,'//');
   }
 
   function getApiUrl(path, params = {}){
-    const p = new URLSearchParams(location.search);
-    const token = p.get('token');
-    if (token) params.token = token;
     const qs = new URLSearchParams(params).toString();
     const base = location.origin;
     return `${base}${path}${qs ? `?${qs}` : ''}`;
+  }
+
+  function getForwardSearch(){
+    try{
+      const u = new URL(window.location.href);
+      u.searchParams.delete('token');
+      const qs = u.searchParams.toString();
+      return qs ? `?${qs}` : '';
+    }catch{
+      return '';
+    }
+  }
+
+  const AUTH_STORAGE_KEY = 'rj.authToken';
+  let authToken = '';
+
+  function saveAuthToken(token){
+    authToken = String(token || '').trim();
+    try{
+      if (authToken){
+        sessionStorage.setItem(AUTH_STORAGE_KEY, authToken);
+      } else {
+        sessionStorage.removeItem(AUTH_STORAGE_KEY);
+      }
+    }catch{}
+  }
+
+  function loadAuthToken(){
+    try{
+      const stored = (sessionStorage.getItem(AUTH_STORAGE_KEY) || '').trim();
+      if (stored) authToken = stored;
+    }catch{}
+
+    // One-time migration: accept token from URL, then remove it.
+    try{
+      const u = new URL(window.location.href);
+      const token = (u.searchParams.get('token') || '').trim();
+      if (token){
+        saveAuthToken(token);
+        u.searchParams.delete('token');
+        window.history.replaceState({}, '', u.toString());
+      }
+    }catch{}
+  }
+
+  function promptForAuthToken(){
+    const value = window.prompt('Enter WebUI token');
+    const t = String(value || '').trim();
+    if (!t) return '';
+    saveAuthToken(t);
+    return t;
+  }
+
+  function authHeaders(extra){
+    const headers = Object.assign({}, extra || {});
+    if (authToken){
+      headers.Authorization = `Bearer ${authToken}`;
+    }
+    return headers;
+  }
+
+  async function apiFetch(url, options = {}, allowRetry = true){
+    const merged = Object.assign({}, options);
+    merged.headers = authHeaders(merged.headers);
+    const res = await fetch(url, merged);
+    if (res.status === 401 && allowRetry){
+      const t = promptForAuthToken();
+      if (t){
+        return apiFetch(url, options, false);
+      }
+    }
+    return res;
   }
 
   let ws = null;
@@ -114,6 +181,7 @@
   let terminalHasFocus = false;
   let shellWanted = false;
   let systemOpen = false;
+  let wsAuthenticated = true;
 
   function setStatus(txt){
     if (statusEl) statusEl.textContent = txt;
@@ -249,6 +317,12 @@
 
     ws.onopen = () => {
       setStatus('Connected');
+      wsAuthenticated = true;
+      if (authToken){
+        try{
+          ws.send(JSON.stringify({ type: 'auth', token: authToken }));
+        }catch{}
+      }
       if (shellWanted) {
         sendShellOpen();
       }
@@ -274,6 +348,31 @@
             } catch {}
           };
           img.src = 'data:image/jpeg;base64,' + msg.data;
+          return;
+        }
+        if (msg.type === 'auth_required'){
+          wsAuthenticated = false;
+          if (!authToken){
+            const t = promptForAuthToken();
+            if (!t){
+              setStatus('Auth required');
+              return;
+            }
+          }
+          try{
+            ws.send(JSON.stringify({ type: 'auth', token: authToken }));
+          }catch{}
+          return;
+        }
+        if (msg.type === 'auth_ok'){
+          wsAuthenticated = true;
+          setStatus('Authenticated');
+          if (shellWanted) sendShellOpen();
+          return;
+        }
+        if (msg.type === 'auth_error'){
+          wsAuthenticated = false;
+          setStatus('Auth failed');
           return;
         }
         if (msg.type === 'shell_ready'){
@@ -424,7 +523,7 @@
     setSystemStatus('Loading...');
     try{
       const url = getApiUrl('/api/system/status');
-      const res = await fetch(url, { cache: 'no-store' });
+      const res = await apiFetch(url, { cache: 'no-store' });
       const data = await res.json();
       if (!res.ok){
         throw new Error(data && data.error ? data.error : 'system_failed');
@@ -481,7 +580,7 @@
     setSettingsStatus('Loading...');
     try{
       const url = getApiUrl('/api/settings/discord_webhook');
-      const res = await fetch(url, { cache: 'no-store' });
+      const res = await apiFetch(url, { cache: 'no-store' });
       const data = await res.json();
       if (!res.ok){
         throw new Error(data && data.error ? data.error : 'settings_failed');
@@ -497,7 +596,7 @@
     setSettingsStatus('Saving...');
     try{
       const endpoint = getApiUrl('/api/settings/discord_webhook');
-      const res = await fetch(endpoint, {
+      const res = await apiFetch(endpoint, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: String(url || '').trim() }),
@@ -584,7 +683,7 @@
     setLootStatus('Loading...');
     try{
       const url = getApiUrl('/api/loot/list', { path });
-      const res = await fetch(url, { cache: 'no-store' });
+      const res = await apiFetch(url, { cache: 'no-store' });
       const data = await res.json();
       if (!res.ok){
         throw new Error(data && data.error ? data.error : 'Failed to load');
@@ -604,7 +703,7 @@
     setLootStatus('Loading preview...');
     try{
       const url = getApiUrl('/api/loot/view', { path });
-      const res = await fetch(url, { cache: 'no-store' });
+      const res = await apiFetch(url, { cache: 'no-store' });
       const data = await res.json();
       if (!res.ok){
         throw new Error(data && data.error ? data.error : 'preview_failed');
@@ -629,7 +728,7 @@
     setPayloadStatus('Loading...');
     try{
       const url = getApiUrl('/api/payloads/list');
-      const res = await fetch(url, { cache: 'no-store' });
+      const res = await apiFetch(url, { cache: 'no-store' });
       const data = await res.json();
       if (!res.ok){
         throw new Error(data && data.error ? data.error : 'payloads_failed');
@@ -695,7 +794,7 @@
     setPayloadStatus('Starting...');
     try{
       const url = getApiUrl('/api/payloads/start');
-      const res = await fetch(url, {
+      const res = await apiFetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ path })
@@ -715,7 +814,7 @@
   async function pollPayloadStatus(){
     try{
       const url = getApiUrl('/api/payloads/status');
-      const res = await fetch(url, { cache: 'no-store' });
+      const res = await apiFetch(url, { cache: 'no-store' });
       const data = await res.json();
       if (!res.ok){
         return;
@@ -821,7 +920,7 @@
     setActiveTab('settings');
     loadDiscordWebhook();
   });
-  if (navPayloadStudio) navPayloadStudio.href = './ide.html' + (location.search || '');
+  if (navPayloadStudio) navPayloadStudio.href = './ide.html' + getForwardSearch();
   themeButtons.forEach(btn => {
     btn.addEventListener('click', () => {
       const id = btn.getAttribute('data-theme');
@@ -882,6 +981,7 @@
   if (lootPreview) lootPreview.addEventListener('click', (e) => {
     if (e.target === lootPreview) closePreview();
   });
+  loadAuthToken();
   loadThemePreference();
   applyTheme();
   setActiveTab('device');

@@ -15,7 +15,7 @@ Routes:
 Environment:
   RJ_WEB_HOST  Host to bind (default: 0.0.0.0)
   RJ_WEB_PORT  Port to bind (default: 8080)
-  RJ_WS_TOKEN  Optional shared token for API access (?token=...)
+  RJ_WS_TOKEN  Optional shared token for API access (Bearer header)
   RJ_WS_TOKEN_FILE Optional token file (default: <repo>/.webui_token)
 """
 
@@ -223,9 +223,18 @@ def _read_ipv4_interfaces() -> list[dict]:
     return out
 
 
-def _auth_ok(query: dict) -> bool:
+def _auth_ok(handler: SimpleHTTPRequestHandler, query: dict) -> bool:
     if not TOKEN:
         return True
+    try:
+        authz = str(handler.headers.get("Authorization", "")).strip()
+        if authz.lower().startswith("bearer "):
+            bearer = authz[7:].strip()
+            if bearer == TOKEN:
+                return True
+    except Exception:
+        pass
+    # Legacy fallback for older clients still sending ?token=
     return query.get("token", [None])[0] == TOKEN
 
 
@@ -302,7 +311,7 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
             or parsed.path.startswith("/api/settings/")
         ):
             query = parse_qs(parsed.query or "")
-            if not _auth_ok(query):
+            if not _auth_ok(self, query):
                 _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
                 return
 
@@ -344,14 +353,14 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path in ("/api/payloads/start", "/api/payloads/run"):
             query = parse_qs(parsed.query or "")
-            if not _auth_ok(query):
+            if not _auth_ok(self, query):
                 _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
                 return
             self._handle_payloads_start()
             return
         if parsed.path == "/api/payloads/entry":
             query = parse_qs(parsed.query or "")
-            if not _auth_ok(query):
+            if not _auth_ok(self, query):
                 _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
                 return
             self._handle_payloads_entry_create()
@@ -362,14 +371,14 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path == "/api/payloads/file":
             query = parse_qs(parsed.query or "")
-            if not _auth_ok(query):
+            if not _auth_ok(self, query):
                 _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
                 return
             self._handle_payloads_file_put()
             return
         if parsed.path == "/api/settings/discord_webhook":
             query = parse_qs(parsed.query or "")
-            if not _auth_ok(query):
+            if not _auth_ok(self, query):
                 _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
                 return
             self._handle_settings_webhook_put()
@@ -380,7 +389,7 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path == "/api/payloads/entry":
             query = parse_qs(parsed.query or "")
-            if not _auth_ok(query):
+            if not _auth_ok(self, query):
                 _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
                 return
             self._handle_payloads_entry_rename()
@@ -391,7 +400,7 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path == "/api/payloads/entry":
             query = parse_qs(parsed.query or "")
-            if not _auth_ok(query):
+            if not _auth_ok(self, query):
                 _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
                 return
             self._handle_payloads_entry_delete(query)

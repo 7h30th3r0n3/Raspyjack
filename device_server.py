@@ -286,18 +286,27 @@ def authorize(path: str) -> bool:
         return False
 
 
+def _token_ok(value: str) -> bool:
+    if not TOKEN:
+        return True
+    return str(value or "").strip() == TOKEN
+
+
 # ----------------------------- WS Handler -------------------------------------
 async def handle_client(ws):
     # websockets v12+ : path is in ws.request.path
     path = getattr(getattr(ws, "request", None), "path", "/")
-
-    if not authorize(path):
-        await ws.close(code=4401, reason="Unauthorized")
-        return
-
-    async with clients_lock:
-        clients.add(ws)
-    log.info("Client connected (%d online)", len(clients))
+    authenticated = authorize(path) if TOKEN else True
+    if authenticated:
+        async with clients_lock:
+            clients.add(ws)
+        log.info("Client connected (%d online)", len(clients))
+    else:
+        try:
+            await ws.send(json.dumps({"type": "auth_required"}))
+        except Exception:
+            await ws.close(code=4401, reason="Unauthorized")
+            return
     loop = asyncio.get_running_loop()
     shell = None
 
@@ -306,6 +315,27 @@ async def handle_client(ws):
             try:
                 data = json.loads(raw)
             except Exception:
+                continue
+
+            if not authenticated:
+                if data.get("type") != "auth":
+                    continue
+                if _token_ok(data.get("token", "")):
+                    authenticated = True
+                    async with clients_lock:
+                        clients.add(ws)
+                    log.info("Client authenticated (%d online)", len(clients))
+                    try:
+                        await ws.send(json.dumps({"type": "auth_ok"}))
+                    except Exception:
+                        pass
+                else:
+                    try:
+                        await ws.send(json.dumps({"type": "auth_error"}))
+                    except Exception:
+                        pass
+                    await ws.close(code=4401, reason="Unauthorized")
+                    break
                 continue
 
             if data.get("type") == "input":
