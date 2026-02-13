@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 RaspyJack – WebSocket device server
-Compatible websockets v11+ / v12+
+Compatible websockets v11+ / v12+ /
 """
 
 import asyncio
@@ -13,10 +13,12 @@ import logging
 import os
 import socket
 import subprocess
+import time
 import termios
 import fcntl
 import struct
 import pty
+from http.cookies import SimpleCookie
 from pathlib import Path
 from typing import Set
 from urllib.parse import urlparse, parse_qs
@@ -32,6 +34,7 @@ FPS = float(os.environ.get("RJ_FPS", "10"))
 TOKEN_FILE = Path(os.environ.get("RJ_WS_TOKEN_FILE", "/root/Raspyjack/.webui_token"))
 AUTH_FILE = Path(os.environ.get("RJ_WEB_AUTH_FILE", "/root/Raspyjack/.webui_auth.json"))
 AUTH_SECRET_FILE = Path(os.environ.get("RJ_WEB_AUTH_SECRET_FILE", "/root/Raspyjack/.webui_session_secret"))
+SESSION_COOKIE_NAME = os.environ.get("RJ_WEB_SESSION_COOKIE", "rj_session")
 INPUT_SOCK = os.environ.get("RJ_INPUT_SOCK", "/dev/shm/rj_input.sock")
 SHELL_CMD = os.environ.get("RJ_SHELL_CMD", "/bin/bash")
 SHELL_CWD = os.environ.get("RJ_SHELL_CWD", "/")
@@ -372,6 +375,47 @@ def _ws_ticket_ok(value: str) -> bool:
         return False
 
 
+def _session_token_ok(token: str) -> bool:
+    claims = _read_signed_token(str(token or "").strip())
+    if not claims:
+        return False
+    if claims.get("typ") != "session":
+        return False
+    try:
+        return int(claims.get("exp", 0)) >= int(time.time())
+    except Exception:
+        return False
+
+
+def _cookie_session_ok(ws) -> bool:
+    header_val = ""
+    try:
+        req_headers = getattr(ws, "request_headers", None)
+        if req_headers:
+            header_val = str(req_headers.get("Cookie", "") or "")
+    except Exception:
+        header_val = ""
+    if not header_val:
+        try:
+            req = getattr(ws, "request", None)
+            hdrs = getattr(req, "headers", None) if req else None
+            if hdrs:
+                header_val = str(hdrs.get("Cookie", "") or "")
+        except Exception:
+            header_val = ""
+    if not header_val:
+        return False
+    c = SimpleCookie()
+    try:
+        c.load(header_val)
+    except Exception:
+        return False
+    morsel = c.get(SESSION_COOKIE_NAME)
+    if not morsel:
+        return False
+    return _session_token_ok(morsel.value)
+
+
 # ----------------------------- WS Handler -------------------------------------
 async def handle_client(ws):
     # websockets v12+ : path is in ws.request.path
@@ -379,7 +423,7 @@ async def handle_client(ws):
     if not _auth_initialized():
         authenticated = True
     else:
-        authenticated = authorize(path) if TOKEN else False
+        authenticated = _cookie_session_ok(ws) or (authorize(path) if TOKEN else False)
     if authenticated:
         async with clients_lock:
             clients.add(ws)
@@ -416,6 +460,7 @@ async def handle_client(ws):
                     except Exception:
                         pass
                 else:
+                    log.warning("Client auth failed (type=%s)", msg_type)
                     try:
                         await ws.send(json.dumps({"type": "auth_error"}))
                     except Exception:
