@@ -81,6 +81,7 @@
   const shellStatusEl = document.getElementById('shellStatus');
   const shellConnectBtn = document.getElementById('shellConnect');
   const shellDisconnectBtn = document.getElementById('shellDisconnect');
+  const logoutBtn = document.getElementById('logoutBtn');
   const authModal = document.getElementById('authModal');
   const authModalTitle = document.getElementById('authModalTitle');
   const authModalMessage = document.getElementById('authModalMessage');
@@ -415,6 +416,18 @@
     } finally {
       authInFlight = null;
     }
+  }
+
+  async function logoutUser(){
+    try{
+      await fetch(getApiUrl('/api/auth/logout'), { method: 'POST', credentials: 'include' });
+    }catch{}
+    saveAuthToken('');
+    wsTicket = '';
+    try{
+      if (ws) ws.close();
+    }catch{}
+    window.location.reload();
   }
 
   let ws = null;
@@ -1169,6 +1182,7 @@
   bindKeyboard();
   if (shellConnectBtn) shellConnectBtn.addEventListener('click', sendShellOpen);
   if (shellDisconnectBtn) shellDisconnectBtn.addEventListener('click', sendShellClose);
+  if (logoutBtn) logoutBtn.addEventListener('click', logoutUser);
   window.addEventListener('resize', () => {
     if (shellOpen) sendShellResize();
   });

@@ -10,6 +10,7 @@
   const saveBtn = document.getElementById('saveBtn');
   const runBtn = document.getElementById('runBtn');
   const editorTextarea = document.getElementById('editor');
+  const logoutBtn = document.getElementById('logoutBtn');
   const wsStatusEl = document.getElementById('wsStatus');
   const canvas = document.getElementById('screen-gb') || document.getElementById('screen');
   const ctx = canvas ? canvas.getContext('2d') : null;
@@ -371,6 +372,18 @@
     } finally {
       authInFlight = null;
     }
+  }
+
+  async function logoutUser(){
+    try{
+      await fetch(getApiUrl('/api/auth/logout'), { method: 'POST', credentials: 'include' });
+    }catch{}
+    saveAuthToken('');
+    wsTicket = '';
+    try{
+      if (ws) ws.close();
+    }catch{}
+    window.location.reload();
   }
 
   function bytesFromString(s){
@@ -2642,6 +2655,7 @@ if __name__ == "__main__":
     document.addEventListener('mouseup', stopResize);
     document.addEventListener('touchend', stopResize);
   }
+  if (logoutBtn) logoutBtn.addEventListener('click', logoutUser);
 
   // ------------------------ Init ------------------------
   loadAuthToken();
