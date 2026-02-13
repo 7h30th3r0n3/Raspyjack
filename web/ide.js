@@ -35,6 +35,12 @@
   const deleteModalConfirm = document.getElementById('deleteModalConfirm');
   const deleteModalCancel = document.getElementById('deleteModalCancel');
   const deleteModalClose = document.getElementById('deleteModalClose');
+  const authModal = document.getElementById('authModal');
+  const authModalMessage = document.getElementById('authModalMessage');
+  const authModalToken = document.getElementById('authModalToken');
+  const authModalConfirm = document.getElementById('authModalConfirm');
+  const authModalCancel = document.getElementById('authModalCancel');
+  const authModalClose = document.getElementById('authModalClose');
   const leftPanel = document.getElementById('leftPanel');
   const resizeHandle = document.getElementById('resizeHandle');
 
@@ -67,6 +73,7 @@
 
   const AUTH_STORAGE_KEY = 'rj.authToken';
   let authToken = '';
+  let authPromptResolver = null;
 
   function saveAuthToken(token){
     authToken = String(token || '').trim();
@@ -96,12 +103,32 @@
     }catch{}
   }
 
-  function promptForAuthToken(){
-    const value = window.prompt('Enter WebUI token');
-    const t = String(value || '').trim();
-    if (!t) return '';
-    saveAuthToken(t);
-    return t;
+  function resolveAuthPrompt(token){
+    if (!authPromptResolver) return;
+    const resolver = authPromptResolver;
+    authPromptResolver = null;
+    const t = String(token || '').trim();
+    if (t) saveAuthToken(t);
+    if (authModal) authModal.classList.add('hidden');
+    resolver(t);
+  }
+
+  function promptForAuthToken(message = 'Enter your WebUI token to continue.'){
+    if (!authModal || !authModalToken || !authModalConfirm || !authModalCancel || !authModalClose){
+      return Promise.resolve('');
+    }
+    if (authPromptResolver){
+      return Promise.resolve('');
+    }
+    if (authModalMessage) authModalMessage.textContent = message;
+    authModalToken.value = authToken || '';
+    authModal.classList.remove('hidden');
+    setTimeout(() => {
+      try { authModalToken.focus(); authModalToken.select(); } catch {}
+    }, 10);
+    return new Promise(resolve => {
+      authPromptResolver = resolve;
+    });
   }
 
   function authHeaders(extra){
@@ -117,7 +144,7 @@
     merged.headers = authHeaders(merged.headers);
     const res = await fetch(url, merged);
     if (res.status === 401 && allowRetry){
-      const t = promptForAuthToken();
+      const t = await promptForAuthToken('Authentication required. Enter WebUI token.');
       if (t){
         return apiFetch(url, options, false);
       }
@@ -734,11 +761,18 @@
         if (msg.type === 'auth_required'){
           wsAuthenticated = false;
           if (!authToken){
-            const t = promptForAuthToken();
-            if (!t){
-              setWsStatus('Auth required');
-              return;
-            }
+            promptForAuthToken('WebSocket authentication required. Enter WebUI token.')
+              .then((t) => {
+                if (!t){
+                  setWsStatus('Auth required');
+                  return;
+                }
+                if (!ws || ws.readyState !== WebSocket.OPEN) return;
+                try{
+                  ws.send(JSON.stringify({ type: 'auth', token: authToken }));
+                }catch{}
+              });
+            return;
           }
           try{
             ws.send(JSON.stringify({ type: 'auth', token: authToken }));
@@ -2288,6 +2322,23 @@ if __name__ == "__main__":
       }
     });
   }
+  if (authModalConfirm) authModalConfirm.addEventListener('click', () => {
+    resolveAuthPrompt(authModalToken ? authModalToken.value : '');
+  });
+  if (authModalCancel) authModalCancel.addEventListener('click', () => resolveAuthPrompt(''));
+  if (authModalClose) authModalClose.addEventListener('click', () => resolveAuthPrompt(''));
+  if (authModal) authModal.addEventListener('click', (e) => {
+    if (e.target === authModal) resolveAuthPrompt('');
+  });
+  if (authModalToken) authModalToken.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter'){
+      e.preventDefault();
+      resolveAuthPrompt(authModalToken.value);
+    } else if (e.key === 'Escape'){
+      e.preventDefault();
+      resolveAuthPrompt('');
+    }
+  });
 
   window.addEventListener('beforeunload', (e) => {
     if (isDirty){
