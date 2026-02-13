@@ -35,6 +35,36 @@ SHELL_CWD = os.environ.get("RJ_SHELL_CWD", "/")
 SEND_TIMEOUT = 0.5
 PING_INTERVAL = 15
 
+# WebSocket server only listens on these interfaces — wlan1+ are for attacks
+WEBUI_INTERFACES = ["eth0", "wlan0"]
+
+
+def _get_interface_ip(interface: str):
+    """Get the IPv4 address of a network interface."""
+    try:
+        result = subprocess.run(
+            ["ip", "-4", "addr", "show", interface],
+            capture_output=True, text=True, timeout=3,
+        )
+        if result.returncode == 0:
+            for line in result.stdout.split("\n"):
+                if "inet " in line:
+                    return line.split("inet ")[1].split("/")[0]
+    except Exception:
+        pass
+    return None
+
+
+def _get_webui_bind_addrs():
+    """Return (ip, iface_label) pairs the WS server should bind to."""
+    addrs = []
+    for iface in WEBUI_INTERFACES:
+        ip = _get_interface_ip(iface)
+        if ip:
+            addrs.append((ip, iface))
+    addrs.append(("127.0.0.1", "lo"))
+    return addrs
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -307,15 +337,48 @@ async def handle_client(ws):
 async def main():
     cache = FrameCache(FRAME_PATH)
 
-    async with websockets.serve(
-        handle_client,
-        HOST,
-        PORT,
-        ping_interval=PING_INTERVAL,
-        max_size=2 * 1024 * 1024,
-    ):
-        log.info("WebSocket server listening on %s:%d", HOST, PORT)
+    # If a specific host was set via env var, honour it (single bind)
+    if HOST != "0.0.0.0":
+        async with websockets.serve(
+            handle_client, HOST, PORT,
+            ping_interval=PING_INTERVAL, max_size=2 * 1024 * 1024,
+        ):
+            log.info("WebSocket server listening on %s:%d", HOST, PORT)
+            await broadcast_frames(cache)
+        return
+
+    # Default: bind only to eth0 + wlan0 (+ localhost).  wlan1+ stay untouched.
+    bind_addrs = _get_webui_bind_addrs()
+    servers = []
+
+    for addr, iface in bind_addrs:
+        try:
+            srv = await websockets.serve(
+                handle_client, addr, PORT,
+                ping_interval=PING_INTERVAL, max_size=2 * 1024 * 1024,
+            )
+            servers.append(srv)
+            log.info("WebSocket server listening on %s:%d (%s)", addr, PORT, iface)
+        except Exception as exc:
+            log.warning("Could not bind WS to %s:%d (%s): %s", addr, PORT, iface, exc)
+
+    if not servers:
+        # Last resort — fall back so the WS server is not dead
+        log.warning("No WebUI interfaces available, falling back to 0.0.0.0")
+        async with websockets.serve(
+            handle_client, "0.0.0.0", PORT,
+            ping_interval=PING_INTERVAL, max_size=2 * 1024 * 1024,
+        ):
+            log.info("WebSocket server listening on 0.0.0.0:%d", PORT)
+            await broadcast_frames(cache)
+        return
+
+    try:
         await broadcast_frames(cache)
+    finally:
+        for srv in servers:
+            srv.close()
+            await srv.wait_closed()
 
 
 if __name__ == "__main__":

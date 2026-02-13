@@ -21,6 +21,9 @@ from __future__ import annotations
 import json
 import mimetypes
 import os
+import subprocess
+import threading
+import time
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -35,6 +38,37 @@ PAYLOAD_STATE_PATH = Path("/dev/shm/rj_payload_state.json")
 HOST = os.environ.get("RJ_WEB_HOST", "0.0.0.0")
 PORT = int(os.environ.get("RJ_WEB_PORT", "8080"))
 TOKEN = os.environ.get("RJ_WS_TOKEN")
+
+# WebUI only listens on these interfaces — wlan1+ are for attacks/monitor mode
+WEBUI_INTERFACES = ["eth0", "wlan0"]
+
+
+def _get_interface_ip(interface: str) -> str | None:
+    """Get the IPv4 address of a network interface."""
+    try:
+        result = subprocess.run(
+            ["ip", "-4", "addr", "show", interface],
+            capture_output=True, text=True, timeout=3,
+        )
+        if result.returncode == 0:
+            for line in result.stdout.split("\n"):
+                if "inet " in line:
+                    return line.split("inet ")[1].split("/")[0]
+    except Exception:
+        pass
+    return None
+
+
+def _get_webui_bind_addrs() -> list[tuple[str, str]]:
+    """Return (ip, iface_label) pairs the WebUI should bind to."""
+    addrs: list[tuple[str, str]] = []
+    for iface in WEBUI_INTERFACES:
+        ip = _get_interface_ip(iface)
+        if ip:
+            addrs.append((ip, iface))
+    # Always include localhost for local access
+    addrs.append(("127.0.0.1", "lo"))
+    return addrs
 PREVIEW_MAX_BYTES = int(os.environ.get("RJ_LOOT_PREVIEW_MAX", str(200 * 1024)))
 PAYLOAD_MAX_BYTES = int(os.environ.get("RJ_PAYLOAD_MAX", str(512 * 1024)))
 TEXT_EXTS = {
@@ -590,14 +624,52 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
 
 
 def main() -> None:
-    server = ThreadingHTTPServer((HOST, PORT), RaspyJackHandler)
-    print(f"[WebUI] Serving on http://{HOST}:{PORT}")
+    # If a specific host was set via env var, honour it as-is (single bind)
+    if HOST != "0.0.0.0":
+        server = ThreadingHTTPServer((HOST, PORT), RaspyJackHandler)
+        print(f"[WebUI] Serving on http://{HOST}:{PORT}")
+        try:
+            server.serve_forever()
+        except KeyboardInterrupt:
+            pass
+        finally:
+            server.server_close()
+        return
+
+    # Default: bind only to eth0 + wlan0 (+ localhost).  wlan1+ stay untouched.
+    bind_addrs = _get_webui_bind_addrs()
+    servers: list[ThreadingHTTPServer] = []
+
+    for addr, iface in bind_addrs:
+        try:
+            srv = ThreadingHTTPServer((addr, PORT), RaspyJackHandler)
+            servers.append(srv)
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+            print(f"[WebUI] Serving on http://{addr}:{PORT} ({iface})")
+        except Exception as exc:
+            print(f"[WebUI] Could not bind {addr}:{PORT} ({iface}): {exc}")
+
+    if not servers:
+        # Last resort — fall back to all interfaces so the WebUI is not dead
+        print("[WebUI] WARNING: No WebUI interfaces available, falling back to 0.0.0.0")
+        srv = ThreadingHTTPServer(("0.0.0.0", PORT), RaspyJackHandler)
+        print(f"[WebUI] Serving on http://0.0.0.0:{PORT}")
+        try:
+            srv.serve_forever()
+        except KeyboardInterrupt:
+            pass
+        finally:
+            srv.server_close()
+        return
+
     try:
-        server.serve_forever()
+        while True:
+            time.sleep(3600)
     except KeyboardInterrupt:
         pass
     finally:
-        server.server_close()
+        for srv in servers:
+            srv.server_close()
 
 
 if __name__ == "__main__":

@@ -131,11 +131,16 @@ def lcd_init():
 # ===================================================================
 
 def find_iface():
-    """Find a monitor-mode capable wireless interface."""
+    """Find a monitor-mode capable wireless interface.
+    
+    wlan0 is reserved for the WebUI and is never selected here.
+    """
     ifs = []
     try:
         for n in os.listdir("/sys/class/net"):
-            if n != "lo" and os.path.isdir(f"/sys/class/net/{n}/wireless"):
+            if n == "lo" or n == "wlan0":
+                continue  # wlan0 reserved for WebUI
+            if os.path.isdir(f"/sys/class/net/{n}/wireless"):
                 ifs.append(n)
     except Exception:
         pass
@@ -153,11 +158,14 @@ def find_iface():
 
 
 def monitor_up(iface):
-    """Put *iface* into monitor mode. Returns interface name or None."""
+    """Put *iface* into monitor mode. Returns interface name or None.
+    
+    Only stops services for this specific interface — wlan0/WebUI is never touched.
+    """
     for cmd in [
-        ["sudo", "systemctl", "stop", "NetworkManager"],
-        ["sudo", "pkill", "-f", "wpa_supplicant"],
-        ["sudo", "pkill", "-f", "dhcpcd"],
+        ["nmcli", "device", "set", iface, "managed", "no"],
+        ["sudo", "pkill", "-f", f"wpa_supplicant.*{iface}"],
+        ["sudo", "pkill", "-f", f"dhcpcd.*{iface}"],
     ]:
         try:
             subprocess.run(cmd, capture_output=True, timeout=5)
@@ -213,7 +221,11 @@ def monitor_up(iface):
 
 
 def monitor_down(iface):
-    """Best-effort restore to managed mode."""
+    """Best-effort restore to managed mode.
+    
+    Re-manages the interface in NetworkManager instead of restarting the service
+    (which would disrupt wlan0/WebUI).
+    """
     if not iface:
         return
     base = iface.replace("mon", "")
@@ -226,7 +238,7 @@ def monitor_down(iface):
         ["sudo", "ip", "link", "set", base, "down"],
         ["sudo", "iw", base, "set", "type", "managed"],
         ["sudo", "ip", "link", "set", base, "up"],
-        ["sudo", "systemctl", "start", "NetworkManager"],
+        ["nmcli", "device", "set", base, "managed", "yes"],
     ]:
         try:
             subprocess.run(cmd, capture_output=True, timeout=5)

@@ -463,13 +463,15 @@ class WardrivingScanner:
         monitor mode.  Broadcom brcmfmac does NOT.  RTL88xx / Atheros do.
         Scans /sys/class/net/ directly (iwconfig misses some interfaces).
         Returns the best interface name, or None.
+
+        wlan0 is reserved for the WebUI and is never selected here.
         """
         # Discover all wireless interfaces via /sys (more reliable than iwconfig)
         interfaces = []
         try:
             for name in os.listdir("/sys/class/net"):
-                if name == "lo":
-                    continue
+                if name == "lo" or name == "wlan0":
+                    continue  # wlan0 reserved for WebUI
                 # An interface is wireless if /sys/class/net/<name>/wireless exists
                 if os.path.isdir(f"/sys/class/net/{name}/wireless"):
                     interfaces.append(name)
@@ -478,12 +480,12 @@ class WardrivingScanner:
 
         # Fallback to iwconfig if /sys found nothing
         if not interfaces:
-            interfaces = self.get_wifi_interfaces()
+            interfaces = [i for i in self.get_wifi_interfaces() if i != "wlan0"]
 
         if not interfaces:
             return None
 
-        print(f"  Found wireless interfaces: {interfaces}", flush=True)
+        print(f"  Found wireless interfaces (excluding wlan0/WebUI): {interfaces}", flush=True)
 
         # Drivers known NOT to support monitor mode
         no_monitor = {'brcmfmac', 'b43', 'wl'}
@@ -515,23 +517,26 @@ class WardrivingScanner:
         return None
 
     def setup_monitor_mode(self, interface):
-        """Comprehensive monitor mode setup"""
+        """Comprehensive monitor mode setup.
+        
+        Only stops services for the specific interface — wlan0/WebUI is never touched.
+        """
         print(f"Setting up monitor mode on {interface}")
         
-        # Step 1: Kill interfering processes (with timeouts so we never hang)
-        print("Stopping interfering services...")
+        # Step 1: Stop services for THIS interface only (keeps wlan0/WebUI alive)
+        print(f"Unmanaging {interface} from NetworkManager...")
         for cmd_label, cmd in [
-            ("NetworkManager", ['sudo', 'systemctl', 'stop', 'NetworkManager']),
-            ("wpa_supplicant", ['sudo', 'pkill', '-f', 'wpa_supplicant']),
-            ("dhcpcd",         ['sudo', 'pkill', '-f', 'dhcpcd']),
+            ("NM unmanage",    ['nmcli', 'device', 'set', interface, 'managed', 'no']),
+            ("wpa_supplicant", ['sudo', 'pkill', '-f', f'wpa_supplicant.*{interface}']),
+            ("dhcpcd",         ['sudo', 'pkill', '-f', f'dhcpcd.*{interface}']),
         ]:
             try:
                 subprocess.run(cmd, capture_output=True, timeout=5)
-                print(f"  {cmd_label} stopped", flush=True)
+                print(f"  {cmd_label} done", flush=True)
             except subprocess.TimeoutExpired:
                 print(f"  {cmd_label} timed out - skipping", flush=True)
             except Exception:
-                print(f"  {cmd_label} not running", flush=True)
+                print(f"  {cmd_label} not applicable", flush=True)
         time.sleep(1)
         
         # Step 2: Check current interface status

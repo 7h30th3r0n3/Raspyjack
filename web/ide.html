@@ -8,6 +8,9 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/monokai.min.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
     :root { color-scheme: dark; }
     html {
@@ -16,8 +19,139 @@
     }
     body {
       min-height: 100%;
+      font-family: 'Space Grotesk', system-ui, sans-serif;
       background: radial-gradient(1200px 800px at 50% -10%, #0f1b2d 0%, #07090f 55%, #05060a 100%);
     }
+    code, pre, .font-mono, .CodeMirror {
+      font-family: 'JetBrains Mono', 'Fira Code', monospace !important;
+    }
+
+    /* Neon glow effects */
+    .text-glow {
+      text-shadow: 0 0 10px rgba(16,185,129,0.8), 0 0 20px rgba(16,185,129,0.4), 0 0 30px rgba(16,185,129,0.2);
+    }
+    .glow-sm {
+      box-shadow: 0 0 10px rgba(16,185,129,0.3), 0 0 20px rgba(16,185,129,0.1);
+    }
+    .glow-md {
+      box-shadow: 0 0 15px rgba(16,185,129,0.4), 0 0 30px rgba(16,185,129,0.2), 0 0 45px rgba(16,185,129,0.1);
+    }
+    .glow-accent {
+      box-shadow: 0 0 15px rgba(34,211,238,0.4), 0 0 30px rgba(34,211,238,0.2);
+    }
+
+    /* Scanline effect */
+    .scanlines {
+      position: relative;
+    }
+    .scanlines::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(16,185,129,0.02) 2px, rgba(16,185,129,0.02) 4px);
+      pointer-events: none;
+      z-index: 100;
+    }
+
+    /* Grid pattern background */
+    .grid-pattern {
+      background-image:
+        linear-gradient(rgba(16,185,129,0.06) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(16,185,129,0.06) 1px, transparent 1px);
+      background-size: 20px 20px;
+    }
+
+    /* Cursor blink */
+    @keyframes cursor-blink {
+      0%, 50% { opacity: 1; }
+      51%, 100% { opacity: 0; }
+    }
+    .cursor-blink { animation: cursor-blink 1s step-end infinite; }
+
+    /* Pulse glow */
+    @keyframes pulse-glow {
+      0%, 100% { box-shadow: 0 0 10px rgba(16,185,129,0.3), 0 0 20px rgba(16,185,129,0.1); }
+      50% { box-shadow: 0 0 15px rgba(16,185,129,0.5), 0 0 30px rgba(16,185,129,0.2); }
+    }
+    .animate-pulse-glow { animation: pulse-glow 2s ease-in-out infinite; }
+
+    /* Fade in */
+    @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+    .animate-fade-in { animation: fade-in 0.3s ease-out; }
+
+    /* Custom scrollbar (global) */
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-track { background: rgba(15,23,42,0.6); }
+    ::-webkit-scrollbar-thumb { background: rgba(16,185,129,0.25); border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(16,185,129,0.4); }
+    ::selection { background: rgba(16,185,129,0.3); color: #d1fae5; }
+
+    /* Wizard / Modal shared styles */
+    .wizard-step-bar { display: flex; gap: 4px; }
+    .wizard-step-bar .step-dot {
+      flex: 1; height: 6px; border-radius: 3px;
+      background: rgba(148,163,184,0.2); transition: background 0.3s;
+    }
+    .wizard-step-bar .step-dot.active { background: #10b981; }
+    .wizard-type-card {
+      display: flex; align-items: center; gap: 12px;
+      padding: 12px 16px; border-radius: 8px;
+      border: 1px solid rgba(148,163,184,0.15);
+      cursor: pointer; transition: all 0.15s;
+    }
+    .wizard-type-card:hover { border-color: rgba(16,185,129,0.4); background: rgba(16,185,129,0.05); }
+    .wizard-type-card.selected { border-color: #10b981; background: rgba(16,185,129,0.1); }
+    .wizard-type-card .type-icon { font-size: 24px; width: 36px; text-align: center; }
+
+    /* Template library styles */
+    .tmpl-category-tabs { display: flex; gap: 2px; margin-bottom: 12px; }
+    .tmpl-category-tab {
+      flex: 1; padding: 6px 4px; text-align: center; font-size: 11px; cursor: pointer;
+      border-radius: 6px; border: 1px solid transparent; transition: all 0.15s;
+      color: rgba(148,163,184,0.7);
+    }
+    .tmpl-category-tab:hover { background: rgba(148,163,184,0.08); }
+    .tmpl-category-tab.active { border-color: #10b981; background: rgba(16,185,129,0.1); color: #10b981; }
+    .tmpl-card {
+      padding: 10px 12px; border-radius: 8px; cursor: pointer;
+      border: 1px solid rgba(148,163,184,0.15); transition: all 0.15s; margin-bottom: 6px;
+    }
+    .tmpl-card:hover { border-color: rgba(16,185,129,0.4); background: rgba(16,185,129,0.05); }
+    .tmpl-card.selected { border-color: #10b981; background: rgba(16,185,129,0.1); }
+
+    /* GPIO Reference panel */
+    .gpio-section-header {
+      display: flex; align-items: center; gap: 6px;
+      padding: 6px 8px; cursor: pointer; border-radius: 6px; transition: background 0.15s;
+    }
+    .gpio-section-header:hover { background: rgba(16,185,129,0.08); }
+    .gpio-table { width: 100%; font-size: 11px; border-collapse: collapse; }
+    .gpio-table th { padding: 4px 8px; text-align: left; font-weight: 500; background: rgba(148,163,184,0.08); }
+    .gpio-table td { padding: 4px 8px; border-top: 1px solid rgba(148,163,184,0.1); }
+    .gpio-table tr:nth-child(even) td { background: rgba(148,163,184,0.03); }
+    .gpio-code-block {
+      position: relative; padding: 8px 10px; border-radius: 6px; font-size: 10px;
+      background: rgba(15,23,42,0.6); border: 1px solid rgba(148,163,184,0.1);
+      white-space: pre-wrap; overflow-x: auto; color: rgba(148,163,184,0.8);
+    }
+    .gpio-code-block .copy-btn {
+      position: absolute; top: 4px; right: 4px; padding: 2px 6px; font-size: 10px;
+      border-radius: 4px; background: rgba(148,163,184,0.1); border: 1px solid rgba(148,163,184,0.15);
+      color: rgba(148,163,184,0.6); cursor: pointer; opacity: 0; transition: opacity 0.15s;
+    }
+    .gpio-code-block:hover .copy-btn { opacity: 1; }
+    .gpio-code-block .copy-btn:hover { background: rgba(16,185,129,0.2); color: #10b981; }
+
+    /* Toolbar button styles */
+    .ide-toolbar-btn {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 4px 10px; font-size: 11px; border-radius: 6px;
+      border: 1px solid rgba(148,163,184,0.15); background: rgba(148,163,184,0.06);
+      color: rgba(148,163,184,0.7); cursor: pointer; transition: all 0.15s;
+    }
+    .ide-toolbar-btn:hover { border-color: rgba(16,185,129,0.4); color: #d1fae5; background: rgba(16,185,129,0.08); }
+    .ide-toolbar-btn.active { border-color: #10b981; color: #10b981; background: rgba(16,185,129,0.12); }
+    .ide-toolbar-sep { width: 1px; height: 20px; background: rgba(148,163,184,0.15); margin: 0 4px; }
     .cm-editor,
     .CodeMirror {
       height: 100%;
@@ -136,26 +270,6 @@
       display: block;
     }
 
-    /* Terminal-style scrollbar for all IDE scroll areas (matches main WebUI terminal) */
-    #treeContainer,
-    .editor-body .CodeMirror-scroll {
-      scrollbar-width: thin;
-      scrollbar-color: rgba(148, 163, 184, 0.25) transparent;
-    }
-    #treeContainer::-webkit-scrollbar,
-    .editor-body .CodeMirror-scroll::-webkit-scrollbar {
-      width: 8px;
-    }
-    #treeContainer::-webkit-scrollbar-track,
-    .editor-body .CodeMirror-scroll::-webkit-scrollbar-track {
-      background: transparent;
-    }
-    #treeContainer::-webkit-scrollbar-thumb,
-    .editor-body .CodeMirror-scroll::-webkit-scrollbar-thumb {
-      background: rgba(148, 163, 184, 0.25);
-      border-radius: 8px;
-    }
-
     /* File type icons */
     .file-icon {
       display: inline-block;
@@ -169,17 +283,26 @@
   </style>
 </head>
 <body class="min-h-screen text-slate-200">
-  <div class="min-h-screen flex flex-col">
+  <div class="min-h-screen flex flex-col relative">
+    <div class="absolute inset-0 grid-pattern opacity-30 pointer-events-none"></div>
     <!-- Header -->
-    <header class="flex items-center justify-between px-4 py-3 border-b border-slate-800/70 bg-slate-950/60 backdrop-blur">
-      <div class="flex items-center gap-3">
+    <header class="flex items-center justify-between px-4 py-2 border-b border-slate-800/70 bg-slate-950/60 backdrop-blur scanlines relative overflow-hidden">
+      <div class="flex items-center gap-3 relative z-10">
         <img src="./raspyjack.png" alt="RaspyJack" class="h-8 drop-shadow-[0_0_12px_rgba(18,255,120,0.35)]"/>
         <div>
-          <div class="text-sm font-black tracking-wide"><span class="text-emerald-400">R</span>ASPY<span class="text-rose-400">J</span>ACK</div>
-          <div class="text-[11px] text-slate-400">Payload IDE</div>
+          <div class="text-sm font-black tracking-wide text-glow"><span class="text-emerald-400">R</span>ASPY<span class="text-rose-400">J</span>ACK</div>
+          <div class="text-[10px] text-slate-400">IDE STUDIO</div>
         </div>
       </div>
-      <div class="flex items-center gap-4 text-xs">
+      <!-- Toolbar center -->
+      <div class="flex items-center gap-1.5 relative z-10">
+        <button id="wizardBtn" class="ide-toolbar-btn"><i class="fa-solid fa-wand-magic-sparkles"></i> Wizard</button>
+        <button id="templatesBtn" class="ide-toolbar-btn"><i class="fa-solid fa-layer-group"></i> Templates</button>
+        <div class="ide-toolbar-sep"></div>
+        <button id="gpioToggleBtn" class="ide-toolbar-btn"><i class="fa-solid fa-microchip"></i> GPIO</button>
+      </div>
+      <!-- Right -->
+      <div class="flex items-center gap-3 text-xs relative z-10">
         <div id="ideStatus" class="text-slate-400">Ready</div>
         <a href="./index.html" class="px-3 py-1.5 rounded-lg bg-slate-800/80 border border-slate-600/40 text-slate-200 hover:bg-slate-700/80 transition">Back to WebUI</a>
       </div>
@@ -333,6 +456,205 @@
       </div>
     </div>
   </div>
+
+  <!-- Payload Wizard modal -->
+  <div id="wizardModal" class="hidden fixed inset-0 z-50 bg-black/60 backdrop-blur-sm">
+    <div class="max-w-xl mx-auto mt-16 px-4">
+      <div class="rounded-2xl border border-slate-700/60 bg-slate-950/95 shadow-[0_0_40px_rgba(15,23,42,0.75)] overflow-hidden animate-fade-in">
+        <div class="px-5 py-3 border-b border-slate-800/70 flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <i class="fa-solid fa-wand-magic-sparkles text-emerald-400"></i>
+            <span class="text-sm font-semibold text-emerald-300 text-glow">Payload Generator Wizard</span>
+          </div>
+          <button id="wizardModalClose" class="text-slate-400 hover:text-slate-200 text-xs px-2 py-1 rounded-md bg-slate-900/60 border border-slate-700/60">✕</button>
+        </div>
+        <!-- Step description -->
+        <div class="px-5 pt-3 pb-1 text-xs text-slate-400">
+          Step <span id="wizardStepNum">1</span> of 3: <span id="wizardStepLabel">Select Type</span>
+        </div>
+        <!-- Progress bar -->
+        <div class="px-5 py-2">
+          <div class="wizard-step-bar">
+            <div class="step-dot active" id="wizardDot1"></div>
+            <div class="step-dot" id="wizardDot2"></div>
+            <div class="step-dot" id="wizardDot3"></div>
+          </div>
+        </div>
+        <!-- Step content container -->
+        <div id="wizardStepContent" class="px-5 py-3 min-h-[260px]">
+          <!-- Populated by JS -->
+        </div>
+        <!-- Footer -->
+        <div class="px-5 py-3 border-t border-slate-800/70 flex justify-between">
+          <button id="wizardBackBtn" class="hidden px-4 py-1.5 rounded-lg bg-slate-800/80 border border-slate-600/60 text-slate-200 hover:bg-slate-700/80 text-xs"><i class="fa-solid fa-arrow-left mr-1"></i> Back</button>
+          <div class="flex-1"></div>
+          <button id="wizardNextBtn" class="px-4 py-1.5 rounded-lg bg-emerald-600/80 border border-emerald-300/30 text-white hover:bg-emerald-500/80 text-xs">Next <i class="fa-solid fa-arrow-right ml-1"></i></button>
+          <button id="wizardGenerateBtn" class="hidden px-4 py-1.5 rounded-lg bg-emerald-600/80 border border-emerald-300/30 text-white hover:bg-emerald-500/80 text-xs"><i class="fa-solid fa-wand-magic-sparkles mr-1"></i> Generate Payload</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Template Library modal -->
+  <div id="templateModal" class="hidden fixed inset-0 z-50 bg-black/60 backdrop-blur-sm">
+    <div class="max-w-4xl mx-auto mt-12 px-4">
+      <div class="rounded-2xl border border-slate-700/60 bg-slate-950/95 shadow-[0_0_40px_rgba(15,23,42,0.75)] overflow-hidden animate-fade-in" style="height:520px;">
+        <div class="px-5 py-3 border-b border-slate-800/70 flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <i class="fa-solid fa-layer-group text-emerald-400"></i>
+            <span class="text-sm font-semibold text-emerald-300 text-glow">Template Library</span>
+          </div>
+          <button id="templateModalClose" class="text-slate-400 hover:text-slate-200 text-xs px-2 py-1 rounded-md bg-slate-900/60 border border-slate-700/60">✕</button>
+        </div>
+        <div class="px-5 pt-3 text-xs text-slate-400 mb-1">Choose a starter template for your payload</div>
+        <div class="px-5 py-2 flex gap-4 overflow-hidden" style="height: calc(100% - 80px);">
+          <!-- Left: categories & templates -->
+          <div class="flex-1 flex flex-col overflow-hidden min-w-0">
+            <div id="tmplCategoryTabs" class="tmpl-category-tabs">
+              <!-- Populated by JS -->
+            </div>
+            <div id="tmplList" class="flex-1 overflow-y-auto pr-1">
+              <!-- Populated by JS -->
+            </div>
+          </div>
+          <!-- Right: preview -->
+          <div class="flex flex-col border-l border-slate-800/70 pl-4" style="width:380px;">
+            <div class="flex items-center gap-2 mb-2 text-xs text-slate-400">
+              <i class="fa-solid fa-eye"></i> <span>Preview</span>
+            </div>
+            <div id="tmplPreviewArea" class="flex-1 flex flex-col overflow-hidden">
+              <div id="tmplPreviewEmpty" class="flex-1 flex items-center justify-center text-slate-500 text-xs">
+                <div class="text-center">
+                  <i class="fa-solid fa-file-code text-3xl mb-2 opacity-40"></i>
+                  <div>Select a template to preview</div>
+                </div>
+              </div>
+              <div id="tmplPreviewContent" class="hidden flex-1 flex flex-col overflow-hidden">
+                <div class="mb-2">
+                  <div id="tmplPreviewName" class="text-sm font-semibold text-emerald-300"></div>
+                  <div id="tmplPreviewFile" class="text-[10px] text-slate-400 font-mono"></div>
+                </div>
+                <pre id="tmplPreviewCode" class="flex-1 overflow-auto text-[10px] font-mono text-slate-400 bg-slate-900/60 border border-slate-800/70 rounded-lg p-3 whitespace-pre-wrap"></pre>
+                <button id="tmplUseBtn" class="mt-2 w-full px-3 py-2 rounded-lg bg-emerald-600/80 border border-emerald-300/30 text-white hover:bg-emerald-500/80 text-xs font-medium">
+                  <i class="fa-solid fa-file-code mr-1"></i> Use This Template
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- GPIO Reference panel (inserted into main layout by JS) -->
+  <template id="gpioPanelTemplate">
+    <section id="gpioPanel" class="hidden flex-col border-l border-slate-800/70 bg-slate-950/50 backdrop-blur overflow-hidden animate-fade-in" style="width:280px; min-width:240px;">
+      <div class="px-3 py-2 border-b border-slate-800/70 flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <i class="fa-solid fa-microchip text-emerald-400"></i>
+          <span class="text-xs font-semibold text-emerald-300 text-glow">GPIO REFERENCE</span>
+        </div>
+        <button id="gpioPanelClose" class="text-slate-400 hover:text-slate-200 text-[10px] px-1.5 py-0.5 rounded bg-slate-900/60 border border-slate-700/60">✕</button>
+      </div>
+      <div class="flex-1 overflow-y-auto px-3 py-3 space-y-3" id="gpioPanelBody">
+        <!-- Info banner -->
+        <div class="p-2 rounded-lg bg-emerald-500/5 border border-emerald-500/15 flex items-start gap-2">
+          <i class="fa-solid fa-circle-info text-emerald-400 mt-0.5 text-xs"></i>
+          <span class="text-[10px] text-slate-400">RaspyJack uses BCM (Broadcom) pin numbering with active-LOW buttons (pressed = 0).</span>
+        </div>
+        <!-- Pin Mappings section -->
+        <div>
+          <div class="gpio-section-header" data-gpio-section="pins">
+            <i class="fa-solid fa-chevron-down text-emerald-400 text-[10px] gpio-chevron"></i>
+            <span class="text-xs font-medium text-slate-200">Pin Mappings</span>
+          </div>
+          <div class="gpio-section-body mt-1" data-gpio-body="pins">
+            <div class="rounded-lg border border-slate-800/70 overflow-hidden">
+              <table class="gpio-table">
+                <thead><tr><th>Name</th><th>BCM Pin</th><th>Function</th></tr></thead>
+                <tbody>
+                  <tr><td class="font-mono text-emerald-400">KEY1</td><td class="font-mono">21</td><td class="text-slate-400">Primary action</td></tr>
+                  <tr><td class="font-mono text-emerald-400">KEY2</td><td class="font-mono">20</td><td class="text-slate-400">Secondary action</td></tr>
+                  <tr><td class="font-mono text-emerald-400">KEY3</td><td class="font-mono">16</td><td class="text-slate-400">Exit / Back</td></tr>
+                  <tr><td class="font-mono text-emerald-400">UP</td><td class="font-mono">6</td><td class="text-slate-400">Joystick up</td></tr>
+                  <tr><td class="font-mono text-emerald-400">DOWN</td><td class="font-mono">19</td><td class="text-slate-400">Joystick down</td></tr>
+                  <tr><td class="font-mono text-emerald-400">LEFT</td><td class="font-mono">5</td><td class="text-slate-400">Joystick left</td></tr>
+                  <tr><td class="font-mono text-emerald-400">RIGHT</td><td class="font-mono">26</td><td class="text-slate-400">Joystick right</td></tr>
+                  <tr><td class="font-mono text-emerald-400">OK</td><td class="font-mono">13</td><td class="text-slate-400">Joystick press</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+        <!-- Code Examples section -->
+        <div>
+          <div class="gpio-section-header" data-gpio-section="code">
+            <i class="fa-solid fa-chevron-down text-emerald-400 text-[10px] gpio-chevron"></i>
+            <span class="text-xs font-medium text-slate-200">Code Examples</span>
+          </div>
+          <div class="gpio-section-body mt-2 space-y-2" data-gpio-body="code">
+            <div>
+              <div class="text-[10px] font-medium text-slate-300 mb-1">Setup</div>
+              <div class="gpio-code-block font-mono">import RPi.GPIO as GPIO
+
+PINS = {
+    "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
+    "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16,
+}
+
+GPIO.setmode(GPIO.BCM)
+for pin in PINS.values():
+    GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)<button class="copy-btn" data-copy-target="setup"><i class="fa-regular fa-copy"></i></button></div>
+            </div>
+            <div>
+              <div class="text-[10px] font-medium text-slate-300 mb-1">Read Button</div>
+              <div class="gpio-code-block font-mono">def pressed_button():
+    """Return pressed button name or None."""
+    for name, pin in PINS.items():
+        if GPIO.input(pin) == 0:
+            return name
+    return None<button class="copy-btn" data-copy-target="readButton"><i class="fa-regular fa-copy"></i></button></div>
+            </div>
+            <div>
+              <div class="text-[10px] font-medium text-slate-300 mb-1">Debounce</div>
+              <div class="gpio-code-block font-mono"># Wait for button release (debounce)
+btn = pressed_button()
+if btn == "KEY1":
+    while pressed_button():
+        time.sleep(0.05)
+    # Button was released, do action<button class="copy-btn" data-copy-target="debounce"><i class="fa-regular fa-copy"></i></button></div>
+            </div>
+            <div>
+              <div class="text-[10px] font-medium text-slate-300 mb-1">Cleanup</div>
+              <div class="gpio-code-block font-mono"># Always clean up GPIO on exit
+try:
+    main()
+finally:
+    GPIO.cleanup()<button class="copy-btn" data-copy-target="cleanup"><i class="fa-regular fa-copy"></i></button></div>
+            </div>
+          </div>
+        </div>
+        <!-- LCD Display section -->
+        <div>
+          <div class="gpio-section-header" data-gpio-section="lcd">
+            <i class="fa-solid fa-chevron-right text-slate-400 text-[10px] gpio-chevron"></i>
+            <span class="text-xs font-medium text-slate-200">LCD Display</span>
+          </div>
+          <div class="gpio-section-body hidden mt-2" data-gpio-body="lcd">
+            <div class="p-2 rounded-lg bg-slate-800/30 border border-slate-800/70">
+              <div class="grid grid-cols-2 gap-2 text-[10px]">
+                <div><span class="text-slate-400">Type:</span> <span class="font-mono">1.44" TFT</span></div>
+                <div><span class="text-slate-400">Resolution:</span> <span class="font-mono">128x128</span></div>
+                <div><span class="text-slate-400">Driver:</span> <span class="font-mono">LCD_1in44</span></div>
+                <div><span class="text-slate-400">Interface:</span> <span class="font-mono">SPI</span></div>
+              </div>
+            </div>
+            <p class="text-[10px] text-slate-400 mt-1">Uses Waveshare 1.44inch LCD HAT with ST7735S controller. Supports RGB565 color format via PIL/Pillow.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+  </template>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/python/python.min.js"></script>
