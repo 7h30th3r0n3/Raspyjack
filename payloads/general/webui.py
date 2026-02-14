@@ -15,7 +15,6 @@ import sys
 import time
 import socket
 import textwrap
-import signal
 
 # Allow imports of project drivers when run directly
 sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
@@ -23,7 +22,6 @@ sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
-from payloads._input_helper import get_button
 
 # --------------------------- LCD and GPIO setup ---------------------------
 PINS = {
@@ -47,17 +45,6 @@ WIDTH, HEIGHT = 128, 128
 font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 11)
 bold = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 12)
 small_font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 9)
-running = True
-
-
-def _handle_exit_signal(signum, frame):
-    """Allow WebUI/manager stop signals to exit the loop cleanly."""
-    global running
-    running = False
-
-
-signal.signal(signal.SIGINT, _handle_exit_signal)
-signal.signal(signal.SIGTERM, _handle_exit_signal)
 
 # ------------------------------- Helpers -------------------------------
 
@@ -121,7 +108,6 @@ def draw_info(url):
 # -------------------------------- Main --------------------------------
 
 def main():
-    global running
     try:
         # 1. Get IP and URL
         ip = get_ip_for_url()
@@ -131,9 +117,9 @@ def main():
         draw_info(url)
         
         # 3. Wait for exit button
-        while running:
-            btn = get_button(PINS, GPIO)
-            if btn in ("KEY3", "LEFT"):
+        while True:
+            # Check for generic GPIO pins
+            if GPIO.input(PINS['KEY3']) == 0 or GPIO.input(PINS['LEFT']) == 0:
                 break
             time.sleep(0.1)
 

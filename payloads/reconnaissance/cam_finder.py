@@ -253,7 +253,7 @@ class CamFinderScanner(WardrivingScanner):
         Scans /sys/class/net/ directly (iwconfig misses some interfaces).
         Returns the best interface name, or None.
 
-        wlan0 is reserved for the WebUI and is never selected here.
+        The onboard Pi WiFi (WebUI interface) is never selected here.
         """
         # Discover all wireless interfaces via /sys (more reliable than iwconfig)
         interfaces = []
@@ -262,18 +262,20 @@ class CamFinderScanner(WardrivingScanner):
                 if name == "lo" or name == "wlan0":
                     continue  # wlan0 reserved for WebUI
                 if os.path.isdir(f"/sys/class/net/{name}/wireless"):
+                    if self._is_onboard_wifi_iface(name):
+                        continue
                     interfaces.append(name)
         except Exception:
             pass
 
         # Fallback to iwconfig if /sys found nothing
         if not interfaces:
-            interfaces = [i for i in self.get_wifi_interfaces() if i != "wlan0"]
+            interfaces = [i for i in self.get_wifi_interfaces() if not self._is_onboard_wifi_iface(i)]
 
         if not interfaces:
             return None
 
-        print(f"  Found wireless interfaces (excluding wlan0/WebUI): {interfaces}", flush=True)
+        print(f"  Found wireless interfaces (excluding onboard/WebUI): {interfaces}", flush=True)
 
         # Drivers known NOT to support monitor mode
         no_monitor = {'brcmfmac', 'b43', 'wl'}

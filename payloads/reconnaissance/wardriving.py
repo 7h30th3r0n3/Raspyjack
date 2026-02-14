@@ -456,6 +456,24 @@ class WardrivingScanner:
             return interfaces
         except:
             return []
+
+    def _is_onboard_wifi_iface(self, iface):
+        """True for onboard Pi WiFi (SDIO/mmc path or brcmfmac driver)."""
+        try:
+            devpath = os.path.realpath(f"/sys/class/net/{iface}/device")
+            if "mmc" in devpath:
+                return True
+        except Exception:
+            pass
+        try:
+            driver = os.path.basename(
+                os.path.realpath(f"/sys/class/net/{iface}/device/driver")
+            )
+            if driver == "brcmfmac":
+                return True
+        except Exception:
+            pass
+        return False
     
     def _find_monitor_capable_interface(self):
         """
@@ -464,7 +482,7 @@ class WardrivingScanner:
         Scans /sys/class/net/ directly (iwconfig misses some interfaces).
         Returns the best interface name, or None.
 
-        wlan0 is reserved for the WebUI and is never selected here.
+        The onboard Pi WiFi (WebUI interface) is never selected here.
         """
         # Discover all wireless interfaces via /sys (more reliable than iwconfig)
         interfaces = []
@@ -474,18 +492,20 @@ class WardrivingScanner:
                     continue  # wlan0 reserved for WebUI
                 # An interface is wireless if /sys/class/net/<name>/wireless exists
                 if os.path.isdir(f"/sys/class/net/{name}/wireless"):
+                    if self._is_onboard_wifi_iface(name):
+                        continue
                     interfaces.append(name)
         except Exception:
             pass
 
         # Fallback to iwconfig if /sys found nothing
         if not interfaces:
-            interfaces = [i for i in self.get_wifi_interfaces() if i != "wlan0"]
+            interfaces = [i for i in self.get_wifi_interfaces() if not self._is_onboard_wifi_iface(i)]
 
         if not interfaces:
             return None
 
-        print(f"  Found wireless interfaces (excluding wlan0/WebUI): {interfaces}", flush=True)
+        print(f"  Found wireless interfaces (excluding onboard/WebUI): {interfaces}", flush=True)
 
         # Drivers known NOT to support monitor mode
         no_monitor = {'brcmfmac', 'b43', 'wl'}

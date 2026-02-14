@@ -76,6 +76,75 @@ grep -qE '^dtoverlay=spi0-[12]cs' "$CFG" || echo 'dtoverlay=spi0-2cs' | sudo tee
 
 # ───── 4 ▸ WiFi attack setup ──────────────────────────────────
 step "Setting up WiFi attack environment …"
+
+# Pin onboard WiFi to wlan0 so it never swaps with USB dongles across reboots.
+# Without this, Linux can assign wlan0/wlan1 in random order on each boot,
+# which breaks the WebUI (wlan0) vs monitor-mode (wlan1+) separation.
+step "Pinning onboard WiFi to wlan0 (persistent naming) …"
+
+# Detect WiFi MAC addresses by bus:
+# - onboard chip: SDIO/MMC -> forced to wlan0
+# - first USB dongle: USB bus -> forced to wlan1
+ONBOARD_MAC=""
+USB_MAC=""
+for dev in /sys/class/net/wlan*; do
+  [ -e "$dev" ] || continue
+  DEVPATH=$(readlink -f "$dev/device" 2>/dev/null || true)
+  if echo "$DEVPATH" | grep -q "mmc"; then
+    ONBOARD_MAC=$(cat "$dev/address" 2>/dev/null || true)
+    ONBOARD_NAME=$(basename "$dev")
+    info "Found onboard WiFi: $ONBOARD_NAME ($ONBOARD_MAC) on SDIO/MMC bus"
+  elif [ -z "$USB_MAC" ] && echo "$DEVPATH" | grep -q "usb"; then
+    USB_MAC=$(cat "$dev/address" 2>/dev/null || true)
+    USB_NAME=$(basename "$dev")
+    info "Found USB WiFi dongle: $USB_NAME ($USB_MAC) on USB bus"
+  fi
+done
+
+if [ -n "$ONBOARD_MAC" ]; then
+  # Method 1: systemd .link file (takes priority on Bookworm / modern systemd)
+  # This is the RELIABLE way — systemd overrides udev NAME= rules
+  sudo tee /etc/systemd/network/10-onboard-wifi.link >/dev/null <<LINK
+[Match]
+MACAddress=$ONBOARD_MAC
+
+[Link]
+Name=wlan0
+LINK
+
+  if [ -n "$USB_MAC" ]; then
+    sudo tee /etc/systemd/network/11-usb-wifi.link >/dev/null <<LINK
+[Match]
+MACAddress=$USB_MAC
+
+[Link]
+Name=wlan1
+LINK
+  else
+    warn "No USB WiFi dongle detected during install - wlan1 pin skipped"
+  fi
+
+  # Method 2: udev rule (fallback for older systems without systemd-networkd)
+  sudo tee /etc/udev/rules.d/70-raspyjack-wifi.rules >/dev/null <<UDEV
+# RaspyJack: pin WiFi interfaces by MAC
+# Onboard WiFi (SDIO) -> wlan0
+SUBSYSTEM=="net", ACTION=="add", ATTR{address}=="$ONBOARD_MAC", NAME="wlan0"
+UDEV
+  if [ -n "$USB_MAC" ]; then
+    echo "SUBSYSTEM==\"net\", ACTION==\"add\", ATTR{address}==\"$USB_MAC\", NAME=\"wlan1\"" | sudo tee -a /etc/udev/rules.d/70-raspyjack-wifi.rules >/dev/null
+  fi
+
+  sudo udevadm control --reload-rules
+  info "Pinned onboard WiFi ($ONBOARD_MAC) to wlan0 via systemd .link + udev rule"
+  if [ -n "$USB_MAC" ]; then
+    info "Pinned USB WiFi dongle ($USB_MAC) to wlan1 via systemd .link + udev rule"
+  fi
+  info "This will take effect after reboot"
+else
+  warn "Could not detect onboard WiFi MAC — skipping interface pinning"
+  warn "Run 'ip link' and manually create /etc/systemd/network/10-onboard-wifi.link"
+fi
+
 sudo mkdir -p /root/Raspyjack/wifi/profiles
 sudo chown root:root /root/Raspyjack/wifi/profiles
 sudo chmod 755 /root/Raspyjack/wifi/profiles
@@ -109,6 +178,27 @@ NM_CONF
 else
   warn "NetworkManager not active - WiFi attacks may need manual setup"
 fi
+
+# Hard fallback: force WiFi naming at boot before NetworkManager
+step "Installing boot-time WiFi name pinning service …"
+sudo install -m 0755 /root/Raspyjack/scripts/pin_wifi_names.sh /usr/local/sbin/raspyjack-pin-wifi.sh
+sudo tee /etc/systemd/system/raspyjack-pin-wifi.service >/dev/null <<'UNIT'
+[Unit]
+Description=RaspyJack Pin WiFi Interface Names
+After=systemd-udev-settle.service local-fs.target
+Wants=systemd-udev-settle.service
+Before=NetworkManager.service network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/raspyjack-pin-wifi.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+sudo systemctl daemon-reload
+sudo systemctl enable raspyjack-pin-wifi.service
 
 # ───── 5 ▸ RaspyJack core service ────────────────────────────
 SERVICE=/etc/systemd/system/raspyjack.service
