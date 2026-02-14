@@ -151,6 +151,26 @@
     }
     .ide-toolbar-btn:hover { border-color: rgba(16,185,129,0.4); color: #d1fae5; background: rgba(16,185,129,0.08); }
     .ide-toolbar-btn.active { border-color: #10b981; color: #10b981; background: rgba(16,185,129,0.12); }
+    .ide-toolbar-btn--success {
+      border-color: rgba(16,185,129,0.35);
+      color: #a7f3d0;
+      background: rgba(16,185,129,0.12);
+    }
+    .ide-toolbar-btn--success:hover {
+      border-color: rgba(16,185,129,0.5);
+      color: #d1fae5;
+      background: rgba(16,185,129,0.18);
+    }
+    .ide-toolbar-btn--danger {
+      border-color: rgba(244,63,94,0.35);
+      color: #fecdd3;
+      background: rgba(244,63,94,0.12);
+    }
+    .ide-toolbar-btn--danger:hover {
+      border-color: rgba(244,63,94,0.5);
+      color: #ffe4e6;
+      background: rgba(244,63,94,0.18);
+    }
     .ide-toolbar-sep { width: 1px; height: 20px; background: rgba(148,163,184,0.15); margin: 0 4px; }
     .cm-editor,
     .CodeMirror {
@@ -339,13 +359,13 @@
           <div class="flex items-center gap-2 text-xs">
             <span id="dirtyFlag" class="text-amber-400 hidden">● Unsaved</span>
             <span id="payloadRunState" class="text-slate-400">Idle</span>
-            <button id="saveBtn" class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] bg-emerald-700/70 border border-emerald-400/30 text-emerald-100 hover:bg-emerald-600/70 transition disabled:opacity-40 disabled:cursor-not-allowed">
+            <button id="saveBtn" class="ide-toolbar-btn ide-toolbar-btn--success disabled:opacity-40 disabled:cursor-not-allowed">
               <i class="fa-solid fa-floppy-disk text-[10px]"></i> Save
             </button>
-            <button id="runBtn" class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] bg-emerald-600/70 border border-emerald-300/30 text-emerald-50 hover:bg-emerald-500/70 transition disabled:opacity-40 disabled:cursor-not-allowed">
+            <button id="runBtn" class="ide-toolbar-btn ide-toolbar-btn--success disabled:opacity-40 disabled:cursor-not-allowed">
               <i class="fa-solid fa-play text-[10px]"></i> Run
             </button>
-            <button id="stopBtn" class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] bg-rose-700/70 border border-rose-300/30 text-rose-100 hover:bg-rose-600/70 transition disabled:opacity-40 disabled:cursor-not-allowed">
+            <button id="stopBtn" class="ide-toolbar-btn ide-toolbar-btn--danger disabled:opacity-40 disabled:cursor-not-allowed">
               <i class="fa-solid fa-stop text-[10px]"></i> Stop
             </button>
           </div>
