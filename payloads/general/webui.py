@@ -14,6 +14,7 @@ import os
 import sys
 import time
 import socket
+import signal
 import textwrap
 
 # Allow imports of project drivers when run directly
@@ -22,6 +23,7 @@ sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
+from payloads._input_helper import get_button
 
 # --------------------------- LCD and GPIO setup ---------------------------
 PINS = {
@@ -159,9 +161,20 @@ def draw_info(https_url: str, http_url: str):
     LCD.LCD_ShowImage(img, 0, 0)
 
 # -------------------------------- Main --------------------------------
+running = True
+
+
+def _handle_exit_signal(signum, _frame):
+    global running
+    running = False
+
 
 def main():
+    global running
     try:
+        signal.signal(signal.SIGINT, _handle_exit_signal)
+        signal.signal(signal.SIGTERM, _handle_exit_signal)
+
         # 1. Get IP and URL
         ip = get_ip_for_url()
         https_url = f"https://{ip}/"
@@ -175,9 +188,9 @@ def main():
         draw_info(https_url, http_url)
         
         # 3. Wait for exit button
-        while True:
-            # Check for generic GPIO pins
-            if GPIO.input(PINS['KEY3']) == 0 or GPIO.input(PINS['LEFT']) == 0:
+        while running:
+            btn = get_button(PINS, GPIO)
+            if btn in ("KEY3", "LEFT"):
                 break
             time.sleep(0.1)
 

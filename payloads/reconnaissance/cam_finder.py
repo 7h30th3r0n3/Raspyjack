@@ -10,7 +10,7 @@ logs devices whose MAC matches a known camera vendor.
 
 Controls:
   KEY1 - Start / Stop scan
-  KEY2 - Exit (hold 2 s)
+  KEY2 - Exit (WebUI: immediate, device: hold 2 s)
   KEY3 - Export data
 
 Author: dag nazty
@@ -779,7 +779,7 @@ class CamFinderScanner(WardrivingScanner):
 
             print("LCD Mode - Use hardware buttons:")
             print("  KEY1 - Start/Stop scan")
-            print("  KEY2 - Exit (hold 2s)")
+            print("  KEY2 - Exit (WebUI immediate / hold 2s on device)")
             print("  KEY3 - Export data")
             print("\nPress Ctrl+C to exit")
 
