@@ -1257,6 +1257,7 @@ import subprocess
 import RPi.GPIO as GPIO
 import LCD_1in44
 from PIL import Image, ImageDraw, ImageFont
+from payloads._input_helper import get_button
 
 # Configuration
 PINS = {"UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26, "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16}
@@ -1296,10 +1297,7 @@ def show(lines):
     LCD.LCD_ShowImage(canvas, 0, 0)
 
 def pressed_button():
-    for name, pin in PINS.items():
-        if GPIO.input(pin) == 0:
-            return name
-    return None
+    return get_button(PINS, GPIO)
 
 def scan_networks():
     show(["Scanning WiFi...", f"Interface: {WIFI_INTERFACE}", f"Timeout: {SCAN_TIMEOUT}s"])
@@ -1369,6 +1367,7 @@ import signal
 import RPi.GPIO as GPIO
 import LCD_1in44
 from PIL import Image, ImageDraw, ImageFont
+from payloads._input_helper import get_button
 
 PINS = {"UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26, "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16}
 SCAN_DURATION = 10
@@ -1404,10 +1403,7 @@ def show(lines):
     LCD.LCD_ShowImage(canvas, 0, 0)
 
 def pressed_button():
-    for name, pin in PINS.items():
-        if GPIO.input(pin) == 0:
-            return name
-    return None
+    return get_button(PINS, GPIO)
 
 def scan_ble():
     show(["Scanning BLE...", f"Duration: {SCAN_DURATION}s"])
@@ -1479,6 +1475,7 @@ from datetime import datetime
 import RPi.GPIO as GPIO
 import LCD_1in44
 from PIL import Image, ImageDraw, ImageFont
+from payloads._input_helper import get_button
 
 PINS = {"UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26, "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16}
 INTERFACE = "eth0"
@@ -1522,10 +1519,7 @@ def show(lines):
     LCD.LCD_ShowImage(canvas, 0, 0)
 
 def pressed_button():
-    for name, pin in PINS.items():
-        if GPIO.input(pin) == 0:
-            return name
-    return None
+    return get_button(PINS, GPIO)
 
 def get_target():
     cmd = f"ip -4 addr show {INTERFACE} | awk '/inet / {{ print $2 }}'"
@@ -1599,6 +1593,7 @@ from datetime import datetime
 import RPi.GPIO as GPIO
 import LCD_1in44
 from PIL import Image, ImageDraw, ImageFont
+from payloads._input_helper import get_button
 
 PINS = {"UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26, "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16}
 PORTS = [22, 23, 80, 8080]
@@ -1640,10 +1635,7 @@ def show(lines):
     LCD.LCD_ShowImage(canvas, 0, 0)
 
 def pressed_button():
-    for name, pin in PINS.items():
-        if GPIO.input(pin) == 0:
-            return name
-    return None
+    return get_button(PINS, GPIO)
 
 def log_connection(port, ip):
     entry = {"time": datetime.now().isoformat(), "port": port, "ip": ip}
@@ -1710,6 +1702,7 @@ import signal
 import RPi.GPIO as GPIO
 import LCD_1in44
 from PIL import Image, ImageDraw, ImageFont
+from payloads._input_helper import get_button
 
 PINS = {"UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26, "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16}
 
@@ -1756,10 +1749,7 @@ def show_action(text):
     LCD.LCD_ShowImage(canvas, 0, 0)
 
 def pressed_button():
-    for name, pin in PINS.items():
-        if GPIO.input(pin) == 0:
-            return name
-    return None
+    return get_button(PINS, GPIO)
 
 def handle_selection():
     global running
@@ -1820,6 +1810,7 @@ import subprocess
 import RPi.GPIO as GPIO
 import LCD_1in44
 from PIL import Image, ImageDraw, ImageFont
+from payloads._input_helper import get_button
 
 PINS = {"UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26, "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16}
 
@@ -1915,10 +1906,7 @@ def show_status():
     LCD.LCD_ShowImage(canvas, 0, 0)
 
 def pressed_button():
-    for name, pin in PINS.items():
-        if GPIO.input(pin) == 0:
-            return name
-    return None
+    return get_button(PINS, GPIO)
 
 def main():
     while running:
@@ -2142,6 +2130,7 @@ if __name__ == "__main__":
       '',
       'import time',
       'import signal',
+      'from payloads._input_helper import get_button',
     ].join('\n');
 
     const gpioSetup = `
@@ -2183,11 +2172,8 @@ def show(lines):
 
     const buttonHelper = `
 def pressed_button():
-    """Return the name of the pressed button, or None."""
-    for name, pin in PINS.items():
-        if GPIO.input(pin) == 0:
-            return name
-    return None
+    """Return merged WebUI/GPIO button input."""
+    return get_button(PINS, GPIO)
 `;
 
     const cleanupHandler = `
