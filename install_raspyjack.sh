@@ -317,6 +317,81 @@ UNIT
 sudo systemctl daemon-reload
 sudo systemctl enable --now raspyjack-webui.service
 
+# ───── 5-c ▸ optional TLS reverse proxy (Caddy) ─────────────
+step "Setting up optional HTTPS reverse proxy with Caddy ..."
+set +e
+TLS_SETUP_OK=1
+
+# Install Caddy best-effort. If this fails, keep plain HTTP stack available.
+if ! dpkg -s caddy >/dev/null 2>&1; then
+  step "Installing Caddy package ..."
+  if ! sudo apt-get install -y --no-install-recommends caddy; then
+    warn "Caddy install failed; keeping WebUI on HTTP only."
+    TLS_SETUP_OK=0
+  fi
+fi
+
+if [ "$TLS_SETUP_OK" -eq 1 ]; then
+  CADDY_HOSTS=()
+  for IFACE in eth0 wlan0 tailscale0; do
+    IFACE_IP=$(ip -4 -o addr show "$IFACE" 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -n1)
+    if [ -n "$IFACE_IP" ]; then
+      CADDY_HOSTS+=("$IFACE_IP")
+    fi
+  done
+  CADDY_HOSTS+=("localhost")
+
+  if [ "${#CADDY_HOSTS[@]}" -eq 0 ]; then
+    warn "No interface IPs detected for Caddy TLS vhosts; skipping Caddy config."
+    TLS_SETUP_OK=0
+  fi
+fi
+
+if [ "$TLS_SETUP_OK" -eq 1 ]; then
+  CADDY_SITE_ADDRS=$(IFS=,; echo "${CADDY_HOSTS[*]}")
+  if ! sudo tee /etc/caddy/Caddyfile >/dev/null <<CADDYFILE
+{
+    # RaspyJack self-signed internal CA (local trust only)
+    auto_https disable_redirects
+}
+
+${CADDY_SITE_ADDRS} {
+    tls internal
+
+    @ws path /ws*
+    reverse_proxy @ws 127.0.0.1:8765 {
+        header_up X-Forwarded-Proto {scheme}
+        header_up X-Forwarded-Host {host}
+    }
+
+    reverse_proxy 127.0.0.1:8080 {
+        header_up X-Forwarded-Proto {scheme}
+        header_up X-Forwarded-Host {host}
+    }
+}
+CADDYFILE
+  then
+    warn "Failed to write /etc/caddy/Caddyfile; skipping HTTPS proxy setup."
+    TLS_SETUP_OK=0
+  fi
+fi
+
+if [ "$TLS_SETUP_OK" -eq 1 ]; then
+  if ! sudo systemctl enable --now caddy.service; then
+    warn "Failed to enable/start caddy.service; keeping HTTP services active."
+    TLS_SETUP_OK=0
+  fi
+fi
+
+if [ "$TLS_SETUP_OK" -eq 1 ]; then
+  info "HTTPS proxy is enabled. Access WebUI at: https://<device-ip>/"
+  info "For first use, trust Caddy's local CA certificate on your client if prompted."
+else
+  warn "TLS setup incomplete. WebUI remains available on: http://<device-ip>:8080"
+  warn "Manual remediation: sudo apt-get install caddy && sudo systemctl restart caddy"
+fi
+set -e
+
 # ───── 6 ▸ final health‑check ────────────────────────────────
 step "Running post install checks …"
 

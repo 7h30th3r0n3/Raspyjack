@@ -1,0 +1,26 @@
+# RaspyJack HTTPS reverse proxy template (self-signed).
+# Installer writes a runtime copy to /etc/caddy/Caddyfile using detected IPs.
+# This repository template is for transparency/documentation.
+
+{
+    # Keep behavior predictable for IP access. Caddy still serves HTTPS on :443.
+    auto_https disable_redirects
+}
+
+# Replace host list with your device IPs/hostnames if deploying manually.
+localhost {
+    tls internal
+
+    # WebSocket stream/input endpoint
+    @ws path /ws*
+    reverse_proxy @ws 127.0.0.1:8765 {
+        header_up X-Forwarded-Proto {scheme}
+        header_up X-Forwarded-Host {host}
+    }
+
+    # Web UI + API
+    reverse_proxy 127.0.0.1:8080 {
+        header_up X-Forwarded-Proto {scheme}
+        header_up X-Forwarded-Host {host}
+    }
+}

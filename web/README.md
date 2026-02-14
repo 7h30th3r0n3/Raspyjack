@@ -27,7 +27,12 @@ These are the WebUI-relevant packages in `install_raspyjack.sh`:
 - `device_server.py` (WebSocket server on port `8765`)
 - `web_server.py` (static frontend + loot API) on port `8080`
 
-Open in a browser:
+Open in a browser (recommended):
+```
+https://<device-ip>/
+```
+
+Fallback during rollout/troubleshooting:
 ```
 http://<device-ip>:8080
 ```
@@ -38,6 +43,22 @@ http://<device-ip>:8080
 - Successful login creates an HTTP-only session cookie used for API calls.
 - WebSocket access uses a short-lived WS ticket issued by `web_server.py`.
 - Emergency fallback: recovery token auth is still supported.
+
+## HTTPS/WSS architecture
+- Public entrypoint: Caddy on `:443` (`https://<device-ip>/`).
+- Upstream Web UI/API: `127.0.0.1:8080` (proxied by Caddy).
+- Upstream device WebSocket: `127.0.0.1:8765` exposed as `wss://<device-ip>/ws`.
+- On HTTPS requests, the backend sets session cookies with `Secure; HttpOnly; SameSite=Strict`.
+
+## Self-signed certificate trust
+- Installer config uses `tls internal` (self-signed local CA via Caddy).
+- First browser visit may show a certificate warning until trust is added.
+- You can continue with warning temporarily, or install/trust Caddy's local CA on your client for a clean lock icon.
+
+## Migration and fallback behavior
+- Existing auth/session logic is unchanged; only transport is upgraded (HTTP -> HTTPS, WS -> WSS on `/ws`).
+- Legacy direct ports (`8080` and `8765`) remain available so access is not bricked if proxy setup fails.
+- If Caddy installation/configuration fails, installer prints remediation and keeps current services running.
 
 ## Environment variables (optional)
 `device_server.py` supports:

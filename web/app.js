@@ -97,11 +97,13 @@
 
   // Build WS URL from current page host.
   function getWsUrl(){
+    if (location.protocol === 'https:'){
+      return `${location.origin.replace(/^https:/, 'wss:')}/ws`;
+    }
     const p = new URLSearchParams(location.search);
     const host = location.hostname || 'raspberrypi.local';
     const port = p.get('port') || '8765';
-    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    return `${proto}://${host}:${port}/`.replace(/\/\/\//,'//');
+    return `ws://${host}:${port}/`.replace(/\/\/\//,'//');
   }
 
   function getApiUrl(path, params = {}){
@@ -1154,8 +1156,15 @@
   ]);
 
   function bindKeyboard(){
+    const isTypingFocus = () => {
+      const el = document.activeElement;
+      if (!el) return false;
+      const tag = String(el.tagName || '').toUpperCase();
+      return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || !!el.isContentEditable;
+    };
+
     window.addEventListener('keydown', (e)=>{
-      if (terminalHasFocus) return;
+      if (terminalHasFocus || isTypingFocus()) return;
       const btn = KEYMAP.get(e.code) || KEYMAP.get(e.key);
       if (!btn) return;
       if (pressed.has(btn)) return; // avoid repeats
@@ -1164,7 +1173,7 @@
       e.preventDefault();
     });
     window.addEventListener('keyup', (e)=>{
-      if (terminalHasFocus) return;
+      if (terminalHasFocus || isTypingFocus()) return;
       const btn = KEYMAP.get(e.code) || KEYMAP.get(e.key);
       if (!btn) return;
       pressed.delete(btn);

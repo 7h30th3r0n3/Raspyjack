@@ -71,11 +71,13 @@
   }
 
   function getWsUrl(){
+    if (location.protocol === 'https:'){
+      return `${location.origin.replace(/^https:/, 'wss:')}/ws`;
+    }
     const p = getSearchParams();
     const host = location.hostname || 'raspberrypi.local';
     const port = p.get('port') || '8765';
-    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    return `${proto}://${host}:${port}/`.replace(/\/\/\//,'//');
+    return `ws://${host}:${port}/`.replace(/\/\/\//,'//');
   }
 
   const AUTH_STORAGE_KEY = 'rj.authToken';

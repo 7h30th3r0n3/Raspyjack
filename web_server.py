@@ -414,16 +414,33 @@ def _auth_ok(handler: SimpleHTTPRequestHandler, query: dict) -> bool:
     return ctx is not None and ctx.get("method") != "bootstrap"
 
 
-def _session_cookie_header(username: str, ttl_seconds: int = SESSION_TTL_SECONDS) -> tuple[str, str]:
+def _request_is_https(handler: SimpleHTTPRequestHandler) -> bool:
+    """Return True for direct TLS or trusted local reverse proxy TLS."""
+    if getattr(handler, "request_version", "").startswith("HTTPS/"):
+        return True
+    proto = str(handler.headers.get("X-Forwarded-Proto", "") or "").strip().lower()
+    if proto != "https":
+        return False
+    try:
+        ip = str(handler.client_address[0])
+    except Exception:
+        ip = ""
+    # Trust forwarded scheme only from local proxy hops.
+    return ip in ("127.0.0.1", "::1")
+
+
+def _session_cookie_header(username: str, secure: bool = False, ttl_seconds: int = SESSION_TTL_SECONDS) -> tuple[str, str]:
     now = int(time.time())
     claims = {"typ": "session", "usr": username, "iat": now, "exp": now + int(ttl_seconds)}
     token = _issue_signed_token(claims)
-    cookie = f"{SESSION_COOKIE_NAME}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={int(ttl_seconds)}"
+    secure_attr = "; Secure" if secure else ""
+    cookie = f"{SESSION_COOKIE_NAME}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={int(ttl_seconds)}{secure_attr}"
     return ("Set-Cookie", cookie)
 
 
-def _clear_session_cookie_header() -> tuple[str, str]:
-    return ("Set-Cookie", f"{SESSION_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0")
+def _clear_session_cookie_header(secure: bool = False) -> tuple[str, str]:
+    secure_attr = "; Secure" if secure else ""
+    return ("Set-Cookie", f"{SESSION_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0{secure_attr}")
 
 
 def _safe_loot_path(raw_path: str) -> Path | None:
@@ -1075,7 +1092,7 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
         _json_response(
             self,
             {"ok": True, "initialized": True, "user": username},
-            extra_headers=[_session_cookie_header(username)],
+            extra_headers=[_session_cookie_header(username, secure=_request_is_https(self))],
         )
 
     def _handle_auth_login(self) -> None:
@@ -1107,11 +1124,11 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
         _json_response(
             self,
             {"ok": True, "user": username},
-            extra_headers=[_session_cookie_header(username)],
+            extra_headers=[_session_cookie_header(username, secure=_request_is_https(self))],
         )
 
     def _handle_auth_logout(self) -> None:
-        _json_response(self, {"ok": True}, extra_headers=[_clear_session_cookie_header()])
+        _json_response(self, {"ok": True}, extra_headers=[_clear_session_cookie_header(secure=_request_is_https(self))])
 
     def _handle_auth_me(self, query: dict) -> None:
         ctx = _auth_context(self, query)
