@@ -44,6 +44,19 @@
   const deleteModalConfirm = document.getElementById('deleteModalConfirm');
   const deleteModalCancel = document.getElementById('deleteModalCancel');
   const deleteModalClose = document.getElementById('deleteModalClose');
+  const unsavedModal = document.getElementById('unsavedModal');
+  const unsavedModalConfirm = document.getElementById('unsavedModalConfirm');
+  const unsavedModalCancel = document.getElementById('unsavedModalCancel');
+  const unsavedModalClose = document.getElementById('unsavedModalClose');
+  const saveBeforeRunModal = document.getElementById('saveBeforeRunModal');
+  const saveBeforeRunModalConfirm = document.getElementById('saveBeforeRunModalConfirm');
+  const saveBeforeRunModalCancel = document.getElementById('saveBeforeRunModalCancel');
+  const saveBeforeRunModalClose = document.getElementById('saveBeforeRunModalClose');
+  const noticeModal = document.getElementById('noticeModal');
+  const noticeModalTitle = document.getElementById('noticeModalTitle');
+  const noticeModalMessage = document.getElementById('noticeModalMessage');
+  const noticeModalConfirm = document.getElementById('noticeModalConfirm');
+  const noticeModalClose = document.getElementById('noticeModalClose');
   const authModal = document.getElementById('authModal');
   const authModalTitle = document.getElementById('authModalTitle');
   const authModalMessage = document.getElementById('authModalMessage');
@@ -94,6 +107,9 @@
   let wsTicket = '';
   let authPromptResolver = null;
   let restartUiPromptResolver = null;
+  let unsavedPromptResolver = null;
+  let saveBeforeRunPromptResolver = null;
+  let noticePromptResolver = null;
   let authInFlight = null;
   let authMode = 'login';
   let authRecoveryMode = false;
@@ -721,7 +737,7 @@
   async function onFileSelected(path){
     if (!path) return;
     if (isDirty){
-      const ok = window.confirm('You have unsaved changes. Discard and open another file?');
+      const ok = await promptDiscardUnsavedChanges();
       if (!ok) return;
     }
     setIdeStatus('Loading file...');
@@ -751,7 +767,11 @@
     const content = editor.getValue();
     const sizeBytes = bytesFromString(content);
     if (sizeBytes > 512 * 1024){
-      window.alert('File is too large to save via WebUI (limit 512 KB).');
+      await showNoticeModal({
+        title: 'File Too Large',
+        message: 'File is too large to save via WebUI (limit 512 KB).',
+        tone: 'amber',
+      });
       return false;
     }
     setIdeStatus('Saving...');
@@ -772,7 +792,11 @@
     }catch(e){
       console.error(e);
       setIdeStatus('Save failed');
-      window.alert('Failed to save file.');
+      await showNoticeModal({
+        title: 'Save Failed',
+        message: 'Failed to save file.',
+        tone: 'rose',
+      });
       return false;
     }
   }
@@ -803,7 +827,11 @@
     }catch(e){
       console.error(e);
       setIdeStatus('Create failed');
-      window.alert(`Failed to create ${type}.`);
+      await showNoticeModal({
+        title: 'Create Failed',
+        message: `Failed to create ${type}.`,
+        tone: 'rose',
+      });
     }
   }
 
@@ -875,7 +903,11 @@
     }catch(e){
       console.error(e);
       setIdeStatus('Rename failed');
-      window.alert('Failed to rename entry.');
+      await showNoticeModal({
+        title: 'Rename Failed',
+        message: 'Failed to rename entry.',
+        tone: 'rose',
+      });
     }
   }
 
@@ -959,7 +991,11 @@
     }catch(e){
       console.error(e);
       setIdeStatus('Delete failed');
-      window.alert('Failed to delete entry.');
+      await showNoticeModal({
+        title: 'Delete Failed',
+        message: 'Failed to delete entry.',
+        tone: 'rose',
+      });
     }
   }
 
@@ -973,7 +1009,7 @@
     if (normalizePayloadPath(payloadActivePath)) return;
     // if dirty, offer to save first
     if (isDirty){
-      const ok = window.confirm('Save changes before running?');
+      const ok = await promptSaveBeforeRun();
       if (!ok) return;
       const saved = await saveCurrentFile();
       if (!saved) return;
@@ -999,7 +1035,11 @@
     }catch(e){
       console.error(e);
       setIdeStatus('Run failed');
-      window.alert('Failed to start payload.');
+      await showNoticeModal({
+        title: 'Run Failed',
+        message: 'Failed to start payload.',
+        tone: 'rose',
+      });
     }finally{
       payloadRunPending = false;
       updatePayloadRunUi();
@@ -1055,6 +1095,97 @@
     restartUiPromptResolver = null;
     if (restartUiModal) restartUiModal.classList.add('hidden');
     resolver(!!value);
+  }
+
+  function resolveUnsavedPrompt(value){
+    if (!unsavedPromptResolver) return;
+    const resolver = unsavedPromptResolver;
+    unsavedPromptResolver = null;
+    if (unsavedModal) unsavedModal.classList.add('hidden');
+    resolver(!!value);
+  }
+
+  function promptDiscardUnsavedChanges(){
+    if (!unsavedModal || !unsavedModalConfirm || !unsavedModalCancel || !unsavedModalClose){
+      return Promise.resolve(false);
+    }
+    if (unsavedPromptResolver){
+      return Promise.resolve(false);
+    }
+    unsavedModal.classList.remove('hidden');
+    return new Promise(resolve => {
+      unsavedPromptResolver = resolve;
+    });
+  }
+
+  function resolveSaveBeforeRunPrompt(value){
+    if (!saveBeforeRunPromptResolver) return;
+    const resolver = saveBeforeRunPromptResolver;
+    saveBeforeRunPromptResolver = null;
+    if (saveBeforeRunModal) saveBeforeRunModal.classList.add('hidden');
+    resolver(!!value);
+  }
+
+  function promptSaveBeforeRun(){
+    if (!saveBeforeRunModal || !saveBeforeRunModalConfirm || !saveBeforeRunModalCancel || !saveBeforeRunModalClose){
+      return Promise.resolve(false);
+    }
+    if (saveBeforeRunPromptResolver){
+      return Promise.resolve(false);
+    }
+    saveBeforeRunModal.classList.remove('hidden');
+    return new Promise(resolve => {
+      saveBeforeRunPromptResolver = resolve;
+    });
+  }
+
+  function applyNoticeTone(tone){
+    if (!noticeModalTitle || !noticeModalConfirm) return;
+    const titleToneClasses = ['text-rose-300', 'text-amber-300', 'text-emerald-300'];
+    const btnToneClasses = [
+      'bg-rose-600/80', 'border-rose-300/30', 'hover:bg-rose-500/80',
+      'bg-amber-600/80', 'border-amber-300/30', 'hover:bg-amber-500/80',
+      'bg-emerald-600/80', 'border-emerald-300/30', 'hover:bg-emerald-500/80',
+    ];
+    noticeModalTitle.classList.remove(...titleToneClasses);
+    noticeModalConfirm.classList.remove(...btnToneClasses);
+    if (tone === 'amber'){
+      noticeModalTitle.classList.add('text-amber-300');
+      noticeModalConfirm.classList.add('bg-amber-600/80', 'border-amber-300/30', 'hover:bg-amber-500/80');
+      return;
+    }
+    if (tone === 'emerald'){
+      noticeModalTitle.classList.add('text-emerald-300');
+      noticeModalConfirm.classList.add('bg-emerald-600/80', 'border-emerald-300/30', 'hover:bg-emerald-500/80');
+      return;
+    }
+    noticeModalTitle.classList.add('text-rose-300');
+    noticeModalConfirm.classList.add('bg-rose-600/80', 'border-rose-300/30', 'hover:bg-rose-500/80');
+  }
+
+  function resolveNoticePrompt(){
+    if (!noticePromptResolver) return;
+    const resolver = noticePromptResolver;
+    noticePromptResolver = null;
+    if (noticeModal) noticeModal.classList.add('hidden');
+    resolver();
+  }
+
+  function showNoticeModal({ title = 'Notice', message = 'Something went wrong.', tone = 'rose', buttonText = 'OK' } = {}){
+    if (!noticeModal || !noticeModalTitle || !noticeModalMessage || !noticeModalConfirm || !noticeModalClose){
+      return Promise.resolve();
+    }
+    if (noticePromptResolver){
+      return Promise.resolve();
+    }
+    noticeModalTitle.textContent = title;
+    noticeModalMessage.textContent = message;
+    noticeModalConfirm.textContent = buttonText;
+    applyNoticeTone(tone);
+    noticeModal.classList.remove('hidden');
+    return new Promise(resolve => {
+      noticePromptResolver = resolve;
+    });
   }
 
   function promptRestartUi(){
@@ -2728,6 +2859,23 @@ if __name__ == "__main__":
   if (restartUiModalClose) restartUiModalClose.addEventListener('click', () => resolveRestartUiPrompt(false));
   if (restartUiModal) restartUiModal.addEventListener('click', (e) => {
     if (e.target === restartUiModal) resolveRestartUiPrompt(false);
+  });
+  if (unsavedModalConfirm) unsavedModalConfirm.addEventListener('click', () => resolveUnsavedPrompt(true));
+  if (unsavedModalCancel) unsavedModalCancel.addEventListener('click', () => resolveUnsavedPrompt(false));
+  if (unsavedModalClose) unsavedModalClose.addEventListener('click', () => resolveUnsavedPrompt(false));
+  if (unsavedModal) unsavedModal.addEventListener('click', (e) => {
+    if (e.target === unsavedModal) resolveUnsavedPrompt(false);
+  });
+  if (saveBeforeRunModalConfirm) saveBeforeRunModalConfirm.addEventListener('click', () => resolveSaveBeforeRunPrompt(true));
+  if (saveBeforeRunModalCancel) saveBeforeRunModalCancel.addEventListener('click', () => resolveSaveBeforeRunPrompt(false));
+  if (saveBeforeRunModalClose) saveBeforeRunModalClose.addEventListener('click', () => resolveSaveBeforeRunPrompt(false));
+  if (saveBeforeRunModal) saveBeforeRunModal.addEventListener('click', (e) => {
+    if (e.target === saveBeforeRunModal) resolveSaveBeforeRunPrompt(false);
+  });
+  if (noticeModalConfirm) noticeModalConfirm.addEventListener('click', () => resolveNoticePrompt());
+  if (noticeModalClose) noticeModalClose.addEventListener('click', () => resolveNoticePrompt());
+  if (noticeModal) noticeModal.addEventListener('click', (e) => {
+    if (e.target === noticeModal) resolveNoticePrompt();
   });
   if (authModalConfirm) authModalConfirm.addEventListener('click', () => {
     resolveAuthPrompt({

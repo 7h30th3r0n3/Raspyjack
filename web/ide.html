@@ -502,6 +502,71 @@
     </div>
   </div>
 
+  <!-- Unsaved changes modal -->
+  <div id="unsavedModal" class="hidden fixed inset-0 z-50 bg-black/60 backdrop-blur-sm">
+    <div class="max-w-sm mx-auto mt-24 px-4">
+      <div class="rounded-2xl border border-slate-700/60 bg-slate-950/95 shadow-[0_0_30px_rgba(15,23,42,0.75)] overflow-hidden">
+        <div class="px-4 py-3 border-b border-slate-800/70 flex items-center justify-between">
+          <div class="text-sm font-semibold text-amber-300">Unsaved Changes</div>
+          <button id="unsavedModalClose" class="text-slate-400 hover:text-slate-200 text-xs px-2 py-1 rounded-md bg-slate-900/60 border border-slate-700/60">✕</button>
+        </div>
+        <div class="px-4 py-3 space-y-2 text-xs">
+          <div class="text-slate-300">
+            You have unsaved changes. Discard and open another file?
+          </div>
+        </div>
+        <div class="px-4 py-3 border-t border-slate-800/70 flex justify-end gap-2">
+          <button id="unsavedModalCancel" class="px-3 py-1.5 rounded-lg bg-slate-800/80 border border-slate-600/60 text-slate-200 hover:bg-slate-700/80 text-xs">Stay</button>
+          <button id="unsavedModalConfirm" class="px-3 py-1.5 rounded-lg bg-amber-600/80 border border-amber-300/30 text-white hover:bg-amber-500/80 text-xs">Discard</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Save before run modal -->
+  <div id="saveBeforeRunModal" class="hidden fixed inset-0 z-50 bg-black/60 backdrop-blur-sm">
+    <div class="max-w-sm mx-auto mt-24 px-4">
+      <div class="rounded-2xl border border-slate-700/60 bg-slate-950/95 shadow-[0_0_30px_rgba(15,23,42,0.75)] overflow-hidden">
+        <div class="px-4 py-3 border-b border-slate-800/70 flex items-center justify-between">
+          <div class="text-sm font-semibold text-emerald-300">Unsaved Changes</div>
+          <button id="saveBeforeRunModalClose" class="text-slate-400 hover:text-slate-200 text-xs px-2 py-1 rounded-md bg-slate-900/60 border border-slate-700/60">✕</button>
+        </div>
+        <div class="px-4 py-3 space-y-2 text-xs">
+          <div class="text-slate-300">
+            Save changes before running?
+          </div>
+          <div class="text-slate-400 text-[11px]">
+            Your current file has modifications that are not saved yet.
+          </div>
+        </div>
+        <div class="px-4 py-3 border-t border-slate-800/70 flex justify-end gap-2">
+          <button id="saveBeforeRunModalCancel" class="px-3 py-1.5 rounded-lg bg-slate-800/80 border border-slate-600/60 text-slate-200 hover:bg-slate-700/80 text-xs">Cancel</button>
+          <button id="saveBeforeRunModalConfirm" class="px-3 py-1.5 rounded-lg bg-emerald-600/80 border border-emerald-300/30 text-white hover:bg-emerald-500/80 text-xs">Save & Run</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Notice modal -->
+  <div id="noticeModal" class="hidden fixed inset-0 z-50 bg-black/60 backdrop-blur-sm">
+    <div class="max-w-sm mx-auto mt-24 px-4">
+      <div class="rounded-2xl border border-slate-700/60 bg-slate-950/95 shadow-[0_0_30px_rgba(15,23,42,0.75)] overflow-hidden">
+        <div class="px-4 py-3 border-b border-slate-800/70 flex items-center justify-between">
+          <div id="noticeModalTitle" class="text-sm font-semibold text-rose-300">Notice</div>
+          <button id="noticeModalClose" class="text-slate-400 hover:text-slate-200 text-xs px-2 py-1 rounded-md bg-slate-900/60 border border-slate-700/60">✕</button>
+        </div>
+        <div class="px-4 py-3 space-y-2 text-xs">
+          <div id="noticeModalMessage" class="text-slate-300">
+            Something went wrong.
+          </div>
+        </div>
+        <div class="px-4 py-3 border-t border-slate-800/70 flex justify-end gap-2">
+          <button id="noticeModalConfirm" class="px-3 py-1.5 rounded-lg bg-rose-600/80 border border-rose-300/30 text-white hover:bg-rose-500/80 text-xs">OK</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Restart UI confirmation modal -->
   <div id="restartUiModal" class="hidden fixed inset-0 z-50 bg-black/60 backdrop-blur-sm">
     <div class="max-w-sm mx-auto mt-24 px-4">
