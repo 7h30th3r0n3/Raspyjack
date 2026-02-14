@@ -611,6 +611,14 @@
         </div>
         <div class="px-4 py-3 space-y-2 text-xs">
           <div id="authModalMessage" class="text-slate-400">Enter your WebUI token to continue.</div>
+          <div id="authModalRules" class="hidden rounded-lg border border-slate-800/70 bg-slate-900/30 p-2">
+            <div class="text-[11px] font-semibold text-slate-200 mb-1">Rules</div>
+            <ul class="text-[11px] text-slate-400 space-y-1">
+              <li>Username must be 3-32 characters</li>
+              <li>Password must be at least 8 characters</li>
+              <li>Passwords must match</li>
+            </ul>
+          </div>
           <input id="authModalUsername" type="text" autocomplete="username" class="w-full rounded-lg bg-slate-900/80 border border-slate-700/70 px-3 py-2 text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-1 focus:ring-emerald-400 focus:border-emerald-400" placeholder="Username">
           <input id="authModalPassword" type="password" autocomplete="current-password" class="w-full rounded-lg bg-slate-900/80 border border-slate-700/70 px-3 py-2 text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-1 focus:ring-emerald-400 focus:border-emerald-400" placeholder="Password">
           <input id="authModalPasswordConfirm" type="password" autocomplete="new-password" class="hidden w-full rounded-lg bg-slate-900/80 border border-slate-700/70 px-3 py-2 text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-1 focus:ring-emerald-400 focus:border-emerald-400" placeholder="Confirm password">

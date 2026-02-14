@@ -43,6 +43,7 @@
   const authModalPassword = document.getElementById('authModalPassword');
   const authModalPasswordConfirm = document.getElementById('authModalPasswordConfirm');
   const authModalToken = document.getElementById('authModalToken');
+  const authModalRules = document.getElementById('authModalRules');
   const authModalError = document.getElementById('authModalError');
   const authModalToggleRecovery = document.getElementById('authModalToggleRecovery');
   const authModalConfirm = document.getElementById('authModalConfirm');
@@ -134,6 +135,7 @@
         : 'Log in to continue.');
     }
     const isBootstrap = mode === 'bootstrap';
+    if (authModalRules) authModalRules.classList.toggle('hidden', !isBootstrap);
     if (authModalPasswordConfirm) authModalPasswordConfirm.classList.toggle('hidden', !isBootstrap);
     if (authModalUsername) authModalUsername.classList.toggle('hidden', authRecoveryMode);
     if (authModalPassword) authModalPassword.classList.toggle('hidden', authRecoveryMode);
@@ -248,6 +250,18 @@
     const confirm = String(input.confirm || '');
     if (!username || !password){
       setAuthError('Username and password are required.');
+      return attemptBootstrap(message);
+    }
+    if (username.length < 3){
+      setAuthError('username must be at least 3 characters');
+      return attemptBootstrap(message);
+    }
+    if (username.length > 32){
+      setAuthError('username too long');
+      return attemptBootstrap(message);
+    }
+    if (password.length < 8){
+      setAuthError('password must be at least 8 characters');
       return attemptBootstrap(message);
     }
     if (password !== confirm){

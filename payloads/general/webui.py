@@ -76,7 +76,7 @@ def get_ip_for_url() -> str:
     except Exception:
         return "127.0.0.1"
 
-def draw_info(url):
+def draw_info(https_url: str, http_url: str):
     img = Image.new('RGB', (WIDTH, HEIGHT), 'black')
     d = ImageDraw.Draw(img)
     
@@ -86,18 +86,71 @@ def draw_info(url):
     
     # Content
     y = 28
-    d.text((4, y), "Access at:", font=small_font, fill='white')
-    y += 15
-    
-    # Wrap URL
-    # Approx char width for small_font is 6-7px, screen is 128px ~ 18_20 chars
-    # We can use textwrap for safety
-    wrapper = textwrap.TextWrapper(width=18) 
-    lines = wrapper.wrap(url)
-    
-    for line in lines:
-        d.text((4, y), line, font=font, fill='cyan')
-        y += 14
+    d.text((4, y), "Use HTTPS (preferred):", font=small_font, fill='white')
+    y += 13
+
+    def _text_width(txt: str) -> int:
+        """Pixel width for given text with the main font."""
+        try:
+            return int(d.textlength(txt, font=font))
+        except Exception:
+            try:
+                box = d.textbbox((0, 0), txt, font=font)
+                return int(box[2] - box[0])
+            except Exception:
+                return len(txt) * 6
+
+    def _wrap_by_pixels(txt: str, max_px: int) -> list[str]:
+        """Wrap text by pixel width (URLs have no spaces)."""
+        s = str(txt or "")
+        if not s:
+            return []
+        if max_px <= 0:
+            return [s]
+        out: list[str] = []
+        i = 0
+        while i < len(s):
+            j = i + 1
+            # Grow until it would overflow.
+            while j <= len(s) and _text_width(s[i:j]) <= max_px:
+                j += 1
+            # Step back one (last fit), ensuring progress.
+            j = max(i + 1, j - 1)
+            out.append(s[i:j])
+            i = j
+        return out
+
+    def _draw_labeled_url(y0: int, label: str, url: str) -> int:
+        x0 = 4
+        line_h = 14
+        label_color = 'yellow'
+        url_color = 'cyan'
+
+        d.text((x0, y0), label, font=font, fill=label_color)
+        label_w = _text_width(label)
+
+        # First line: URL continues after the label.
+        x_url = x0 + label_w + 2
+        first_max = WIDTH - 4 - (label_w + 2)
+        full_max = WIDTH - 8
+
+        remaining = str(url or "")
+        first_chunk = ""
+        if remaining:
+            chunks = _wrap_by_pixels(remaining, first_max)
+            if chunks:
+                first_chunk = chunks[0]
+                d.text((x_url, y0), first_chunk, font=font, fill=url_color)
+                remaining = remaining[len(first_chunk):]
+
+        y0 += line_h
+        for line in _wrap_by_pixels(remaining, full_max):
+            d.text((x0, y0), line, font=font, fill=url_color)
+            y0 += line_h
+        return y0
+
+    y = _draw_labeled_url(y, "Https: ", https_url)
+    y = _draw_labeled_url(y, "Http: ", http_url)
         
     # Footer
     d.line([(0, 110), (128, 110)], fill='gray', width=1)
@@ -111,10 +164,15 @@ def main():
     try:
         # 1. Get IP and URL
         ip = get_ip_for_url()
-        url = f"http://{ip}:8080"
+        https_url = f"https://{ip}/"
+        http_url = f"http://{ip}:8080"
+
+        print("use https")
+        print(f"Https:{https_url}")
+        print(f"Http:{http_url}")
         
         # 2. Draw info
-        draw_info(url)
+        draw_info(https_url, http_url)
         
         # 3. Wait for exit button
         while True:
