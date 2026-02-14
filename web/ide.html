@@ -339,9 +339,15 @@
           <div class="flex items-center gap-2 text-xs">
             <span id="dirtyFlag" class="text-amber-400 hidden">● Unsaved</span>
             <span id="payloadRunState" class="text-slate-400">Idle</span>
-            <button id="saveBtn" class="px-3 py-1.5 rounded-lg bg-emerald-600/80 border border-emerald-300/30 text-white hover:bg-emerald-500/80 disabled:opacity-40 disabled:cursor-not-allowed">Save</button>
-            <button id="runBtn" class="px-3 py-1.5 rounded-lg bg-emerald-600/80 border border-emerald-300/30 text-white hover:bg-emerald-500/80 disabled:opacity-40 disabled:cursor-not-allowed">Run</button>
-            <button id="stopBtn" class="px-3 py-1.5 rounded-lg bg-rose-600/80 border border-rose-300/30 text-white hover:bg-rose-500/80 disabled:opacity-40 disabled:cursor-not-allowed">Stop</button>
+            <button id="saveBtn" class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] bg-emerald-700/70 border border-emerald-400/30 text-emerald-100 hover:bg-emerald-600/70 transition disabled:opacity-40 disabled:cursor-not-allowed">
+              <i class="fa-solid fa-floppy-disk text-[10px]"></i> Save
+            </button>
+            <button id="runBtn" class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] bg-emerald-600/70 border border-emerald-300/30 text-emerald-50 hover:bg-emerald-500/70 transition disabled:opacity-40 disabled:cursor-not-allowed">
+              <i class="fa-solid fa-play text-[10px]"></i> Run
+            </button>
+            <button id="stopBtn" class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] bg-rose-700/70 border border-rose-300/30 text-rose-100 hover:bg-rose-600/70 transition disabled:opacity-40 disabled:cursor-not-allowed">
+              <i class="fa-solid fa-stop text-[10px]"></i> Stop
+            </button>
           </div>
         </div>
         <div class="editor-body bg-transparent h-[800px] border-r border-slate-800/70">

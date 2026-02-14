@@ -484,12 +484,16 @@
 
     if (runBtn){
       runBtn.disabled = !hasSelection || runningAny || payloadRunPending;
-      runBtn.textContent = payloadRunPending ? 'Starting...' : 'Run';
+      runBtn.innerHTML = payloadRunPending
+        ? '<i class="fa-solid fa-spinner fa-spin text-[10px]"></i> Starting...'
+        : '<i class="fa-solid fa-play text-[10px]"></i> Run';
     }
 
     if (stopBtn){
       stopBtn.disabled = !runningAny || payloadStopPending;
-      stopBtn.textContent = payloadStopPending ? 'Stopping...' : 'Stop';
+      stopBtn.innerHTML = payloadStopPending
+        ? '<i class="fa-solid fa-spinner fa-spin text-[10px]"></i> Stopping...'
+        : '<i class="fa-solid fa-stop text-[10px]"></i> Stop';
     }
 
     if (payloadRunStateEl){
