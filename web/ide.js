@@ -7,11 +7,18 @@
   const newFolderBtn = document.getElementById('newFolderBtn');
   const currentPathEl = document.getElementById('currentPath');
   const dirtyFlagEl = document.getElementById('dirtyFlag');
+  const payloadRunStateEl = document.getElementById('payloadRunState');
   const saveBtn = document.getElementById('saveBtn');
   const runBtn = document.getElementById('runBtn');
+  const stopBtn = document.getElementById('stopBtn');
   const editorTextarea = document.getElementById('editor');
   const logoutBtn = document.getElementById('logoutBtn');
   const restartUiBtn = document.getElementById('restartUiBtn');
+  const restartUiModal = document.getElementById('restartUiModal');
+  const restartUiModalConfirm = document.getElementById('restartUiModalConfirm');
+  const restartUiModalCancel = document.getElementById('restartUiModalCancel');
+  const restartUiModalClose = document.getElementById('restartUiModalClose');
+  const restartUiModalError = document.getElementById('restartUiModalError');
   const wsStatusEl = document.getElementById('wsStatus');
   const canvas = document.getElementById('screen-gb') || document.getElementById('screen');
   const ctx = canvas ? canvas.getContext('2d') : null;
@@ -86,6 +93,7 @@
   let authToken = '';
   let wsTicket = '';
   let authPromptResolver = null;
+  let restartUiPromptResolver = null;
   let authInFlight = null;
   let authMode = 'login';
   let authRecoveryMode = false;
@@ -459,6 +467,47 @@
   let currentFolder = '';    // folder used for create operations
   let ctxTargetPath = null;
   let ctxTargetType = null;
+  let payloadActivePath = null;
+  let payloadRunPending = false;
+  let payloadStopPending = false;
+
+  function normalizePayloadPath(path){
+    return String(path || '').replace(/\\/g, '/').replace(/^\/+/, '');
+  }
+
+  function updatePayloadRunUi(){
+    const selected = normalizePayloadPath(selectedPath);
+    const running = normalizePayloadPath(payloadActivePath);
+    const hasSelection = !!selected;
+    const runningAny = !!running;
+    const runningSelected = runningAny && selected && selected === running;
+
+    if (runBtn){
+      runBtn.disabled = !hasSelection || runningAny || payloadRunPending;
+      runBtn.textContent = payloadRunPending ? 'Starting...' : 'Run';
+    }
+
+    if (stopBtn){
+      stopBtn.disabled = !runningAny || payloadStopPending;
+      stopBtn.textContent = payloadStopPending ? 'Stopping...' : 'Stop';
+    }
+
+    if (payloadRunStateEl){
+      if (payloadRunPending){
+        payloadRunStateEl.textContent = 'Starting...';
+        payloadRunStateEl.className = 'text-amber-300';
+      } else if (payloadStopPending){
+        payloadRunStateEl.textContent = 'Stopping...';
+        payloadRunStateEl.className = 'text-amber-300';
+      } else if (runningAny){
+        payloadRunStateEl.textContent = runningSelected ? 'Running (current file)' : 'Running (another payload)';
+        payloadRunStateEl.className = 'text-emerald-300';
+      } else {
+        payloadRunStateEl.textContent = 'Idle';
+        payloadRunStateEl.className = 'text-slate-400';
+      }
+    }
+  }
 
   function setCurrentFolder(path){
     currentFolder = (path === undefined || path === null) ? '' : path;
@@ -491,6 +540,7 @@
       const folder = parts.join('/');
       setCurrentFolder(folder);
     }
+    updatePayloadRunUi();
   }
 
   function hideContextMenu(){
@@ -916,6 +966,7 @@
   // ------------------------ Run payload ------------------------
   async function runCurrentPayload(){
     if (!selectedPath) return;
+    if (normalizePayloadPath(payloadActivePath)) return;
     // if dirty, offer to save first
     if (isDirty){
       const ok = window.confirm('Save changes before running?');
@@ -923,6 +974,8 @@
       const saved = await saveCurrentFile();
       if (!saved) return;
     }
+    payloadRunPending = true;
+    updatePayloadRunUi();
     setIdeStatus('Starting payload...');
     try{
       const url = getApiUrl('/api/payloads/run');
@@ -935,16 +988,88 @@
       if (!res.ok || !data.ok){
         throw new Error(data.error || 'run_failed');
       }
+      payloadActivePath = normalizePayloadPath(selectedPath);
+      payloadStopPending = false;
+      updatePayloadRunUi();
       setIdeStatus('Payload launched');
     }catch(e){
       console.error(e);
       setIdeStatus('Run failed');
       window.alert('Failed to start payload.');
+    }finally{
+      payloadRunPending = false;
+      updatePayloadRunUi();
     }
   }
 
+  async function pollPayloadStatus(){
+    try{
+      const res = await apiFetch(getApiUrl('/api/payloads/status'), { cache: 'no-store' });
+      const data = await res.json();
+      if (!res.ok){
+        return;
+      }
+      payloadActivePath = data && data.running ? normalizePayloadPath(data.path) : null;
+      if (!payloadActivePath){
+        payloadRunPending = false;
+        payloadStopPending = false;
+      }
+      updatePayloadRunUi();
+    }catch{}
+  }
+
+  async function stopCurrentPayload(){
+    if (!normalizePayloadPath(payloadActivePath)) return;
+    payloadStopPending = true;
+    updatePayloadRunUi();
+    setIdeStatus('Stopping payload...');
+    try{
+      sendInput('KEY3', 'press');
+      setTimeout(() => sendInput('KEY3', 'release'), 120);
+      setTimeout(() => { pollPayloadStatus(); }, 300);
+    }catch(e){
+      console.error(e);
+      setIdeStatus('Stop failed');
+    }finally{
+      setTimeout(() => {
+        payloadStopPending = false;
+        updatePayloadRunUi();
+      }, 800);
+    }
+  }
+
+  function setRestartUiError(msg){
+    if (!restartUiModalError) return;
+    const text = String(msg || '').trim();
+    restartUiModalError.textContent = text;
+    restartUiModalError.classList.toggle('hidden', !text);
+  }
+
+  function resolveRestartUiPrompt(value){
+    if (!restartUiPromptResolver) return;
+    const resolver = restartUiPromptResolver;
+    restartUiPromptResolver = null;
+    if (restartUiModal) restartUiModal.classList.add('hidden');
+    resolver(!!value);
+  }
+
+  function promptRestartUi(){
+    if (!restartUiModal || !restartUiModalConfirm || !restartUiModalCancel || !restartUiModalClose){
+      return Promise.resolve(false);
+    }
+    if (restartUiPromptResolver){
+      return Promise.resolve(false);
+    }
+    setRestartUiError('');
+    restartUiModal.classList.remove('hidden');
+    return new Promise(resolve => {
+      restartUiPromptResolver = resolve;
+    });
+  }
+
   async function restartUi(){
-    if (!window.confirm('Restart RaspyJack UI now?')) return;
+    const confirmed = await promptRestartUi();
+    if (!confirmed) return;
     if (restartUiBtn) restartUiBtn.disabled = true;
     setIdeStatus('Restarting UI...');
     try{
@@ -957,7 +1082,8 @@
     }catch(e){
       console.error(e);
       setIdeStatus('UI restart failed');
-      window.alert('Failed to restart UI.');
+      setRestartUiError('Failed to restart UI.');
+      if (restartUiModal) restartUiModal.classList.remove('hidden');
     }finally{
       if (restartUiBtn) restartUiBtn.disabled = false;
     }
@@ -2504,6 +2630,7 @@ if __name__ == "__main__":
   if (newFolderBtn) newFolderBtn.addEventListener('click', () => createEntry('dir'));
   if (saveBtn) saveBtn.addEventListener('click', () => saveCurrentFile());
   if (runBtn) runBtn.addEventListener('click', () => runCurrentPayload());
+  if (stopBtn) stopBtn.addEventListener('click', () => stopCurrentPayload());
   if (restartUiBtn) restartUiBtn.addEventListener('click', () => restartUi());
 
   // Context menu for rename/delete on files and folders
@@ -2606,6 +2733,12 @@ if __name__ == "__main__":
       }
     });
   }
+  if (restartUiModalConfirm) restartUiModalConfirm.addEventListener('click', () => resolveRestartUiPrompt(true));
+  if (restartUiModalCancel) restartUiModalCancel.addEventListener('click', () => resolveRestartUiPrompt(false));
+  if (restartUiModalClose) restartUiModalClose.addEventListener('click', () => resolveRestartUiPrompt(false));
+  if (restartUiModal) restartUiModal.addEventListener('click', (e) => {
+    if (e.target === restartUiModal) resolveRestartUiPrompt(false);
+  });
   if (authModalConfirm) authModalConfirm.addEventListener('click', () => {
     resolveAuthPrompt({
       recovery: authRecoveryMode,
@@ -2699,6 +2832,7 @@ if __name__ == "__main__":
   loadAuthToken();
   setupHiDPI();
   bindButtons();
+  updatePayloadRunUi();
   const startAfterAuth = () => {
     ensureAuthenticated('Log in to access Payload Studio.').then((ok) => {
       if (!ok){
@@ -2707,6 +2841,8 @@ if __name__ == "__main__":
       }
       connectWs();
       loadTree();
+      pollPayloadStatus();
+      setInterval(pollPayloadStatus, 1500);
       ensureEditor();
     });
   };
