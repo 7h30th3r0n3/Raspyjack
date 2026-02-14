@@ -324,8 +324,12 @@
       <!-- Right -->
       <div class="flex items-center gap-3 text-xs relative z-10">
         <div id="ideStatus" class="text-slate-400">Ready</div>
-        <button id="logoutBtn" type="button" class="px-3 py-1.5 rounded-lg bg-slate-800/80 border border-slate-600/40 text-slate-200 hover:bg-slate-700/80 transition">Logout</button>
-        <a href="./index.html" class="px-3 py-1.5 rounded-lg bg-slate-800/80 border border-slate-600/40 text-slate-200 hover:bg-slate-700/80 transition">Back to WebUI</a>
+        <button id="logoutBtn" type="button" class="ide-toolbar-btn ide-toolbar-btn--danger">
+          <i class="fa-solid fa-right-from-bracket"></i> Logout
+        </button>
+        <a href="./index.html" class="ide-toolbar-btn">
+          <i class="fa-solid fa-arrow-left"></i> Back to WebUI
+        </a>
       </div>
     </header>
 
@@ -338,12 +342,18 @@
         <div class="px-3 py-2 border-b border-slate-800/70 flex items-center justify-between">
           <div class="text-xs font-semibold text-emerald-300">Payloads</div>
           <div class="flex items-center gap-1 text-[11px] text-slate-400">
-            <button id="refreshTree" class="px-2 py-1 rounded-md border border-slate-700/60 bg-slate-800/80 hover:bg-slate-700/80">Refresh</button>
+            <button id="refreshTree" class="ide-toolbar-btn">
+              <i class="fa-solid fa-rotate-right"></i> Refresh
+            </button>
           </div>
         </div>
         <div class="px-3 py-2 flex items-center gap-2 text-[11px] border-b border-slate-800/70">
-          <button id="newFileBtn" class="px-2 py-1 rounded-md bg-emerald-600/80 border border-emerald-300/30 text-white hover:bg-emerald-500/80">+ File</button>
-          <button id="newFolderBtn" class="px-2 py-1 rounded-md bg-slate-800/80 border border-slate-600/40 text-slate-200 hover:bg-slate-700/80">+ Folder</button>
+          <button id="newFileBtn" class="ide-toolbar-btn">
+            <i class="fa-solid fa-file-circle-plus"></i> File
+          </button>
+          <button id="newFolderBtn" class="ide-toolbar-btn">
+            <i class="fa-solid fa-folder-plus"></i> Folder
+          </button>
         </div>
         <div id="treeContainer" class="flex-1 overflow-auto px-2 py-2 text-xs">
           <!-- tree populated by ide.js -->
@@ -380,7 +390,9 @@
         <div class="w-full flex items-center justify-between mb-3">
           <div class="flex items-center gap-2">
             <div class="text-xs font-semibold text-emerald-300">Handheld Preview</div>
-            <button id="restartUiBtn" type="button" class="px-2 py-1 rounded-md bg-slate-800/80 border border-slate-600/40 text-slate-200 hover:bg-slate-700/80 text-[10px] transition">Restart UI</button>
+            <button id="restartUiBtn" type="button" class="ide-toolbar-btn ide-toolbar-btn--success">
+              <i class="fa-solid fa-rotate"></i> Restart UI
+            </button>
           </div>
           <div id="wsStatus" class="text-[11px] text-slate-400">Connecting…</div>
         </div>
