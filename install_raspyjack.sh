@@ -348,7 +348,14 @@ if [ "$TLS_SETUP_OK" -eq 1 ]; then
 fi
 
 if [ "$TLS_SETUP_OK" -eq 1 ]; then
-  CADDY_SITE_ADDRS=$(IFS=,; echo "${CADDY_HOSTS[*]}")
+  CADDY_SITE_ADDRS=""
+  for host in "${CADDY_HOSTS[@]}"; do
+    if [ -z "$CADDY_SITE_ADDRS" ]; then
+      CADDY_SITE_ADDRS="$host"
+    else
+      CADDY_SITE_ADDRS="${CADDY_SITE_ADDRS}, ${host}"
+    fi
+  done
   if ! sudo tee /etc/caddy/Caddyfile >/dev/null <<CADDYFILE
 {
     # RaspyJack self-signed internal CA (local trust only)
