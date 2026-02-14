@@ -350,7 +350,10 @@
       <!-- Right: handheld preview -->
       <section class="flex-1 flex flex-col min-w-0 border-l border-slate-800/70 bg-transparent items-center justify-start py-4 px-3 min-h-[260px]">
         <div class="w-full flex items-center justify-between mb-3">
-          <div class="text-xs font-semibold text-emerald-300">Handheld Preview</div>
+          <div class="flex items-center gap-2">
+            <div class="text-xs font-semibold text-emerald-300">Handheld Preview</div>
+            <button id="restartUiBtn" type="button" class="px-2 py-1 rounded-md bg-slate-800/80 border border-slate-600/40 text-slate-200 hover:bg-slate-700/80 text-[10px] transition">Restart UI</button>
+          </div>
           <div id="wsStatus" class="text-[11px] text-slate-400">Connecting…</div>
         </div>
         <div id="deviceShell" class="device-shell theme-gameboy rounded-3xl p-4 w-fit mx-auto">

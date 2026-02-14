@@ -11,6 +11,7 @@
   const runBtn = document.getElementById('runBtn');
   const editorTextarea = document.getElementById('editor');
   const logoutBtn = document.getElementById('logoutBtn');
+  const restartUiBtn = document.getElementById('restartUiBtn');
   const wsStatusEl = document.getElementById('wsStatus');
   const canvas = document.getElementById('screen-gb') || document.getElementById('screen');
   const ctx = canvas ? canvas.getContext('2d') : null;
@@ -939,6 +940,26 @@
       console.error(e);
       setIdeStatus('Run failed');
       window.alert('Failed to start payload.');
+    }
+  }
+
+  async function restartUi(){
+    if (!window.confirm('Restart RaspyJack UI now?')) return;
+    if (restartUiBtn) restartUiBtn.disabled = true;
+    setIdeStatus('Restarting UI...');
+    try{
+      const res = await apiFetch(getApiUrl('/api/system/restart-ui'), { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok || !data || !data.ok){
+        throw new Error((data && data.error) ? data.error : 'restart_failed');
+      }
+      setIdeStatus('UI restart requested');
+    }catch(e){
+      console.error(e);
+      setIdeStatus('UI restart failed');
+      window.alert('Failed to restart UI.');
+    }finally{
+      if (restartUiBtn) restartUiBtn.disabled = false;
     }
   }
 
@@ -2483,6 +2504,7 @@ if __name__ == "__main__":
   if (newFolderBtn) newFolderBtn.addEventListener('click', () => createEntry('dir'));
   if (saveBtn) saveBtn.addEventListener('click', () => saveCurrentFile());
   if (runBtn) runBtn.addEventListener('click', () => runCurrentPayload());
+  if (restartUiBtn) restartUiBtn.addEventListener('click', () => restartUi());
 
   // Context menu for rename/delete on files and folders
   if (treeContainer){

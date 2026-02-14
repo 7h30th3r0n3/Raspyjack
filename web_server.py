@@ -586,6 +586,14 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
             self._handle_auth_ws_ticket(query)
             return
 
+        if parsed.path == "/api/system/restart-ui":
+            query = parse_qs(parsed.query or "")
+            if not _auth_ok(self, query):
+                _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
+                return
+            self._handle_system_restart_ui()
+            return
+
         if parsed.path in ("/api/payloads/start", "/api/payloads/run"):
             query = parse_qs(parsed.query or "")
             if not _auth_ok(self, query):
@@ -1065,6 +1073,24 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
             })
         except Exception as exc:
             _json_response(self, {"error": f"status error: {exc}"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+
+    def _handle_system_restart_ui(self) -> None:
+        try:
+            subprocess.run(
+                ["systemctl", "restart", "raspyjack.service"],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            _json_response(self, {"ok": True})
+        except subprocess.TimeoutExpired:
+            _json_response(self, {"error": "restart timed out"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+        except subprocess.CalledProcessError as exc:
+            err = (exc.stderr or exc.stdout or "").strip() or "restart failed"
+            _json_response(self, {"error": err}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+        except Exception as exc:
+            _json_response(self, {"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
 
     def _client_ip(self) -> str:
         try:
