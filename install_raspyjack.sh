@@ -37,9 +37,11 @@ add_dtparam() {
 
 # ───── 2 ▸ install / upgrade required APT packages ───────────
 PACKAGES=(
+  python3 python3-pip python3-dev \
   python3-scapy python3-netifaces python3-pyudev python3-serial \
-  python3-smbus python3-rpi.gpio python3-spidev python3-pil python3-numpy \
+  python3-smbus python3-rpi.gpio python3-spidev python3-pil python3-qrcode python3-numpy \
   python3-setuptools python3-cryptography python3-requests python3-websockets \
+  libglib2.0-dev python3-bluez \
   fonts-dejavu-core nmap ncat tcpdump arp-scan dsniff ettercap-text-only php procps \
   aircrack-ng wireless-tools wpasupplicant iw \
   firmware-linux-nonfree firmware-realtek firmware-atheros \
@@ -54,6 +56,42 @@ if ((${#to_install[@]})); then
   sudo apt-get install -y --no-install-recommends "${PACKAGES[@]}"
 else
   info "All packages already installed & up‑to‑date."
+fi
+
+# ───── 2‑b ▸ Wall-of-Flippers packet backend deps ─────────────
+step "Ensuring WoF packet-scanning Python deps …"
+
+if ! python3 - <<'PY' >/dev/null 2>&1
+import bluepy
+PY
+then
+  warn "bluepy not found; installing with pip (PEP 668 override)"
+  python3 -m pip install --break-system-packages bluepy
+fi
+
+# Optional fallback backend for non-bluepy scenarios.
+if ! python3 - <<'PY' >/dev/null 2>&1
+import bleak
+PY
+then
+  warn "bleak not found; installing optional fallback backend"
+  python3 -m pip install --break-system-packages bleak || true
+fi
+
+# Hard requirement for WoF parity in this project.
+python3 - <<'PY' || fail "bluepy install failed; WoF threat detection will not be ready."
+import bluepy
+print("[OK] bluepy available")
+PY
+
+# ───── 2‑c ▸ Navarro (vendored in repo) ─────────────────────────
+# Navarro is expected at Raspyjack/Navarro/ from your repo clone; no install clone.
+NAVARRO_PATH="/root/Raspyjack/Navarro/navarro.py"
+if [ -f "$NAVARRO_PATH" ]; then
+  chmod +x "$NAVARRO_PATH"
+  info "Navarro found: $NAVARRO_PATH"
+else
+  warn "Navarro not found at $NAVARRO_PATH – add Navarro/ to your Raspyjack repo for OSINT payload"
 fi
 
 mkdir -p /usr/share/fonts/truetype/fontawesome
@@ -426,7 +464,7 @@ fi
 # 6‑d python imports
 python3 - <<'PY' || fail "Python dependency test failed"
 import importlib, sys
-for mod in ("scapy", "netifaces", "pyudev", "serial", "smbus2", "RPi.GPIO", "spidev", "PIL", "requests"):
+for mod in ("scapy", "netifaces", "pyudev", "serial", "smbus2", "RPi.GPIO", "spidev", "PIL", "qrcode", "requests", "bluepy", "bleak"):
     try:
         importlib.import_module(mod.split('.')[0])
     except Exception as e:
