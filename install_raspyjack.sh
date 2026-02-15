@@ -37,7 +37,7 @@ add_dtparam() {
 
 # ───── 2 ▸ install / upgrade required APT packages ───────────
 PACKAGES=(
-  python3 python3-pip python3-dev python3-venv \
+  python3 python3-pip python3-dev \
   python3-scapy python3-netifaces python3-pyudev python3-serial \
   python3-smbus python3-rpi.gpio python3-spidev python3-pil python3-qrcode python3-numpy \
   python3-setuptools python3-cryptography python3-requests python3-websockets \
@@ -58,27 +58,19 @@ else
   info "All packages already installed & up‑to‑date."
 fi
 
-# ───── 2‑b ▸ Wall-of-Flippers deps (bluepy/bleak) via venv ───
-# WoF uses bluepy.btle (BLE). Install in a venv so we never touch system Python.
-RJ_VENV="/root/Raspyjack/venv"
-step "Creating RaspyJack venv and installing WoF deps (bluepy, bleak) …"
+# ───── 2‑b ▸ Wall-of-Flippers: bluepy (clone + setup.py install) ─
+# WoF uses bluepy.btle (BLE). Install from source; no bleak.
+step "Installing bluepy for WoF (clone + setup.py) …"
 
-if [ ! -d "$RJ_VENV" ]; then
-  python3 -m venv --system-site-packages "$RJ_VENV"
-  info "Created venv at $RJ_VENV (--system-site-packages so apt packages are visible)"
-else
-  info "Venv already exists: $RJ_VENV"
-fi
+BLUEPY_BUILD=$(mktemp -d)
+trap "rm -rf '$BLUEPY_BUILD'" EXIT
+git clone --depth 1 https://github.com/IanHarvey/bluepy.git "$BLUEPY_BUILD"
+(cd "$BLUEPY_BUILD" && python3 setup.py build && sudo python3 setup.py install)
+info "Installed bluepy from source"
 
-"$RJ_VENV/bin/pip" install --upgrade pip -q
-"$RJ_VENV/bin/pip" install bluepy bleak
-info "Installed bluepy and bleak in venv (no --break-system-packages)"
-
-# Verify WoF can import bluepy
-"$RJ_VENV/bin/python" - <<'PY' || fail "bluepy import failed in venv; WoF threat detection will not be ready."
+python3 - <<'PY' || fail "bluepy import failed; WoF threat detection will not be ready."
 import bluepy
-import bleak
-print("[OK] bluepy and bleak available in venv")
+print("[OK] bluepy available")
 PY
 
 # ───── 2‑c ▸ Navarro (vendored in repo) ─────────────────────────
@@ -247,7 +239,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=/root/Raspyjack
-ExecStart=/root/Raspyjack/venv/bin/python /root/Raspyjack/raspyjack.py
+ExecStart=/usr/bin/python3 /root/Raspyjack/raspyjack.py
 Restart=on-failure
 User=root
 Environment=PYTHONUNBUFFERED=1
@@ -308,7 +300,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=/root/Raspyjack
-ExecStart=/root/Raspyjack/venv/bin/python /root/Raspyjack/device_server.py
+ExecStart=/usr/bin/python3 /root/Raspyjack/device_server.py
 Restart=on-failure
 User=root
 Environment=PYTHONUNBUFFERED=1
@@ -336,7 +328,7 @@ Requires=raspyjack-device.service
 [Service]
 Type=simple
 WorkingDirectory=/root/Raspyjack
-ExecStart=/root/Raspyjack/venv/bin/python /root/Raspyjack/web_server.py
+ExecStart=/usr/bin/python3 /root/Raspyjack/web_server.py
 Restart=on-failure
 User=root
 Environment=PYTHONUNBUFFERED=1
@@ -457,20 +449,20 @@ else
   warn "No USB WiFi dongles detected - WiFi attacks require external dongle"
 fi
 
-# 6‑d python imports (use venv – same interpreter as services and payloads)
-/root/Raspyjack/venv/bin/python - <<'PY' || fail "Python dependency test failed"
+# 6‑d python imports
+python3 - <<'PY' || fail "Python dependency test failed"
 import importlib, sys
-for mod in ("scapy", "netifaces", "pyudev", "serial", "smbus2", "RPi.GPIO", "spidev", "PIL", "qrcode", "requests", "bluepy", "bleak"):
+for mod in ("scapy", "netifaces", "pyudev", "serial", "smbus2", "RPi.GPIO", "spidev", "PIL", "qrcode", "requests", "bluepy"):
     try:
         importlib.import_module(mod.split('.')[0])
     except Exception as e:
         print("[FAIL]", mod, e)
         sys.exit(1)
-print("[OK] All Python modules import correctly (venv)")
+print("[OK] All Python modules import correctly")
 PY
 
-# 6‑e WiFi integration test (venv)
-/root/Raspyjack/venv/bin/python - <<'WIFI_TEST' || warn "WiFi integration test failed - check wifi/ folder"
+# 6‑e WiFi integration test
+python3 - <<'WIFI_TEST' || warn "WiFi integration test failed - check wifi/ folder"
 import sys
 import os
 sys.path.append('/root/Raspyjack/wifi/')
