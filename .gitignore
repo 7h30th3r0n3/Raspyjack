@@ -2,7 +2,5 @@
 /payloads/ref
 __pycache__/
 *.pyc
-*.log
-wifi/__pycache__/
-wifi/wifi.log
-wifi/profiles/
+*.pyo
+*.pyd
