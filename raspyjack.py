@@ -2294,7 +2294,7 @@ def exec_payload(filename: str) -> None:
         env = os.environ.copy()
         env["PYTHONPATH"] = default.install_path + os.pathsep + env.get("PYTHONPATH", "")
         result = subprocess.run(
-            ["python3", full],
+            [sys.executable, full],
             cwd=default.install_path,  # same PYTHONPATH as RaspyJack
             env=env,
             stdout=log,
