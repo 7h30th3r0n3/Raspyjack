@@ -2,9 +2,7 @@
 """
 RaspyJack payload - Wall of Flippers
 ------------------------------------------------
-A RaspyJack-native adaptation of Wall of Flippers behavior with:
-- 128x128 LCD UI (WebUI mirrored automatically via LCD_1in44)
-- Physical + virtual buttons via payloads._input_helper
+A RaspyJack-native version of Wall of Flippers
 - Live BLE scanning
 - Threat summaries, nearby WoF detection, history persistence, settings
 - Credits: https://github.com/K3YOMI/Wall-of-Flippers
@@ -244,7 +242,6 @@ class ScannerWorker:
             self.thread.join(timeout=2.0)
 
     def _run(self) -> None:
-        # Closest parity to original WoF on Linux is bluepy packet scanning.
         if os.name == "posix" and BluepyScanner is not None:
             with state_lock:
                 state.scanner_backend = "bluepy"
@@ -284,8 +281,7 @@ class ScannerWorker:
                 packets.append(str(uid).lower())
             for company_id, mbytes in (adv_data.manufacturer_data or {}).items():
                 try:
-                    # Original WoF signatures include manufacturer ID prefix (e.g. 4c00...)
-                    # so we normalize as <company_id_hex><payload_hex>.
+
                     packets.append(f"{int(company_id):04x}{bytes(mbytes).hex()}".lower())
                 except Exception:
                     pass
