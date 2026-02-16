@@ -10,7 +10,7 @@ logs devices whose MAC matches a known camera vendor.
 
 Controls:
   KEY1 - Start / Stop scan
-  KEY2 - Exit (hold 2 s)
+  KEY2 - Exit (WebUI: immediate, device: hold 2 s)
   KEY3 - Export data
 
 Author: dag nazty
@@ -25,7 +25,7 @@ from datetime import datetime
 sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..")))
 
 # Import the working wardriving scanner — we inherit everything from it
-from payloads.wardriving import (  # type: ignore
+from payloads.reconnaissance.wardriving import (  # type: ignore
     WardrivingScanner,
     LCD_AVAILABLE,
     SCAPY_AVAILABLE,
@@ -252,26 +252,30 @@ class CamFinderScanner(WardrivingScanner):
         monitor mode.  Broadcom brcmfmac does NOT.  RTL88xx / Atheros do.
         Scans /sys/class/net/ directly (iwconfig misses some interfaces).
         Returns the best interface name, or None.
+
+        The onboard Pi WiFi (WebUI interface) is never selected here.
         """
         # Discover all wireless interfaces via /sys (more reliable than iwconfig)
         interfaces = []
         try:
             for name in os.listdir("/sys/class/net"):
-                if name == "lo":
-                    continue
+                if name == "lo" or name == "wlan0":
+                    continue  # wlan0 reserved for WebUI
                 if os.path.isdir(f"/sys/class/net/{name}/wireless"):
+                    if self._is_onboard_wifi_iface(name):
+                        continue
                     interfaces.append(name)
         except Exception:
             pass
 
         # Fallback to iwconfig if /sys found nothing
         if not interfaces:
-            interfaces = self.get_wifi_interfaces()
+            interfaces = [i for i in self.get_wifi_interfaces() if not self._is_onboard_wifi_iface(i)]
 
         if not interfaces:
             return None
 
-        print(f"  Found wireless interfaces: {interfaces}", flush=True)
+        print(f"  Found wireless interfaces (excluding onboard/WebUI): {interfaces}", flush=True)
 
         # Drivers known NOT to support monitor mode
         no_monitor = {'brcmfmac', 'b43', 'wl'}
@@ -357,23 +361,26 @@ class CamFinderScanner(WardrivingScanner):
     # Exact same logic, just won't freeze on systemctl/sudo
     # ------------------------------------------------------------------
     def setup_monitor_mode(self, interface):
-        """Parent's monitor-mode setup with timeouts so nothing hangs."""
+        """Parent's monitor-mode setup with timeouts so nothing hangs.
+        
+        Only stops services for this specific interface — wlan0/WebUI is never touched.
+        """
         print(f"Setting up monitor mode on {interface}", flush=True)
 
-        # Step 1: Kill interfering processes (with timeouts)
-        print("Stopping interfering services...", flush=True)
+        # Step 1: Stop services for THIS interface only (keeps wlan0/WebUI alive)
+        print(f"Unmanaging {interface} from NetworkManager...", flush=True)
         for cmd_label, cmd in [
-            ("NetworkManager", ['sudo', 'systemctl', 'stop', 'NetworkManager']),
-            ("wpa_supplicant", ['sudo', 'pkill', '-f', 'wpa_supplicant']),
-            ("dhcpcd",         ['sudo', 'pkill', '-f', 'dhcpcd']),
+            ("NM unmanage",    ['nmcli', 'device', 'set', interface, 'managed', 'no']),
+            ("wpa_supplicant", ['sudo', 'pkill', '-f', f'wpa_supplicant.*{interface}']),
+            ("dhcpcd",         ['sudo', 'pkill', '-f', f'dhcpcd.*{interface}']),
         ]:
             try:
                 subprocess.run(cmd, capture_output=True, timeout=5)
-                print(f"  {cmd_label} stopped", flush=True)
+                print(f"  {cmd_label} done", flush=True)
             except subprocess.TimeoutExpired:
                 print(f"  {cmd_label} timed out - skipping", flush=True)
             except Exception:
-                print(f"  {cmd_label} not running", flush=True)
+                print(f"  {cmd_label} not applicable", flush=True)
         time.sleep(1)
 
         # Step 2: Check current interface status
@@ -772,7 +779,7 @@ class CamFinderScanner(WardrivingScanner):
 
             print("LCD Mode - Use hardware buttons:")
             print("  KEY1 - Start/Stop scan")
-            print("  KEY2 - Exit (hold 2s)")
+            print("  KEY2 - Exit (WebUI immediate / hold 2s on device)")
             print("  KEY3 - Export data")
             print("\nPress Ctrl+C to exit")
 

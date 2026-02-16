@@ -259,6 +259,12 @@ class template():
 def getButton():
     global _last_button, _last_button_time, _button_down_since
     while 1:
+        # WebUI payload requests: launch immediately while waiting for input
+        if not screen_lock.is_set():
+            requested = _check_payload_request()
+            if requested:
+                exec_payload(requested)
+                continue
         # 1) virtual buttons from Web UI
         v = rj_input.get_virtual_button()
         if v:
@@ -628,10 +634,123 @@ def ShowLines(arr,bold=[]):
                 render_color = color.selected_text
                 draw.rectangle([(default.start_text[0]-5, default.start_text[1] + default.text_gap * i),
                                 (120, default.start_text[1] + default.text_gap * i + 10)], fill=color.select)
-            draw.text((default.start_text[0], default.start_text[1] + default.text_gap * i),
-                        render_text[:m.max_len], fill=render_color)
+            # Draw icons on main menu when available
+            if m.which == "a":
+                icon = MENU_ICONS.get(render_text, "")
+                if icon:
+                    draw.text(
+                        (default.start_text[0] - 2, default.start_text[1] + default.text_gap * i),
+                        icon,
+                        font=icon_font,
+                        fill=render_color
+                    )
+                    max_w = 120 - (default.start_text[0] + 12)
+                    text = _truncate_to_width(render_text, max_w, text_font)
+                    draw.text(
+                        (default.start_text[0] + 12, default.start_text[1] + default.text_gap * i),
+                        text,
+                        font=text_font,
+                        fill=render_color
+                    )
+                else:
+                    draw.text(
+                        (default.start_text[0], default.start_text[1] + default.text_gap * i),
+                        render_text[:m.max_len],
+                        fill=render_color
+                    )
+            else:
+                draw.text((default.start_text[0], default.start_text[1] + default.text_gap * i),
+                            render_text[:m.max_len], fill=render_color)
     finally:
         draw_lock.release()
+
+def RenderMenuWindowOnce(inlist, selected_index=0):
+    """
+    Render a non-interactive menu window with a selected item highlighted.
+    Keeps the selected index visible without shifting the list unexpectedly.
+    """
+    WINDOW = 7
+    if not inlist:
+        inlist = ["Nothing here :(   "]
+        selected_index = 0
+
+    total = len(inlist)
+    index = max(0, min(selected_index, total - 1))
+    offset = 0
+    if index < offset:
+        offset = index
+    elif index >= offset + WINDOW:
+        offset = index - WINDOW + 1
+
+    window = inlist[offset:offset + WINDOW]
+    try:
+        draw_lock.acquire()
+        _draw_toolbar()
+        color.DrawMenuBackground()
+        for i, txt in enumerate(window):
+            fill = color.selected_text if i == (index - offset) else color.text
+            if i == (index - offset):
+                draw.rectangle(
+                    (default.start_text[0] - 5,
+                     default.start_text[1] + default.text_gap * i,
+                     120,
+                     default.start_text[1] + default.text_gap * i + 10),
+                    fill=color.select
+                )
+            # Draw Font Awesome icon if available (only on main menu)
+            if m.which == "a":
+                icon = MENU_ICONS.get(txt, "")
+                if icon:
+                    draw.text(
+                        (default.start_text[0] - 2,
+                         default.start_text[1] + default.text_gap * i),
+                        icon,
+                        font=icon_font,
+                        fill=fill
+                    )
+                    max_w = 120 - (default.start_text[0] + 12)
+                    line = _truncate_to_width(txt, max_w, text_font)
+                    draw.text(
+                        (default.start_text[0] + 12,
+                         default.start_text[1] + default.text_gap * i),
+                        line,
+                        font=text_font,
+                        fill=fill
+                    )
+                else:
+                    draw.text(
+                        (default.start_text[0],
+                         default.start_text[1] + default.text_gap * i),
+                        txt[:m.max_len],
+                        fill=fill
+                    )
+            else:
+                max_w = 120 - default.start_text[0]
+                line = _truncate_to_width(txt, max_w, text_font)
+                draw.text(
+                    (default.start_text[0],
+                     default.start_text[1] + default.text_gap * i),
+                    line,
+                    font=text_font,
+                    fill=fill
+                )
+    finally:
+        draw_lock.release()
+
+def RenderCurrentMenuOnce():
+    """
+    Render the current menu using the active view mode.
+    Used after returning from a payload to restore proper styling/icons.
+    """
+    inlist = m.GetMenuList()
+    if m.which == "a" and m.view_mode in ["grid", "carousel"]:
+        # These draw their own frames; discard selection result
+        if m.view_mode == "grid":
+            GetMenuGrid(inlist)
+        else:
+            GetMenuCarousel(inlist)
+    else:
+        RenderMenuWindowOnce(inlist, m.select)
 
 def GetMenuString(inlist, duplicates=False):
     """
@@ -1484,9 +1603,10 @@ def run_scan(label: str, nmap_args: list[str]):
 
     ts   = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     path = f"/root/Raspyjack/loot/Nmap/{label.lower().replace(' ', '_')}_{ts}.txt"
+    xml_path = path.replace(".txt", ".xml")
 
     # Build nmap command with interface specification
-    cmd = ["nmap"] + nmap_args + ["-oN", path]
+    cmd = ["nmap"] + nmap_args + ["-oN", path, "-oX", xml_path]
 
     # Add interface-specific parameters for better results
     Dialog_info(f"      {label}\n        Running\n      wait please...", wait=True)
@@ -1839,7 +1959,7 @@ def launch_wifi_manager():
         return
 
     Dialog_info("Loading FAST WiFi\nSwitcher...", wait=True)
-    exec_payload("fast_wifi_switcher.py")
+    exec_payload("general/fast_wifi_switcher.py")
 
 def show_interface_info():
     """Show detailed interface information."""
@@ -2031,7 +2151,7 @@ def launch_interface_switcher():
 def launch_webui():
     """Launch the WebUI controller payload (start/stop Web UI)."""
     Dialog_info("Loading WebUI...", wait=True)
-    exec_payload("webui.py")
+    exec_payload("general/webui.py")
 
 def quick_wifi_toggle():
     """FAST toggle between wlan0 and wlan1 - immediate switching."""
@@ -2072,16 +2192,56 @@ def quick_wifi_toggle():
 
 def list_payloads():
     """
-    Returns the list of .py scripts in payload_path, sorted by file name.
+    Returns the list of .py scripts under payload_path, as relative paths.
     """
+    payloads = []
     try:
-        return sorted(
-            f for f in os.listdir(default.payload_path)
-            if f.endswith(".py") and not f.startswith("_")
-        )
+        for root, dirs, files in os.walk(default.payload_path):
+            # Skip cache/hidden folders
+            dirs[:] = [d for d in dirs if not d.startswith(".") and d != "__pycache__"]
+            rel_dir = os.path.relpath(root, default.payload_path)
+            for f in files:
+                if not f.endswith(".py") or f.startswith("_"):
+                    continue
+                rel_path = os.path.join(rel_dir, f) if rel_dir != "." else f
+                payloads.append(rel_path)
     except FileNotFoundError:
         os.makedirs(default.payload_path, exist_ok=True)
         return []
+
+    return sorted(payloads, key=str.lower)
+
+def list_payloads_by_category():
+    """
+    Return payloads grouped by category folder.
+    - Files in payload_path root go to "general".
+    """
+    categories: dict[str, list[str]] = {}
+    for rel_path in list_payloads():
+        parts = rel_path.split(os.sep)
+        if len(parts) > 1:
+            category = parts[0]
+        else:
+            category = "general"
+        categories.setdefault(category, []).append(rel_path)
+    return categories
+
+# ---------------------------------------------------------------------------
+# Payload state (for WebUI status)
+# ---------------------------------------------------------------------------
+PAYLOAD_STATE_PATH = "/dev/shm/rj_payload_state.json"
+
+def _write_payload_state(running: bool, path: str | None = None) -> None:
+    try:
+        state = {
+            "running": bool(running),
+            "path": path if running else None,
+            "ts": time.time(),
+        }
+        with open(PAYLOAD_STATE_PATH, "w", encoding="utf-8") as f:
+            json.dump(state, f)
+    except Exception:
+        pass
 
 # ---------------------------------------------------------------------------
 # 1)  Helper – reset GPIO *and* re-initialise the LCD
@@ -2125,34 +2285,56 @@ def exec_payload(filename: str) -> None:
         return                                       # nothing to launch
 
     print(f"[PAYLOAD] ► Starting: {filename}")
+    _write_payload_state(True, filename)
     screen_lock.set()                # stop _stats_loop & _display_loop
     LCD.LCD_Clear()                  # give the payload a clean canvas
 
     log = open(default.payload_log, "ab", buffering=0)
     try:
-        subprocess.run(
+        # Ensure payloads can import RaspyJack modules reliably
+        env = os.environ.copy()
+        env["PYTHONPATH"] = default.install_path + os.pathsep + env.get("PYTHONPATH", "")
+        result = subprocess.run(
             ["python3", full],
             cwd=default.install_path,  # same PYTHONPATH as RaspyJack
+            env=env,
             stdout=log,
             stderr=subprocess.STDOUT,
         )
-        print("[PAYLOAD]   • Finished without error.")
+        if log and log.tell() is not None:
+            log.flush()
+        if result.returncode == 0:
+            print("[PAYLOAD]   • Finished without error.")
+        else:
+            print(f"[PAYLOAD]   • ERROR: exit code {result.returncode}")
+            Dialog_info("Payload error\nCheck payload.log", wait=True)
     except Exception as exc:
         print(f"[PAYLOAD]   • ERROR: {exc!r}")
+        Dialog_info("Payload error\nCheck payload.log", wait=True)
 
     # ---- restore RaspyJack ----------------------------------------------
     print("[PAYLOAD] ◄ Restoring LCD & GPIO…")
+    _write_payload_state(False, None)
     _setup_gpio()                                  # SPI/DC/RST/CS back
     try:
         rj_input.restart_listener()                # ensure virtual input socket is back
     except AttributeError:
         pass
 
-    # rebuild the current menu image
-    color.DrawMenuBackground()
-    color.DrawBorder()
-    ShowLines(m.GetMenuList())                     # text + cursor
-    LCD.LCD_ShowImage(image, 0, 0)                 # push *before* unlock
+    # Force a clean full-screen redraw to avoid leftover artifacts/border loss
+    try:
+        LCD.LCD_Clear()
+    except Exception:
+        pass
+    try:
+        draw_lock.acquire()
+        draw.rectangle((0, 0, LCD.width, LCD.height), fill=color.background)
+        color.DrawBorder()
+    finally:
+        draw_lock.release()
+
+    # rebuild the current menu image (respect current view mode)
+    RenderCurrentMenuOnce()
 
     # small debounce: 300 ms max
     t0 = time.time()
@@ -2285,11 +2467,52 @@ class DisposableMenu:
         return -1
     # Génération à chaud du sous-menu Payload -------------------------------
     def _build_payload_menu(self):
-        """Crée (ou rafraîchit) le menu 'ap' en fonction du contenu du dossier."""
-        self.menu["ap"] = tuple(
-            [f" {script[:-3]}", partial(exec_payload, script)]
-            for script in list_payloads()
-        ) or ([" <vide>", lambda: None],)  # si aucun script n'est présent
+        """Crée (ou rafraîchit) le menu 'ap' par catégories."""
+        category_order = [
+            "reconnaissance",
+            "interception",
+            "evil_portal",
+            "exfiltration",
+            "remote_access",
+            "general",
+            "examples",
+            "games",
+            "virtual_pager",
+            "incident_response",
+            "known_unstable",
+            "prank",
+        ]
+
+        def _label(cat: str) -> str:
+            return f" {cat.replace('_', ' ').title()}"
+
+        categories = list_payloads_by_category()
+        menu_items = []
+
+        for cat in category_order:
+            scripts = categories.get(cat, [])
+            if not scripts:
+                continue
+            key = f"ap_{cat}"
+            self.menu[key] = tuple(
+                [f" {os.path.splitext(os.path.basename(path))[0]}", partial(exec_payload, path)]
+                for path in scripts
+            )
+            menu_items.append([_label(cat), key])
+
+        # Add any unexpected categories at the end
+        for cat in sorted(categories.keys()):
+            if cat in category_order:
+                continue
+            scripts = categories[cat]
+            key = f"ap_{cat}"
+            self.menu[key] = tuple(
+                [f" {os.path.splitext(os.path.basename(path))[0]}", partial(exec_payload, path)]
+                for path in scripts
+            )
+            menu_items.append([_label(cat), key])
+
+        self.menu["ap"] = tuple(menu_items) or ([" <vide>", lambda: None],)
 
     def __init__(self):
         # cette fois, `default` est déjà instancié → pas d'erreur
@@ -2537,6 +2760,24 @@ def boot_health_check():
         pass
 
 
+def _check_payload_request():
+    """
+    Check for a WebUI payload request file and return a payload path if present.
+    """
+    request_path = "/dev/shm/rj_payload_request.json"
+    try:
+        if not os.path.isfile(request_path):
+            return None
+        with open(request_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        os.remove(request_path)
+        if data.get("action") == "start" and data.get("path"):
+            return str(data["path"])
+    except Exception:
+        pass
+    return None
+
+
 def main():
     # Draw background once
     try:
@@ -2555,6 +2796,10 @@ def main():
     # Menu handling
     # Running functions from menu structure
     while True:
+        requested = _check_payload_request()
+        if requested:
+            exec_payload(requested)
+            continue
         # Use different view modes only for main menu ("a"), list view for all submenus
         if m.which == "a" and m.view_mode in ["grid", "carousel"]:
             if m.view_mode == "grid":
@@ -2585,7 +2830,11 @@ def main():
             else:
                 m.menu[m.which][m.select][1]()
         elif len(m.which) > 1:
-            m.which = m.which[:-1]
+            # Handle dynamic payload category menus (ap_<category>)
+            if m.which.startswith("ap_"):
+                m.which = "ap"
+            else:
+                m.which = m.which[:-1]
 
 
 ### Default values + LCD init ###

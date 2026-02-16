@@ -35,6 +35,103 @@ except Exception as e:
     print(f"WiFi manager not available: {e}")
     wifi_manager = None
 
+BOOT_LOG_FILE = "/root/Raspyjack/loot/network/interface_boot_log.txt"
+
+
+def _safe_read(path):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read().strip()
+    except Exception:
+        return ""
+
+
+def _iface_ip(interface):
+    try:
+        res = subprocess.run(
+            ["ip", "-4", "addr", "show", interface],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=3,
+        )
+        for line in res.stdout.split("\n"):
+            line = line.strip()
+            if line.startswith("inet "):
+                return line.split()[1].split("/")[0]
+    except Exception:
+        pass
+    return ""
+
+
+def _default_route_summary():
+    try:
+        res = subprocess.run(
+            ["ip", "route", "show", "default"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=3,
+        )
+        return " | ".join([ln.strip() for ln in res.stdout.splitlines() if ln.strip()])
+    except Exception:
+        return ""
+
+
+def log_interface_boot_snapshot():
+    """Append one interface snapshot so reboot swaps are visible in loot logs."""
+    try:
+        os.makedirs(os.path.dirname(BOOT_LOG_FILE), exist_ok=True)
+        ts = datetime.now().isoformat(timespec="seconds")
+        boot_id = _safe_read("/proc/sys/kernel/random/boot_id")
+        hostname = _safe_read("/etc/hostname")
+        default_route = _default_route_summary()
+
+        lines = []
+        lines.append("=" * 72)
+        lines.append(f"time={ts} boot_id={boot_id} host={hostname} pid={os.getpid()}")
+        lines.append(f"default_route={default_route or 'none'}")
+
+        iface_names = []
+        try:
+            iface_names = sorted([n for n in os.listdir("/sys/class/net") if n.startswith("wlan")])
+        except Exception:
+            iface_names = []
+
+        if not iface_names:
+            lines.append("no_wlan_interfaces_detected")
+        else:
+            for iface in iface_names:
+                mac = _safe_read(f"/sys/class/net/{iface}/address")
+                dev_path = ""
+                try:
+                    dev_path = os.path.realpath(f"/sys/class/net/{iface}/device")
+                except Exception:
+                    dev_path = ""
+                driver = ""
+                try:
+                    driver = os.path.basename(
+                        os.path.realpath(f"/sys/class/net/{iface}/device/driver")
+                    )
+                except Exception:
+                    driver = ""
+                bus = "mmc" if "mmc" in dev_path else ("usb" if "usb" in dev_path else "other")
+                ip = _iface_ip(iface)
+                lines.append(
+                    f"{iface}: mac={mac or 'unknown'} driver={driver or 'unknown'} "
+                    f"bus={bus} ip={ip or 'none'} dev={dev_path or 'unknown'}"
+                )
+
+        with open(BOOT_LOG_FILE, "a", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+    except Exception:
+        # Never break startup if logging fails.
+        pass
+
+
+# Snapshot at startup/import so reboot-induced renaming is recorded to loot.
+log_interface_boot_snapshot()
+
 def get_available_interfaces():
     """Get list of all available network interfaces."""
     interfaces = []
@@ -154,15 +251,14 @@ def get_best_interface(prefer_wifi=False, bypass_checks=False):
     
     # Priority logic
     if prefer_wifi:
-        # Prefer WiFi if requested - prioritize external dongles
+        # Prefer WiFi if requested - prioritize wlan0 (WebUI/connectivity interface)
         wifi_interfaces = [iface for iface in connected_interfaces if iface.startswith('wlan')]
         if wifi_interfaces:
-            # Sort WiFi interfaces to prefer external dongles (wlan1, wlan2) over built-in (wlan0)
-            wifi_interfaces.sort(key=lambda x: (x != 'wlan1', x != 'wlan2', x))
+            wifi_interfaces.sort(key=lambda x: (x != 'wlan0', x != 'wlan1', x))
             return wifi_interfaces[0]
     
-    # Default priority: eth0 > external WiFi dongles > built-in WiFi > others
-    priority_order = ['eth0', 'wlan1', 'wlan2', 'wlan3', 'wlan0']
+    # Default priority: eth0 > wlan0 (WebUI) > external dongles
+    priority_order = ['eth0', 'wlan0', 'wlan1', 'wlan2', 'wlan3']
     
     for preferred in priority_order:
         if preferred in connected_interfaces:

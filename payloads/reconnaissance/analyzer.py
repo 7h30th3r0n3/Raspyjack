@@ -78,6 +78,14 @@ DWELL_MIN  = 0.10      # fastest channel hop  (seconds)
 DWELL_MAX  = 2.00      # slowest channel hop
 DWELL_STEP = 0.05
 
+# Loot directory (handle case-sensitive path differences)
+_loot_paths = [
+    "/root/Raspyjack/loot/Analyzer",
+    "/root/raspyjack/loot/Analyzer",
+]
+LOOT_DIR = next((p for p in _loot_paths if os.path.exists(os.path.dirname(p))), _loot_paths[0])
+os.makedirs(LOOT_DIR, exist_ok=True)
+
 # Bar area geometry (shared by all views)
 BAR_TOP = 15
 BAR_BOT = 107
@@ -119,12 +127,38 @@ def lcd_init():
 # WiFi monitor-mode setup  (adapted from wardriving / cam_finder)
 # ===================================================================
 
+def _is_onboard_wifi_iface(iface):
+    """True for the onboard Pi WiFi device (SDIO/mmc or brcmfmac driver)."""
+    try:
+        devpath = os.path.realpath(f"/sys/class/net/{iface}/device")
+        if "mmc" in devpath:
+            return True
+    except Exception:
+        pass
+    try:
+        driver = os.path.basename(
+            os.path.realpath(f"/sys/class/net/{iface}/device/driver")
+        )
+        if driver == "brcmfmac":
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def find_iface():
-    """Find a monitor-mode capable wireless interface."""
+    """Find a monitor-mode capable wireless interface.
+
+    The onboard Pi WiFi (WebUI interface) is reserved and never selected.
+    """
     ifs = []
     try:
         for n in os.listdir("/sys/class/net"):
-            if n != "lo" and os.path.isdir(f"/sys/class/net/{n}/wireless"):
+            if n == "lo":
+                continue
+            if os.path.isdir(f"/sys/class/net/{n}/wireless"):
+                if _is_onboard_wifi_iface(n):
+                    continue
                 ifs.append(n)
     except Exception:
         pass
@@ -142,12 +176,14 @@ def find_iface():
 
 
 def monitor_up(iface):
-    """Put *iface* into monitor mode. Returns interface name or None."""
-    # Kill interfering services (with timeouts so nothing hangs)
+    """Put *iface* into monitor mode. Returns interface name or None.
+
+    Only stops services for this specific interface — wlan0/WebUI is never touched.
+    """
     for cmd in [
-        ["sudo", "systemctl", "stop", "NetworkManager"],
-        ["sudo", "pkill", "-f", "wpa_supplicant"],
-        ["sudo", "pkill", "-f", "dhcpcd"],
+        ["nmcli", "device", "set", iface, "managed", "no"],
+        ["sudo", "pkill", "-f", f"wpa_supplicant.*{iface}"],
+        ["sudo", "pkill", "-f", f"dhcpcd.*{iface}"],
     ]:
         try:
             subprocess.run(cmd, capture_output=True, timeout=5)
@@ -203,7 +239,11 @@ def monitor_up(iface):
 
 
 def monitor_down(iface):
-    """Best-effort restore to managed mode."""
+    """Best-effort restore to managed mode.
+
+    Re-manages the interface in NetworkManager instead of restarting the service
+    (which would disrupt wlan0/WebUI).
+    """
     if not iface:
         return
     base = iface.replace("mon", "")
@@ -216,7 +256,7 @@ def monitor_down(iface):
         ["sudo", "ip", "link", "set", base, "down"],
         ["sudo", "iw", base, "set", "type", "managed"],
         ["sudo", "ip", "link", "set", base, "up"],
-        ["sudo", "systemctl", "start", "NetworkManager"],
+        ["nmcli", "device", "set", base, "managed", "yes"],
     ]:
         try:
             subprocess.run(cmd, capture_output=True, timeout=5)

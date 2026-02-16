@@ -1,0 +1,839 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RaspyJack Payload IDE</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/monokai.min.css">
+  <link rel="stylesheet" href="./device-shell.css">
+  <link rel="stylesheet" href="./ui.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      color-scheme: dark;
+      --rj-bg-0: #05060a;
+      --rj-bg-1: #07090f;
+      --rj-bg-2: #0f1b2d;
+      --rj-surface: rgba(15, 23, 42, 0.46);
+      --rj-surface-strong: rgba(15, 23, 42, 0.7);
+      --rj-border: rgba(148, 163, 184, 0.2);
+      --rj-border-strong: rgba(148, 163, 184, 0.32);
+      --rj-text: #e2e8f0;
+      --rj-text-muted: #94a3b8;
+      --rj-accent: #10b981;
+      --rj-accent-soft: rgba(16, 185, 129, 0.14);
+      --rj-radius: 12px;
+      --rj-shadow: 0 14px 32px rgba(2, 6, 23, 0.36);
+      --rj-glow: 0 0 24px rgba(16, 185, 129, 0.14);
+    }
+    html {
+      min-height: 100%;
+      background: radial-gradient(1200px 800px at 50% -10%, var(--rj-bg-2) 0%, var(--rj-bg-1) 55%, var(--rj-bg-0) 100%);
+    }
+    body {
+      min-height: 100%;
+      font-family: 'Space Grotesk', system-ui, sans-serif;
+      background: radial-gradient(1200px 800px at 50% -10%, var(--rj-bg-2) 0%, var(--rj-bg-1) 55%, var(--rj-bg-0) 100%);
+      color: var(--rj-text);
+      letter-spacing: 0.01em;
+    }
+    button, a {
+      transition: background-color .16s ease, color .16s ease, border-color .16s ease, box-shadow .16s ease, transform .12s ease;
+    }
+    code, pre, .font-mono, .CodeMirror {
+      font-family: 'JetBrains Mono', 'Fira Code', monospace !important;
+    }
+
+    /* Neon glow effects */
+    .text-glow {
+      text-shadow: 0 0 10px rgba(16,185,129,0.8), 0 0 20px rgba(16,185,129,0.4), 0 0 30px rgba(16,185,129,0.2);
+    }
+    .glow-sm {
+      box-shadow: 0 0 10px rgba(16,185,129,0.3), 0 0 20px rgba(16,185,129,0.1);
+    }
+    .glow-md {
+      box-shadow: 0 0 15px rgba(16,185,129,0.4), 0 0 30px rgba(16,185,129,0.2), 0 0 45px rgba(16,185,129,0.1);
+    }
+    .glow-accent {
+      box-shadow: 0 0 15px rgba(34,211,238,0.4), 0 0 30px rgba(34,211,238,0.2);
+    }
+
+    /* Scanline effect */
+    .scanlines {
+      position: relative;
+    }
+    .scanlines::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(16,185,129,0.02) 2px, rgba(16,185,129,0.02) 4px);
+      pointer-events: none;
+      z-index: 100;
+    }
+
+    /* Grid pattern background */
+    .grid-pattern {
+      background-image:
+        linear-gradient(rgba(16,185,129,0.06) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(16,185,129,0.06) 1px, transparent 1px);
+      background-size: 20px 20px;
+    }
+
+    /* Cursor blink */
+    @keyframes cursor-blink {
+      0%, 50% { opacity: 1; }
+      51%, 100% { opacity: 0; }
+    }
+    .cursor-blink { animation: cursor-blink 1s step-end infinite; }
+
+    /* Pulse glow */
+    @keyframes pulse-glow {
+      0%, 100% { box-shadow: 0 0 10px rgba(16,185,129,0.3), 0 0 20px rgba(16,185,129,0.1); }
+      50% { box-shadow: 0 0 15px rgba(16,185,129,0.5), 0 0 30px rgba(16,185,129,0.2); }
+    }
+    .animate-pulse-glow { animation: pulse-glow 2s ease-in-out infinite; }
+
+    /* Fade in */
+    @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+    .animate-fade-in { animation: fade-in 0.3s ease-out; }
+
+    /* Custom scrollbar (global) */
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-track { background: rgba(15,23,42,0.6); }
+    ::-webkit-scrollbar-thumb { background: rgba(16,185,129,0.25); border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(16,185,129,0.4); }
+    ::selection { background: rgba(16,185,129,0.3); color: #d1fae5; }
+
+    /* Wizard / Modal shared styles */
+    .wizard-step-bar { display: flex; gap: 4px; }
+    .wizard-step-bar .step-dot {
+      flex: 1; height: 6px; border-radius: 3px;
+      background: rgba(148,163,184,0.2); transition: background 0.3s;
+    }
+    .wizard-step-bar .step-dot.active { background: #10b981; }
+    .wizard-type-card {
+      display: flex; align-items: center; gap: 12px;
+      padding: 12px 16px; border-radius: 8px;
+      border: 1px solid rgba(148,163,184,0.15);
+      cursor: pointer; transition: all 0.15s;
+    }
+    .wizard-type-card:hover { border-color: rgba(16,185,129,0.4); background: rgba(16,185,129,0.05); }
+    .wizard-type-card.selected { border-color: #10b981; background: rgba(16,185,129,0.1); }
+    .wizard-type-card .type-icon { font-size: 24px; width: 36px; text-align: center; }
+
+    /* Template library styles */
+    .tmpl-category-tabs { display: flex; gap: 2px; margin-bottom: 12px; }
+    .tmpl-category-tab {
+      flex: 1; padding: 6px 4px; text-align: center; font-size: 11px; cursor: pointer;
+      border-radius: 6px; border: 1px solid transparent; transition: all 0.15s;
+      color: rgba(148,163,184,0.7);
+    }
+    .tmpl-category-tab:hover { background: rgba(148,163,184,0.08); }
+    .tmpl-category-tab.active { border-color: #10b981; background: rgba(16,185,129,0.1); color: #10b981; }
+    .tmpl-card {
+      padding: 10px 12px; border-radius: 8px; cursor: pointer;
+      border: 1px solid rgba(148,163,184,0.15); transition: all 0.15s; margin-bottom: 6px;
+    }
+    .tmpl-card:hover { border-color: rgba(16,185,129,0.4); background: rgba(16,185,129,0.05); }
+    .tmpl-card.selected { border-color: #10b981; background: rgba(16,185,129,0.1); }
+
+    /* GPIO Reference panel */
+    .gpio-section-header {
+      display: flex; align-items: center; gap: 6px;
+      padding: 6px 8px; cursor: pointer; border-radius: 6px; transition: background 0.15s;
+    }
+    .gpio-section-header:hover { background: rgba(16,185,129,0.08); }
+    .gpio-table { width: 100%; font-size: 11px; border-collapse: collapse; }
+    .gpio-table th { padding: 4px 8px; text-align: left; font-weight: 500; background: rgba(148,163,184,0.08); }
+    .gpio-table td { padding: 4px 8px; border-top: 1px solid rgba(148,163,184,0.1); }
+    .gpio-table tr:nth-child(even) td { background: rgba(148,163,184,0.03); }
+    .gpio-code-block {
+      position: relative; padding: 8px 10px; border-radius: 6px; font-size: 10px;
+      background: rgba(15,23,42,0.6); border: 1px solid rgba(148,163,184,0.1);
+      white-space: pre-wrap; overflow-x: auto; color: rgba(148,163,184,0.8);
+    }
+    .gpio-code-block .copy-btn {
+      position: absolute; top: 4px; right: 4px; padding: 2px 6px; font-size: 10px;
+      border-radius: 4px; background: rgba(148,163,184,0.1); border: 1px solid rgba(148,163,184,0.15);
+      color: rgba(148,163,184,0.6); cursor: pointer; opacity: 0; transition: opacity 0.15s;
+    }
+    .gpio-code-block:hover .copy-btn { opacity: 1; }
+    .gpio-code-block .copy-btn:hover { background: rgba(16,185,129,0.2); color: #10b981; }
+
+    /* Toolbar button styles */
+    .ide-toolbar-btn {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 4px 10px; font-size: 11px; border-radius: 6px;
+      border: 1px solid rgba(148,163,184,0.15); background: rgba(148,163,184,0.06);
+      color: rgba(148,163,184,0.7); cursor: pointer; transition: all 0.15s;
+    }
+    .ide-toolbar-btn:hover { border-color: rgba(16,185,129,0.4); color: #d1fae5; background: rgba(16,185,129,0.08); }
+    .ide-toolbar-btn.active { border-color: #10b981; color: #10b981; background: rgba(16,185,129,0.12); box-shadow: var(--rj-glow); }
+    .ide-toolbar-btn--success {
+      border-color: rgba(16,185,129,0.35);
+      color: #a7f3d0;
+      background: rgba(16,185,129,0.12);
+      box-shadow: var(--rj-glow);
+    }
+    .ide-toolbar-btn--success:hover {
+      border-color: rgba(16,185,129,0.5);
+      color: #d1fae5;
+      background: rgba(16,185,129,0.18);
+    }
+    .ide-toolbar-btn--danger {
+      border-color: rgba(244,63,94,0.35);
+      color: #fecdd3;
+      background: rgba(244,63,94,0.12);
+    }
+    .ide-toolbar-btn--danger:hover {
+      border-color: rgba(244,63,94,0.5);
+      color: #ffe4e6;
+      background: rgba(244,63,94,0.18);
+    }
+    .ide-toolbar-sep { width: 1px; height: 20px; background: rgba(148,163,184,0.15); margin: 0 4px; }
+    .cm-editor,
+    .CodeMirror {
+      height: 100%;
+    }
+    .CodeMirror {
+      background: transparent !important;
+      font-size: 11px;
+    }
+    .CodeMirror-gutters {
+      background: transparent !important;
+      border-right: 1px solid rgba(148, 163, 184, 0.25);
+    }
+    .file-node {
+      cursor: pointer;
+    }
+    .file-node.active,
+    .folder-node.active {
+      background-color: rgba(16, 185, 129, 0.18);
+    }
+    /* .device-shell and Game Boy theme moved to device-shell.css */
+
+    /* File type icons */
+    .file-icon {
+      display: inline-block;
+      width: 16px;
+      text-align: center;
+      font-size: 13px;
+      line-height: 1;
+      opacity: 0.85;
+      color: inherit;
+    }
+
+    header,
+    #leftPanel,
+    section.flex-1.flex.flex-col.min-h-\[260px\].overflow-hidden.min-w-0,
+    section.flex-1.flex.flex-col.min-w-0.border-l.border-slate-800\/70 {
+      box-shadow: var(--rj-shadow);
+    }
+
+    #leftPanel,
+    .editor-body,
+    #treeContextMenuPanel {
+      border-color: var(--rj-border) !important;
+    }
+
+    #saveBtn,
+    #runBtn,
+    #refreshTree,
+    #newFileBtn,
+    #newFolderBtn,
+    #logoutBtn {
+      border-radius: 10px !important;
+    }
+
+    #saveBtn,
+    #runBtn,
+    #newFileBtn {
+      box-shadow: var(--rj-glow);
+    }
+
+    #leftPanel {
+      background: linear-gradient(180deg, rgba(2,6,23,0.58), rgba(2,6,23,0.44));
+    }
+
+    #currentPath {
+      font-weight: 500;
+      letter-spacing: 0.012em;
+    }
+
+    #ideStatus,
+    #wsStatus {
+      transition: color .16s ease, text-shadow .16s ease;
+    }
+    .status-tone-ok { color: #34d399 !important; text-shadow: 0 0 10px rgba(16,185,129,.28); }
+    .status-tone-warn { color: #fbbf24 !important; text-shadow: 0 0 10px rgba(251,191,36,.2); }
+    .status-tone-bad { color: #fb7185 !important; text-shadow: 0 0 10px rgba(244,63,94,.22); }
+
+    @media (min-width: 1024px) {
+      #leftPanel {
+        width: 22%;
+      }
+      main > section.flex-1.flex.flex-col.min-w-0.border-l.border-slate-800\/70 {
+        max-width: 34%;
+      }
+    }
+
+    @media (max-width: 1024px) {
+      main {
+        gap: .75rem;
+      }
+      #leftPanel,
+      main > section,
+      .editor-body {
+        border-radius: 12px;
+      }
+    }
+
+    @media (max-width: 768px) {
+      header {
+        gap: .5rem;
+      }
+      header > div:nth-child(2) {
+        display: none;
+      }
+      #leftPanel {
+        max-width: 100% !important;
+      }
+      .editor-body {
+        height: 58vh !important;
+      }
+    }
+  </style>
+</head>
+<body class="min-h-screen text-slate-200">
+  <div class="min-h-screen flex flex-col relative">
+    <div class="absolute inset-0 grid-pattern opacity-30 pointer-events-none"></div>
+    <!-- Header -->
+    <header class="flex items-center justify-between px-4 py-2 border-b border-slate-800/70 bg-slate-950/60 backdrop-blur scanlines relative overflow-hidden">
+      <div class="flex items-center gap-3 relative z-10">
+        <img src="./raspyjack.png" alt="RaspyJack" class="h-8 drop-shadow-[0_0_12px_rgba(18,255,120,0.35)]"/>
+        <div>
+          <div class="text-sm font-black tracking-wide text-glow"><span class="text-emerald-400">R</span>ASPY<span class="text-rose-400">J</span>ACK</div>
+          <div class="text-[10px] text-slate-400">IDE STUDIO</div>
+        </div>
+      </div>
+      <!-- Toolbar center -->
+      <div class="flex items-center gap-1.5 relative z-10">
+        <button id="wizardBtn" class="ide-toolbar-btn"><i class="fa-solid fa-wand-magic-sparkles"></i> Wizard</button>
+        <button id="templatesBtn" class="ide-toolbar-btn"><i class="fa-solid fa-layer-group"></i> Templates</button>
+        <div class="ide-toolbar-sep"></div>
+        <button id="gpioToggleBtn" class="ide-toolbar-btn"><i class="fa-solid fa-microchip"></i> GPIO</button>
+      </div>
+      <!-- Right -->
+      <div class="flex items-center gap-3 text-xs relative z-10">
+        <div id="ideStatus" class="text-slate-400">Ready</div>
+        <button id="logoutBtn" type="button" class="ide-toolbar-btn ide-toolbar-btn--danger">
+          <i class="fa-solid fa-right-from-bracket"></i> Logout
+        </button>
+        <a href="./index.html" class="ide-toolbar-btn">
+          <i class="fa-solid fa-arrow-left"></i> Back to WebUI
+        </a>
+      </div>
+    </header>
+
+    <!-- Main layout -->
+    <main class="flex-1 flex flex-col md:flex-row overflow-hidden min-w-0 w-full">
+      <!-- Left: file tree -->
+      <section id="leftPanel" class="md:w-1/4 border-r border-slate-800/70 bg-slate-950/50 backdrop-blur flex flex-col min-h-[260px] relative" style="min-width: 200px; max-width: 50%;">
+        <!-- Resize handle -->
+        <div id="resizeHandle" class="hidden md:block absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-emerald-500/30 transition-colors z-10" style="touch-action: none;"></div>
+        <div class="px-3 py-2 border-b border-slate-800/70 flex items-center justify-between">
+          <div class="text-xs font-semibold text-emerald-300">Payloads</div>
+          <div class="flex items-center gap-1 text-[11px] text-slate-400">
+            <button id="refreshTree" class="ide-toolbar-btn">
+              <i class="fa-solid fa-rotate-right"></i> Refresh
+            </button>
+          </div>
+        </div>
+        <div class="px-3 py-2 flex items-center gap-2 text-[11px] border-b border-slate-800/70">
+          <button id="newFileBtn" class="ide-toolbar-btn">
+            <i class="fa-solid fa-file-circle-plus"></i> File
+          </button>
+          <button id="newFolderBtn" class="ide-toolbar-btn">
+            <i class="fa-solid fa-folder-plus"></i> Folder
+          </button>
+        </div>
+        <div id="treeContainer" class="flex-1 overflow-auto px-2 py-2 text-xs">
+          <!-- tree populated by ide.js -->
+        </div>
+      </section>
+
+      <!-- Center: editor -->
+      <section class="flex-1 flex flex-col min-h-[260px] overflow-hidden min-w-0">
+        <div class="px-4 py-2 border-b border-slate-800/70 bg-slate-950/40 flex items-center justify-between gap-3">
+          <div class="flex-1 min-w-0">
+            <div id="currentPath" class="text-xs text-slate-400 truncate">No file selected</div>
+          </div>
+          <div class="flex items-center gap-2 text-xs">
+            <span id="dirtyFlag" class="text-amber-400 hidden">● Unsaved</span>
+            <span id="payloadRunState" class="text-slate-400">Idle</span>
+            <button id="saveBtn" class="ide-toolbar-btn ide-toolbar-btn--success disabled:opacity-40 disabled:cursor-not-allowed">
+              <i class="fa-solid fa-floppy-disk text-[10px]"></i> Save
+            </button>
+            <button id="runBtn" class="ide-toolbar-btn ide-toolbar-btn--success disabled:opacity-40 disabled:cursor-not-allowed">
+              <i class="fa-solid fa-play text-[10px]"></i> Run
+            </button>
+            <button id="stopBtn" class="ide-toolbar-btn ide-toolbar-btn--danger disabled:opacity-40 disabled:cursor-not-allowed">
+              <i class="fa-solid fa-stop text-[10px]"></i> Stop
+            </button>
+          </div>
+        </div>
+        <div class="editor-body bg-transparent h-[800px] border-r border-slate-800/70">
+          <textarea id="editor" class="w-full h-full"></textarea>
+        </div>
+      </section>
+
+      <!-- Right: handheld preview -->
+      <section class="flex-1 flex flex-col min-w-0 border-l border-slate-800/70 bg-transparent items-center justify-start py-4 px-3 min-h-[260px]">
+        <div class="w-full flex items-center justify-between mb-3">
+          <div class="flex items-center gap-2">
+            <div class="text-xs font-semibold text-emerald-300">Handheld Preview</div>
+            <button id="restartUiBtn" type="button" class="ide-toolbar-btn ide-toolbar-btn--success">
+              <i class="fa-solid fa-rotate"></i> Restart UI
+            </button>
+          </div>
+          <div id="wsStatus" class="text-[11px] text-slate-400">Connecting…</div>
+        </div>
+        <div id="deviceShell" class="device-shell theme-gameboy rounded-3xl p-4 w-fit mx-auto">
+          <div class="layout-gameboy">
+            <div class="screen-frame">
+              <canvas id="screen-gb" width="128" height="128" class="w-[240px] md:w-[260px] aspect-square"></canvas>
+            </div>
+            <div class="flex justify-between mb-4">
+              <div class="grid grid-cols-3 grid-rows-3 gap-2">
+                <div></div>
+                <button class="rj-btn" data-btn="UP">▲</button>
+                <div></div>
+                <button class="rj-btn" data-btn="LEFT">◄</button>
+                <button class="rj-btn" data-btn="OK" aria-label="OK"></button>
+                <button class="rj-btn" data-btn="RIGHT">►</button>
+                <div></div>
+                <button class="rj-btn" data-btn="DOWN">▼</button>
+                <div></div>
+              </div>
+              <div class="flex flex-col gap-2 side-buttons">
+                <button class="rj-btn key-btn" data-btn="KEY1">KEY1</button>
+                <button class="rj-btn key-btn" data-btn="KEY2">KEY2</button>
+                <button class="rj-btn key-btn" data-btn="KEY3">KEY3</button>
+              </div>
+            </div>
+            <div class="text-center text-xs text-gray-300">OK = Enter · KEY3 = Esc</div>
+            <div class="status-text text-center text-[11px] text-gray-500 mt-1">Connected</div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Tree context menu -->
+  <div id="treeContextMenu" class="hidden fixed z-50" style="left:0;top:0;">
+    <div id="treeContextMenuPanel" class="rounded-xl border border-slate-700/70 bg-slate-950/95 shadow-[0_0_20px_rgba(15,23,42,0.7)] py-1 text-xs text-slate-100 min-w-[130px]">
+      <button id="ctxRename" class="w-full px-3 py-1.5 text-left hover:bg-slate-800/80">Rename</button>
+      <button id="ctxDelete" class="w-full px-3 py-1.5 text-left text-rose-300 hover:bg-rose-900/50">Delete</button>
+    </div>
+  </div>
+
+  <!-- Create file/folder modal -->
+  <div id="entryModal" class="hidden fixed inset-0 z-50 bg-black/60 backdrop-blur-sm">
+    <div class="max-w-sm mx-auto mt-24 px-4">
+      <div class="rounded-2xl border border-slate-700/60 bg-slate-950/95 shadow-[0_0_30px_rgba(15,23,42,0.75)] overflow-hidden">
+        <div class="px-4 py-3 border-b border-slate-800/70 flex items-center justify-between">
+          <div id="entryModalTitle" class="text-sm font-semibold text-emerald-300">New Entry</div>
+          <button id="entryModalClose" class="text-slate-400 hover:text-slate-200 text-xs px-2 py-1 rounded-md bg-slate-900/60 border border-slate-700/60">✕</button>
+        </div>
+        <div class="px-4 py-3 space-y-2 text-xs">
+          <div id="entryModalDesc" class="text-slate-400">
+            Create under: <span id="entryModalFolder" class="text-slate-200 font-mono">payloads/</span>
+          </div>
+          <input id="entryModalName" type="text" class="w-full rounded-lg bg-slate-900/80 border border-slate-700/70 px-3 py-2 text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-1 focus:ring-emerald-400 focus:border-emerald-400" placeholder="Name (e.g. my_payload.py)">
+        </div>
+        <div class="px-4 py-3 border-t border-slate-800/70 flex justify-end gap-2">
+          <button id="entryModalCancel" class="px-3 py-1.5 rounded-lg bg-slate-800/80 border border-slate-600/60 text-slate-200 hover:bg-slate-700/80 text-xs">Cancel</button>
+          <button id="entryModalConfirm" class="px-3 py-1.5 rounded-lg bg-emerald-600/80 border border-emerald-300/30 text-white hover:bg-emerald-500/80 text-xs">Create</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Rename modal -->
+  <div id="renameModal" class="hidden fixed inset-0 z-50 bg-black/60 backdrop-blur-sm">
+    <div class="max-w-sm mx-auto mt-24 px-4">
+      <div class="rounded-2xl border border-slate-700/60 bg-slate-950/95 shadow-[0_0_30px_rgba(15,23,42,0.75)] overflow-hidden">
+        <div class="px-4 py-3 border-b border-slate-800/70 flex items-center justify-between">
+          <div class="text-sm font-semibold text-emerald-300">Rename</div>
+          <button id="renameModalClose" class="text-slate-400 hover:text-slate-200 text-xs px-2 py-1 rounded-md bg-slate-900/60 border border-slate-700/60">✕</button>
+        </div>
+        <div class="px-4 py-3 space-y-2 text-xs">
+          <div class="text-slate-400">
+            Current: <span id="renameModalPath" class="text-slate-200 font-mono break-all"></span>
+          </div>
+          <input id="renameModalName" type="text" class="w-full rounded-lg bg-slate-900/80 border border-slate-700/70 px-3 py-2 text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-1 focus:ring-emerald-400 focus:border-emerald-400" placeholder="New name">
+        </div>
+        <div class="px-4 py-3 border-t border-slate-800/70 flex justify-end gap-2">
+          <button id="renameModalCancel" class="px-3 py-1.5 rounded-lg bg-slate-800/80 border border-slate-600/60 text-slate-200 hover:bg-slate-700/80 text-xs">Cancel</button>
+          <button id="renameModalConfirm" class="px-3 py-1.5 rounded-lg bg-emerald-600/80 border border-emerald-300/30 text-white hover:bg-emerald-500/80 text-xs">Rename</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Delete confirmation modal -->
+  <div id="deleteModal" class="hidden fixed inset-0 z-50 bg-black/60 backdrop-blur-sm">
+    <div class="max-w-sm mx-auto mt-24 px-4">
+      <div class="rounded-2xl border border-slate-700/60 bg-slate-950/95 shadow-[0_0_30px_rgba(15,23,42,0.75)] overflow-hidden">
+        <div class="px-4 py-3 border-b border-slate-800/70 flex items-center justify-between">
+          <div class="text-sm font-semibold text-rose-300">Delete</div>
+          <button id="deleteModalClose" class="text-slate-400 hover:text-slate-200 text-xs px-2 py-1 rounded-md bg-slate-900/60 border border-slate-700/60">✕</button>
+        </div>
+        <div class="px-4 py-3 space-y-2 text-xs">
+          <div class="text-slate-400">
+            Delete <span id="deleteModalPath" class="text-slate-200 font-mono break-all"></span>?
+          </div>
+          <div class="text-rose-300/80 text-[11px] mt-2">This cannot be undone.</div>
+        </div>
+        <div class="px-4 py-3 border-t border-slate-800/70 flex justify-end gap-2">
+          <button id="deleteModalCancel" class="px-3 py-1.5 rounded-lg bg-slate-800/80 border border-slate-600/60 text-slate-200 hover:bg-slate-700/80 text-xs">Cancel</button>
+          <button id="deleteModalConfirm" class="px-3 py-1.5 rounded-lg bg-rose-600/80 border border-rose-300/30 text-white hover:bg-rose-500/80 text-xs">Delete</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Unsaved changes modal -->
+  <div id="unsavedModal" class="hidden fixed inset-0 z-50 bg-black/60 backdrop-blur-sm">
+    <div class="max-w-sm mx-auto mt-24 px-4">
+      <div class="rounded-2xl border border-slate-700/60 bg-slate-950/95 shadow-[0_0_30px_rgba(15,23,42,0.75)] overflow-hidden">
+        <div class="px-4 py-3 border-b border-slate-800/70 flex items-center justify-between">
+          <div class="text-sm font-semibold text-amber-300">Unsaved Changes</div>
+          <button id="unsavedModalClose" class="text-slate-400 hover:text-slate-200 text-xs px-2 py-1 rounded-md bg-slate-900/60 border border-slate-700/60">✕</button>
+        </div>
+        <div class="px-4 py-3 space-y-2 text-xs">
+          <div class="text-slate-300">
+            You have unsaved changes. Discard and open another file?
+          </div>
+        </div>
+        <div class="px-4 py-3 border-t border-slate-800/70 flex justify-end gap-2">
+          <button id="unsavedModalCancel" class="px-3 py-1.5 rounded-lg bg-slate-800/80 border border-slate-600/60 text-slate-200 hover:bg-slate-700/80 text-xs">Stay</button>
+          <button id="unsavedModalConfirm" class="px-3 py-1.5 rounded-lg bg-amber-600/80 border border-amber-300/30 text-white hover:bg-amber-500/80 text-xs">Discard</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Save before run modal -->
+  <div id="saveBeforeRunModal" class="hidden fixed inset-0 z-50 bg-black/60 backdrop-blur-sm">
+    <div class="max-w-sm mx-auto mt-24 px-4">
+      <div class="rounded-2xl border border-slate-700/60 bg-slate-950/95 shadow-[0_0_30px_rgba(15,23,42,0.75)] overflow-hidden">
+        <div class="px-4 py-3 border-b border-slate-800/70 flex items-center justify-between">
+          <div class="text-sm font-semibold text-emerald-300">Unsaved Changes</div>
+          <button id="saveBeforeRunModalClose" class="text-slate-400 hover:text-slate-200 text-xs px-2 py-1 rounded-md bg-slate-900/60 border border-slate-700/60">✕</button>
+        </div>
+        <div class="px-4 py-3 space-y-2 text-xs">
+          <div class="text-slate-300">
+            Save changes before running?
+          </div>
+          <div class="text-slate-400 text-[11px]">
+            Your current file has modifications that are not saved yet.
+          </div>
+        </div>
+        <div class="px-4 py-3 border-t border-slate-800/70 flex justify-end gap-2">
+          <button id="saveBeforeRunModalCancel" class="px-3 py-1.5 rounded-lg bg-slate-800/80 border border-slate-600/60 text-slate-200 hover:bg-slate-700/80 text-xs">Cancel</button>
+          <button id="saveBeforeRunModalConfirm" class="px-3 py-1.5 rounded-lg bg-emerald-600/80 border border-emerald-300/30 text-white hover:bg-emerald-500/80 text-xs">Save & Run</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Notice modal -->
+  <div id="noticeModal" class="hidden fixed inset-0 z-50 bg-black/60 backdrop-blur-sm">
+    <div class="max-w-sm mx-auto mt-24 px-4">
+      <div class="rounded-2xl border border-slate-700/60 bg-slate-950/95 shadow-[0_0_30px_rgba(15,23,42,0.75)] overflow-hidden">
+        <div class="px-4 py-3 border-b border-slate-800/70 flex items-center justify-between">
+          <div id="noticeModalTitle" class="text-sm font-semibold text-rose-300">Notice</div>
+          <button id="noticeModalClose" class="text-slate-400 hover:text-slate-200 text-xs px-2 py-1 rounded-md bg-slate-900/60 border border-slate-700/60">✕</button>
+        </div>
+        <div class="px-4 py-3 space-y-2 text-xs">
+          <div id="noticeModalMessage" class="text-slate-300">
+            Something went wrong.
+          </div>
+        </div>
+        <div class="px-4 py-3 border-t border-slate-800/70 flex justify-end gap-2">
+          <button id="noticeModalConfirm" class="px-3 py-1.5 rounded-lg bg-rose-600/80 border border-rose-300/30 text-white hover:bg-rose-500/80 text-xs">OK</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Restart UI confirmation modal -->
+  <div id="restartUiModal" class="hidden fixed inset-0 z-50 bg-black/60 backdrop-blur-sm">
+    <div class="max-w-sm mx-auto mt-24 px-4">
+      <div class="rounded-2xl border border-slate-700/60 bg-slate-950/95 shadow-[0_0_30px_rgba(15,23,42,0.75)] overflow-hidden">
+        <div class="px-4 py-3 border-b border-slate-800/70 flex items-center justify-between">
+          <div class="text-sm font-semibold text-emerald-300">Restart RaspyJack UI</div>
+          <button id="restartUiModalClose" class="text-slate-400 hover:text-slate-200 text-xs px-2 py-1 rounded-md bg-slate-900/60 border border-slate-700/60">✕</button>
+        </div>
+        <div class="px-4 py-3 space-y-2 text-xs">
+          <div class="text-slate-300">
+            Restart RaspyJack UI now?
+          </div>
+          <div class="text-slate-400 text-[11px]">
+            This restarts the on-device UI process and may briefly interrupt screen updates.
+          </div>
+          <div id="restartUiModalError" class="hidden text-[11px] text-rose-300"></div>
+        </div>
+        <div class="px-4 py-3 border-t border-slate-800/70 flex justify-end gap-2">
+          <button id="restartUiModalCancel" class="px-3 py-1.5 rounded-lg bg-slate-800/80 border border-slate-600/60 text-slate-200 hover:bg-slate-700/80 text-xs">Cancel</button>
+          <button id="restartUiModalConfirm" class="px-3 py-1.5 rounded-lg bg-emerald-600/80 border border-emerald-300/30 text-white hover:bg-emerald-500/80 text-xs">Restart UI</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Auth token modal -->
+  <div id="authModal" class="hidden fixed inset-0 z-50 bg-black/60 backdrop-blur-sm">
+    <div class="max-w-md mx-auto mt-16 md:mt-20 px-4">
+      <div class="rounded-2xl border border-slate-700/60 bg-slate-950/95 shadow-[0_0_30px_rgba(15,23,42,0.75)] overflow-hidden">
+        <div class="px-4 py-3 border-b border-slate-800/70 flex items-center justify-between">
+          <div id="authModalTitle" class="text-sm font-semibold text-emerald-300">Authentication Required</div>
+          <button id="authModalClose" class="text-slate-400 hover:text-slate-200 text-xs px-2 py-1 rounded-md bg-slate-900/60 border border-slate-700/60">✕</button>
+        </div>
+        <div class="px-4 py-3 space-y-2 text-xs">
+          <div id="authModalMessage" class="text-slate-400">Enter your WebUI token to continue.</div>
+          <div id="authModalRules" class="hidden rounded-lg border border-slate-800/70 bg-slate-900/30 p-2">
+            <div class="text-[11px] font-semibold text-slate-200 mb-1">Rules</div>
+            <ul class="text-[11px] text-slate-400 space-y-1">
+              <li>Username must be 3-32 characters</li>
+              <li>Password must be at least 8 characters</li>
+              <li>Passwords must match</li>
+            </ul>
+          </div>
+          <input id="authModalUsername" type="text" autocomplete="username" class="w-full rounded-lg bg-slate-900/80 border border-slate-700/70 px-3 py-2 text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-1 focus:ring-emerald-400 focus:border-emerald-400" placeholder="Username">
+          <input id="authModalPassword" type="password" autocomplete="current-password" class="w-full rounded-lg bg-slate-900/80 border border-slate-700/70 px-3 py-2 text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-1 focus:ring-emerald-400 focus:border-emerald-400" placeholder="Password">
+          <input id="authModalPasswordConfirm" type="password" autocomplete="new-password" class="hidden w-full rounded-lg bg-slate-900/80 border border-slate-700/70 px-3 py-2 text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-1 focus:ring-emerald-400 focus:border-emerald-400" placeholder="Confirm password">
+          <input id="authModalToken" type="password" autocomplete="off" class="hidden w-full rounded-lg bg-slate-900/80 border border-slate-700/70 px-3 py-2 text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-1 focus:ring-emerald-400 focus:border-emerald-400" placeholder="Recovery token">
+          <div id="authModalError" class="hidden text-[11px] text-rose-300"></div>
+          <button id="authModalToggleRecovery" type="button" class="text-[11px] text-cyan-300 hover:text-cyan-200">Use recovery token instead</button>
+        </div>
+        <div class="px-4 py-3 border-t border-slate-800/70 flex justify-end gap-2">
+          <button id="authModalCancel" class="px-3 py-1.5 rounded-lg bg-slate-800/80 border border-slate-600/60 text-slate-200 hover:bg-slate-700/80 text-xs">Cancel</button>
+          <button id="authModalConfirm" class="px-3 py-1.5 rounded-lg bg-emerald-600/80 border border-emerald-300/30 text-white hover:bg-emerald-500/80 text-xs">Continue</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Payload Wizard modal -->
+  <div id="wizardModal" class="hidden fixed inset-0 z-50 bg-black/60 backdrop-blur-sm">
+    <div class="max-w-xl mx-auto mt-16 px-4">
+      <div class="rounded-2xl border border-slate-700/60 bg-slate-950/95 shadow-[0_0_40px_rgba(15,23,42,0.75)] overflow-hidden animate-fade-in">
+        <div class="px-5 py-3 border-b border-slate-800/70 flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <i class="fa-solid fa-wand-magic-sparkles text-emerald-400"></i>
+            <span class="text-sm font-semibold text-emerald-300 text-glow">Payload Generator Wizard</span>
+          </div>
+          <button id="wizardModalClose" class="text-slate-400 hover:text-slate-200 text-xs px-2 py-1 rounded-md bg-slate-900/60 border border-slate-700/60">✕</button>
+        </div>
+        <!-- Step description -->
+        <div class="px-5 pt-3 pb-1 text-xs text-slate-400">
+          Step <span id="wizardStepNum">1</span> of 3: <span id="wizardStepLabel">Select Type</span>
+        </div>
+        <!-- Progress bar -->
+        <div class="px-5 py-2">
+          <div class="wizard-step-bar">
+            <div class="step-dot active" id="wizardDot1"></div>
+            <div class="step-dot" id="wizardDot2"></div>
+            <div class="step-dot" id="wizardDot3"></div>
+          </div>
+        </div>
+        <!-- Step content container -->
+        <div id="wizardStepContent" class="px-5 py-3 min-h-[260px]">
+          <!-- Populated by JS -->
+        </div>
+        <!-- Footer -->
+        <div class="px-5 py-3 border-t border-slate-800/70 flex justify-between">
+          <button id="wizardBackBtn" class="hidden px-4 py-1.5 rounded-lg bg-slate-800/80 border border-slate-600/60 text-slate-200 hover:bg-slate-700/80 text-xs"><i class="fa-solid fa-arrow-left mr-1"></i> Back</button>
+          <div class="flex-1"></div>
+          <button id="wizardNextBtn" class="px-4 py-1.5 rounded-lg bg-emerald-600/80 border border-emerald-300/30 text-white hover:bg-emerald-500/80 text-xs">Next <i class="fa-solid fa-arrow-right ml-1"></i></button>
+          <button id="wizardGenerateBtn" class="hidden px-4 py-1.5 rounded-lg bg-emerald-600/80 border border-emerald-300/30 text-white hover:bg-emerald-500/80 text-xs"><i class="fa-solid fa-wand-magic-sparkles mr-1"></i> Generate Payload</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Template Library modal -->
+  <div id="templateModal" class="hidden fixed inset-0 z-50 bg-black/60 backdrop-blur-sm">
+    <div class="max-w-4xl mx-auto mt-12 px-4">
+      <div class="rounded-2xl border border-slate-700/60 bg-slate-950/95 shadow-[0_0_40px_rgba(15,23,42,0.75)] overflow-hidden animate-fade-in" style="height:520px;">
+        <div class="px-5 py-3 border-b border-slate-800/70 flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <i class="fa-solid fa-layer-group text-emerald-400"></i>
+            <span class="text-sm font-semibold text-emerald-300 text-glow">Template Library</span>
+          </div>
+          <button id="templateModalClose" class="text-slate-400 hover:text-slate-200 text-xs px-2 py-1 rounded-md bg-slate-900/60 border border-slate-700/60">✕</button>
+        </div>
+        <div class="px-5 pt-3 text-xs text-slate-400 mb-1">Choose a starter template for your payload</div>
+        <div class="px-5 py-2 flex gap-4 overflow-hidden" style="height: calc(100% - 80px);">
+          <!-- Left: categories & templates -->
+          <div class="flex-1 flex flex-col overflow-hidden min-w-0">
+            <div id="tmplCategoryTabs" class="tmpl-category-tabs">
+              <!-- Populated by JS -->
+            </div>
+            <div id="tmplList" class="flex-1 overflow-y-auto pr-1">
+              <!-- Populated by JS -->
+            </div>
+          </div>
+          <!-- Right: preview -->
+          <div class="flex flex-col border-l border-slate-800/70 pl-4" style="width:380px;">
+            <div class="flex items-center gap-2 mb-2 text-xs text-slate-400">
+              <i class="fa-solid fa-eye"></i> <span>Preview</span>
+            </div>
+            <div id="tmplPreviewArea" class="flex-1 flex flex-col overflow-hidden">
+              <div id="tmplPreviewEmpty" class="flex-1 flex items-center justify-center text-slate-500 text-xs">
+                <div class="text-center">
+                  <i class="fa-solid fa-file-code text-3xl mb-2 opacity-40"></i>
+                  <div>Select a template to preview</div>
+                </div>
+              </div>
+              <div id="tmplPreviewContent" class="hidden flex-1 flex flex-col overflow-hidden">
+                <div class="mb-2">
+                  <div id="tmplPreviewName" class="text-sm font-semibold text-emerald-300"></div>
+                  <div id="tmplPreviewFile" class="text-[10px] text-slate-400 font-mono"></div>
+                </div>
+                <pre id="tmplPreviewCode" class="flex-1 overflow-auto text-[10px] font-mono text-slate-400 bg-slate-900/60 border border-slate-800/70 rounded-lg p-3 whitespace-pre-wrap"></pre>
+                <button id="tmplUseBtn" class="mt-2 w-full px-3 py-2 rounded-lg bg-emerald-600/80 border border-emerald-300/30 text-white hover:bg-emerald-500/80 text-xs font-medium">
+                  <i class="fa-solid fa-file-code mr-1"></i> Use This Template
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- GPIO Reference panel (inserted into main layout by JS) -->
+  <template id="gpioPanelTemplate">
+    <section id="gpioPanel" class="hidden flex-col border-l border-slate-800/70 bg-slate-950/50 backdrop-blur overflow-hidden animate-fade-in" style="width:280px; min-width:240px;">
+      <div class="px-3 py-2 border-b border-slate-800/70 flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <i class="fa-solid fa-microchip text-emerald-400"></i>
+          <span class="text-xs font-semibold text-emerald-300 text-glow">GPIO REFERENCE</span>
+        </div>
+        <button id="gpioPanelClose" class="text-slate-400 hover:text-slate-200 text-[10px] px-1.5 py-0.5 rounded bg-slate-900/60 border border-slate-700/60">✕</button>
+      </div>
+      <div class="flex-1 overflow-y-auto px-3 py-3 space-y-3" id="gpioPanelBody">
+        <!-- Info banner -->
+        <div class="p-2 rounded-lg bg-emerald-500/5 border border-emerald-500/15 flex items-start gap-2">
+          <i class="fa-solid fa-circle-info text-emerald-400 mt-0.5 text-xs"></i>
+          <span class="text-[10px] text-slate-400">RaspyJack uses BCM (Broadcom) pin numbering with active-LOW buttons (pressed = 0).</span>
+        </div>
+        <!-- Pin Mappings section -->
+        <div>
+          <div class="gpio-section-header" data-gpio-section="pins">
+            <i class="fa-solid fa-chevron-down text-emerald-400 text-[10px] gpio-chevron"></i>
+            <span class="text-xs font-medium text-slate-200">Pin Mappings</span>
+          </div>
+          <div class="gpio-section-body mt-1" data-gpio-body="pins">
+            <div class="rounded-lg border border-slate-800/70 overflow-hidden">
+              <table class="gpio-table">
+                <thead><tr><th>Name</th><th>BCM Pin</th><th>Function</th></tr></thead>
+                <tbody>
+                  <tr><td class="font-mono text-emerald-400">KEY1</td><td class="font-mono">21</td><td class="text-slate-400">Primary action</td></tr>
+                  <tr><td class="font-mono text-emerald-400">KEY2</td><td class="font-mono">20</td><td class="text-slate-400">Secondary action</td></tr>
+                  <tr><td class="font-mono text-emerald-400">KEY3</td><td class="font-mono">16</td><td class="text-slate-400">Exit / Back</td></tr>
+                  <tr><td class="font-mono text-emerald-400">UP</td><td class="font-mono">6</td><td class="text-slate-400">Joystick up</td></tr>
+                  <tr><td class="font-mono text-emerald-400">DOWN</td><td class="font-mono">19</td><td class="text-slate-400">Joystick down</td></tr>
+                  <tr><td class="font-mono text-emerald-400">LEFT</td><td class="font-mono">5</td><td class="text-slate-400">Joystick left</td></tr>
+                  <tr><td class="font-mono text-emerald-400">RIGHT</td><td class="font-mono">26</td><td class="text-slate-400">Joystick right</td></tr>
+                  <tr><td class="font-mono text-emerald-400">OK</td><td class="font-mono">13</td><td class="text-slate-400">Joystick press</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+        <!-- Code Examples section -->
+        <div>
+          <div class="gpio-section-header" data-gpio-section="code">
+            <i class="fa-solid fa-chevron-down text-emerald-400 text-[10px] gpio-chevron"></i>
+            <span class="text-xs font-medium text-slate-200">Code Examples</span>
+          </div>
+          <div class="gpio-section-body mt-2 space-y-2" data-gpio-body="code">
+            <div>
+              <div class="text-[10px] font-medium text-slate-300 mb-1">Setup</div>
+              <div class="gpio-code-block font-mono">import RPi.GPIO as GPIO
+
+PINS = {
+    "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
+    "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16,
+}
+
+GPIO.setmode(GPIO.BCM)
+for pin in PINS.values():
+    GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)<button class="copy-btn" data-copy-target="setup"><i class="fa-regular fa-copy"></i></button></div>
+            </div>
+            <div>
+              <div class="text-[10px] font-medium text-slate-300 mb-1">Read Button</div>
+              <div class="gpio-code-block font-mono">def pressed_button():
+    """Return pressed button name or None."""
+    for name, pin in PINS.items():
+        if GPIO.input(pin) == 0:
+            return name
+    return None<button class="copy-btn" data-copy-target="readButton"><i class="fa-regular fa-copy"></i></button></div>
+            </div>
+            <div>
+              <div class="text-[10px] font-medium text-slate-300 mb-1">Debounce</div>
+              <div class="gpio-code-block font-mono"># Wait for button release (debounce)
+btn = pressed_button()
+if btn == "KEY1":
+    while pressed_button():
+        time.sleep(0.05)
+    # Button was released, do action<button class="copy-btn" data-copy-target="debounce"><i class="fa-regular fa-copy"></i></button></div>
+            </div>
+            <div>
+              <div class="text-[10px] font-medium text-slate-300 mb-1">Cleanup</div>
+              <div class="gpio-code-block font-mono"># Always clean up GPIO on exit
+try:
+    main()
+finally:
+    GPIO.cleanup()<button class="copy-btn" data-copy-target="cleanup"><i class="fa-regular fa-copy"></i></button></div>
+            </div>
+          </div>
+        </div>
+        <!-- LCD Display section -->
+        <div>
+          <div class="gpio-section-header" data-gpio-section="lcd">
+            <i class="fa-solid fa-chevron-right text-slate-400 text-[10px] gpio-chevron"></i>
+            <span class="text-xs font-medium text-slate-200">LCD Display</span>
+          </div>
+          <div class="gpio-section-body hidden mt-2" data-gpio-body="lcd">
+            <div class="p-2 rounded-lg bg-slate-800/30 border border-slate-800/70">
+              <div class="grid grid-cols-2 gap-2 text-[10px]">
+                <div><span class="text-slate-400">Type:</span> <span class="font-mono">1.44" TFT</span></div>
+                <div><span class="text-slate-400">Resolution:</span> <span class="font-mono">128x128</span></div>
+                <div><span class="text-slate-400">Driver:</span> <span class="font-mono">LCD_1in44</span></div>
+                <div><span class="text-slate-400">Interface:</span> <span class="font-mono">SPI</span></div>
+              </div>
+            </div>
+            <p class="text-[10px] text-slate-400 mt-1">Uses Waveshare 1.44inch LCD HAT with ST7735S controller. Supports RGB565 color format via PIL/Pillow.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+  </template>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/python/python.min.js"></script>
+  <script src="./shared.js"></script>
+  <script src="./ide.js"></script>
+</body>
+</html>
+

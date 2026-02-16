@@ -88,8 +88,8 @@ class WiFiManager:
         except Exception as e:
             self.log(f"Error detecting WiFi interfaces: {e}")
         
-        # Sort interfaces (prefer wlan1 external dongles over wlan0 built-in)
-        interfaces.sort(key=lambda x: (x != 'wlan1', x != 'wlan0', x))
+        # Sort interfaces (prefer wlan0 built-in for connectivity, wlan1+ for attacks)
+        interfaces.sort(key=lambda x: (x != 'wlan0', x != 'wlan1', x))
         
         self.log(f"Final detected WiFi interfaces: {interfaces}")
         return interfaces

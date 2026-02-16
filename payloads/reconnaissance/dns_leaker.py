@@ -78,6 +78,9 @@ import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 
+# Shared input helper (WebUI virtual + GPIO)
+from payloads._input_helper import get_button
+
 from scapy.all import sniff, DNS, DNSQR, IP
 from scapy.layers.netbios import NBNSQueryRequest
 
@@ -236,7 +239,7 @@ threading.Thread(target=sniff_thread, daemon=True).start()
 # UI LOOP
 # ==================================================
 while running:
-    if GPIO.input(PIN_KEY3) == 0:
+    if get_button({"KEY3": PIN_KEY3, "UP": PIN_UP, "DOWN": PIN_DOWN}, GPIO) == "KEY3":
         break
 
     sorted_top = sorted(queries.items(), key=lambda x: x[1], reverse=True)

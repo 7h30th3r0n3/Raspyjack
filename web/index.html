@@ -5,13 +5,60 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>RaspyJack WebUi</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm/css/xterm.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  <link rel="stylesheet" href="./device-shell.css">
+  <link rel="stylesheet" href="./ui.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
-    :root { color-scheme: dark; }
-    body { background: radial-gradient(1200px 800px at 50% -10%, #0f1b2d 0%, #07090f 55%, #05060a 100%); }
-    .device-shell {
-      position: relative;
-      transition: all 0.2s ease;
+    :root {
+      color-scheme: dark;
+      --rj-bg-0: #05060a;
+      --rj-bg-1: #07090f;
+      --rj-bg-2: #0f1b2d;
+      --rj-surface: rgba(15, 23, 42, 0.42);
+      --rj-surface-strong: rgba(15, 23, 42, 0.62);
+      --rj-border: rgba(148, 163, 184, 0.2);
+      --rj-border-strong: rgba(148, 163, 184, 0.32);
+      --rj-text: #e2e8f0;
+      --rj-text-muted: #94a3b8;
+      --rj-accent: #10b981;
+      --rj-accent-soft: rgba(16, 185, 129, 0.16);
+      --rj-danger: #f43f5e;
+      --rj-radius: 12px;
+      --rj-shadow: 0 12px 30px rgba(2, 6, 23, 0.35);
+      --rj-glow: 0 0 24px rgba(16, 185, 129, 0.12);
     }
+    body {
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+      background: radial-gradient(1200px 800px at 50% -10%, var(--rj-bg-2) 0%, var(--rj-bg-1) 55%, var(--rj-bg-0) 100%);
+      color: var(--rj-text);
+      letter-spacing: 0.01em;
+    }
+    button, a {
+      transition: background-color .16s ease, color .16s ease, border-color .16s ease, box-shadow .16s ease, transform .12s ease;
+    }
+    #sidebar {
+      background: linear-gradient(180deg, rgba(2, 6, 23, 0.72), rgba(2, 6, 23, 0.5));
+    }
+    #sidebar nav > button,
+    #sidebar nav > a {
+      border-radius: var(--rj-radius);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.02);
+    }
+    #sidebar nav > button:hover,
+    #sidebar nav > a:hover {
+      border-color: var(--rj-border-strong);
+      box-shadow: var(--rj-shadow);
+    }
+    #deviceTab .terminal-wrap,
+    #settingsTab > div,
+    #lootTab > div {
+      box-shadow: var(--rj-shadow);
+    }
+    /* shared .device-shell base in device-shell.css */
 
     /* Theme: Neon (default) */
     .device-shell.theme-neon,
@@ -38,113 +85,7 @@
       box-shadow: 0 0 40px rgba(18,255,120,0.18);
     }
 
-    /* Theme: Game Boy */
-    .device-shell.theme-gameboy,
-    .device-shell[data-theme="gameboy"] {
-      background: linear-gradient(145deg, #a3a3a3, #7d7d7d);
-      border-radius: 16px;
-      padding: 20px;
-      width: fit-content;
-      box-shadow:
-        inset -4px -4px 10px rgba(0,0,0,0.2),
-        inset 4px 4px 10px rgba(255,255,255,0.05),
-        0 8px 20px rgba(0,0,0,0.5);
-    }
-    .device-shell.theme-gameboy::before,
-    .device-shell[data-theme="gameboy"]::before {
-      content: '';
-      position: absolute;
-      top: 12px;
-      left: 50%;
-      transform: translateX(-50%);
-      width: 80px;
-      height: 6px;
-      background: #222;
-      border-radius: 3px;
-    }
-    .device-shell.theme-gameboy::after,
-    .device-shell[data-theme="gameboy"]::after {
-      content: '';
-      position: absolute;
-      right: 12px;
-      top: 50%;
-      transform: translateY(-50%);
-      width: 6px;
-      height: 60px;
-      background: #333;
-      border-radius: 3px;
-    }
-    .device-shell.theme-gameboy .screen-frame,
-    .device-shell[data-theme="gameboy"] .screen-frame {
-      background: #111;
-      border: 4px solid #444;
-      border-radius: 8px;
-      padding: 4px;
-      margin-bottom: 16px;
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      box-shadow:
-        inset -2px -2px 5px rgba(0,0,0,0.3),
-        inset 2px 2px 5px rgba(255,255,255,0.05);
-    }
-    .device-shell.theme-gameboy .rj-btn,
-    .device-shell[data-theme="gameboy"] .rj-btn {
-      background: #222 !important;
-      color: #fff;
-      border-radius: 8px;
-      width: 40px;
-      height: 40px;
-      font-weight: bold;
-      cursor: pointer;
-      box-shadow:
-        inset -2px -2px 4px rgba(0,0,0,0.3),
-        inset 2px 2px 4px rgba(255,255,255,0.05);
-      transition: all 0.1s;
-    }
-    .device-shell.theme-gameboy .rj-btn:active,
-    .device-shell.theme-gameboy .rj-btn.active,
-    .device-shell[data-theme="gameboy"] .rj-btn:active,
-    .device-shell[data-theme="gameboy"] .rj-btn.active {
-      transform: translateY(2px);
-      box-shadow:
-        inset 2px 2px 4px rgba(0,0,0,0.3),
-        inset -2px -2px 4px rgba(255,255,255,0.05);
-    }
-    .device-shell.theme-gameboy .key-btn,
-    .device-shell[data-theme="gameboy"] .key-btn {
-      width: 96px;
-      height: 36px;
-      border-radius: 8px;
-      font-size: 0.9rem;
-    }
-    .device-shell.theme-gameboy .screen-frame,
-    .device-shell[data-theme="gameboy"] .screen-frame {
-      margin-bottom: 16px;
-    }
-    .device-shell.theme-gameboy .side-buttons button,
-    .device-shell[data-theme="gameboy"] .side-buttons button {
-      width: 96px;
-      height: 36px;
-      border-radius: 8px;
-      font-size: 0.9rem;
-    }
-    .device-shell.theme-gameboy .layout-gameboy,
-    .device-shell[data-theme="gameboy"] .layout-gameboy {
-      display: block;
-    }
-    .device-shell.theme-gameboy .layout-default,
-    .device-shell[data-theme="gameboy"] .layout-default {
-      display: none;
-    }
-    .device-shell.theme-gameboy .layout-default,
-    .device-shell[data-theme="gameboy"] .layout-default {
-      display: none;
-    }
-    .device-shell.theme-gameboy .layout-gameboy,
-    .device-shell[data-theme="gameboy"] .layout-gameboy {
-      display: block;
-    }
+    /* Theme: Game Boy moved to device-shell.css */
 
     /* Theme: Pager */
     .device-shell.theme-pager,
@@ -266,12 +207,144 @@
     }
     .theme-nav-btn:hover { background: rgba(51,65,85,0.8); }
     .theme-label { min-width: 120px; text-align: center; }
+
+    @keyframes payloadPulse {
+      0%   { transform: scale(0.9); opacity: 0.4; }
+      50%  { transform: scale(1.4); opacity: 1; }
+      100% { transform: scale(0.9); opacity: 0.4; }
+    }
+    .payload-status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 9999px;
+      background: rgba(148,163,184,0.5);
+      opacity: 0.6;
+    }
+    .payload-status-dot.running {
+      background: #34d399;
+      box-shadow: 0 0 8px rgba(16,185,129,0.6);
+      animation: payloadPulse 1.2s ease-in-out infinite;
+      opacity: 1;
+    }
+
+    .terminal-wrap {
+      background: transparent;
+      border: none;
+      border-radius: 0;
+      overflow: hidden;
+    }
+    .terminal-divider {
+      border-right: 1px solid rgba(148, 163, 184, 0.2);
+    }
+    .terminal-body {
+      height: 320px;
+    }
+    .terminal-body .xterm-viewport,
+    .terminal-body .xterm-screen,
+    .terminal-body .xterm-scroll-area {
+      background: transparent !important;
+    }
+    .terminal-body .xterm-viewport {
+      scrollbar-width: thin;
+      scrollbar-color: rgba(148, 163, 184, 0.25) transparent;
+    }
+    .terminal-body .xterm-viewport::-webkit-scrollbar {
+      width: 8px;
+    }
+    .terminal-body .xterm-viewport::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    .terminal-body .xterm-viewport::-webkit-scrollbar-thumb {
+      background: rgba(148, 163, 184, 0.25);
+      border-radius: 8px;
+    }
+
+    #logoutBtn,
+    #shellConnect,
+    #shellDisconnect,
+    #payloadsRefresh,
+    #lootUp,
+    #discordWebhookSave,
+    #discordWebhookClear,
+    #lootPreviewClose,
+    #lootPreviewDownload {
+      border-radius: 10px !important;
+      border-color: var(--rj-border) !important;
+    }
+
+    #shellConnect,
+    #discordWebhookSave,
+    #lootPreviewClose {
+      box-shadow: var(--rj-glow);
+    }
+
+    #status,
+    #shellStatus,
+    #payloadStatus,
+    #systemStatus,
+    #lootStatus,
+    #settingsStatus {
+      color: var(--rj-text-muted);
+      font-weight: 500;
+      letter-spacing: 0.015em;
+      transition: color .16s ease, text-shadow .16s ease;
+    }
+
+    .status-tone-ok { color: #34d399 !important; text-shadow: 0 0 10px rgba(16,185,129,.28); }
+    .status-tone-warn { color: #fbbf24 !important; text-shadow: 0 0 10px rgba(251,191,36,.2); }
+    .status-tone-bad { color: #fb7185 !important; text-shadow: 0 0 10px rgba(244,63,94,.22); }
+
+    @keyframes rjPulseSoft {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.03); }
+    }
+    .payload-status-dot.running {
+      animation: payloadPulse 1.2s ease-in-out infinite, rjPulseSoft 1.8s ease-in-out infinite;
+    }
+
+    #sidebar nav > button,
+    #sidebar nav > a {
+      position: relative;
+      overflow: hidden;
+    }
+    #sidebar nav > .nav-active::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 8px;
+      bottom: 8px;
+      width: 3px;
+      border-radius: 999px;
+      background: linear-gradient(180deg, #34d399, #10b981);
+      box-shadow: 0 0 12px rgba(16,185,129,.55);
+    }
+
+    #deviceTab .terminal-wrap,
+    #deviceShell,
+    #settingsTab > div,
+    #lootTab > div {
+      border-radius: 16px;
+    }
+
+    @media (max-width: 768px) {
+      main {
+        padding-left: 0.75rem !important;
+        padding-right: 0.75rem !important;
+      }
+      #deviceTab .terminal-body {
+        height: 250px;
+      }
+      #deviceShell {
+        transform: scale(.96);
+        transform-origin: top center;
+      }
+    }
   </style>
 </head>
 <body class="min-h-screen text-slate-200">
   <div class="min-h-screen md:flex">
     <div id="sidebarBackdrop" class="hidden fixed inset-0 z-30 bg-black/60"></div>
-    <aside id="sidebar" class="fixed md:static inset-y-0 left-0 z-40 w-64 -translate-x-full md:translate-x-0 transform transition bg-slate-950/60 border-r border-slate-800/70 backdrop-blur">
+    <aside id="sidebar" class="fixed md:sticky md:top-0 md:h-screen inset-y-0 left-0 z-40 w-64 -translate-x-full md:translate-x-0 transform transition bg-slate-950/60 border-r border-slate-800/70 backdrop-blur flex flex-col">
       <div class="p-4 border-b border-slate-800/70">
         <div class="flex items-center gap-3 select-none">
           <img src="./raspyjack.png" alt="RaspyJack" class="h-10 drop-shadow-[0_0_16px_rgba(18,255,120,0.25)]"/>
@@ -282,32 +355,110 @@
         </div>
       </div>
 
-      <nav class="p-3 space-y-2">
-        <button id="navDevice" type="button" class="w-full px-3 py-2 rounded-xl text-left text-sm font-semibold border border-emerald-400/30 bg-emerald-500/10 text-emerald-300 shadow-[0_0_16px_rgba(16,185,129,0.15)]">Device</button>
-        <button id="navLoot" type="button" class="w-full px-3 py-2 rounded-xl text-left text-sm font-semibold border border-slate-400/20 bg-slate-800/40 text-slate-300 hover:text-white hover:bg-slate-700/50 transition">Loot</button>
+      <nav class="p-3 space-y-2 flex-1 min-h-0 overflow-y-auto overscroll-contain">
+        <button id="navDevice" type="button" class="w-full px-3 py-2 rounded-xl text-left text-sm font-semibold border border-emerald-400/30 bg-emerald-500/10 text-emerald-300 shadow-[0_0_16px_rgba(16,185,129,0.15)]"><i class="fa-solid fa-gamepad mr-2"></i>Device</button>
+        <button id="navSystem" type="button" class="w-full px-3 py-2 rounded-xl text-left text-sm font-semibold border border-slate-400/20 bg-slate-800/40 text-slate-300 hover:text-white hover:bg-slate-700/50 transition"><i class="fa-solid fa-microchip mr-2"></i>System</button>
+        <div id="systemDropdown" class="hidden rounded-xl border border-slate-800/80 bg-slate-950/40 p-2 space-y-2">
+          <div class="flex items-center justify-between">
+            <div class="text-[11px] font-semibold text-emerald-300">System Monitor</div>
+            <div id="systemStatus" class="text-[10px] text-slate-400">Ready</div>
+          </div>
 
-        <div class="pt-2">
-          <button id="themesToggle" type="button" class="w-full px-3 py-2 rounded-xl text-left text-sm font-semibold border border-slate-400/20 bg-slate-800/40 text-slate-300 hover:text-white hover:bg-slate-700/50 transition">
-            Themes
-            <span class="float-right text-[10px] text-slate-400">Current: <span id="themeName">Neon</span></span>
-          </button>
-          <div id="themesList" class="mt-2 space-y-1 hidden">
-            <button type="button" data-theme="neon" class="w-full px-3 py-2 rounded-lg text-left text-xs font-semibold border border-slate-500/20 bg-slate-900/40 text-slate-300 hover:bg-slate-800/60 transition">Neon</button>
-            <button type="button" data-theme="gameboy" class="w-full px-3 py-2 rounded-lg text-left text-xs font-semibold border border-slate-500/20 bg-slate-900/40 text-slate-300 hover:bg-slate-800/60 transition">Game Boy</button>
-            <button type="button" data-theme="pager" class="w-full px-3 py-2 rounded-lg text-left text-xs font-semibold border border-slate-500/20 bg-slate-900/40 text-slate-300 hover:bg-slate-800/60 transition">Pager</button>
+          <div class="rounded-lg border border-slate-800/80 bg-slate-900/40 p-2">
+            <div class="text-[10px] text-slate-400 mb-1">CPU</div>
+            <div class="flex items-center justify-between">
+              <div id="sysCpuValue" class="text-sm font-semibold text-slate-100">0%</div>
+              <div id="sysTempValue" class="text-[10px] text-slate-400">--.- C</div>
+            </div>
+            <div class="mt-1 h-1.5 rounded bg-slate-800 overflow-hidden">
+              <div id="sysCpuBar" class="h-1.5 bg-emerald-500/80" style="width: 0%"></div>
+            </div>
+          </div>
+
+          <div class="rounded-lg border border-slate-800/80 bg-slate-900/40 p-2">
+            <div class="text-[10px] text-slate-400 mb-1">Memory</div>
+            <div id="sysMemValue" class="text-sm font-semibold text-slate-100">0%</div>
+            <div id="sysMemMeta" class="text-[10px] text-slate-400">0 / 0</div>
+            <div class="mt-1 h-1.5 rounded bg-slate-800 overflow-hidden">
+              <div id="sysMemBar" class="h-1.5 bg-cyan-500/80" style="width: 0%"></div>
+            </div>
+          </div>
+
+          <div class="rounded-lg border border-slate-800/80 bg-slate-900/40 p-2">
+            <div class="text-[10px] text-slate-400 mb-1">Disk (/)</div>
+            <div id="sysDiskValue" class="text-sm font-semibold text-slate-100">0%</div>
+            <div id="sysDiskMeta" class="text-[10px] text-slate-400">0 / 0</div>
+            <div class="mt-1 h-1.5 rounded bg-slate-800 overflow-hidden">
+              <div id="sysDiskBar" class="h-1.5 bg-fuchsia-500/80" style="width: 0%"></div>
+            </div>
+          </div>
+
+          <div class="rounded-lg border border-slate-800/80 bg-slate-900/40 p-2 text-[10px] text-slate-300 space-y-1">
+            <div>Uptime: <span id="sysUptime">-</span></div>
+            <div>Load: <span id="sysLoad">-</span></div>
+            <div>Payload: <span id="sysPayload">none</span></div>
+          </div>
+
+          <div class="rounded-lg border border-slate-800/80 bg-slate-900/40 p-2">
+            <div class="text-[10px] text-slate-400 mb-1">Interfaces</div>
+            <div id="sysInterfaces" class="text-[10px] text-slate-300 space-y-1">
+              <div class="text-slate-500">No data yet</div>
+            </div>
+          </div>
+        </div>
+        <button id="navLoot" type="button" class="w-full px-3 py-2 rounded-xl text-left text-sm font-semibold border border-slate-400/20 bg-slate-800/40 text-slate-300 hover:text-white hover:bg-slate-700/50 transition"><i class="fa-solid fa-vault mr-2"></i>Loot</button>
+        <button id="navSettings" type="button" class="w-full px-3 py-2 rounded-xl text-left text-sm font-semibold border border-slate-400/20 bg-slate-800/40 text-slate-300 hover:text-white hover:bg-slate-700/50 transition"><i class="fa-solid fa-sliders mr-2"></i>Settings</button>
+        <a id="navPayloadStudio" href="./ide.html" class="w-full px-3 py-2 rounded-xl text-left text-sm font-semibold border border-slate-400/20 bg-slate-800/40 text-slate-300 hover:text-white hover:bg-slate-700/50 transition block"><i class="fa-solid fa-code mr-2"></i>Payload Studio</a>
+
+        <div class="pt-2 border-t border-slate-800/70">
+          <div class="flex items-center justify-between px-3 pb-2">
+            <div class="text-xs font-semibold text-emerald-300">Payloads</div>
+            <div class="flex items-center gap-2">
+              <div class="flex items-center gap-1">
+                <span id="payloadStatusDot" class="payload-status-dot" aria-hidden="true"></span>
+                <div id="payloadStatus" class="text-[10px] text-slate-400">Ready</div>
+              </div>
+              <button id="payloadsRefresh" type="button" class="px-2 py-1 text-[10px] rounded-md bg-slate-800/70 border border-slate-600/40 text-slate-200 hover:bg-slate-700/70 transition">Refresh</button>
+            </div>
+          </div>
+          <div id="payloadSidebar" class="space-y-2 px-2 pb-2">
+            <!-- payload categories injected by app.js -->
           </div>
         </div>
       </nav>
     </aside>
 
     <main class="flex-1 px-4 py-6 md:px-8">
-      <div class="flex items-center justify-between mb-4 md:mb-6">
-        <button id="menuToggle" type="button" class="md:hidden px-3 py-2 rounded-lg bg-slate-800/60 border border-slate-600/40 text-slate-200">☰</button>
+      <div class="flex items-center justify-between mb-4 md:mb-6 px-3 py-2 border border-slate-800/70 bg-slate-950/45 backdrop-blur rounded-xl">
+        <div class="flex items-center gap-2 text-[11px] text-slate-300">
+          <i class="fa-solid fa-terminal text-emerald-400"></i>
+          <span class="tracking-wide">WEBUI CONTROL DECK</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <button id="menuToggle" type="button" class="md:hidden px-3 py-2 rounded-lg bg-slate-800/60 border border-slate-600/40 text-slate-200"><i class="fa-solid fa-bars"></i></button>
+          <button id="logoutBtn" type="button" class="px-3 py-1.5 text-xs rounded-lg bg-slate-800/80 border border-slate-600/40 text-slate-200 hover:bg-slate-700/80 transition"><i class="fa-solid fa-right-from-bracket mr-1"></i>Logout</button>
+        </div>
       </div>
 
       <!-- Device card -->
       <div id="deviceTab" class="block">
-        <div id="deviceShell" data-theme="neon" class="device-shell theme-neon rounded-3xl p-4 md:p-5 w-fit mx-auto">
+        <div class="flex flex-col md:flex-row md:items-start md:gap-6">
+          <div class="md:order-1 order-2 flex-1 min-w-0">
+            <div class="terminal-wrap terminal-divider md:pr-6">
+              <div class="flex items-center justify-between px-4 py-3 border-b border-slate-800/70">
+                <div class="text-sm font-semibold text-emerald-300">Terminal</div>
+                <div class="flex items-center gap-2">
+                  <div id="shellStatus" class="text-[11px] text-slate-400">Disconnected</div>
+                  <button id="shellConnect" type="button" class="px-3 py-1.5 text-xs rounded-lg bg-emerald-600/80 border border-emerald-300/30 text-white hover:bg-emerald-500/80 transition">Open</button>
+                  <button id="shellDisconnect" type="button" class="px-3 py-1.5 text-xs rounded-lg bg-slate-800/80 border border-slate-600/40 text-slate-200 hover:bg-slate-700/80 transition">Close</button>
+                </div>
+              </div>
+              <div id="terminal" class="terminal-body"></div>
+            </div>
+          </div>
+
+          <div class="md:order-2 order-1 flex justify-center md:justify-end md:pl-6">
+            <div id="deviceShell" data-theme="neon" class="device-shell theme-neon rounded-3xl p-4 md:p-5 w-fit mx-auto md:mx-0">
       <div class="pager-clip" aria-hidden="true"></div>
       <div class="pager-brand">RaspyJack P200</div>
       <div class="pager-speaker" aria-hidden="true">
@@ -401,8 +552,40 @@
         </div>
         <div class="pager-text text-center text-[11px] mt-4">OK = Enter · KEY3 = Esc</div>
         <div class="status-text pager-text text-center text-[10px] mt-1">Connecting…</div>
+          </div>
+        </div>
       </div>
       </div>
+      </div>
+
+      <!-- Settings -->
+      <div id="settingsTab" class="hidden">
+        <div class="rounded-3xl border border-slate-700/60 bg-slate-900/40 backdrop-blur p-4 md:p-5 max-w-3xl mx-auto shadow-[0_0_30px_rgba(15,23,42,0.35)] space-y-4">
+          <div class="flex items-center justify-between">
+            <div class="text-sm font-semibold text-emerald-300">Settings</div>
+            <div class="text-[11px] text-slate-400">Current theme: <span id="themeName">Neon</span></div>
+          </div>
+
+          <div class="rounded-xl border border-slate-800/70 bg-slate-950/40 p-3">
+            <div class="text-xs font-semibold text-slate-200 mb-2">Themes</div>
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              <button type="button" data-theme="neon" class="px-3 py-2 rounded-lg text-left text-xs font-semibold border border-slate-500/20 bg-slate-900/40 text-slate-300 hover:bg-slate-800/60 transition">Neon</button>
+              <button type="button" data-theme="gameboy" class="px-3 py-2 rounded-lg text-left text-xs font-semibold border border-slate-500/20 bg-slate-900/40 text-slate-300 hover:bg-slate-800/60 transition">Game Boy</button>
+              <button type="button" data-theme="pager" class="px-3 py-2 rounded-lg text-left text-xs font-semibold border border-slate-500/20 bg-slate-900/40 text-slate-300 hover:bg-slate-800/60 transition">Pager</button>
+            </div>
+          </div>
+
+          <div class="rounded-xl border border-slate-800/70 bg-slate-950/40 p-3">
+            <div class="text-xs font-semibold text-slate-200 mb-2">Discord Webhook</div>
+            <label for="discordWebhookInput" class="block text-[11px] text-slate-400 mb-1">Webhook URL</label>
+            <input id="discordWebhookInput" type="password" autocomplete="off" placeholder="https://discord.com/api/webhooks/..." class="w-full px-3 py-2 rounded-lg bg-slate-900/70 border border-slate-700/60 text-slate-100 text-xs focus:outline-none focus:ring-1 focus:ring-emerald-400/50">
+            <div class="mt-2 flex items-center gap-2">
+              <button id="discordWebhookSave" type="button" class="px-3 py-1.5 text-xs rounded-lg bg-emerald-600/80 border border-emerald-300/30 text-white hover:bg-emerald-500/80 transition">Save</button>
+              <button id="discordWebhookClear" type="button" class="px-3 py-1.5 text-xs rounded-lg bg-slate-800/80 border border-slate-600/40 text-slate-200 hover:bg-slate-700/80 transition">Clear</button>
+              <div id="settingsStatus" class="text-[11px] text-slate-400">Ready</div>
+            </div>
+          </div>
+        </div>
       </div>
 
       <!-- Loot browser -->
@@ -422,6 +605,7 @@
           <div class="mt-3 text-[11px] text-slate-500">Tip: click folders to navigate, click files to preview or download.</div>
         </div>
       </div>
+
     </main>
   </div>
 
@@ -444,6 +628,42 @@
       </div>
   </div>
 
+  <!-- Auth token modal -->
+  <div id="authModal" class="hidden fixed inset-0 z-50 bg-black/60 backdrop-blur-sm">
+    <div class="max-w-md mx-auto mt-16 md:mt-20 px-4">
+      <div class="rounded-2xl border border-slate-700/60 bg-slate-950/95 shadow-[0_0_30px_rgba(15,23,42,0.75)] overflow-hidden">
+        <div class="px-4 py-3 border-b border-slate-800/70 flex items-center justify-between">
+          <div id="authModalTitle" class="text-sm font-semibold text-emerald-300">Authentication Required</div>
+          <button id="authModalClose" type="button" class="text-slate-400 hover:text-slate-200 text-xs px-2 py-1 rounded-md bg-slate-900/60 border border-slate-700/60">✕</button>
+        </div>
+        <div class="px-4 py-3 space-y-2 text-xs">
+          <div id="authModalMessage" class="text-slate-400">Enter your WebUI token to continue.</div>
+          <div id="authModalRules" class="hidden rounded-lg border border-slate-800/70 bg-slate-900/30 p-2">
+            <div class="text-[11px] font-semibold text-slate-200 mb-1">Rules</div>
+            <ul class="text-[11px] text-slate-400 space-y-1">
+              <li>Username must be 3-32 characters</li>
+              <li>Password must be at least 8 characters</li>
+              <li>Passwords must match</li>
+            </ul>
+          </div>
+          <input id="authModalUsername" type="text" autocomplete="username" class="w-full rounded-lg bg-slate-900/80 border border-slate-700/70 px-3 py-2 text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-1 focus:ring-emerald-400 focus:border-emerald-400" placeholder="Username">
+          <input id="authModalPassword" type="password" autocomplete="current-password" class="w-full rounded-lg bg-slate-900/80 border border-slate-700/70 px-3 py-2 text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-1 focus:ring-emerald-400 focus:border-emerald-400" placeholder="Password">
+          <input id="authModalPasswordConfirm" type="password" autocomplete="new-password" class="hidden w-full rounded-lg bg-slate-900/80 border border-slate-700/70 px-3 py-2 text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-1 focus:ring-emerald-400 focus:border-emerald-400" placeholder="Confirm password">
+          <input id="authModalToken" type="password" autocomplete="off" class="hidden w-full rounded-lg bg-slate-900/80 border border-slate-700/70 px-3 py-2 text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-1 focus:ring-emerald-400 focus:border-emerald-400" placeholder="Recovery token">
+          <div id="authModalError" class="hidden text-[11px] text-rose-300"></div>
+          <button id="authModalToggleRecovery" type="button" class="text-[11px] text-cyan-300 hover:text-cyan-200">Use recovery token instead</button>
+        </div>
+        <div class="px-4 py-3 border-t border-slate-800/70 flex justify-end gap-2">
+          <button id="authModalCancel" type="button" class="px-3 py-1.5 rounded-lg bg-slate-800/80 border border-slate-600/60 text-slate-200 hover:bg-slate-700/80 text-xs">Cancel</button>
+          <button id="authModalConfirm" type="button" class="px-3 py-1.5 rounded-lg bg-emerald-600/80 border border-emerald-300/30 text-white hover:bg-emerald-500/80 text-xs">Continue</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/xterm/lib/xterm.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit/lib/xterm-addon-fit.min.js"></script>
+  <script src="./shared.js"></script>
   <script src="./app.js"></script>
 </body>
 </html>

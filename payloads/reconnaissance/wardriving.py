@@ -38,7 +38,7 @@ try:
     import LCD_1in44, LCD_Config
     from PIL import Image, ImageDraw, ImageFont
     import RPi.GPIO as GPIO
-    from payloads._input_helper import get_virtual_button
+    from payloads._input_helper import get_button
     LCD_AVAILABLE = True
 except ImportError:
     LCD_AVAILABLE = False
@@ -456,6 +456,24 @@ class WardrivingScanner:
             return interfaces
         except:
             return []
+
+    def _is_onboard_wifi_iface(self, iface):
+        """True for onboard Pi WiFi (SDIO/mmc path or brcmfmac driver)."""
+        try:
+            devpath = os.path.realpath(f"/sys/class/net/{iface}/device")
+            if "mmc" in devpath:
+                return True
+        except Exception:
+            pass
+        try:
+            driver = os.path.basename(
+                os.path.realpath(f"/sys/class/net/{iface}/device/driver")
+            )
+            if driver == "brcmfmac":
+                return True
+        except Exception:
+            pass
+        return False
     
     def _find_monitor_capable_interface(self):
         """
@@ -463,27 +481,31 @@ class WardrivingScanner:
         monitor mode.  Broadcom brcmfmac does NOT.  RTL88xx / Atheros do.
         Scans /sys/class/net/ directly (iwconfig misses some interfaces).
         Returns the best interface name, or None.
+
+        The onboard Pi WiFi (WebUI interface) is never selected here.
         """
         # Discover all wireless interfaces via /sys (more reliable than iwconfig)
         interfaces = []
         try:
             for name in os.listdir("/sys/class/net"):
-                if name == "lo":
-                    continue
+                if name == "lo" or name == "wlan0":
+                    continue  # wlan0 reserved for WebUI
                 # An interface is wireless if /sys/class/net/<name>/wireless exists
                 if os.path.isdir(f"/sys/class/net/{name}/wireless"):
+                    if self._is_onboard_wifi_iface(name):
+                        continue
                     interfaces.append(name)
         except Exception:
             pass
 
         # Fallback to iwconfig if /sys found nothing
         if not interfaces:
-            interfaces = self.get_wifi_interfaces()
+            interfaces = [i for i in self.get_wifi_interfaces() if not self._is_onboard_wifi_iface(i)]
 
         if not interfaces:
             return None
 
-        print(f"  Found wireless interfaces: {interfaces}", flush=True)
+        print(f"  Found wireless interfaces (excluding onboard/WebUI): {interfaces}", flush=True)
 
         # Drivers known NOT to support monitor mode
         no_monitor = {'brcmfmac', 'b43', 'wl'}
@@ -515,23 +537,26 @@ class WardrivingScanner:
         return None
 
     def setup_monitor_mode(self, interface):
-        """Comprehensive monitor mode setup"""
+        """Comprehensive monitor mode setup.
+        
+        Only stops services for the specific interface — wlan0/WebUI is never touched.
+        """
         print(f"Setting up monitor mode on {interface}")
         
-        # Step 1: Kill interfering processes (with timeouts so we never hang)
-        print("Stopping interfering services...")
+        # Step 1: Stop services for THIS interface only (keeps wlan0/WebUI alive)
+        print(f"Unmanaging {interface} from NetworkManager...")
         for cmd_label, cmd in [
-            ("NetworkManager", ['sudo', 'systemctl', 'stop', 'NetworkManager']),
-            ("wpa_supplicant", ['sudo', 'pkill', '-f', 'wpa_supplicant']),
-            ("dhcpcd",         ['sudo', 'pkill', '-f', 'dhcpcd']),
+            ("NM unmanage",    ['nmcli', 'device', 'set', interface, 'managed', 'no']),
+            ("wpa_supplicant", ['sudo', 'pkill', '-f', f'wpa_supplicant.*{interface}']),
+            ("dhcpcd",         ['sudo', 'pkill', '-f', f'dhcpcd.*{interface}']),
         ]:
             try:
                 subprocess.run(cmd, capture_output=True, timeout=5)
-                print(f"  {cmd_label} stopped", flush=True)
+                print(f"  {cmd_label} done", flush=True)
             except subprocess.TimeoutExpired:
                 print(f"  {cmd_label} timed out - skipping", flush=True)
             except Exception:
-                print(f"  {cmd_label} not running", flush=True)
+                print(f"  {cmd_label} not applicable", flush=True)
         time.sleep(1)
         
         # Step 2: Check current interface status
@@ -1669,77 +1694,60 @@ class WardrivingScanner:
             return
         
         try:
-            virtual = get_virtual_button()
-            if virtual == "KEY1":
-                print("KEY1 pressed - toggling scan (WebUI)")
+            btn = get_button({"KEY1": 21, "KEY2": 20, "KEY3": 16}, GPIO)
+            if not btn:
+                return
+
+            if btn == "KEY1":
+                print("KEY1 pressed - toggling scan")
                 if self.running:
                     self.stop_scan()
                 else:
                     self.start_scan()
-                time.sleep(0.2)
-            elif virtual == "KEY2":
-                print("KEY2 pressed - exiting (WebUI)")
-                self.cleanup()
-                sys.exit(0)
-            elif virtual == "KEY3":
-                print("KEY3 pressed - export data (WebUI)")
-                self.export_data()
-                time.sleep(0.2)
 
-            # Check KEY1 (Start/Stop) - Pin 21
-            if GPIO.input(21) == 0:  # Button pressed (active low)
-                time.sleep(0.05)  # Initial debounce
-                if GPIO.input(21) == 0:  # Still pressed
-                    print("KEY1 pressed - toggling scan")
-                    if self.running:
-                        self.stop_scan()
-                    else:
-                        self.start_scan()
-                    
-                    # Wait for button release with timeout
-                    timeout = time.time() + 2  # 2 second timeout
+                # Debounce physical hold/repeat
+                if GPIO.input(21) == 0:
+                    timeout = time.time() + 2
                     while GPIO.input(21) == 0 and time.time() < timeout:
                         time.sleep(0.05)
-                    
-                    time.sleep(0.2)  # Additional debounce after release
-            
-            # Check KEY2 (Exit - hold for 2 seconds) - Pin 20
-            if GPIO.input(20) == 0:  # Button pressed (active low)
-                time.sleep(0.05)  # Initial debounce
-                if GPIO.input(20) == 0:  # Still pressed
-                    print("KEY2 pressed - Hold for 2 seconds to exit")
-                    self.log("Exit button pressed - checking hold duration")
-                    
-                    # Count how long button is held
-                    hold_start = time.time()
-                    while GPIO.input(20) == 0:  # While button is held
-                        hold_duration = time.time() - hold_start
-                        if hold_duration >= 2.0:  # Held for 2 seconds
-                            print("KEY2 held - Exiting wardriving scanner")
-                            self.log("Exit confirmed - shutting down")
-                            self.cleanup()
-                            sys.exit(0)
-                        time.sleep(0.05)
-                    
-                    # Button released before 2 seconds
+                time.sleep(0.2)
+                return
+
+            if btn == "KEY2":
+                # For virtual input, exit immediately (no hold needed).
+                if GPIO.input(20) != 0:
+                    print("KEY2 pressed - exiting (WebUI)")
+                    self.cleanup()
+                    sys.exit(0)
+
+                # For physical KEY2, keep hold-to-exit safety behavior.
+                print("KEY2 pressed - Hold for 2 seconds to exit")
+                self.log("Exit button pressed - checking hold duration")
+                hold_start = time.time()
+                while GPIO.input(20) == 0:
                     hold_duration = time.time() - hold_start
-                    if hold_duration < 2.0:
-                        print(f"KEY2 released too quickly ({hold_duration:.1f}s) - Hold for 2s to exit")
-                        self.log(f"Exit cancelled - held for only {hold_duration:.1f}s")
-                    
-                    time.sleep(0.2)
-            
-            # Check KEY3 (Export data) - Pin 16
-            if GPIO.input(16) == 0:  # Button pressed (active low)
-                time.sleep(0.05)  # Initial debounce
-                if GPIO.input(16) == 0:  # Still pressed
-                    print("KEY3 pressed - export data")
-                    self.export_data()
-                    
-                    # Wait for button release
+                    if hold_duration >= 2.0:
+                        print("KEY2 held - Exiting wardriving scanner")
+                        self.log("Exit confirmed - shutting down")
+                        self.cleanup()
+                        sys.exit(0)
+                    time.sleep(0.05)
+
+                hold_duration = time.time() - hold_start
+                if hold_duration < 2.0:
+                    print(f"KEY2 released too quickly ({hold_duration:.1f}s) - Hold for 2s to exit")
+                    self.log(f"Exit cancelled - held for only {hold_duration:.1f}s")
+                time.sleep(0.2)
+                return
+
+            if btn == "KEY3":
+                print("KEY3 pressed - export data")
+                self.export_data()
+                if GPIO.input(16) == 0:
                     while GPIO.input(16) == 0:
                         time.sleep(0.05)
-                    time.sleep(0.2)
+                time.sleep(0.2)
+                return
         
         except Exception as e:
             print(f"GPIO handling error: {e}")

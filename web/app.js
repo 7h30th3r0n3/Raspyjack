@@ -1,4 +1,5 @@
 (function(){
+  const shared = window.RJShared || {};
   const canvas = document.getElementById('screen');
   const canvasGb = document.getElementById('screen-gb');
   const canvasPager = document.getElementById('screen-pager');
@@ -33,15 +34,32 @@
   const deviceShell = document.getElementById('deviceShell');
   const themeNameEl = document.getElementById('themeName');
   const navDevice = document.getElementById('navDevice');
+  const navSystem = document.getElementById('navSystem');
   const navLoot = document.getElementById('navLoot');
-  const themesToggle = document.getElementById('themesToggle');
-  const themesList = document.getElementById('themesList');
+  const navSettings = document.getElementById('navSettings');
+  const navPayloadStudio = document.getElementById('navPayloadStudio');
   const themeButtons = document.querySelectorAll('[data-theme]');
   const sidebar = document.getElementById('sidebar');
   const sidebarBackdrop = document.getElementById('sidebarBackdrop');
   const menuToggle = document.getElementById('menuToggle');
   const deviceTab = document.getElementById('deviceTab');
+  const systemDropdown = document.getElementById('systemDropdown');
+  const settingsTab = document.getElementById('settingsTab');
   const lootTab = document.getElementById('lootTab');
+  const systemStatus = document.getElementById('systemStatus');
+  const sysCpuValue = document.getElementById('sysCpuValue');
+  const sysCpuBar = document.getElementById('sysCpuBar');
+  const sysTempValue = document.getElementById('sysTempValue');
+  const sysMemValue = document.getElementById('sysMemValue');
+  const sysMemMeta = document.getElementById('sysMemMeta');
+  const sysMemBar = document.getElementById('sysMemBar');
+  const sysDiskValue = document.getElementById('sysDiskValue');
+  const sysDiskMeta = document.getElementById('sysDiskMeta');
+  const sysDiskBar = document.getElementById('sysDiskBar');
+  const sysUptime = document.getElementById('sysUptime');
+  const sysLoad = document.getElementById('sysLoad');
+  const sysPayload = document.getElementById('sysPayload');
+  const sysInterfaces = document.getElementById('sysInterfaces');
   const lootList = document.getElementById('lootList');
   const lootPathEl = document.getElementById('lootPath');
   const lootUpBtn = document.getElementById('lootUp');
@@ -52,25 +70,420 @@
   const lootPreviewClose = document.getElementById('lootPreviewClose');
   const lootPreviewDownload = document.getElementById('lootPreviewDownload');
   const lootPreviewMeta = document.getElementById('lootPreviewMeta');
+  const payloadSidebar = document.getElementById('payloadSidebar');
+  const payloadStatus = document.getElementById('payloadStatus');
+  const payloadStatusDot = document.getElementById('payloadStatusDot');
+  const payloadsRefresh = document.getElementById('payloadsRefresh');
+  const settingsStatus = document.getElementById('settingsStatus');
+  const discordWebhookInput = document.getElementById('discordWebhookInput');
+  const discordWebhookSave = document.getElementById('discordWebhookSave');
+  const discordWebhookClear = document.getElementById('discordWebhookClear');
+  const terminalEl = document.getElementById('terminal');
+  const shellStatusEl = document.getElementById('shellStatus');
+  const shellConnectBtn = document.getElementById('shellConnect');
+  const shellDisconnectBtn = document.getElementById('shellDisconnect');
+  const logoutBtn = document.getElementById('logoutBtn');
+  const authModal = document.getElementById('authModal');
+  const authModalTitle = document.getElementById('authModalTitle');
+  const authModalMessage = document.getElementById('authModalMessage');
+  const authModalUsername = document.getElementById('authModalUsername');
+  const authModalPassword = document.getElementById('authModalPassword');
+  const authModalPasswordConfirm = document.getElementById('authModalPasswordConfirm');
+  const authModalToken = document.getElementById('authModalToken');
+  const authModalRules = document.getElementById('authModalRules');
+  const authModalError = document.getElementById('authModalError');
+  const authModalToggleRecovery = document.getElementById('authModalToggleRecovery');
+  const authModalConfirm = document.getElementById('authModalConfirm');
+  const authModalCancel = document.getElementById('authModalCancel');
+  const authModalClose = document.getElementById('authModalClose');
 
-  // Build WS URL from current page host. Supports optional token in page URL (?token=...)
+  // Build WS URL from current page host.
   function getWsUrl(){
+    if (shared.getWsUrl) return shared.getWsUrl(location);
+    if (location.protocol === 'https:'){
+      return `${location.origin.replace(/^https:/, 'wss:')}/ws`;
+    }
     const p = new URLSearchParams(location.search);
-    const token = p.get('token');
     const host = location.hostname || 'raspberrypi.local';
     const port = p.get('port') || '8765';
-    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    const q = token ? `?token=${encodeURIComponent(token)}` : '';
-    return `${proto}://${host}:${port}/${q}`.replace(/\/\/\//,'//');
+    return `ws://${host}:${port}/`.replace(/\/\/\//,'//');
   }
 
   function getApiUrl(path, params = {}){
-    const p = new URLSearchParams(location.search);
-    const token = p.get('token');
-    if (token) params.token = token;
+    if (shared.getApiUrl) return shared.getApiUrl(path, params, location);
     const qs = new URLSearchParams(params).toString();
     const base = location.origin;
     return `${base}${path}${qs ? `?${qs}` : ''}`;
+  }
+
+  function getForwardSearch(){
+    try{
+      const u = new URL(window.location.href);
+      u.searchParams.delete('token');
+      const qs = u.searchParams.toString();
+      return qs ? `?${qs}` : '';
+    }catch{
+      return '';
+    }
+  }
+
+  function escapeHtml(value){
+    return String(value ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/\"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function encodeData(value){
+    return encodeURIComponent(String(value ?? ''));
+  }
+
+  const AUTH_STORAGE_KEY = 'rj.authToken';
+  let authToken = '';
+  let wsTicket = '';
+  let authPromptResolver = null;
+  let authInFlight = null;
+  let authMode = 'login';
+  let authRecoveryMode = false;
+
+  function saveAuthToken(token){
+    if (shared.saveToken){
+      authToken = shared.saveToken(AUTH_STORAGE_KEY, token);
+      return;
+    }
+    authToken = String(token || '').trim();
+    try{
+      if (authToken){
+        sessionStorage.setItem(AUTH_STORAGE_KEY, authToken);
+      } else {
+        sessionStorage.removeItem(AUTH_STORAGE_KEY);
+      }
+    }catch{}
+  }
+
+  function loadAuthToken(){
+    if (shared.loadToken){
+      const stored = shared.loadToken(AUTH_STORAGE_KEY);
+      if (stored) authToken = stored;
+    } else {
+      try{
+        const stored = (sessionStorage.getItem(AUTH_STORAGE_KEY) || '').trim();
+        if (stored) authToken = stored;
+      }catch{}
+    }
+
+    const migrated = shared.migrateTokenFromUrl ? shared.migrateTokenFromUrl(AUTH_STORAGE_KEY, 'token') : '';
+    if (migrated) authToken = migrated;
+    if (migrated) return;
+
+    // One-time migration: accept token from URL, then remove it.
+    try{
+      const u = new URL(window.location.href);
+      const token = (u.searchParams.get('token') || '').trim();
+      if (token){
+        saveAuthToken(token);
+        u.searchParams.delete('token');
+        window.history.replaceState({}, '', u.toString());
+      }
+    }catch{}
+  }
+
+  function setAuthError(msg){
+    if (!authModalError) return;
+    const text = String(msg || '').trim();
+    authModalError.textContent = text;
+    authModalError.classList.toggle('hidden', !text);
+  }
+
+  function setAuthMode(mode, message){
+    authMode = mode;
+    if (authModalTitle){
+      authModalTitle.textContent = mode === 'bootstrap' ? 'Create Admin Account' : 'Login Required';
+    }
+    if (authModalMessage){
+      authModalMessage.textContent = message || (mode === 'bootstrap'
+        ? 'Set the first admin account for this device.'
+        : 'Log in to continue.');
+    }
+    const isBootstrap = mode === 'bootstrap';
+    if (authModalRules) authModalRules.classList.toggle('hidden', !isBootstrap);
+    if (authModalPasswordConfirm) authModalPasswordConfirm.classList.toggle('hidden', !isBootstrap);
+    if (authModalUsername) authModalUsername.classList.toggle('hidden', authRecoveryMode);
+    if (authModalPassword) authModalPassword.classList.toggle('hidden', authRecoveryMode);
+    if (authModalToken) authModalToken.classList.toggle('hidden', !authRecoveryMode);
+    if (authModalToggleRecovery){
+      authModalToggleRecovery.classList.toggle('hidden', isBootstrap);
+      authModalToggleRecovery.textContent = authRecoveryMode ? 'Use username/password login' : 'Use recovery token instead';
+    }
+    if (authModalConfirm) authModalConfirm.textContent = isBootstrap ? 'Create Admin' : 'Login';
+  }
+
+  function setRecoveryMode(enabled){
+    authRecoveryMode = !!enabled;
+    setAuthMode(authMode, authModalMessage ? authModalMessage.textContent : '');
+    setAuthError('');
+    if (authRecoveryMode){
+      if (authModalToken) authModalToken.focus();
+    } else if (authModalUsername) {
+      authModalUsername.focus();
+    }
+  }
+
+  function resolveAuthPrompt(payload){
+    if (!authPromptResolver) return;
+    const resolver = authPromptResolver;
+    authPromptResolver = null;
+    if (authModal) authModal.classList.add('hidden');
+    resolver(payload || null);
+  }
+
+  function promptForAuth(message, mode = 'login'){
+    if (!authModal || !authModalConfirm || !authModalCancel || !authModalClose){
+      return Promise.resolve(null);
+    }
+    if (authPromptResolver){
+      return Promise.resolve(null);
+    }
+    if (authModalUsername) authModalUsername.value = '';
+    if (authModalPassword) authModalPassword.value = '';
+    if (authModalPasswordConfirm) authModalPasswordConfirm.value = '';
+    if (authModalToken) authModalToken.value = authToken || '';
+    authRecoveryMode = false;
+    setAuthMode(mode, message);
+    setAuthError('');
+    authModal.classList.remove('hidden');
+    setTimeout(() => {
+      try {
+        if (mode === 'bootstrap'){
+          authModalUsername && authModalUsername.focus();
+        } else if (authModalUsername) {
+          authModalUsername.focus();
+        }
+      } catch {}
+    }, 10);
+    return new Promise(resolve => {
+      authPromptResolver = resolve;
+    });
+  }
+
+  function authHeaders(extra){
+    if (shared.authHeaders) return shared.authHeaders(authToken, extra);
+    const headers = Object.assign({}, extra || {});
+    if (authToken){
+      headers.Authorization = `Bearer ${authToken}`;
+    }
+    return headers;
+  }
+
+  async function apiFetch(url, options = {}, allowRetry = true){
+    const merged = Object.assign({}, options);
+    merged.headers = authHeaders(merged.headers);
+    merged.credentials = 'include';
+    const res = await fetch(url, merged);
+    if (res.status === 401 && allowRetry){
+      const ok = await ensureAuthenticated('Session expired. Log in again.');
+      if (ok){
+        return apiFetch(url, options, false);
+      }
+    }
+    return res;
+  }
+
+  async function fetchBootstrapStatus(){
+    if (shared.fetchBootstrapStatus){
+      return shared.fetchBootstrapStatus(getApiUrl.bind(null));
+    }
+    try{
+      const res = await fetch(getApiUrl('/api/auth/bootstrap-status'), { cache: 'no-store' });
+      const data = await res.json();
+      return !!(res.ok && data && data.initialized);
+    }catch{
+      return true;
+    }
+  }
+
+  async function fetchAuthMe(){
+    if (shared.fetchAuthMe){
+      return shared.fetchAuthMe(getApiUrl.bind(null), authToken);
+    }
+    try{
+      const res = await fetch(getApiUrl('/api/auth/me'), {
+        cache: 'no-store',
+        credentials: 'include',
+        headers: authHeaders({}),
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      return data && data.authenticated ? data : null;
+    }catch{
+      return null;
+    }
+  }
+
+  async function attemptBootstrap(message){
+    const input = await promptForAuth(message || 'Set the first admin account for this device.', 'bootstrap');
+    if (!input) return false;
+    const username = String(input.username || '').trim();
+    const password = String(input.password || '');
+    const confirm = String(input.confirm || '');
+    if (!username || !password){
+      setAuthError('Username and password are required.');
+      return attemptBootstrap(message);
+    }
+    if (username.length < 3){
+      setAuthError('username must be at least 3 characters');
+      return attemptBootstrap(message);
+    }
+    if (username.length > 32){
+      setAuthError('username too long');
+      return attemptBootstrap(message);
+    }
+    if (password.length < 8){
+      setAuthError('password must be at least 8 characters');
+      return attemptBootstrap(message);
+    }
+    if (password !== confirm){
+      setAuthError('Passwords do not match.');
+      return attemptBootstrap(message);
+    }
+    try{
+      const res = await fetch(getApiUrl('/api/auth/bootstrap'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ username, password }),
+      });
+      const data = await res.json();
+      if (!res.ok){
+        if (res.status === 409){
+          return attemptLogin('Admin already exists. Log in to continue.');
+        }
+        setAuthError(data && data.error ? data.error : 'Bootstrap failed');
+        return attemptBootstrap(message);
+      }
+      saveAuthToken('');
+      return true;
+    }catch{
+      setAuthError('Bootstrap request failed.');
+      return attemptBootstrap(message);
+    }
+  }
+
+  async function attemptLogin(message){
+    const input = await promptForAuth(message || 'Log in to continue.', 'login');
+    if (!input) return false;
+
+    if (input.recovery){
+      const token = String(input.token || '').trim();
+      if (!token){
+        setAuthError('Recovery token is required.');
+        return attemptLogin(message);
+      }
+      saveAuthToken(token);
+      try{
+        const meRes = await fetch(getApiUrl('/api/auth/me'), {
+          cache: 'no-store',
+          headers: authHeaders({}),
+          credentials: 'include',
+        });
+        if (!meRes.ok){
+          setAuthError('Invalid recovery token.');
+          return attemptLogin(message);
+        }
+        return true;
+      }catch{
+        setAuthError('Recovery auth failed.');
+        return attemptLogin(message);
+      }
+    }
+
+    const username = String(input.username || '').trim();
+    const password = String(input.password || '');
+    if (!username || !password){
+      setAuthError('Username and password are required.');
+      return attemptLogin(message);
+    }
+    try{
+      const res = await fetch(getApiUrl('/api/auth/login'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ username, password }),
+      });
+      const data = await res.json();
+      if (!res.ok){
+        setAuthError(data && data.error ? data.error : 'Login failed');
+        return attemptLogin(message);
+      }
+      saveAuthToken('');
+      return true;
+    }catch{
+      setAuthError('Login request failed.');
+      return attemptLogin(message);
+    }
+  }
+
+  async function refreshWsTicket(){
+    wsTicket = '';
+    if (shared.refreshWsTicket){
+      wsTicket = await shared.refreshWsTicket(getApiUrl.bind(null), authToken);
+      return;
+    }
+    if (authToken) return;
+    try{
+      const res = await fetch(getApiUrl('/api/auth/ws-ticket'), {
+        method: 'POST',
+        credentials: 'include',
+      });
+      const data = await res.json();
+      if (res.ok && data && data.ticket){
+        wsTicket = String(data.ticket);
+      }
+    }catch{}
+  }
+
+  async function ensureAuthenticated(message){
+    if (authInFlight){
+      return authInFlight;
+    }
+    authInFlight = (async () => {
+      const me = await fetchAuthMe();
+      if (me){
+        await refreshWsTicket();
+        return true;
+      }
+
+    const initialized = await fetchBootstrapStatus();
+    if (!initialized){
+      const bootOk = await attemptBootstrap(message);
+      if (!bootOk) return false;
+      await refreshWsTicket();
+      return true;
+    }
+    const loginOk = await attemptLogin(message);
+    if (!loginOk) return false;
+    await refreshWsTicket();
+    return true;
+    })();
+    try{
+      return await authInFlight;
+    } finally {
+      authInFlight = null;
+    }
+  }
+
+  async function logoutUser(){
+    try{
+      await fetch(getApiUrl('/api/auth/logout'), { method: 'POST', credentials: 'include' });
+    }catch{}
+    saveAuthToken('');
+    wsTicket = '';
+    try{
+      if (ws) ws.close();
+    }catch{}
+    window.location.reload();
   }
 
   let ws = null;
@@ -78,11 +491,70 @@
   const pressed = new Set(); // keyboard pressed state
   let activeTab = 'device';
   let lootState = { path: '', parent: '' };
+  let payloadState = { categories: [], open: {}, activePath: null };
+  let term = null;
+  let fitAddon = null;
+  let shellOpen = false;
+  let terminalHasFocus = false;
+  let shellWanted = false;
+  let systemOpen = false;
+  let wsAuthenticated = true;
+
+  function applyStatusTone(el, txt){
+    if (!el) return;
+    const s = String(txt || '').toLowerCase();
+    el.classList.remove('status-tone-ok', 'status-tone-warn', 'status-tone-bad');
+    if (/connected|authenticated|ready|live|saved|configured|launched|running/.test(s)) {
+      el.classList.add('status-tone-ok');
+    } else if (/loading|connecting|opening|reconnecting|stopping/.test(s)) {
+      el.classList.add('status-tone-warn');
+    } else if (/failed|unavailable|disconnected|error|denied/.test(s)) {
+      el.classList.add('status-tone-bad');
+    }
+  }
 
   function setStatus(txt){
-    if (statusEl) statusEl.textContent = txt;
+    if (statusEl) {
+      statusEl.textContent = txt;
+      applyStatusTone(statusEl, txt);
+    }
     if (statusEls && statusEls.length) {
-      statusEls.forEach(el => { el.textContent = txt; });
+      statusEls.forEach(el => {
+        el.textContent = txt;
+        applyStatusTone(el, txt);
+      });
+    }
+  }
+
+  function setPayloadStatus(txt){
+    if (payloadStatus) {
+      payloadStatus.textContent = txt;
+      applyStatusTone(payloadStatus, txt);
+    }
+    if (payloadStatusDot){
+      const active = /running|starting|stopping|launched/i.test(String(txt || ''));
+      payloadStatusDot.classList.toggle('running', active);
+    }
+  }
+
+  function setSystemStatus(txt){
+    if (systemStatus) {
+      systemStatus.textContent = txt;
+      applyStatusTone(systemStatus, txt);
+    }
+  }
+
+  function setShellStatus(txt){
+    if (shellStatusEl) {
+      shellStatusEl.textContent = txt;
+      applyStatusTone(shellStatusEl, txt);
+    }
+  }
+
+  function setSettingsStatus(txt){
+    if (settingsStatus) {
+      settingsStatus.textContent = txt;
+      applyStatusTone(settingsStatus, txt);
     }
   }
 
@@ -92,7 +564,23 @@
     { id: 'gameboy', label: 'Game Boy' },
     { id: 'pager', label: 'Pager' },
   ];
+  const THEME_STORAGE_KEY = 'rj.defaultTheme';
   let themeIndex = 0;
+
+  function saveThemePreference(themeId){
+    try{
+      localStorage.setItem(THEME_STORAGE_KEY, themeId);
+    }catch{}
+  }
+
+  function loadThemePreference(){
+    try{
+      const saved = localStorage.getItem(THEME_STORAGE_KEY);
+      if (!saved) return;
+      const idx = themes.findIndex(t => t.id === saved);
+      if (idx >= 0) themeIndex = idx;
+    }catch{}
+  }
 
   function applyTheme(){
     const t = themes[themeIndex];
@@ -123,6 +611,7 @@
 
   function setNavActive(btn, active){
     if (!btn) return;
+    btn.classList.toggle('nav-active', active);
     btn.classList.toggle('bg-emerald-500/10', active);
     btn.classList.toggle('text-emerald-300', active);
     btn.classList.toggle('border-emerald-400/30', active);
@@ -136,10 +625,23 @@
     activeTab = tab;
     const isDevice = tab === 'device';
     if (deviceTab) deviceTab.classList.toggle('hidden', !isDevice);
-    if (lootTab) lootTab.classList.toggle('hidden', isDevice);
+    if (settingsTab) settingsTab.classList.toggle('hidden', tab !== 'settings');
+    if (lootTab) lootTab.classList.toggle('hidden', tab !== 'loot');
     setNavActive(navDevice, isDevice);
-    setNavActive(navLoot, !isDevice);
+    setNavActive(navLoot, tab === 'loot');
+    setNavActive(navSettings, tab === 'settings');
     setSidebarOpen(false);
+  }
+
+  function setSystemOpen(open){
+    systemOpen = !!open;
+    if (systemDropdown){
+      systemDropdown.classList.toggle('hidden', !systemOpen);
+    }
+    setNavActive(navSystem, systemOpen);
+    if (systemOpen){
+      loadSystemStatus();
+    }
   }
 
   function setThemeById(id){
@@ -147,6 +649,7 @@
     if (idx >= 0){
       themeIndex = idx;
       applyTheme();
+      saveThemePreference(id);
     }
   }
 
@@ -163,6 +666,19 @@
 
     ws.onopen = () => {
       setStatus('Connected');
+      wsAuthenticated = true;
+      if (wsTicket){
+        try{
+          ws.send(JSON.stringify({ type: 'auth_session', ticket: wsTicket }));
+        }catch{}
+      } else if (authToken){
+        try{
+          ws.send(JSON.stringify({ type: 'auth', token: authToken }));
+        }catch{}
+      }
+      if (shellWanted) {
+        sendShellOpen();
+      }
     };
 
     ws.onmessage = (ev) => {
@@ -185,12 +701,70 @@
             } catch {}
           };
           img.src = 'data:image/jpeg;base64,' + msg.data;
+          return;
+        }
+        if (msg.type === 'auth_required'){
+          wsAuthenticated = false;
+          if (wsTicket){
+            try{
+              ws.send(JSON.stringify({ type: 'auth_session', ticket: wsTicket }));
+            }catch{}
+            return;
+          }
+          if (authToken){
+            try{
+              ws.send(JSON.stringify({ type: 'auth', token: authToken }));
+            }catch{}
+            return;
+          }
+          ensureAuthenticated('Authentication required to use WebSocket.')
+            .then(() => {
+              if (!ws || ws.readyState !== WebSocket.OPEN) return;
+              if (wsTicket){
+                try{
+                  ws.send(JSON.stringify({ type: 'auth_session', ticket: wsTicket }));
+                }catch{}
+              } else if (authToken){
+                try{
+                  ws.send(JSON.stringify({ type: 'auth', token: authToken }));
+                }catch{}
+              }
+            });
+          return;
+        }
+        if (msg.type === 'auth_ok'){
+          wsAuthenticated = true;
+          setStatus('Authenticated');
+          if (shellWanted) sendShellOpen();
+          return;
+        }
+        if (msg.type === 'auth_error'){
+          wsAuthenticated = false;
+          setStatus('Auth failed');
+          return;
+        }
+        if (msg.type === 'shell_ready'){
+          shellOpen = true;
+          setShellStatus('Connected');
+          sendShellResize();
+          return;
+        }
+        if (msg.type === 'shell_out' && msg.data){
+          ensureTerminal();
+          if (term) term.write(msg.data);
+          return;
+        }
+        if (msg.type === 'shell_exit'){
+          shellOpen = false;
+          setShellStatus('Exited');
         }
       }catch{}
     };
 
     ws.onclose = () => {
       setStatus('Disconnected – reconnecting…');
+      setShellStatus('Disconnected');
+      shellOpen = false;
       scheduleReconnect();
     };
 
@@ -207,6 +781,83 @@
     }, 1000);
   }
 
+  function ensureTerminal(){
+    if (!terminalEl) return null;
+    if (!window.Terminal){
+      setShellStatus('xterm missing');
+      return null;
+    }
+    if (!term){
+      term = new window.Terminal({
+        cursorBlink: true,
+        fontSize: 13,
+        theme: {
+          background: 'transparent',
+          foreground: '#e2e8f0',
+          cursor: '#94a3b8'
+        }
+      });
+      if (window.FitAddon && window.FitAddon.FitAddon){
+        fitAddon = new window.FitAddon.FitAddon();
+        term.loadAddon(fitAddon);
+      }
+      term.open(terminalEl);
+      term.onData(data => sendShellInput(data));
+      if (terminalEl){
+        terminalEl.addEventListener('focusin', () => { terminalHasFocus = true; });
+        terminalEl.addEventListener('focusout', () => { terminalHasFocus = false; });
+        terminalEl.addEventListener('mousedown', () => {
+          try { term.focus(); } catch {}
+        });
+      }
+      if (fitAddon){
+        try { fitAddon.fit(); } catch {}
+      }
+      term.write('RaspyJack shell ready.\\r\\n');
+    }
+    return term;
+  }
+
+  function sendShellInput(data){
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    if (!shellOpen) return;
+    try{
+      ws.send(JSON.stringify({ type: 'shell_in', data }));
+    }catch{}
+  }
+
+  function sendShellOpen(){
+    shellWanted = true;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ensureTerminal();
+    setShellStatus('Opening...');
+    try{
+      ws.send(JSON.stringify({ type: 'shell_open' }));
+    }catch{}
+  }
+
+  function sendShellClose(){
+    shellWanted = false;
+    if (ws && ws.readyState === WebSocket.OPEN){
+      try{
+        ws.send(JSON.stringify({ type: 'shell_close' }));
+      }catch{}
+    }
+    shellOpen = false;
+    setShellStatus('Closed');
+  }
+
+  function sendShellResize(){
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    if (!shellOpen || !term) return;
+    if (fitAddon){
+      try { fitAddon.fit(); } catch {}
+    }
+    try{
+      ws.send(JSON.stringify({ type: 'shell_resize', cols: term.cols, rows: term.rows }));
+    }catch{}
+  }
+
   function formatBytes(bytes){
     if (bytes === 0) return '0 B';
     const k = 1024;
@@ -214,6 +865,118 @@
     const i = Math.min(sizes.length - 1, Math.floor(Math.log(bytes) / Math.log(k)));
     const value = bytes / Math.pow(k, i);
     return `${value.toFixed(value >= 10 || i === 0 ? 0 : 1)} ${sizes[i]}`;
+  }
+
+  function formatDuration(totalSec){
+    const s = Math.max(0, Number(totalSec || 0) | 0);
+    const d = Math.floor(s / 86400);
+    const h = Math.floor((s % 86400) / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    if (d > 0) return `${d}d ${h}h ${m}m`;
+    if (h > 0) return `${h}h ${m}m`;
+    return `${m}m`;
+  }
+
+  function pct(used, total){
+    if (!total || total <= 0) return 0;
+    return Math.max(0, Math.min(100, (used / total) * 100));
+  }
+
+  function bar(el, value){
+    if (!el) return;
+    el.style.width = `${Math.max(0, Math.min(100, value)).toFixed(1)}%`;
+  }
+
+  async function loadSystemStatus(){
+    setSystemStatus('Loading...');
+    try{
+      const url = getApiUrl('/api/system/status');
+      const res = await apiFetch(url, { cache: 'no-store' });
+      const data = await res.json();
+      if (!res.ok){
+        throw new Error(data && data.error ? data.error : 'system_failed');
+      }
+
+      const cpu = Number(data.cpu_percent || 0);
+      const memUsed = Number(data.mem_used || 0);
+      const memTotal = Number(data.mem_total || 0);
+      const diskUsed = Number(data.disk_used || 0);
+      const diskTotal = Number(data.disk_total || 0);
+      const memPct = pct(memUsed, memTotal);
+      const diskPct = pct(diskUsed, diskTotal);
+
+      if (sysCpuValue) sysCpuValue.textContent = `${cpu.toFixed(1)}%`;
+      if (sysTempValue) {
+        if (data.temp_c === null || data.temp_c === undefined){
+          sysTempValue.textContent = '--.- C';
+        } else {
+          sysTempValue.textContent = `${Number(data.temp_c).toFixed(1)} C`;
+        }
+      }
+      bar(sysCpuBar, cpu);
+
+      if (sysMemValue) sysMemValue.textContent = `${memPct.toFixed(1)}%`;
+      if (sysMemMeta) sysMemMeta.textContent = `${formatBytes(memUsed)} / ${formatBytes(memTotal)}`;
+      bar(sysMemBar, memPct);
+
+      if (sysDiskValue) sysDiskValue.textContent = `${diskPct.toFixed(1)}%`;
+      if (sysDiskMeta) sysDiskMeta.textContent = `${formatBytes(diskUsed)} / ${formatBytes(diskTotal)}`;
+      bar(sysDiskBar, diskPct);
+
+      if (sysUptime) sysUptime.textContent = formatDuration(data.uptime_s);
+      if (sysLoad) sysLoad.textContent = Array.isArray(data.load) ? data.load.join(', ') : '-';
+      if (sysPayload) sysPayload.textContent = data.payload_running ? (data.payload_path || 'running') : 'none';
+
+      if (sysInterfaces){
+        const ifaces = Array.isArray(data.interfaces) ? data.interfaces : [];
+        if (!ifaces.length){
+          sysInterfaces.innerHTML = '<div class="text-slate-500">No active interfaces</div>';
+        } else {
+          sysInterfaces.innerHTML = ifaces
+            .map(i => `<div><span class="text-emerald-300">${escapeHtml(String(i.name || '-'))}</span>: ${escapeHtml(String(i.ipv4 || '-'))}</div>`)
+            .join('');
+        }
+      }
+
+      setSystemStatus('Live');
+    } catch (e){
+      setSystemStatus('Unavailable');
+    }
+  }
+
+  async function loadDiscordWebhook(){
+    setSettingsStatus('Loading...');
+    try{
+      const url = getApiUrl('/api/settings/discord_webhook');
+      const res = await apiFetch(url, { cache: 'no-store' });
+      const data = await res.json();
+      if (!res.ok){
+        throw new Error(data && data.error ? data.error : 'settings_failed');
+      }
+      if (discordWebhookInput) discordWebhookInput.value = String(data.url || '');
+      setSettingsStatus(data.configured ? 'Webhook configured' : 'No webhook configured');
+    } catch(e){
+      setSettingsStatus('Failed to load settings');
+    }
+  }
+
+  async function saveDiscordWebhook(url){
+    setSettingsStatus('Saving...');
+    try{
+      const endpoint = getApiUrl('/api/settings/discord_webhook');
+      const res = await apiFetch(endpoint, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: String(url || '').trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok){
+        throw new Error(data && data.error ? data.error : 'save_failed');
+      }
+      setSettingsStatus(data.status === 'cleared' ? 'Webhook cleared' : 'Webhook saved');
+    } catch(e){
+      setSettingsStatus('Failed to save webhook');
+    }
   }
 
   function formatTime(ts){
@@ -266,18 +1029,19 @@
       return;
     }
     const rows = items.map(item => {
-      const icon = item.type === 'dir' ? '📁' : '📄';
-      const meta = item.type === 'dir' ? 'Folder' : `${formatBytes(item.size)} · ${formatTime(item.mtime)}`;
-      const safeName = item.name.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-      const encodedName = encodeURIComponent(item.name);
+      const itemType = item && item.type === 'dir' ? 'dir' : 'file';
+      const icon = itemType === 'dir' ? '📁' : '📄';
+      const meta = itemType === 'dir' ? 'Folder' : `${formatBytes(item.size)} · ${formatTime(item.mtime)}`;
+      const safeName = escapeHtml(item.name || '');
+      const encodedName = encodeData(item.name || '');
       return `
-        <button class="w-full text-left px-3 py-2 flex items-center gap-3 hover:bg-slate-800/60 transition loot-item" data-type="${item.type}" data-name="${encodedName}">
+        <button class="w-full text-left px-3 py-2 flex items-center gap-3 hover:bg-slate-800/60 transition loot-item" data-type="${itemType}" data-name="${encodedName}">
           <span class="text-lg">${icon}</span>
           <div class="flex-1 min-w-0">
             <div class="text-sm text-slate-100 truncate">${safeName}</div>
-            <div class="text-[11px] text-slate-400">${meta}</div>
+            <div class="text-[11px] text-slate-400">${escapeHtml(meta)}</div>
           </div>
-          <div class="text-xs text-slate-400">${item.type === 'dir' ? 'Open' : 'Download'}</div>
+          <div class="text-xs text-slate-400">${itemType === 'dir' ? 'Open' : 'Download'}</div>
         </button>
       `;
     }).join('');
@@ -288,7 +1052,7 @@
     setLootStatus('Loading...');
     try{
       const url = getApiUrl('/api/loot/list', { path });
-      const res = await fetch(url, { cache: 'no-store' });
+      const res = await apiFetch(url, { cache: 'no-store' });
       const data = await res.json();
       if (!res.ok){
         throw new Error(data && data.error ? data.error : 'Failed to load');
@@ -308,7 +1072,7 @@
     setLootStatus('Loading preview...');
     try{
       const url = getApiUrl('/api/loot/view', { path });
-      const res = await fetch(url, { cache: 'no-store' });
+      const res = await apiFetch(url, { cache: 'no-store' });
       const data = await res.json();
       if (!res.ok){
         throw new Error(data && data.error ? data.error : 'preview_failed');
@@ -329,11 +1093,128 @@
     }
   }
 
+  async function loadPayloads(){
+    setPayloadStatus('Loading...');
+    try{
+      const url = getApiUrl('/api/payloads/list');
+      const res = await apiFetch(url, { cache: 'no-store' });
+      const data = await res.json();
+      if (!res.ok){
+        throw new Error(data && data.error ? data.error : 'payloads_failed');
+      }
+      payloadState.categories = data.categories || [];
+      payloadState.categories.forEach((cat, idx) => {
+        if (payloadState.open[cat.id] === undefined) {
+          payloadState.open[cat.id] = idx === 0;
+        }
+      });
+      renderPayloadSidebar();
+      setPayloadStatus('Ready');
+    }catch(e){
+      setPayloadStatus('Failed to load');
+      if (payloadSidebar) payloadSidebar.innerHTML = '<div class="text-xs text-slate-500 px-2">No payloads available.</div>';
+    }
+  }
+
+  function renderPayloadSidebar(){
+    if (!payloadSidebar) return;
+    const cats = payloadState.categories || [];
+    if (!cats.length){
+      payloadSidebar.innerHTML = '<div class="text-xs text-slate-500 px-2">No categories.</div>';
+      return;
+    }
+    payloadSidebar.innerHTML = cats.map(cat => {
+      const catId = String(cat?.id || '');
+      const catIdEncoded = encodeData(catId);
+      const catLabel = escapeHtml(String(cat?.label || catId || 'Category'));
+      const isOpen = !!payloadState.open[catId];
+      const items = (cat.items || []).map(item => {
+        const itemName = escapeHtml(String(item?.name || 'payload'));
+        const itemPath = String(item?.path || '');
+        const itemPathEncoded = encodeData(itemPath);
+        const isActive = payloadState.activePath === itemPath;
+        const disabled = !!payloadState.activePath;
+        const startCls = disabled
+          ? 'px-2 py-0.5 text-[10px] rounded-md bg-slate-800/80 border border-slate-700/40 text-slate-500 cursor-not-allowed'
+          : 'px-2 py-0.5 text-[10px] rounded-md bg-emerald-600/80 border border-emerald-300/30 text-white hover:bg-emerald-500/80 transition';
+        const stopBtn = isActive
+          ? '<button type="button" data-stop="1" class="px-2 py-0.5 text-[10px] rounded-md bg-rose-600/80 border border-rose-300/30 text-white hover:bg-rose-500/80 transition">Stop</button>'
+          : '<span class="px-2 py-0.5 text-[10px] rounded-md bg-slate-900/60 border border-slate-800/40 text-slate-600">Idle</span>';
+        return `
+        <div class="flex items-center justify-between gap-2 px-2 py-1 rounded-lg bg-slate-900/40 border border-slate-800/70">
+          <div class="text-[11px] text-slate-200 truncate">${itemName}</div>
+          <div class="flex items-center gap-1">
+            <button type="button" data-start="${itemPathEncoded}" ${disabled ? 'disabled' : ''} class="${startCls}">Start</button>
+            ${stopBtn}
+          </div>
+        </div>
+      `;
+      }).join('');
+      return `
+        <div class="rounded-xl border border-slate-800/70 bg-slate-950/40">
+          <button type="button" data-cat="${catIdEncoded}" class="w-full px-3 py-2 text-left text-xs font-semibold text-slate-200 flex items-center justify-between">
+            <span>${catLabel}</span>
+            <span class="text-slate-400">${isOpen ? '▾' : '▸'}</span>
+          </button>
+          <div class="${isOpen ? '' : 'hidden'} px-2 pb-2 space-y-1">
+            ${items || '<div class="text-[11px] text-slate-500 px-1">Empty</div>'}
+          </div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  async function startPayload(path){
+    setPayloadStatus('Starting...');
+    try{
+      const url = getApiUrl('/api/payloads/start');
+      const res = await apiFetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path })
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok){
+        throw new Error(data && data.error ? data.error : 'start_failed');
+      }
+      payloadState.activePath = path;
+      renderPayloadSidebar();
+      setPayloadStatus('Launched');
+    }catch(e){
+      setPayloadStatus('Start failed');
+    }
+  }
+
+  async function pollPayloadStatus(){
+    try{
+      const url = getApiUrl('/api/payloads/status');
+      const res = await apiFetch(url, { cache: 'no-store' });
+      const data = await res.json();
+      if (!res.ok){
+        return;
+      }
+      const running = !!data.running;
+      const path = running ? (data.path || null) : null;
+      if (payloadState.activePath !== path){
+        payloadState.activePath = path;
+        renderPayloadSidebar();
+      }
+      setPayloadStatus(running ? 'Running' : 'Ready');
+    }catch(e){
+      setPayloadStatus('Ready');
+    }
+  }
+
   function sendInput(button, state){
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     try{
       ws.send(JSON.stringify({ type: 'input', button, state }));
     }catch{}
+  }
+
+  function tapInput(button){
+    sendInput(button, 'press');
+    setTimeout(() => sendInput(button, 'release'), 120);
   }
 
   // Mouse/touch buttons
@@ -367,7 +1248,15 @@
   ]);
 
   function bindKeyboard(){
+    const isTypingFocus = () => {
+      const el = document.activeElement;
+      if (!el) return false;
+      const tag = String(el.tagName || '').toUpperCase();
+      return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || !!el.isContentEditable;
+    };
+
     window.addEventListener('keydown', (e)=>{
+      if (terminalHasFocus || isTypingFocus()) return;
       const btn = KEYMAP.get(e.code) || KEYMAP.get(e.key);
       if (!btn) return;
       if (pressed.has(btn)) return; // avoid repeats
@@ -376,6 +1265,7 @@
       e.preventDefault();
     });
     window.addEventListener('keyup', (e)=>{
+      if (terminalHasFocus || isTypingFocus()) return;
       const btn = KEYMAP.get(e.code) || KEYMAP.get(e.key);
       if (!btn) return;
       pressed.delete(btn);
@@ -391,7 +1281,16 @@
 
   bindButtons();
   bindKeyboard();
+  if (shellConnectBtn) shellConnectBtn.addEventListener('click', sendShellOpen);
+  if (shellDisconnectBtn) shellDisconnectBtn.addEventListener('click', sendShellClose);
+  if (logoutBtn) logoutBtn.addEventListener('click', logoutUser);
+  window.addEventListener('resize', () => {
+    if (shellOpen) sendShellResize();
+  });
   if (navDevice) navDevice.addEventListener('click', () => setActiveTab('device'));
+  if (navSystem) navSystem.addEventListener('click', () => {
+    setSystemOpen(!systemOpen);
+  });
   if (navLoot) navLoot.addEventListener('click', () => {
     setActiveTab('loot');
     if (lootList && !lootList.dataset.loaded){
@@ -399,9 +1298,11 @@
       lootList.dataset.loaded = '1';
     }
   });
-  if (themesToggle) themesToggle.addEventListener('click', () => {
-    if (themesList) themesList.classList.toggle('hidden');
+  if (navSettings) navSettings.addEventListener('click', () => {
+    setActiveTab('settings');
+    loadDiscordWebhook();
   });
+  if (navPayloadStudio) navPayloadStudio.href = './ide.html' + getForwardSearch();
   themeButtons.forEach(btn => {
     btn.addEventListener('click', () => {
       const id = btn.getAttribute('data-theme');
@@ -428,11 +1329,126 @@
       previewLootFile(nextPath, name);
     }
   });
+  if (payloadSidebar) payloadSidebar.addEventListener('click', (e) => {
+    const catBtn = e.target.closest('[data-cat]');
+    if (catBtn){
+      const encodedId = catBtn.getAttribute('data-cat') || '';
+      const id = decodeURIComponent(encodedId);
+      if (id){
+        payloadState.open[id] = !payloadState.open[id];
+        renderPayloadSidebar();
+      }
+      return;
+    }
+    const startBtn = e.target.closest('[data-start]');
+    if (startBtn){
+      const encodedPath = startBtn.getAttribute('data-start') || '';
+      const path = decodeURIComponent(encodedPath);
+      if (path) startPayload(path);
+      return;
+    }
+    const stopBtn = e.target.closest('[data-stop]');
+    if (stopBtn){
+      setPayloadStatus('Stopping...');
+      tapInput('KEY3');
+    }
+  });
+  if (payloadsRefresh) payloadsRefresh.addEventListener('click', () => loadPayloads());
+  if (discordWebhookSave) discordWebhookSave.addEventListener('click', () => {
+    saveDiscordWebhook(discordWebhookInput ? discordWebhookInput.value : '');
+  });
+  if (discordWebhookClear) discordWebhookClear.addEventListener('click', () => {
+    if (discordWebhookInput) discordWebhookInput.value = '';
+    saveDiscordWebhook('');
+  });
   if (lootPreviewClose) lootPreviewClose.addEventListener('click', closePreview);
   if (lootPreview) lootPreview.addEventListener('click', (e) => {
     if (e.target === lootPreview) closePreview();
   });
+  if (authModalConfirm) authModalConfirm.addEventListener('click', () => {
+    resolveAuthPrompt({
+      recovery: authRecoveryMode,
+      token: authModalToken ? authModalToken.value : '',
+      username: authModalUsername ? authModalUsername.value : '',
+      password: authModalPassword ? authModalPassword.value : '',
+      confirm: authModalPasswordConfirm ? authModalPasswordConfirm.value : '',
+    });
+  });
+  if (authModalCancel) authModalCancel.addEventListener('click', () => resolveAuthPrompt(null));
+  if (authModalClose) authModalClose.addEventListener('click', () => resolveAuthPrompt(null));
+  if (authModal) authModal.addEventListener('click', (e) => {
+    if (e.target === authModal) resolveAuthPrompt(null);
+  });
+  if (authModalToggleRecovery) authModalToggleRecovery.addEventListener('click', () => {
+    setRecoveryMode(!authRecoveryMode);
+  });
+  const authSubmitFromEnter = (e) => {
+    if (e.key === 'Enter'){
+      e.preventDefault();
+      resolveAuthPrompt({
+        recovery: authRecoveryMode,
+        token: authModalToken ? authModalToken.value : '',
+        username: authModalUsername ? authModalUsername.value : '',
+        password: authModalPassword ? authModalPassword.value : '',
+        confirm: authModalPasswordConfirm ? authModalPasswordConfirm.value : '',
+      });
+    } else if (e.key === 'Escape'){
+      e.preventDefault();
+      resolveAuthPrompt(null);
+    }
+  };
+  if (authModalToken) authModalToken.addEventListener('keydown', authSubmitFromEnter);
+  if (authModalUsername) authModalUsername.addEventListener('keydown', authSubmitFromEnter);
+  if (authModalPassword) authModalPassword.addEventListener('keydown', authSubmitFromEnter);
+  if (authModalPasswordConfirm) authModalPasswordConfirm.addEventListener('keydown', authSubmitFromEnter);
+  loadAuthToken();
+  loadThemePreference();
   applyTheme();
   setActiveTab('device');
-  connect();
+
+  let payloadPollTimer = null;
+  let systemPollTimer = null;
+
+  function schedulePayloadPoll(){
+    if (payloadPollTimer) clearTimeout(payloadPollTimer);
+    const delay = document.hidden ? 6000 : 1500;
+    payloadPollTimer = setTimeout(async () => {
+      await pollPayloadStatus();
+      schedulePayloadPoll();
+    }, delay);
+  }
+
+  function scheduleSystemPoll(){
+    if (systemPollTimer) clearTimeout(systemPollTimer);
+    const delay = document.hidden ? 10000 : 3000;
+    systemPollTimer = setTimeout(async () => {
+      if (systemOpen){
+        await loadSystemStatus();
+      }
+      scheduleSystemPoll();
+    }, delay);
+  }
+
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden){
+      if (systemOpen) loadSystemStatus();
+      pollPayloadStatus();
+    }
+    schedulePayloadPoll();
+    scheduleSystemPoll();
+  });
+
+  const startAfterAuth = () => {
+    ensureAuthenticated('Log in to access RaspyJack WebUI.').then((ok) => {
+      if (!ok){
+        setTimeout(startAfterAuth, 0);
+        return;
+      }
+      connect();
+      loadPayloads();
+      schedulePayloadPoll();
+      scheduleSystemPoll();
+    });
+  };
+  startAfterAuth();
 })();

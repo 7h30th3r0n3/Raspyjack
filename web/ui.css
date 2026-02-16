@@ -1,0 +1,309 @@
+:root {
+  --rj-parity-bg: linear-gradient(180deg, rgba(2, 6, 23, 0.72), rgba(2, 6, 23, 0.5));
+  --rj-parity-surface: rgba(15, 23, 42, 0.46);
+  --rj-parity-surface-strong: rgba(15, 23, 42, 0.62);
+  --rj-parity-border: rgba(148, 163, 184, 0.2);
+  --rj-parity-border-strong: rgba(148, 163, 184, 0.32);
+  --rj-parity-radius: 12px;
+  --rj-parity-shadow: 0 14px 30px rgba(2, 6, 23, 0.35);
+  --rj-parity-glow: 0 0 20px rgba(16, 185, 129, 0.12);
+}
+
+/* Shared shell feel */
+#sidebar,
+header {
+  background: var(--rj-parity-bg) !important;
+  border-color: var(--rj-parity-border) !important;
+  backdrop-filter: blur(10px);
+}
+
+/* Shared panel chrome */
+#settingsTab > div,
+#lootTab > div,
+#leftPanel,
+.editor-body,
+main > section {
+  border-color: var(--rj-parity-border) !important;
+  box-shadow: var(--rj-parity-shadow);
+}
+
+/* Shared control appearance */
+button,
+a.ide-toolbar-btn {
+  border-radius: var(--rj-parity-radius);
+}
+
+#saveBtn,
+#runBtn,
+#shellConnect,
+#discordWebhookSave,
+#newFileBtn,
+#restartUiBtn {
+  box-shadow: var(--rj-parity-glow);
+}
+
+/* Shared nav sizing */
+#sidebar nav > button,
+#sidebar nav > a {
+  min-height: 40px;
+  font-weight: 600;
+}
+
+/* Shared modal visual language */
+#lootPreview > div > div,
+#authModal > div > div,
+#entryModal > div > div,
+#renameModal > div > div,
+#deleteModal > div > div,
+#wizardModal > div > div,
+#templateModal > div > div {
+  border-radius: 16px !important;
+  border-color: var(--rj-parity-border) !important;
+  box-shadow: 0 18px 38px rgba(2, 6, 23, 0.5) !important;
+}
+
+/* Shared input treatment */
+input,
+textarea,
+select {
+  border-color: var(--rj-parity-border) !important;
+  border-radius: 10px !important;
+}
+input:focus,
+textarea:focus,
+select:focus {
+  border-color: rgba(16,185,129,.55) !important;
+  box-shadow: 0 0 0 1px rgba(16,185,129,.4), var(--rj-parity-glow) !important;
+}
+
+/* Status placement consistency */
+#ideStatus,
+#wsStatus,
+#payloadStatus,
+#systemStatus,
+#shellStatus,
+#settingsStatus,
+#lootStatus {
+  font-weight: 600;
+  font-size: 11px;
+}
+
+/* Action clusters look tighter and consistent */
+.flex.items-center.gap-2 > button,
+.flex.items-center.gap-3 > button {
+  min-height: 32px;
+}
+
+/* Parity PR3: spacing + line-height + icon sizing */
+body {
+  line-height: 1.45;
+}
+
+h1, h2, h3,
+.text-lg,
+.text-sm.font-black {
+  line-height: 1.2;
+}
+
+.text-xs,
+.text-\[11px\],
+.text-\[10px\] {
+  line-height: 1.35;
+}
+
+button i,
+a i {
+  font-size: 0.85em;
+  vertical-align: middle;
+}
+
+/* Normalize section paddings for both screens */
+main > section,
+#settingsTab > div,
+#lootTab > div,
+#leftPanel {
+  border-radius: 14px;
+}
+
+#settingsTab > div,
+#lootTab > div {
+  padding-top: 1rem !important;
+  padding-bottom: 1rem !important;
+}
+
+/* Keep status rows and top bars rhythmically aligned */
+header,
+#deviceTab .terminal-wrap > .flex,
+main section > .px-4.py-2,
+#leftPanel > .px-3.py-2 {
+  min-height: 44px;
+}
+
+/* Small-screen parity: same breathing room on both pages */
+@media (max-width: 768px) {
+  body {
+    line-height: 1.42;
+  }
+  .text-xs,
+  .text-\[11px\],
+  .text-\[10px\] {
+    line-height: 1.32;
+  }
+  main > section {
+    margin-bottom: 0.6rem;
+  }
+}
+
+/* Shared typography cues */
+#sidebar .text-lg,
+header .text-sm.font-black {
+  letter-spacing: 0.06em;
+}
+
+#sidebar .text-\[11px\],
+header .text-\[10px\],
+#ideStatus,
+#wsStatus,
+#payloadStatus,
+#systemStatus,
+#shellStatus {
+  letter-spacing: 0.02em;
+}
+
+/* Layout parity */
+@media (min-width: 1024px) {
+  #deviceTab > .flex {
+    gap: 1.25rem;
+  }
+  #leftPanel {
+    min-width: 240px;
+  }
+}
+
+@media (max-width: 768px) {
+  main {
+    padding-left: 0.75rem !important;
+    padding-right: 0.75rem !important;
+  }
+  #menuToggle,
+  #logoutBtn {
+    min-height: 2.25rem;
+  }
+}
+
+/* ---------- Look-match PR1: make WebUI visually closer to IDE ---------- */
+body {
+  font-family: 'Space Grotesk', system-ui, sans-serif;
+}
+
+code,
+pre,
+.font-mono,
+#terminal,
+#terminal * {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace !important;
+}
+
+/* IDE-like subtle grid/scanline feel on WebUI */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(16,185,129,0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(16,185,129,0.045) 1px, transparent 1px);
+  background-size: 22px 22px;
+  opacity: 0.22;
+  pointer-events: none;
+  z-index: 0;
+}
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(16,185,129,0.02) 2px, rgba(16,185,129,0.02) 4px);
+  pointer-events: none;
+  opacity: 0.3;
+  z-index: 0;
+}
+main,
+#sidebar {
+  position: relative;
+  z-index: 1;
+}
+
+/* Make WebUI controls feel like IDE toolbar buttons */
+#menuToggle,
+#logoutBtn,
+#shellConnect,
+#shellDisconnect,
+#payloadsRefresh,
+#lootUp,
+#discordWebhookSave,
+#discordWebhookClear,
+#lootPreviewClose,
+#lootPreviewDownload {
+  border: 1px solid rgba(148,163,184,0.18) !important;
+  background: rgba(148,163,184,0.08) !important;
+  color: rgba(226,232,240,0.92) !important;
+}
+#shellConnect,
+#discordWebhookSave,
+#lootPreviewClose {
+  border-color: rgba(16,185,129,0.42) !important;
+  background: rgba(16,185,129,0.16) !important;
+  color: #d1fae5 !important;
+}
+#shellConnect:hover,
+#discordWebhookSave:hover,
+#lootPreviewClose:hover {
+  background: rgba(16,185,129,0.22) !important;
+}
+
+/* WebUI cards align with IDE card depth */
+#deviceTab .terminal-wrap,
+#settingsTab > div,
+#lootTab > div,
+#deviceShell {
+  box-shadow: 0 16px 34px rgba(2,6,23,0.42) !important;
+}
+
+/* Look-match PR2: icon and chroma harmonization */
+#sidebar nav i,
+#menuToggle i,
+#logoutBtn i {
+  width: 14px;
+  text-align: center;
+  opacity: 0.9;
+}
+
+#sidebar nav > button,
+#sidebar nav > a {
+  background: rgba(15,23,42,0.5) !important;
+}
+#sidebar nav > button:hover,
+#sidebar nav > a:hover {
+  background: rgba(30,41,59,0.68) !important;
+}
+
+/* Look-match PR3: shell bar and section structure parity */
+main > .flex.items-center.justify-between.mb-4.md\:mb-6 {
+  box-shadow: var(--rj-parity-shadow);
+}
+
+#deviceTab .terminal-wrap > .flex.items-center.justify-between,
+#settingsTab .flex.items-center.justify-between,
+#lootTab .flex.items-center.justify-between {
+  background: rgba(2, 6, 23, 0.34);
+}
+
+#payloadSidebar > div,
+#lootList,
+#treeContainer {
+  border-radius: 10px;
+}
+
+#deviceShell.theme-neon,
+#deviceShell[data-theme="neon"] {
+  filter: saturate(0.92) brightness(0.98);
+}

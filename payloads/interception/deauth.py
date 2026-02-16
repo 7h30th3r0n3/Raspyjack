@@ -53,6 +53,43 @@ PINS = {"UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26, "OK": 13, "KEY1": 21, "KEY2
 SCAN_TIMEOUT = 15
 LOG_FILE = os.path.join(os.path.dirname(__file__), "deauth_debug.log")
 
+# Reserve the onboard Pi WiFi for WebUI, regardless of whether it is wlan0 or wlan1
+def _is_onboard_wifi_iface(iface):
+    """True for onboard Pi WiFi (SDIO/mmc path or brcmfmac driver)."""
+    try:
+        devpath = os.path.realpath(f"/sys/class/net/{iface}/device")
+        if "mmc" in devpath:
+            return True
+    except Exception:
+        pass
+    try:
+        driver = os.path.basename(
+            os.path.realpath(f"/sys/class/net/{iface}/device/driver")
+        )
+        if driver == "brcmfmac":
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _detect_webui_interface():
+    """Detect the onboard WebUI WiFi interface name at runtime."""
+    try:
+        for name in os.listdir("/sys/class/net"):
+            if not name.startswith("wlan"):
+                continue
+            if not os.path.isdir(f"/sys/class/net/{name}/wireless"):
+                continue
+            if _is_onboard_wifi_iface(name):
+                return name
+    except Exception:
+        pass
+    return "wlan0"
+
+
+WEBUI_INTERFACE = _detect_webui_interface()
+
 def log(message):
     """Write message to log file."""
     timestamp = time.strftime("%H:%M:%S")
@@ -65,15 +102,19 @@ def log(message):
 
 # Dynamic WiFi interface selection
 def get_wifi_interface():
-    """Get the best WiFi interface for deauth attacks."""
+    """Get the best WiFi interface for deauth attacks.
+    
+    IMPORTANT: onboard WiFi (WebUI interface) is never used for monitor mode.
+    """
     if WIFI_INTEGRATION:
         # Use WiFi integration to get best interface, preferring WiFi dongles
         interfaces = get_available_interfaces()
-        wifi_interfaces = [iface for iface in interfaces if iface.startswith('wlan')]
+        # Exclude onboard/WebUI interface
+        wifi_interfaces = [iface for iface in interfaces
+                           if iface.startswith('wlan') and iface != WEBUI_INTERFACE]
         
         if wifi_interfaces:
-            # Prefer external dongles (wlan1, wlan2) over built-in (wlan0)
-            wifi_interfaces.sort(key=lambda x: (x != 'wlan1', x != 'wlan2', x))
+            wifi_interfaces.sort(key=lambda x: (int(x[4:]) if x[4:].isdigit() else 999, x))
             selected_interface = wifi_interfaces[0]
             
             # Check interface status
@@ -92,9 +133,9 @@ def get_wifi_interface():
                 return selected_interface
         else:
             try:
-                log("No WiFi interfaces found via integration")
+                log(f"No WiFi interfaces found via integration ({WEBUI_INTERFACE} reserved for WebUI)")
             except:
-                print("No WiFi interfaces found via integration")
+                print(f"No WiFi interfaces found via integration ({WEBUI_INTERFACE} reserved for WebUI)")
             return "wlan1"  # Fallback
     else:
         # Fallback to hardcoded interface
@@ -208,8 +249,10 @@ def check_interface_exists():
         log(f"Interface {WIFI_INTERFACE} not found, trying alternatives")
         show_status("Finding iface...")
         
-        # Try alternative interfaces
+        # Try alternative interfaces (skip reserved WebUI interface)
         for iface in INTERFACE_PATTERNS:
+            if iface == WEBUI_INTERFACE or iface == f"{WEBUI_INTERFACE}mon":
+                continue
             result = run_command(f"iwconfig {iface}")
             if "No such device" not in result and "IEEE 802.11" in result:
                 log(f"Found working interface: {iface}")
@@ -219,7 +262,7 @@ def check_interface_exists():
         
         # Check for USB dongles specifically
         show_status("Check USB dongles...")
-        usb_check = run_command("lsusb | grep -i 'realtek\|ralink\|atheros\|broadcom'")
+        usb_check = run_command("lsusb | grep -Ei 'realtek|ralink|atheros|broadcom'")
         if usb_check:
             log(f"USB WiFi dongles detected: {usb_check}")
             show_status("USB dongles found!")
@@ -273,10 +316,11 @@ def setup_monitor_mode():
         show_status("Switch to USB dongle")
         return False
     
-    # Kill interfering processes
-    show_status("Stopping NM...")
-    run_command("pkill -f NetworkManager")
-    run_command("pkill -f wpa_supplicant")
+    # Tell NetworkManager to stop managing this interface only (keeps wlan0/WebUI alive)
+    show_status("Unmanage iface...")
+    run_command(f"nmcli device set {WIFI_INTERFACE} managed no")
+    # Only kill wpa_supplicant for this specific interface
+    run_command(f"pkill -f 'wpa_supplicant.*{WIFI_INTERFACE}'")
     time.sleep(1)
     
     # Check current mode
@@ -701,12 +745,12 @@ def simple_cleanup():
         # Stop all attacks
         stop_all_attacks()
         
-        # Kill any remaining processes
+        # Kill any remaining attack processes
         run_command("pkill -f aireplay-ng 2>/dev/null || true")
         run_command("pkill -f airodump-ng 2>/dev/null || true")
         
-        # Try to restart network manager (ignore errors)
-        run_command("systemctl start NetworkManager 2>/dev/null || true")
+        # Re-manage the interface in NetworkManager (NM was never stopped)
+        run_command(f"nmcli device set {WIFI_INTERFACE} managed yes 2>/dev/null || true")
         
         log("Simple cleanup completed")
         
@@ -789,17 +833,34 @@ def switch_interface():
         time.sleep(2)
         return
     
-    # Get current interface
+    # Build candidate dongle interfaces dynamically (skip onboard/WebUI interface)
     current = WIFI_INTERFACE
-    
-    # Determine target interface (toggle between wlan0 and wlan1)
-    if current == 'wlan0':
-        target_interface = 'wlan1'
-    elif current == 'wlan1':
-        target_interface = 'wlan0'
+    candidates = []
+    try:
+        interfaces = get_available_interfaces() if WIFI_INTEGRATION else []
+        candidates = [
+            i for i in interfaces
+            if i.startswith("wlan") and i != WEBUI_INTERFACE
+        ]
+    except Exception:
+        candidates = []
+
+    if not candidates:
+        # fallback to hardcoded names if integration list is unavailable
+        candidates = ["wlan0", "wlan1", "wlan2"]
+        candidates = [i for i in candidates if i != WEBUI_INTERFACE]
+
+    candidates.sort(key=lambda x: (int(x[4:]) if x[4:].isdigit() else 999, x))
+    if not candidates:
+        show_status("No dongle iface")
+        time.sleep(2)
+        return
+
+    if current in candidates:
+        idx = candidates.index(current)
+        target_interface = candidates[(idx + 1) % len(candidates)]
     else:
-        # If current is not wlan0/wlan1, default to wlan1
-        target_interface = 'wlan1'
+        target_interface = candidates[0]
     
     show_status(f"Switch to {target_interface}")
     

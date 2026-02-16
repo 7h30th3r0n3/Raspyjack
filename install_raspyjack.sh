@@ -37,9 +37,11 @@ add_dtparam() {
 
 # ───── 2 ▸ install / upgrade required APT packages ───────────
 PACKAGES=(
+  python3 python3-pip python3-dev \
   python3-scapy python3-netifaces python3-pyudev python3-serial \
-  python3-smbus python3-rpi.gpio python3-spidev python3-pil python3-numpy \
+  python3-smbus python3-rpi.gpio python3-spidev python3-pil python3-qrcode python3-numpy \
   python3-setuptools python3-cryptography python3-requests python3-websockets \
+  libglib2.0-dev python3-bluez \
   fonts-dejavu-core nmap ncat tcpdump arp-scan dsniff ettercap-text-only php procps \
   aircrack-ng wireless-tools wpasupplicant iw \
   firmware-linux-nonfree firmware-realtek firmware-atheros \
@@ -54,6 +56,30 @@ if ((${#to_install[@]})); then
   sudo apt-get install -y --no-install-recommends "${PACKAGES[@]}"
 else
   info "All packages already installed & up‑to‑date."
+fi
+
+# ───── 2‑b ▸ Wall-of-Flippers: bluepy (clone + setup.py install) ─
+# WoF uses bluepy.btle (BLE). Install from source; no bleak.
+step "Installing bluepy for WoF (clone + setup.py) …"
+
+BLUEPY_BUILD=$(mktemp -d)
+trap "rm -rf '$BLUEPY_BUILD'" EXIT
+git clone --depth 1 https://github.com/IanHarvey/bluepy.git "$BLUEPY_BUILD"
+(cd "$BLUEPY_BUILD" && python3 setup.py build && sudo python3 setup.py install)
+info "Installed bluepy from source"
+
+python3 - <<'PY' || fail "bluepy import failed; WoF threat detection will not be ready."
+import bluepy
+print("[OK] bluepy available")
+PY
+
+# ───── 2‑c ▸ Navarro (vendored in repo) ─────────────────────────
+NAVARRO_PATH="/root/Raspyjack/Navarro/navarro.py"
+if [ -f "$NAVARRO_PATH" ]; then
+  chmod +x "$NAVARRO_PATH"
+  info "Navarro found: $NAVARRO_PATH"
+else
+  warn "Navarro not found at $NAVARRO_PATH – add Navarro/ to your Raspyjack repo for OSINT payload"
 fi
 
 mkdir -p /usr/share/fonts/truetype/fontawesome
@@ -76,6 +102,75 @@ grep -qE '^dtoverlay=spi0-[12]cs' "$CFG" || echo 'dtoverlay=spi0-2cs' | sudo tee
 
 # ───── 4 ▸ WiFi attack setup ──────────────────────────────────
 step "Setting up WiFi attack environment …"
+
+# Pin onboard WiFi to wlan0 so it never swaps with USB dongles across reboots.
+# Without this, Linux can assign wlan0/wlan1 in random order on each boot,
+# which breaks the WebUI (wlan0) vs monitor-mode (wlan1+) separation.
+step "Pinning onboard WiFi to wlan0 (persistent naming) …"
+
+# Detect WiFi MAC addresses by bus:
+# - onboard chip: SDIO/MMC -> forced to wlan0
+# - first USB dongle: USB bus -> forced to wlan1
+ONBOARD_MAC=""
+USB_MAC=""
+for dev in /sys/class/net/wlan*; do
+  [ -e "$dev" ] || continue
+  DEVPATH=$(readlink -f "$dev/device" 2>/dev/null || true)
+  if echo "$DEVPATH" | grep -q "mmc"; then
+    ONBOARD_MAC=$(cat "$dev/address" 2>/dev/null || true)
+    ONBOARD_NAME=$(basename "$dev")
+    info "Found onboard WiFi: $ONBOARD_NAME ($ONBOARD_MAC) on SDIO/MMC bus"
+  elif [ -z "$USB_MAC" ] && echo "$DEVPATH" | grep -q "usb"; then
+    USB_MAC=$(cat "$dev/address" 2>/dev/null || true)
+    USB_NAME=$(basename "$dev")
+    info "Found USB WiFi dongle: $USB_NAME ($USB_MAC) on USB bus"
+  fi
+done
+
+if [ -n "$ONBOARD_MAC" ]; then
+  # Method 1: systemd .link file (takes priority on Bookworm / modern systemd)
+  # This is the RELIABLE way — systemd overrides udev NAME= rules
+  sudo tee /etc/systemd/network/10-onboard-wifi.link >/dev/null <<LINK
+[Match]
+MACAddress=$ONBOARD_MAC
+
+[Link]
+Name=wlan0
+LINK
+
+  if [ -n "$USB_MAC" ]; then
+    sudo tee /etc/systemd/network/11-usb-wifi.link >/dev/null <<LINK
+[Match]
+MACAddress=$USB_MAC
+
+[Link]
+Name=wlan1
+LINK
+  else
+    warn "No USB WiFi dongle detected during install - wlan1 pin skipped"
+  fi
+
+  # Method 2: udev rule (fallback for older systems without systemd-networkd)
+  sudo tee /etc/udev/rules.d/70-raspyjack-wifi.rules >/dev/null <<UDEV
+# RaspyJack: pin WiFi interfaces by MAC
+# Onboard WiFi (SDIO) -> wlan0
+SUBSYSTEM=="net", ACTION=="add", ATTR{address}=="$ONBOARD_MAC", NAME="wlan0"
+UDEV
+  if [ -n "$USB_MAC" ]; then
+    echo "SUBSYSTEM==\"net\", ACTION==\"add\", ATTR{address}==\"$USB_MAC\", NAME=\"wlan1\"" | sudo tee -a /etc/udev/rules.d/70-raspyjack-wifi.rules >/dev/null
+  fi
+
+  sudo udevadm control --reload-rules
+  info "Pinned onboard WiFi ($ONBOARD_MAC) to wlan0 via systemd .link + udev rule"
+  if [ -n "$USB_MAC" ]; then
+    info "Pinned USB WiFi dongle ($USB_MAC) to wlan1 via systemd .link + udev rule"
+  fi
+  info "This will take effect after reboot"
+else
+  warn "Could not detect onboard WiFi MAC — skipping interface pinning"
+  warn "Run 'ip link' and manually create /etc/systemd/network/10-onboard-wifi.link"
+fi
+
 sudo mkdir -p /root/Raspyjack/wifi/profiles
 sudo chown root:root /root/Raspyjack/wifi/profiles
 sudo chmod 755 /root/Raspyjack/wifi/profiles
@@ -110,6 +205,27 @@ else
   warn "NetworkManager not active - WiFi attacks may need manual setup"
 fi
 
+# Hard fallback: force WiFi naming at boot before NetworkManager
+step "Installing boot-time WiFi name pinning service …"
+sudo install -m 0755 /root/Raspyjack/scripts/pin_wifi_names.sh /usr/local/sbin/raspyjack-pin-wifi.sh
+sudo tee /etc/systemd/system/raspyjack-pin-wifi.service >/dev/null <<'UNIT'
+[Unit]
+Description=RaspyJack Pin WiFi Interface Names
+After=systemd-udev-settle.service local-fs.target
+Wants=systemd-udev-settle.service
+Before=NetworkManager.service network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/raspyjack-pin-wifi.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+sudo systemctl daemon-reload
+sudo systemctl enable raspyjack-pin-wifi.service
+
 # ───── 5 ▸ RaspyJack core service ────────────────────────────
 SERVICE=/etc/systemd/system/raspyjack.service
 step "Installing core systemd service $SERVICE …"
@@ -136,6 +252,41 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now raspyjack.service
 
 # ───── 5‑b ▸ device server & WebUI split services ───────────
+# Shared WebUI token (used by both HTTP + WS servers)
+WEBUI_TOKEN_FILE=/root/Raspyjack/.webui_token
+WEBUI_AUTH_SECRET_FILE=/root/Raspyjack/.webui_session_secret
+step "Configuring shared WebUI token at $WEBUI_TOKEN_FILE …"
+if ! sudo test -s "$WEBUI_TOKEN_FILE"; then
+  sudo python3 - <<'PY'
+from pathlib import Path
+import secrets
+
+path = Path("/root/Raspyjack/.webui_token")
+path.write_text(secrets.token_urlsafe(32) + "\n", encoding="utf-8")
+print(f"[OK] Created {path}")
+PY
+else
+  info "Existing WebUI token file found, keeping it."
+fi
+sudo chown root:root "$WEBUI_TOKEN_FILE"
+sudo chmod 600 "$WEBUI_TOKEN_FILE"
+
+step "Configuring WebUI auth secret at $WEBUI_AUTH_SECRET_FILE …"
+if ! sudo test -s "$WEBUI_AUTH_SECRET_FILE"; then
+  sudo python3 - <<'PY'
+from pathlib import Path
+import secrets
+
+path = Path("/root/Raspyjack/.webui_session_secret")
+path.write_text(secrets.token_urlsafe(48) + "\n", encoding="utf-8")
+print(f"[OK] Created {path}")
+PY
+else
+  info "Existing WebUI auth secret found, keeping it."
+fi
+sudo chown root:root "$WEBUI_AUTH_SECRET_FILE"
+sudo chmod 600 "$WEBUI_AUTH_SECRET_FILE"
+
 # Device server
 DEVICE_SERVICE=/etc/systemd/system/raspyjack-device.service
 step "Installing device server systemd service $DEVICE_SERVICE …"
@@ -153,6 +304,9 @@ ExecStart=/usr/bin/python3 /root/Raspyjack/device_server.py
 Restart=on-failure
 User=root
 Environment=PYTHONUNBUFFERED=1
+Environment=RJ_WS_TOKEN_FILE=/root/Raspyjack/.webui_token
+Environment=RJ_WEB_AUTH_SECRET_FILE=/root/Raspyjack/.webui_session_secret
+Environment=RJ_WEB_AUTH_FILE=/root/Raspyjack/.webui_auth.json
 
 [Install]
 WantedBy=multi-user.target
@@ -178,6 +332,9 @@ ExecStart=/usr/bin/python3 /root/Raspyjack/web_server.py
 Restart=on-failure
 User=root
 Environment=PYTHONUNBUFFERED=1
+Environment=RJ_WS_TOKEN_FILE=/root/Raspyjack/.webui_token
+Environment=RJ_WEB_AUTH_SECRET_FILE=/root/Raspyjack/.webui_session_secret
+Environment=RJ_WEB_AUTH_FILE=/root/Raspyjack/.webui_auth.json
 
 [Install]
 WantedBy=multi-user.target
@@ -185,6 +342,88 @@ UNIT
 
 sudo systemctl daemon-reload
 sudo systemctl enable --now raspyjack-webui.service
+
+# ───── 5-c ▸ optional TLS reverse proxy (Caddy) ─────────────
+step "Setting up optional HTTPS reverse proxy with Caddy ..."
+set +e
+TLS_SETUP_OK=1
+
+# Install Caddy best-effort. If this fails, keep plain HTTP stack available.
+if ! dpkg -s caddy >/dev/null 2>&1; then
+  step "Installing Caddy package ..."
+  if ! sudo apt-get install -y --no-install-recommends caddy; then
+    warn "Caddy install failed; keeping WebUI on HTTP only."
+    TLS_SETUP_OK=0
+  fi
+fi
+
+if [ "$TLS_SETUP_OK" -eq 1 ]; then
+  CADDY_HOSTS=()
+  for IFACE in eth0 wlan0 tailscale0; do
+    IFACE_IP=$(ip -4 -o addr show "$IFACE" 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -n1)
+    if [ -n "$IFACE_IP" ]; then
+      CADDY_HOSTS+=("$IFACE_IP")
+    fi
+  done
+  CADDY_HOSTS+=("localhost")
+
+  if [ "${#CADDY_HOSTS[@]}" -eq 0 ]; then
+    warn "No interface IPs detected for Caddy TLS vhosts; skipping Caddy config."
+    TLS_SETUP_OK=0
+  fi
+fi
+
+if [ "$TLS_SETUP_OK" -eq 1 ]; then
+  CADDY_SITE_ADDRS=""
+  for host in "${CADDY_HOSTS[@]}"; do
+    if [ -z "$CADDY_SITE_ADDRS" ]; then
+      CADDY_SITE_ADDRS="$host"
+    else
+      CADDY_SITE_ADDRS="${CADDY_SITE_ADDRS}, ${host}"
+    fi
+  done
+  if ! sudo tee /etc/caddy/Caddyfile >/dev/null <<CADDYFILE
+{
+    # RaspyJack self-signed internal CA (local trust only)
+    auto_https disable_redirects
+}
+
+${CADDY_SITE_ADDRS} {
+    tls internal
+
+    @ws path /ws*
+    reverse_proxy @ws 127.0.0.1:8765 {
+        header_up X-Forwarded-Proto {scheme}
+        header_up X-Forwarded-Host {host}
+    }
+
+    reverse_proxy 127.0.0.1:8080 {
+        header_up X-Forwarded-Proto {scheme}
+        header_up X-Forwarded-Host {host}
+    }
+}
+CADDYFILE
+  then
+    warn "Failed to write /etc/caddy/Caddyfile; skipping HTTPS proxy setup."
+    TLS_SETUP_OK=0
+  fi
+fi
+
+if [ "$TLS_SETUP_OK" -eq 1 ]; then
+  if ! sudo systemctl enable --now caddy.service; then
+    warn "Failed to enable/start caddy.service; keeping HTTP services active."
+    TLS_SETUP_OK=0
+  fi
+fi
+
+if [ "$TLS_SETUP_OK" -eq 1 ]; then
+  info "HTTPS proxy is enabled. Access WebUI at: https://<device-ip>/"
+  info "For first use, trust Caddy's local CA certificate on your client if prompted."
+else
+  warn "TLS setup incomplete. WebUI remains available on: http://<device-ip>:8080"
+  warn "Manual remediation: sudo apt-get install caddy && sudo systemctl restart caddy"
+fi
+set -e
 
 # ───── 6 ▸ final health‑check ────────────────────────────────
 step "Running post install checks …"
@@ -213,7 +452,7 @@ fi
 # 6‑d python imports
 python3 - <<'PY' || fail "Python dependency test failed"
 import importlib, sys
-for mod in ("scapy", "netifaces", "pyudev", "serial", "smbus2", "RPi.GPIO", "spidev", "PIL", "requests"):
+for mod in ("scapy", "netifaces", "pyudev", "serial", "smbus2", "RPi.GPIO", "spidev", "PIL", "qrcode", "requests", "bluepy"):
     try:
         importlib.import_module(mod.split('.')[0])
     except Exception as e:
@@ -245,4 +484,4 @@ fi
 
 step "Installation finished successfully!"
 info "⚠️  Reboot is recommended to ensure overlays & services start cleanly."
-info "📡 For WiFi attacks: Plug in USB WiFi dongle and run payloads/deauth.py"
+info "📡 For WiFi attacks: Plug in USB WiFi dongle and run payloads/interception/deauth.py"
