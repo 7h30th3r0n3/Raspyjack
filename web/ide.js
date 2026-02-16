@@ -1719,8 +1719,9 @@ def run_scan():
     target = get_target()
     ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     output = f"{LOOT_DIR}scan_{ts}.txt"
+    xml_output = output.replace(".txt", ".xml")
     show(["Nmap Scan", "Running...", target])
-    subprocess.run(["nmap", "-T4", "-oN", output, target], check=True)
+    subprocess.run(["nmap", "-T4", "-oN", output, "-oX", xml_output, target], check=True)
     show(["Scan Complete!", ts])
     time.sleep(2)
 
@@ -2470,8 +2471,9 @@ def run_nmap_scan():
     target = get_local_ip()
     ts = time.strftime("%Y-%m-%d_%H-%M-%S")
     output = f"{LOOT_DIR}scan_{ts}.txt"
+    xml_output = output.replace(".txt", ".xml")
     show(["Nmap Scan", "In progress..."])
-    subprocess.run(["nmap", "-T4", "-oN", output, target], check=True)
+    subprocess.run(["nmap", "-T4", "-oN", output, "-oX", xml_output, target], check=True)
     show(["Scan complete!", ts])
     time.sleep(2)
 

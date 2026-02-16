@@ -1603,9 +1603,10 @@ def run_scan(label: str, nmap_args: list[str]):
 
     ts   = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     path = f"/root/Raspyjack/loot/Nmap/{label.lower().replace(' ', '_')}_{ts}.txt"
+    xml_path = path.replace(".txt", ".xml")
 
     # Build nmap command with interface specification
-    cmd = ["nmap"] + nmap_args + ["-oN", path]
+    cmd = ["nmap"] + nmap_args + ["-oN", path, "-oX", xml_path]
 
     # Add interface-specific parameters for better results
     Dialog_info(f"      {label}\n        Running\n      wait please...", wait=True)

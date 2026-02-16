@@ -141,10 +141,11 @@ def nmap_scan() -> None:
     target = current_target()
     ts     = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     out    = f"{LOOT_DIR}periodic_scan_{ts}.txt"
+    xml_out = out.replace(".txt", ".xml")
 
     show(["Nmap scan", "in progress…"])
     try:
-        subprocess.run(["nmap", *NMAP_ARGS, "-oN", out, target], check=True)
+        subprocess.run(["nmap", *NMAP_ARGS, "-oN", out, "-oX", xml_out, target], check=True)
         # Clean output like RaspyJack main script
         subprocess.run(["sed", "-i", "s/Nmap scan report for //g", out])
         show(["Scan finished!", ts])
