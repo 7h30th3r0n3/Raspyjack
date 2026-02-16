@@ -6,13 +6,59 @@
   <title>RaspyJack WebUi</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm/css/xterm.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  <link rel="stylesheet" href="./device-shell.css">
+  <link rel="stylesheet" href="./ui.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
-    :root { color-scheme: dark; }
-    body { background: radial-gradient(1200px 800px at 50% -10%, #0f1b2d 0%, #07090f 55%, #05060a 100%); }
-    .device-shell {
-      position: relative;
-      transition: all 0.2s ease;
+    :root {
+      color-scheme: dark;
+      --rj-bg-0: #05060a;
+      --rj-bg-1: #07090f;
+      --rj-bg-2: #0f1b2d;
+      --rj-surface: rgba(15, 23, 42, 0.42);
+      --rj-surface-strong: rgba(15, 23, 42, 0.62);
+      --rj-border: rgba(148, 163, 184, 0.2);
+      --rj-border-strong: rgba(148, 163, 184, 0.32);
+      --rj-text: #e2e8f0;
+      --rj-text-muted: #94a3b8;
+      --rj-accent: #10b981;
+      --rj-accent-soft: rgba(16, 185, 129, 0.16);
+      --rj-danger: #f43f5e;
+      --rj-radius: 12px;
+      --rj-shadow: 0 12px 30px rgba(2, 6, 23, 0.35);
+      --rj-glow: 0 0 24px rgba(16, 185, 129, 0.12);
     }
+    body {
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+      background: radial-gradient(1200px 800px at 50% -10%, var(--rj-bg-2) 0%, var(--rj-bg-1) 55%, var(--rj-bg-0) 100%);
+      color: var(--rj-text);
+      letter-spacing: 0.01em;
+    }
+    button, a {
+      transition: background-color .16s ease, color .16s ease, border-color .16s ease, box-shadow .16s ease, transform .12s ease;
+    }
+    #sidebar {
+      background: linear-gradient(180deg, rgba(2, 6, 23, 0.72), rgba(2, 6, 23, 0.5));
+    }
+    #sidebar nav > button,
+    #sidebar nav > a {
+      border-radius: var(--rj-radius);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.02);
+    }
+    #sidebar nav > button:hover,
+    #sidebar nav > a:hover {
+      border-color: var(--rj-border-strong);
+      box-shadow: var(--rj-shadow);
+    }
+    #deviceTab .terminal-wrap,
+    #settingsTab > div,
+    #lootTab > div {
+      box-shadow: var(--rj-shadow);
+    }
+    /* shared .device-shell base in device-shell.css */
 
     /* Theme: Neon (default) */
     .device-shell.theme-neon,
@@ -39,113 +85,7 @@
       box-shadow: 0 0 40px rgba(18,255,120,0.18);
     }
 
-    /* Theme: Game Boy */
-    .device-shell.theme-gameboy,
-    .device-shell[data-theme="gameboy"] {
-      background: linear-gradient(145deg, #a3a3a3, #7d7d7d);
-      border-radius: 16px;
-      padding: 20px;
-      width: fit-content;
-      box-shadow:
-        inset -4px -4px 10px rgba(0,0,0,0.2),
-        inset 4px 4px 10px rgba(255,255,255,0.05),
-        0 8px 20px rgba(0,0,0,0.5);
-    }
-    .device-shell.theme-gameboy::before,
-    .device-shell[data-theme="gameboy"]::before {
-      content: '';
-      position: absolute;
-      top: 12px;
-      left: 50%;
-      transform: translateX(-50%);
-      width: 80px;
-      height: 6px;
-      background: #222;
-      border-radius: 3px;
-    }
-    .device-shell.theme-gameboy::after,
-    .device-shell[data-theme="gameboy"]::after {
-      content: '';
-      position: absolute;
-      right: 12px;
-      top: 50%;
-      transform: translateY(-50%);
-      width: 6px;
-      height: 60px;
-      background: #333;
-      border-radius: 3px;
-    }
-    .device-shell.theme-gameboy .screen-frame,
-    .device-shell[data-theme="gameboy"] .screen-frame {
-      background: #111;
-      border: 4px solid #444;
-      border-radius: 8px;
-      padding: 4px;
-      margin-bottom: 16px;
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      box-shadow:
-        inset -2px -2px 5px rgba(0,0,0,0.3),
-        inset 2px 2px 5px rgba(255,255,255,0.05);
-    }
-    .device-shell.theme-gameboy .rj-btn,
-    .device-shell[data-theme="gameboy"] .rj-btn {
-      background: #222 !important;
-      color: #fff;
-      border-radius: 8px;
-      width: 40px;
-      height: 40px;
-      font-weight: bold;
-      cursor: pointer;
-      box-shadow:
-        inset -2px -2px 4px rgba(0,0,0,0.3),
-        inset 2px 2px 4px rgba(255,255,255,0.05);
-      transition: all 0.1s;
-    }
-    .device-shell.theme-gameboy .rj-btn:active,
-    .device-shell.theme-gameboy .rj-btn.active,
-    .device-shell[data-theme="gameboy"] .rj-btn:active,
-    .device-shell[data-theme="gameboy"] .rj-btn.active {
-      transform: translateY(2px);
-      box-shadow:
-        inset 2px 2px 4px rgba(0,0,0,0.3),
-        inset -2px -2px 4px rgba(255,255,255,0.05);
-    }
-    .device-shell.theme-gameboy .key-btn,
-    .device-shell[data-theme="gameboy"] .key-btn {
-      width: 96px;
-      height: 36px;
-      border-radius: 8px;
-      font-size: 0.9rem;
-    }
-    .device-shell.theme-gameboy .screen-frame,
-    .device-shell[data-theme="gameboy"] .screen-frame {
-      margin-bottom: 16px;
-    }
-    .device-shell.theme-gameboy .side-buttons button,
-    .device-shell[data-theme="gameboy"] .side-buttons button {
-      width: 96px;
-      height: 36px;
-      border-radius: 8px;
-      font-size: 0.9rem;
-    }
-    .device-shell.theme-gameboy .layout-gameboy,
-    .device-shell[data-theme="gameboy"] .layout-gameboy {
-      display: block;
-    }
-    .device-shell.theme-gameboy .layout-default,
-    .device-shell[data-theme="gameboy"] .layout-default {
-      display: none;
-    }
-    .device-shell.theme-gameboy .layout-default,
-    .device-shell[data-theme="gameboy"] .layout-default {
-      display: none;
-    }
-    .device-shell.theme-gameboy .layout-gameboy,
-    .device-shell[data-theme="gameboy"] .layout-gameboy {
-      display: block;
-    }
+    /* Theme: Game Boy moved to device-shell.css */
 
     /* Theme: Pager */
     .device-shell.theme-pager,
@@ -318,6 +258,87 @@
       background: rgba(148, 163, 184, 0.25);
       border-radius: 8px;
     }
+
+    #logoutBtn,
+    #shellConnect,
+    #shellDisconnect,
+    #payloadsRefresh,
+    #lootUp,
+    #discordWebhookSave,
+    #discordWebhookClear,
+    #lootPreviewClose,
+    #lootPreviewDownload {
+      border-radius: 10px !important;
+      border-color: var(--rj-border) !important;
+    }
+
+    #shellConnect,
+    #discordWebhookSave,
+    #lootPreviewClose {
+      box-shadow: var(--rj-glow);
+    }
+
+    #status,
+    #shellStatus,
+    #payloadStatus,
+    #systemStatus,
+    #lootStatus,
+    #settingsStatus {
+      color: var(--rj-text-muted);
+      font-weight: 500;
+      letter-spacing: 0.015em;
+      transition: color .16s ease, text-shadow .16s ease;
+    }
+
+    .status-tone-ok { color: #34d399 !important; text-shadow: 0 0 10px rgba(16,185,129,.28); }
+    .status-tone-warn { color: #fbbf24 !important; text-shadow: 0 0 10px rgba(251,191,36,.2); }
+    .status-tone-bad { color: #fb7185 !important; text-shadow: 0 0 10px rgba(244,63,94,.22); }
+
+    @keyframes rjPulseSoft {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.03); }
+    }
+    .payload-status-dot.running {
+      animation: payloadPulse 1.2s ease-in-out infinite, rjPulseSoft 1.8s ease-in-out infinite;
+    }
+
+    #sidebar nav > button,
+    #sidebar nav > a {
+      position: relative;
+      overflow: hidden;
+    }
+    #sidebar nav > .nav-active::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 8px;
+      bottom: 8px;
+      width: 3px;
+      border-radius: 999px;
+      background: linear-gradient(180deg, #34d399, #10b981);
+      box-shadow: 0 0 12px rgba(16,185,129,.55);
+    }
+
+    #deviceTab .terminal-wrap,
+    #deviceShell,
+    #settingsTab > div,
+    #lootTab > div {
+      border-radius: 16px;
+    }
+
+    @media (max-width: 768px) {
+      main {
+        padding-left: 0.75rem !important;
+        padding-right: 0.75rem !important;
+      }
+      #deviceTab .terminal-body {
+        height: 250px;
+      }
+      #deviceShell {
+        transform: scale(.96);
+        transform-origin: top center;
+      }
+    }
   </style>
 </head>
 <body class="min-h-screen text-slate-200">
@@ -335,8 +356,8 @@
       </div>
 
       <nav class="p-3 space-y-2 flex-1 min-h-0 overflow-y-auto overscroll-contain">
-        <button id="navDevice" type="button" class="w-full px-3 py-2 rounded-xl text-left text-sm font-semibold border border-emerald-400/30 bg-emerald-500/10 text-emerald-300 shadow-[0_0_16px_rgba(16,185,129,0.15)]">Device</button>
-        <button id="navSystem" type="button" class="w-full px-3 py-2 rounded-xl text-left text-sm font-semibold border border-slate-400/20 bg-slate-800/40 text-slate-300 hover:text-white hover:bg-slate-700/50 transition">System</button>
+        <button id="navDevice" type="button" class="w-full px-3 py-2 rounded-xl text-left text-sm font-semibold border border-emerald-400/30 bg-emerald-500/10 text-emerald-300 shadow-[0_0_16px_rgba(16,185,129,0.15)]"><i class="fa-solid fa-gamepad mr-2"></i>Device</button>
+        <button id="navSystem" type="button" class="w-full px-3 py-2 rounded-xl text-left text-sm font-semibold border border-slate-400/20 bg-slate-800/40 text-slate-300 hover:text-white hover:bg-slate-700/50 transition"><i class="fa-solid fa-microchip mr-2"></i>System</button>
         <div id="systemDropdown" class="hidden rounded-xl border border-slate-800/80 bg-slate-950/40 p-2 space-y-2">
           <div class="flex items-center justify-between">
             <div class="text-[11px] font-semibold text-emerald-300">System Monitor</div>
@@ -385,9 +406,9 @@
             </div>
           </div>
         </div>
-        <button id="navLoot" type="button" class="w-full px-3 py-2 rounded-xl text-left text-sm font-semibold border border-slate-400/20 bg-slate-800/40 text-slate-300 hover:text-white hover:bg-slate-700/50 transition">Loot</button>
-        <button id="navSettings" type="button" class="w-full px-3 py-2 rounded-xl text-left text-sm font-semibold border border-slate-400/20 bg-slate-800/40 text-slate-300 hover:text-white hover:bg-slate-700/50 transition">Settings</button>
-        <a id="navPayloadStudio" href="./ide.html" class="w-full px-3 py-2 rounded-xl text-left text-sm font-semibold border border-slate-400/20 bg-slate-800/40 text-slate-300 hover:text-white hover:bg-slate-700/50 transition block">Payload Studio</a>
+        <button id="navLoot" type="button" class="w-full px-3 py-2 rounded-xl text-left text-sm font-semibold border border-slate-400/20 bg-slate-800/40 text-slate-300 hover:text-white hover:bg-slate-700/50 transition"><i class="fa-solid fa-vault mr-2"></i>Loot</button>
+        <button id="navSettings" type="button" class="w-full px-3 py-2 rounded-xl text-left text-sm font-semibold border border-slate-400/20 bg-slate-800/40 text-slate-300 hover:text-white hover:bg-slate-700/50 transition"><i class="fa-solid fa-sliders mr-2"></i>Settings</button>
+        <a id="navPayloadStudio" href="./ide.html" class="w-full px-3 py-2 rounded-xl text-left text-sm font-semibold border border-slate-400/20 bg-slate-800/40 text-slate-300 hover:text-white hover:bg-slate-700/50 transition block"><i class="fa-solid fa-code mr-2"></i>Payload Studio</a>
 
         <div class="pt-2 border-t border-slate-800/70">
           <div class="flex items-center justify-between px-3 pb-2">
@@ -408,9 +429,15 @@
     </aside>
 
     <main class="flex-1 px-4 py-6 md:px-8">
-      <div class="flex items-center justify-between mb-4 md:mb-6">
-        <button id="menuToggle" type="button" class="md:hidden px-3 py-2 rounded-lg bg-slate-800/60 border border-slate-600/40 text-slate-200">☰</button>
-        <button id="logoutBtn" type="button" class="px-3 py-1.5 text-xs rounded-lg bg-slate-800/80 border border-slate-600/40 text-slate-200 hover:bg-slate-700/80 transition">Logout</button>
+      <div class="flex items-center justify-between mb-4 md:mb-6 px-3 py-2 border border-slate-800/70 bg-slate-950/45 backdrop-blur rounded-xl">
+        <div class="flex items-center gap-2 text-[11px] text-slate-300">
+          <i class="fa-solid fa-terminal text-emerald-400"></i>
+          <span class="tracking-wide">WEBUI CONTROL DECK</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <button id="menuToggle" type="button" class="md:hidden px-3 py-2 rounded-lg bg-slate-800/60 border border-slate-600/40 text-slate-200"><i class="fa-solid fa-bars"></i></button>
+          <button id="logoutBtn" type="button" class="px-3 py-1.5 text-xs rounded-lg bg-slate-800/80 border border-slate-600/40 text-slate-200 hover:bg-slate-700/80 transition"><i class="fa-solid fa-right-from-bracket mr-1"></i>Logout</button>
+        </div>
       </div>
 
       <!-- Device card -->
@@ -636,6 +663,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/xterm/lib/xterm.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit/lib/xterm-addon-fit.min.js"></script>
+  <script src="./shared.js"></script>
   <script src="./app.js"></script>
 </body>
 </html>

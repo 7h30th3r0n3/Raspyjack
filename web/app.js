@@ -1,4 +1,5 @@
 (function(){
+  const shared = window.RJShared || {};
   const canvas = document.getElementById('screen');
   const canvasGb = document.getElementById('screen-gb');
   const canvasPager = document.getElementById('screen-pager');
@@ -98,6 +99,7 @@
 
   // Build WS URL from current page host.
   function getWsUrl(){
+    if (shared.getWsUrl) return shared.getWsUrl(location);
     if (location.protocol === 'https:'){
       return `${location.origin.replace(/^https:/, 'wss:')}/ws`;
     }
@@ -108,6 +110,7 @@
   }
 
   function getApiUrl(path, params = {}){
+    if (shared.getApiUrl) return shared.getApiUrl(path, params, location);
     const qs = new URLSearchParams(params).toString();
     const base = location.origin;
     return `${base}${path}${qs ? `?${qs}` : ''}`;
@@ -124,6 +127,19 @@
     }
   }
 
+  function escapeHtml(value){
+    return String(value ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/\"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function encodeData(value){
+    return encodeURIComponent(String(value ?? ''));
+  }
+
   const AUTH_STORAGE_KEY = 'rj.authToken';
   let authToken = '';
   let wsTicket = '';
@@ -133,6 +149,10 @@
   let authRecoveryMode = false;
 
   function saveAuthToken(token){
+    if (shared.saveToken){
+      authToken = shared.saveToken(AUTH_STORAGE_KEY, token);
+      return;
+    }
     authToken = String(token || '').trim();
     try{
       if (authToken){
@@ -144,10 +164,19 @@
   }
 
   function loadAuthToken(){
-    try{
-      const stored = (sessionStorage.getItem(AUTH_STORAGE_KEY) || '').trim();
+    if (shared.loadToken){
+      const stored = shared.loadToken(AUTH_STORAGE_KEY);
       if (stored) authToken = stored;
-    }catch{}
+    } else {
+      try{
+        const stored = (sessionStorage.getItem(AUTH_STORAGE_KEY) || '').trim();
+        if (stored) authToken = stored;
+      }catch{}
+    }
+
+    const migrated = shared.migrateTokenFromUrl ? shared.migrateTokenFromUrl(AUTH_STORAGE_KEY, 'token') : '';
+    if (migrated) authToken = migrated;
+    if (migrated) return;
 
     // One-time migration: accept token from URL, then remove it.
     try{
@@ -240,6 +269,7 @@
   }
 
   function authHeaders(extra){
+    if (shared.authHeaders) return shared.authHeaders(authToken, extra);
     const headers = Object.assign({}, extra || {});
     if (authToken){
       headers.Authorization = `Bearer ${authToken}`;
@@ -262,6 +292,9 @@
   }
 
   async function fetchBootstrapStatus(){
+    if (shared.fetchBootstrapStatus){
+      return shared.fetchBootstrapStatus(getApiUrl.bind(null));
+    }
     try{
       const res = await fetch(getApiUrl('/api/auth/bootstrap-status'), { cache: 'no-store' });
       const data = await res.json();
@@ -272,6 +305,9 @@
   }
 
   async function fetchAuthMe(){
+    if (shared.fetchAuthMe){
+      return shared.fetchAuthMe(getApiUrl.bind(null), authToken);
+    }
     try{
       const res = await fetch(getApiUrl('/api/auth/me'), {
         cache: 'no-store',
@@ -391,6 +427,10 @@
 
   async function refreshWsTicket(){
     wsTicket = '';
+    if (shared.refreshWsTicket){
+      wsTicket = await shared.refreshWsTicket(getApiUrl.bind(null), authToken);
+      return;
+    }
     if (authToken) return;
     try{
       const res = await fetch(getApiUrl('/api/auth/ws-ticket'), {
@@ -460,15 +500,37 @@
   let systemOpen = false;
   let wsAuthenticated = true;
 
+  function applyStatusTone(el, txt){
+    if (!el) return;
+    const s = String(txt || '').toLowerCase();
+    el.classList.remove('status-tone-ok', 'status-tone-warn', 'status-tone-bad');
+    if (/connected|authenticated|ready|live|saved|configured|launched|running/.test(s)) {
+      el.classList.add('status-tone-ok');
+    } else if (/loading|connecting|opening|reconnecting|stopping/.test(s)) {
+      el.classList.add('status-tone-warn');
+    } else if (/failed|unavailable|disconnected|error|denied/.test(s)) {
+      el.classList.add('status-tone-bad');
+    }
+  }
+
   function setStatus(txt){
-    if (statusEl) statusEl.textContent = txt;
+    if (statusEl) {
+      statusEl.textContent = txt;
+      applyStatusTone(statusEl, txt);
+    }
     if (statusEls && statusEls.length) {
-      statusEls.forEach(el => { el.textContent = txt; });
+      statusEls.forEach(el => {
+        el.textContent = txt;
+        applyStatusTone(el, txt);
+      });
     }
   }
 
   function setPayloadStatus(txt){
-    if (payloadStatus) payloadStatus.textContent = txt;
+    if (payloadStatus) {
+      payloadStatus.textContent = txt;
+      applyStatusTone(payloadStatus, txt);
+    }
     if (payloadStatusDot){
       const active = /running|starting|stopping|launched/i.test(String(txt || ''));
       payloadStatusDot.classList.toggle('running', active);
@@ -476,15 +538,24 @@
   }
 
   function setSystemStatus(txt){
-    if (systemStatus) systemStatus.textContent = txt;
+    if (systemStatus) {
+      systemStatus.textContent = txt;
+      applyStatusTone(systemStatus, txt);
+    }
   }
 
   function setShellStatus(txt){
-    if (shellStatusEl) shellStatusEl.textContent = txt;
+    if (shellStatusEl) {
+      shellStatusEl.textContent = txt;
+      applyStatusTone(shellStatusEl, txt);
+    }
   }
 
   function setSettingsStatus(txt){
-    if (settingsStatus) settingsStatus.textContent = txt;
+    if (settingsStatus) {
+      settingsStatus.textContent = txt;
+      applyStatusTone(settingsStatus, txt);
+    }
   }
 
   // Handheld themes (frontend-only)
@@ -540,6 +611,7 @@
 
   function setNavActive(btn, active){
     if (!btn) return;
+    btn.classList.toggle('nav-active', active);
     btn.classList.toggle('bg-emerald-500/10', active);
     btn.classList.toggle('text-emerald-300', active);
     btn.classList.toggle('border-emerald-400/30', active);
@@ -861,7 +933,7 @@
           sysInterfaces.innerHTML = '<div class="text-slate-500">No active interfaces</div>';
         } else {
           sysInterfaces.innerHTML = ifaces
-            .map(i => `<div><span class="text-emerald-300">${String(i.name || '-')}</span>: ${String(i.ipv4 || '-')}</div>`)
+            .map(i => `<div><span class="text-emerald-300">${escapeHtml(String(i.name || '-'))}</span>: ${escapeHtml(String(i.ipv4 || '-'))}</div>`)
             .join('');
         }
       }
@@ -957,18 +1029,19 @@
       return;
     }
     const rows = items.map(item => {
-      const icon = item.type === 'dir' ? '📁' : '📄';
-      const meta = item.type === 'dir' ? 'Folder' : `${formatBytes(item.size)} · ${formatTime(item.mtime)}`;
-      const safeName = item.name.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-      const encodedName = encodeURIComponent(item.name);
+      const itemType = item && item.type === 'dir' ? 'dir' : 'file';
+      const icon = itemType === 'dir' ? '📁' : '📄';
+      const meta = itemType === 'dir' ? 'Folder' : `${formatBytes(item.size)} · ${formatTime(item.mtime)}`;
+      const safeName = escapeHtml(item.name || '');
+      const encodedName = encodeData(item.name || '');
       return `
-        <button class="w-full text-left px-3 py-2 flex items-center gap-3 hover:bg-slate-800/60 transition loot-item" data-type="${item.type}" data-name="${encodedName}">
+        <button class="w-full text-left px-3 py-2 flex items-center gap-3 hover:bg-slate-800/60 transition loot-item" data-type="${itemType}" data-name="${encodedName}">
           <span class="text-lg">${icon}</span>
           <div class="flex-1 min-w-0">
             <div class="text-sm text-slate-100 truncate">${safeName}</div>
-            <div class="text-[11px] text-slate-400">${meta}</div>
+            <div class="text-[11px] text-slate-400">${escapeHtml(meta)}</div>
           </div>
-          <div class="text-xs text-slate-400">${item.type === 'dir' ? 'Open' : 'Download'}</div>
+          <div class="text-xs text-slate-400">${itemType === 'dir' ? 'Open' : 'Download'}</div>
         </button>
       `;
     }).join('');
@@ -1051,31 +1124,36 @@
       return;
     }
     payloadSidebar.innerHTML = cats.map(cat => {
-      const isOpen = payloadState.open[cat.id];
-      const items = (cat.items || []).map(item => `
+      const catId = String(cat?.id || '');
+      const catIdEncoded = encodeData(catId);
+      const catLabel = escapeHtml(String(cat?.label || catId || 'Category'));
+      const isOpen = !!payloadState.open[catId];
+      const items = (cat.items || []).map(item => {
+        const itemName = escapeHtml(String(item?.name || 'payload'));
+        const itemPath = String(item?.path || '');
+        const itemPathEncoded = encodeData(itemPath);
+        const isActive = payloadState.activePath === itemPath;
+        const disabled = !!payloadState.activePath;
+        const startCls = disabled
+          ? 'px-2 py-0.5 text-[10px] rounded-md bg-slate-800/80 border border-slate-700/40 text-slate-500 cursor-not-allowed'
+          : 'px-2 py-0.5 text-[10px] rounded-md bg-emerald-600/80 border border-emerald-300/30 text-white hover:bg-emerald-500/80 transition';
+        const stopBtn = isActive
+          ? '<button type="button" data-stop="1" class="px-2 py-0.5 text-[10px] rounded-md bg-rose-600/80 border border-rose-300/30 text-white hover:bg-rose-500/80 transition">Stop</button>'
+          : '<span class="px-2 py-0.5 text-[10px] rounded-md bg-slate-900/60 border border-slate-800/40 text-slate-600">Idle</span>';
+        return `
         <div class="flex items-center justify-between gap-2 px-2 py-1 rounded-lg bg-slate-900/40 border border-slate-800/70">
-          <div class="text-[11px] text-slate-200 truncate">${item.name}</div>
-          ${(() => {
-            const isActive = payloadState.activePath === item.path;
-            const disabled = !!payloadState.activePath;
-            const startCls = disabled
-              ? 'px-2 py-0.5 text-[10px] rounded-md bg-slate-800/80 border border-slate-700/40 text-slate-500 cursor-not-allowed'
-              : 'px-2 py-0.5 text-[10px] rounded-md bg-emerald-600/80 border border-emerald-300/30 text-white hover:bg-emerald-500/80 transition';
-            const stopBtn = isActive
-              ? '<button type="button" data-stop="1" class="px-2 py-0.5 text-[10px] rounded-md bg-rose-600/80 border border-rose-300/30 text-white hover:bg-rose-500/80 transition">Stop</button>'
-              : '<span class="px-2 py-0.5 text-[10px] rounded-md bg-slate-900/60 border border-slate-800/40 text-slate-600">Idle</span>';
-            return `
+          <div class="text-[11px] text-slate-200 truncate">${itemName}</div>
           <div class="flex items-center gap-1">
-            <button type="button" data-start="${item.path}" ${disabled ? 'disabled' : ''} class="${startCls}">Start</button>
+            <button type="button" data-start="${itemPathEncoded}" ${disabled ? 'disabled' : ''} class="${startCls}">Start</button>
             ${stopBtn}
-          </div>`;
-          })()}
+          </div>
         </div>
-      `).join('');
+      `;
+      }).join('');
       return `
         <div class="rounded-xl border border-slate-800/70 bg-slate-950/40">
-          <button type="button" data-cat="${cat.id}" class="w-full px-3 py-2 text-left text-xs font-semibold text-slate-200 flex items-center justify-between">
-            <span>${cat.label}</span>
+          <button type="button" data-cat="${catIdEncoded}" class="w-full px-3 py-2 text-left text-xs font-semibold text-slate-200 flex items-center justify-between">
+            <span>${catLabel}</span>
             <span class="text-slate-400">${isOpen ? '▾' : '▸'}</span>
           </button>
           <div class="${isOpen ? '' : 'hidden'} px-2 pb-2 space-y-1">
@@ -1254,7 +1332,8 @@
   if (payloadSidebar) payloadSidebar.addEventListener('click', (e) => {
     const catBtn = e.target.closest('[data-cat]');
     if (catBtn){
-      const id = catBtn.getAttribute('data-cat');
+      const encodedId = catBtn.getAttribute('data-cat') || '';
+      const id = decodeURIComponent(encodedId);
       if (id){
         payloadState.open[id] = !payloadState.open[id];
         renderPayloadSidebar();
@@ -1263,7 +1342,8 @@
     }
     const startBtn = e.target.closest('[data-start]');
     if (startBtn){
-      const path = startBtn.getAttribute('data-start');
+      const encodedPath = startBtn.getAttribute('data-start') || '';
+      const path = decodeURIComponent(encodedPath);
       if (path) startPayload(path);
       return;
     }
@@ -1325,6 +1405,39 @@
   loadThemePreference();
   applyTheme();
   setActiveTab('device');
+
+  let payloadPollTimer = null;
+  let systemPollTimer = null;
+
+  function schedulePayloadPoll(){
+    if (payloadPollTimer) clearTimeout(payloadPollTimer);
+    const delay = document.hidden ? 6000 : 1500;
+    payloadPollTimer = setTimeout(async () => {
+      await pollPayloadStatus();
+      schedulePayloadPoll();
+    }, delay);
+  }
+
+  function scheduleSystemPoll(){
+    if (systemPollTimer) clearTimeout(systemPollTimer);
+    const delay = document.hidden ? 10000 : 3000;
+    systemPollTimer = setTimeout(async () => {
+      if (systemOpen){
+        await loadSystemStatus();
+      }
+      scheduleSystemPoll();
+    }, delay);
+  }
+
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden){
+      if (systemOpen) loadSystemStatus();
+      pollPayloadStatus();
+    }
+    schedulePayloadPoll();
+    scheduleSystemPoll();
+  });
+
   const startAfterAuth = () => {
     ensureAuthenticated('Log in to access RaspyJack WebUI.').then((ok) => {
       if (!ok){
@@ -1333,12 +1446,8 @@
       }
       connect();
       loadPayloads();
-      setInterval(pollPayloadStatus, 1500);
-      setInterval(() => {
-        if (systemOpen){
-          loadSystemStatus();
-        }
-      }, 3000);
+      schedulePayloadPoll();
+      scheduleSystemPoll();
     });
   };
   startAfterAuth();

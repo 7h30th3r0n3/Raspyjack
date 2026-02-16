@@ -1,4 +1,5 @@
 (function(){
+  const shared = window.RJShared || {};
   // ------------------------ DOM references ------------------------
   const ideStatusEl = document.getElementById('ideStatus');
   const treeContainer = document.getElementById('treeContainer');
@@ -74,8 +75,24 @@
   const resizeHandle = document.getElementById('resizeHandle');
 
   // ------------------------ Helpers ------------------------
+  function applyStatusTone(el, txt){
+    if (!el) return;
+    const s = String(txt || '').toLowerCase();
+    el.classList.remove('status-tone-ok', 'status-tone-warn', 'status-tone-bad');
+    if (/connected|authenticated|ready|saved|launched|active|ok/.test(s)) {
+      el.classList.add('status-tone-ok');
+    } else if (/loading|connecting|starting|running|reconnecting/.test(s)) {
+      el.classList.add('status-tone-warn');
+    } else if (/failed|error|denied|disconnected/.test(s)) {
+      el.classList.add('status-tone-bad');
+    }
+  }
+
   function setIdeStatus(text){
-    if (ideStatusEl) ideStatusEl.textContent = text;
+    if (ideStatusEl) {
+      ideStatusEl.textContent = text;
+      applyStatusTone(ideStatusEl, text);
+    }
   }
 
   function getSearchParams(){
@@ -87,12 +104,14 @@
   }
 
   function getApiUrl(path, params = {}){
+    if (shared.getApiUrl) return shared.getApiUrl(path, params, location);
     const qs = new URLSearchParams(params).toString();
     const base = location.origin;
     return `${base}${path}${qs ? `?${qs}` : ''}`;
   }
 
   function getWsUrl(){
+    if (shared.getWsUrl) return shared.getWsUrl(location);
     if (location.protocol === 'https:'){
       return `${location.origin.replace(/^https:/, 'wss:')}/ws`;
     }
@@ -115,6 +134,10 @@
   let authRecoveryMode = false;
 
   function saveAuthToken(token){
+    if (shared.saveToken){
+      authToken = shared.saveToken(AUTH_STORAGE_KEY, token);
+      return;
+    }
     authToken = String(token || '').trim();
     try{
       if (authToken){
@@ -126,10 +149,19 @@
   }
 
   function loadAuthToken(){
-    try{
-      const stored = (sessionStorage.getItem(AUTH_STORAGE_KEY) || '').trim();
+    if (shared.loadToken){
+      const stored = shared.loadToken(AUTH_STORAGE_KEY);
       if (stored) authToken = stored;
-    }catch{}
+    } else {
+      try{
+        const stored = (sessionStorage.getItem(AUTH_STORAGE_KEY) || '').trim();
+        if (stored) authToken = stored;
+      }catch{}
+    }
+
+    const migrated = shared.migrateTokenFromUrl ? shared.migrateTokenFromUrl(AUTH_STORAGE_KEY, 'token') : '';
+    if (migrated) authToken = migrated;
+    if (migrated) return;
 
     try{
       const u = new URL(window.location.href);
@@ -221,6 +253,7 @@
   }
 
   function authHeaders(extra){
+    if (shared.authHeaders) return shared.authHeaders(authToken, extra);
     const headers = Object.assign({}, extra || {});
     if (authToken){
       headers.Authorization = `Bearer ${authToken}`;
@@ -243,6 +276,9 @@
   }
 
   async function fetchBootstrapStatus(){
+    if (shared.fetchBootstrapStatus){
+      return shared.fetchBootstrapStatus(getApiUrl.bind(null));
+    }
     try{
       const res = await fetch(getApiUrl('/api/auth/bootstrap-status'), { cache: 'no-store' });
       const data = await res.json();
@@ -253,6 +289,9 @@
   }
 
   async function fetchAuthMe(){
+    if (shared.fetchAuthMe){
+      return shared.fetchAuthMe(getApiUrl.bind(null), authToken);
+    }
     try{
       const res = await fetch(getApiUrl('/api/auth/me'), {
         cache: 'no-store',
@@ -372,6 +411,10 @@
 
   async function refreshWsTicket(){
     wsTicket = '';
+    if (shared.refreshWsTicket){
+      wsTicket = await shared.refreshWsTicket(getApiUrl.bind(null), authToken);
+      return;
+    }
     if (authToken) return;
     try{
       const res = await fetch(getApiUrl('/api/auth/ws-ticket'), {
@@ -429,6 +472,19 @@
 
   function bytesFromString(s){
     return new TextEncoder().encode(s).length;
+  }
+
+  function escapeHtml(value){
+    return String(value ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function escapeAttr(value){
+    return escapeHtml(value);
   }
 
   function getFileIcon(filename){
@@ -1230,7 +1286,10 @@
   let wsAuthenticated = true;
 
   function setWsStatus(text){
-    if (wsStatusEl) wsStatusEl.textContent = text;
+    if (wsStatusEl) {
+      wsStatusEl.textContent = text;
+      applyStatusTone(wsStatusEl, text);
+    }
   }
 
   function setupHiDPI(){
@@ -2126,11 +2185,11 @@ if __name__ == "__main__":
     // Render step content
     if (wizardStep === 1){
       wizardStepContent.innerHTML = WIZARD_TYPES.map(t => `
-        <div class="wizard-type-card ${wizardConfig.type === t.id ? 'selected' : ''}" data-wizard-type="${t.id}">
-          <div class="type-icon"><i class="${t.icon} ${wizardConfig.type === t.id ? 'text-emerald-400' : 'text-slate-400'}"></i></div>
+        <div class="wizard-type-card ${wizardConfig.type === t.id ? 'selected' : ''}" data-wizard-type="${escapeAttr(t.id)}">
+          <div class="type-icon"><i class="${escapeAttr(t.icon)} ${wizardConfig.type === t.id ? 'text-emerald-400' : 'text-slate-400'}"></i></div>
           <div class="flex-1">
-            <div class="text-sm font-medium text-slate-200">${t.name}</div>
-            <div class="text-[10px] text-slate-400">${t.description}</div>
+            <div class="text-sm font-medium text-slate-200">${escapeHtml(t.name)}</div>
+            <div class="text-[10px] text-slate-400">${escapeHtml(t.description)}</div>
           </div>
           ${wizardConfig.type === t.id ? '<i class="fa-solid fa-check text-emerald-400"></i>' : ''}
         </div>
@@ -2146,7 +2205,7 @@ if __name__ == "__main__":
         <div class="space-y-3">
           <div>
             <label class="text-[11px] text-slate-300 block mb-1">Payload Name</label>
-            <input type="text" id="wizCfgName" value="${wizardConfig.name}" class="w-full rounded-lg bg-slate-900/80 border border-slate-700/70 px-3 py-2 text-xs text-slate-100 font-mono focus:outline-none focus:ring-1 focus:ring-emerald-400">
+            <input type="text" id="wizCfgName" value="${escapeAttr(wizardConfig.name)}" class="w-full rounded-lg bg-slate-900/80 border border-slate-700/70 px-3 py-2 text-xs text-slate-100 font-mono focus:outline-none focus:ring-1 focus:ring-emerald-400">
           </div>`;
       if (wizardConfig.type === 'wifi'){
         fields += `
@@ -2172,7 +2231,7 @@ if __name__ == "__main__":
         fields += `
           <div>
             <label class="text-[11px] text-slate-300 block mb-1">Network Interface</label>
-            <input type="text" id="wizCfgNetIface" value="${wizardConfig.networkInterface}" class="w-full rounded-lg bg-slate-900/80 border border-slate-700/70 px-3 py-2 text-xs text-slate-100 font-mono focus:outline-none focus:ring-1 focus:ring-emerald-400">
+            <input type="text" id="wizCfgNetIface" value="${escapeAttr(wizardConfig.networkInterface)}" class="w-full rounded-lg bg-slate-900/80 border border-slate-700/70 px-3 py-2 text-xs text-slate-100 font-mono focus:outline-none focus:ring-1 focus:ring-emerald-400">
           </div>
           <label class="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
             <input type="checkbox" id="wizCfgNetNmap" ${wizardConfig.networkNmap ? 'checked' : ''} class="rounded border-slate-600">
@@ -2182,7 +2241,7 @@ if __name__ == "__main__":
         fields += `
           <div>
             <label class="text-[11px] text-slate-300 block mb-1">Listen Ports (comma-separated)</label>
-            <input type="text" id="wizCfgHoneyPorts" value="${wizardConfig.honeypotPorts}" class="w-full rounded-lg bg-slate-900/80 border border-slate-700/70 px-3 py-2 text-xs text-slate-100 font-mono focus:outline-none focus:ring-1 focus:ring-emerald-400">
+            <input type="text" id="wizCfgHoneyPorts" value="${escapeAttr(wizardConfig.honeypotPorts)}" class="w-full rounded-lg bg-slate-900/80 border border-slate-700/70 px-3 py-2 text-xs text-slate-100 font-mono focus:outline-none focus:ring-1 focus:ring-emerald-400">
           </div>
           <label class="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
             <input type="checkbox" id="wizCfgHoneyDiscord" ${wizardConfig.honeypotDiscord ? 'checked' : ''} class="rounded border-slate-600">
@@ -2204,17 +2263,17 @@ if __name__ == "__main__":
     } else if (wizardStep === 3){
       const typeInfo = WIZARD_TYPES.find(t => t.id === wizardConfig.type);
       let summary = `<ul class="text-xs text-slate-400 space-y-1 mt-1">
-        <li>Type: ${typeInfo ? typeInfo.name : wizardConfig.type}</li>`;
+        <li>Type: ${escapeHtml(typeInfo ? typeInfo.name : wizardConfig.type)}</li>`;
       if (wizardConfig.type === 'wifi') summary += `<li>Scan timeout: ${wizardConfig.wifiScanTimeout}s</li><li>Deauth: ${wizardConfig.wifiDeauth ? 'Enabled' : 'Disabled'}</li>`;
       if (wizardConfig.type === 'ble') summary += `<li>Scan duration: ${wizardConfig.bleScanDuration}s</li><li>Spam mode: ${wizardConfig.bleSpam ? 'Enabled' : 'Disabled'}</li>`;
-      if (wizardConfig.type === 'network') summary += `<li>Interface: ${wizardConfig.networkInterface}</li><li>Nmap: ${wizardConfig.networkNmap ? 'Enabled' : 'Disabled'}</li>`;
-      if (wizardConfig.type === 'honeypot') summary += `<li>Ports: ${wizardConfig.honeypotPorts}</li><li>Discord: ${wizardConfig.honeypotDiscord ? 'Enabled' : 'Disabled'}</li>`;
+      if (wizardConfig.type === 'network') summary += `<li>Interface: ${escapeHtml(wizardConfig.networkInterface)}</li><li>Nmap: ${wizardConfig.networkNmap ? 'Enabled' : 'Disabled'}</li>`;
+      if (wizardConfig.type === 'honeypot') summary += `<li>Ports: ${escapeHtml(wizardConfig.honeypotPorts)}</li><li>Discord: ${wizardConfig.honeypotDiscord ? 'Enabled' : 'Disabled'}</li>`;
       summary += '</ul>';
       wizardStepContent.innerHTML = `
         <div class="p-4 rounded-lg bg-slate-800/30 border border-slate-800/70">
           <div class="font-medium text-sm text-slate-200 flex items-center gap-2">
-            <i class="${typeInfo ? typeInfo.icon : 'fa-solid fa-file'} text-emerald-400"></i>
-            ${wizardConfig.name}
+            <i class="${escapeAttr(typeInfo ? typeInfo.icon : 'fa-solid fa-file')} text-emerald-400"></i>
+            ${escapeHtml(wizardConfig.name)}
           </div>
           ${summary}
         </div>
@@ -2571,9 +2630,9 @@ if __name__ == "__main__":
   function renderTemplateTabs(){
     if (!tmplCategoryTabs) return;
     tmplCategoryTabs.innerHTML = TEMPLATE_CATEGORIES.map(cat => `
-      <div class="tmpl-category-tab ${tmplActiveCategory === cat.id ? 'active' : ''}" data-tmpl-cat="${cat.id}">
-        <i class="${cat.icon} text-[10px]"></i>
-        <span class="hidden sm:inline ml-1">${cat.name}</span>
+      <div class="tmpl-category-tab ${tmplActiveCategory === cat.id ? 'active' : ''}" data-tmpl-cat="${escapeAttr(cat.id)}">
+        <i class="${escapeAttr(cat.icon)} text-[10px]"></i>
+        <span class="hidden sm:inline ml-1">${escapeHtml(cat.name)}</span>
       </div>
     `).join('');
     tmplCategoryTabs.querySelectorAll('.tmpl-category-tab').forEach(tab => {
@@ -2593,16 +2652,16 @@ if __name__ == "__main__":
     tmplList.innerHTML = filtered.map(t => {
       const cat = TEMPLATE_CATEGORIES.find(c => c.id === t.category);
       return `
-        <div class="tmpl-card ${tmplSelectedId === t.id ? 'selected' : ''}" data-tmpl-id="${t.id}">
+        <div class="tmpl-card ${tmplSelectedId === t.id ? 'selected' : ''}" data-tmpl-id="${escapeAttr(t.id)}">
           <div class="flex items-start gap-2">
-            <i class="${cat ? cat.icon : 'fa-solid fa-file'} text-xs mt-0.5 ${tmplSelectedId === t.id ? 'text-emerald-400' : 'text-slate-400'}"></i>
+            <i class="${escapeAttr(cat ? cat.icon : 'fa-solid fa-file')} text-xs mt-0.5 ${tmplSelectedId === t.id ? 'text-emerald-400' : 'text-slate-400'}"></i>
             <div class="flex-1 min-w-0">
               <div class="flex items-center gap-2">
-                <span class="text-xs font-medium text-slate-200">${t.name}</span>
+                <span class="text-xs font-medium text-slate-200">${escapeHtml(t.name)}</span>
                 ${tmplSelectedId === t.id ? '<i class="fa-solid fa-check text-emerald-400 text-[10px]"></i>' : ''}
               </div>
-              <div class="text-[10px] text-slate-400 line-clamp-2">${t.description}</div>
-              <div class="text-[9px] font-mono text-emerald-400/60 mt-0.5">${t.filename}</div>
+              <div class="text-[10px] text-slate-400 line-clamp-2">${escapeHtml(t.description)}</div>
+              <div class="text-[9px] font-mono text-emerald-400/60 mt-0.5">${escapeHtml(t.filename)}</div>
             </div>
           </div>
         </div>`;
@@ -2971,6 +3030,25 @@ if __name__ == "__main__":
   setupHiDPI();
   bindButtons();
   updatePayloadRunUi();
+
+  let payloadPollTimer = null;
+
+  function schedulePayloadPoll(){
+    if (payloadPollTimer) clearTimeout(payloadPollTimer);
+    const delay = document.hidden ? 6000 : 1500;
+    payloadPollTimer = setTimeout(async () => {
+      await pollPayloadStatus();
+      schedulePayloadPoll();
+    }, delay);
+  }
+
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden){
+      pollPayloadStatus();
+    }
+    schedulePayloadPoll();
+  });
+
   const startAfterAuth = () => {
     ensureAuthenticated('Log in to access Payload Studio.').then((ok) => {
       if (!ok){
@@ -2980,7 +3058,7 @@ if __name__ == "__main__":
       connectWs();
       loadTree();
       pollPayloadStatus();
-      setInterval(pollPayloadStatus, 1500);
+      schedulePayloadPoll();
       ensureEditor();
     });
   };

@@ -78,3 +78,10 @@ http://<device-ip>:8080
 - The LCD frame mirror must exist at `RJ_FRAME_PATH`.
 - If you want browser input to control the UI, `rj_input.py` must be present and
   the main UI must import it so it consumes virtual button events.
+
+## Local sanity check (JS syntax)
+From repo root:
+```bash
+./scripts/check_webui_js.sh
+```
+This verifies `web/shared.js`, `web/app.js`, and `web/ide.js` parse cleanly under Node.
