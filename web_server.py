@@ -55,6 +55,8 @@ AUTH_SECRET_FILE = Path(os.environ.get("RJ_WEB_AUTH_SECRET_FILE", "/root/Raspyja
 SESSION_COOKIE_NAME = "rj_session"
 SESSION_TTL_SECONDS = int(os.environ.get("RJ_WEB_SESSION_TTL", str(8 * 60 * 60)))
 WS_TICKET_TTL_SECONDS = int(os.environ.get("RJ_WEB_WS_TICKET_TTL", "120"))
+TAILSCALE_KEY_PATH = ROOT_DIR / ".tailscale_auth_key"
+TAILSCALE_STATUS_PATH = Path("/dev/shm/rj_tailscale_status.json")
 
 
 def _load_shared_token() -> str | None:
@@ -180,6 +182,180 @@ def _write_discord_webhook_url(url: str) -> tuple[bool, str]:
         return True, "saved"
     except Exception as exc:
         return False, f"write error: {exc}"
+
+
+def _tailscale_write_status(payload: dict) -> None:
+    """Persist last Tailscale install/bootstrap status for the WebUI."""
+    try:
+        TAILSCALE_STATUS_PATH.write_text(json.dumps(payload), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _tailscale_read_status() -> dict:
+    try:
+        if not TAILSCALE_STATUS_PATH.exists():
+            return {}
+        raw = TAILSCALE_STATUS_PATH.read_text(encoding="utf-8")
+        data = json.loads(raw) if raw else {}
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _tailscale_installed() -> bool:
+    """Return True if the tailscale CLI appears to be installed."""
+    try:
+        return shutil.which("tailscale") is not None
+    except Exception:
+        return False
+
+
+def _tailscale_status() -> dict:
+    """
+    Best-effort snapshot of the Tailscale daemon.
+    Returns {"backend_state": str|None, "ip": str|None}.
+    """
+    summary: dict[str, str | None] = {"backend_state": None, "ip": None}
+    if not _tailscale_installed():
+        return summary
+    try:
+        res = subprocess.run(
+            ["tailscale", "status", "--json"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if res.returncode != 0 or not res.stdout:
+            return summary
+        data = json.loads(res.stdout)
+        if not isinstance(data, dict):
+            return summary
+        summary["backend_state"] = str(data.get("BackendState") or "") or None
+        self_info = data.get("Self") or {}
+        if isinstance(self_info, dict):
+            ips = self_info.get("TailscaleIPs") or []
+            if isinstance(ips, list) and ips:
+                summary["ip"] = str(ips[0])
+    except Exception:
+        pass
+    return summary
+
+
+def _tailscale_write_key(key: str) -> tuple[bool, str]:
+    """Store the auth key in a root-only file so tailscale can read it."""
+    value = str(key or "").strip()
+    if not value:
+        return False, "missing auth key"
+    try:
+        TAILSCALE_KEY_PATH.write_text(value + "\n", encoding="utf-8")
+        try:
+            os.chmod(TAILSCALE_KEY_PATH, 0o600)
+        except Exception:
+            # On some platforms chmod may fail; do not treat as fatal.
+            pass
+        return True, "ok"
+    except Exception as exc:
+        return False, f"write error: {exc}"
+
+
+def _tailscale_run_install_and_up() -> None:
+    """
+    Run the official install script and bring Tailscale up using the stored auth key.
+    This is executed in a background thread so HTTP handlers can return quickly.
+    """
+    _tailscale_write_status({"installing": True, "ok": False, "error": None})
+
+    try:
+        if not TAILSCALE_KEY_PATH.exists():
+            _tailscale_write_status({
+                "installing": False,
+                "ok": False,
+                "error": "auth key not found",
+            })
+            return
+    except Exception:
+        _tailscale_write_status({
+            "installing": False,
+            "ok": False,
+            "error": "auth key not found",
+        })
+        return
+
+    # 1) Install Tailscale using the official script.
+    try:
+        install_res = subprocess.run(
+            ["sh", "-c", "curl -fsSL https://tailscale.com/install.sh | sh"],
+            capture_output=True,
+            text=True,
+            timeout=600,
+        )
+    except subprocess.TimeoutExpired:
+        _tailscale_write_status({
+            "installing": False,
+            "ok": False,
+            "error": "tailscale install timeout",
+        })
+        return
+    except Exception as exc:
+        _tailscale_write_status({
+            "installing": False,
+            "ok": False,
+            "error": str(exc),
+        })
+        return
+
+    if install_res.returncode != 0:
+        msg = (install_res.stderr or install_res.stdout or "").strip()
+        if not msg:
+            msg = f"tailscale install failed (code {install_res.returncode})"
+        _tailscale_write_status({
+            "installing": False,
+            "ok": False,
+            "error": msg[:200],
+        })
+        return
+
+    # 2) Bring the daemon up using the stored auth key (non-interactive).
+    try:
+        auth_arg = f"--auth-key=file:{TAILSCALE_KEY_PATH}"
+        up_res = subprocess.run(
+            ["tailscale", "up", auth_arg, "--ssh"],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    except subprocess.TimeoutExpired:
+        _tailscale_write_status({
+            "installing": False,
+            "ok": False,
+            "error": "tailscale up timeout",
+        })
+        return
+    except Exception as exc:
+        _tailscale_write_status({
+            "installing": False,
+            "ok": False,
+            "error": str(exc),
+        })
+        return
+
+    if up_res.returncode != 0:
+        msg = (up_res.stderr or up_res.stdout or "").strip()
+        if not msg:
+            msg = f"tailscale up failed (code {up_res.returncode})"
+        _tailscale_write_status({
+            "installing": False,
+            "ok": False,
+            "error": msg[:200],
+        })
+        return
+
+    _tailscale_write_status({
+        "installing": False,
+        "ok": True,
+        "error": None,
+    })
 
 
 def _read_cpu_percent() -> float:
@@ -564,6 +740,9 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
             if parsed.path == "/api/settings/discord_webhook":
                 self._handle_settings_webhook_get()
                 return
+            if parsed.path == "/api/settings/tailscale":
+                self._handle_settings_tailscale_get()
+                return
 
             _json_response(self, {"error": "not found"}, status=HTTPStatus.NOT_FOUND)
             return
@@ -625,6 +804,13 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
                 _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
                 return
             self._handle_settings_webhook_put()
+            return
+        if parsed.path == "/api/settings/tailscale":
+            query = parse_qs(parsed.query or "")
+            if not _auth_ok(self, query):
+                _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
+                return
+            self._handle_settings_tailscale_put()
             return
         _json_response(self, {"error": "not found"}, status=HTTPStatus.NOT_FOUND)
 
@@ -1209,6 +1395,43 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
             "configured": bool(url),
             "url": url if url else "",
         })
+
+    def _handle_settings_tailscale_get(self) -> None:
+        status = _tailscale_read_status()
+        installed = _tailscale_installed()
+        has_key = TAILSCALE_KEY_PATH.exists()
+        ts = _tailscale_status() if installed else {"backend_state": None, "ip": None}
+        _json_response(self, {
+            "installed": installed,
+            "has_key": has_key,
+            "installing": bool(status.get("installing")),
+            "ok": status.get("ok"),
+            "error": status.get("error"),
+            "backend_state": ts.get("backend_state"),
+            "ip": ts.get("ip"),
+        })
+
+    def _handle_settings_tailscale_put(self) -> None:
+        body = _read_json(self)
+        if body is None:
+            _json_response(self, {"error": "invalid json"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        if _tailscale_installed():
+            _json_response(self, {"error": "tailscale already installed"}, status=HTTPStatus.CONFLICT)
+            return
+        raw_key = str(body.get("auth_key", "")).strip()
+        if not raw_key:
+            _json_response(self, {"error": "auth key required"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        if not raw_key.startswith("tskey-"):
+            _json_response(self, {"error": "auth key must start with 'tskey-'"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        ok, msg = _tailscale_write_key(raw_key)
+        if not ok:
+            _json_response(self, {"error": msg}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+        threading.Thread(target=_tailscale_run_install_and_up, daemon=True).start()
+        _json_response(self, {"ok": True})
 
 
 def main() -> None:
