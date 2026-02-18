@@ -259,6 +259,83 @@ def _tailscale_write_key(key: str) -> tuple[bool, str]:
         return False, f"write error: {exc}"
 
 
+def _regenerate_caddyfile_and_reload() -> None:
+    """
+    Regenerate /etc/caddy/Caddyfile with current IPs (eth0, wlan0, tailscale0)
+    and reload Caddy. Same logic as install_raspyjack.sh so that installing
+    Tailscale from the WebUI updates HTTPS to listen on the Tailscale IP
+    without re-running the install script.
+    """
+    hosts: list[str] = []
+    for iface in ("eth0", "wlan0", "tailscale0"):
+        try:
+            res = subprocess.run(
+                ["ip", "-4", "-o", "addr", "show", iface],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if res.returncode != 0 or not res.stdout:
+                continue
+            # First line: "2: eth0    inet 192.168.1.100/24 ..." -> take 4th field, strip /suffix
+            line = res.stdout.strip().split("\n")[0]
+            parts = line.split()
+            if len(parts) >= 4:
+                addr = parts[3].split("/")[0].strip()
+                if addr and addr not in hosts:
+                    hosts.append(addr)
+        except Exception:
+            continue
+    hosts.append("localhost")
+
+    if not hosts:
+        return
+
+    caddy_site_addrs = ", ".join(hosts)
+    caddyfile_content = f"""{{
+    # RaspyJack self-signed internal CA (local trust only)
+    auto_https disable_redirects
+}}
+
+{caddy_site_addrs} {{
+    tls internal
+
+    @ws path /ws*
+    reverse_proxy @ws 127.0.0.1:8765 {{
+        header_up X-Forwarded-Proto {{scheme}}
+        header_up X-Forwarded-Host {{host}}
+    }}
+
+    reverse_proxy 127.0.0.1:8080 {{
+        header_up X-Forwarded-Proto {{scheme}}
+        header_up X-Forwarded-Host {{host}}
+    }}
+}}
+"""
+
+    tmp = Path("/dev/shm/rj_caddyfile_tmp")
+    try:
+        tmp.write_text(caddyfile_content, encoding="utf-8")
+        subprocess.run(
+            ["sudo", "cp", str(tmp), "/etc/caddy/Caddyfile"],
+            check=True,
+            timeout=10,
+        )
+        subprocess.run(
+            ["sudo", "systemctl", "reload", "caddy"],
+            check=True,
+            timeout=15,
+        )
+    except Exception:
+        pass
+    finally:
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except Exception:
+            pass
+
+
 def _tailscale_run_install_and_up() -> None:
     """
     Run the official install script and bring Tailscale up using the stored auth key.
@@ -351,6 +428,9 @@ def _tailscale_run_install_and_up() -> None:
         })
         return
 
+    # Regenerate Caddyfile with tailscale0 IP and reload Caddy so HTTPS works over Tailscale.
+    _regenerate_caddyfile_and_reload()
+
     _tailscale_write_status({
         "installing": False,
         "ok": True,
@@ -414,6 +494,8 @@ def _tailscale_run_reauth() -> None:
             "error": msg[:200],
         })
         return
+
+    _regenerate_caddyfile_and_reload()
 
     _tailscale_write_status({
         "installing": False,
