@@ -594,9 +594,14 @@
             <p class="text-[11px] text-slate-400 mb-2">
               One-time setup with a Tailscale auth key. After install, use the Tailscale payload on the device to toggle the tunnel.
             </p>
-            <button id="tailscaleInstallBtn" type="button" class="px-3 py-1.5 text-xs rounded-lg bg-emerald-600/80 border border-emerald-300/30 text-white hover:bg-emerald-500/80 transition">
-              Install Tailscale
-            </button>
+            <div class="flex flex-wrap gap-2">
+              <button id="tailscaleInstallBtn" type="button" class="px-3 py-1.5 text-xs rounded-lg bg-emerald-600/80 border border-emerald-300/30 text-white hover:bg-emerald-500/80 transition">
+                Install Tailscale
+              </button>
+              <button id="tailscaleReauthBtn" type="button" class="px-3 py-1.5 text-xs rounded-lg bg-slate-800/80 border border-slate-600/40 text-slate-200 hover:bg-slate-700/80 transition hidden">
+                Re-authenticate with new key
+              </button>
+            </div>
           </div>
         </div>
       </div>

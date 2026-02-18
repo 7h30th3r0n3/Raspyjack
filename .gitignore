@@ -1,6 +1,35 @@
+# =========================
+# Secrets / Auth Keys
+# =========================
+.tailscale_auth_key
+.webui_auth.json
+.webui_session_secret
+.webui_token
+
+# =========================
+# Logs / Scans
+# =========================
+*.log
+loot/*                  
+!loot/README.md          
+payloads/loot/*         
+!payloads/loot/README.md
+
+# =========================
+# Payload folders to ignore
+# =========================
 /payloads/ideas
 /payloads/ref
+
+# =========================
+# Python bytecode / cache
+# =========================
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
+
+# =========================
+# Ignore node_modules if any 
+# =========================
+node_modules/

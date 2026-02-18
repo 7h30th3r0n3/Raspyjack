@@ -358,6 +358,70 @@ def _tailscale_run_install_and_up() -> None:
     })
 
 
+def _tailscale_run_reauth() -> None:
+    """
+    Re-authenticate an existing Tailscale install using the stored auth key.
+    Does not re-run the install script, only `tailscale up --reset --auth-key=... --ssh`.
+    """
+    _tailscale_write_status({"installing": True, "ok": False, "error": None})
+
+    try:
+        if not TAILSCALE_KEY_PATH.exists():
+            _tailscale_write_status({
+                "installing": False,
+                "ok": False,
+                "error": "auth key not found",
+            })
+            return
+    except Exception:
+        _tailscale_write_status({
+            "installing": False,
+            "ok": False,
+            "error": "auth key not found",
+        })
+        return
+
+    try:
+        auth_arg = f"--auth-key=file:{TAILSCALE_KEY_PATH}"
+        up_res = subprocess.run(
+            ["tailscale", "up", "--reset", auth_arg, "--ssh"],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    except subprocess.TimeoutExpired:
+        _tailscale_write_status({
+            "installing": False,
+            "ok": False,
+            "error": "tailscale up timeout",
+        })
+        return
+    except Exception as exc:
+        _tailscale_write_status({
+            "installing": False,
+            "ok": False,
+            "error": str(exc),
+        })
+        return
+
+    if up_res.returncode != 0:
+        msg = (up_res.stderr or up_res.stdout or "").strip()
+        if not msg:
+            msg = f"tailscale up failed (code {up_res.returncode})"
+        _tailscale_write_status({
+            "installing": False,
+            "ok": False,
+            "error": msg[:200],
+        })
+        return
+
+    _tailscale_write_status({
+        "installing": False,
+        "ok": True,
+        "error": None,
+    })
+
+
 def _read_cpu_percent() -> float:
     """Best-effort CPU usage based on /proc/stat delta."""
     global _CPU_SNAPSHOT
@@ -1416,9 +1480,7 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
         if body is None:
             _json_response(self, {"error": "invalid json"}, status=HTTPStatus.BAD_REQUEST)
             return
-        if _tailscale_installed():
-            _json_response(self, {"error": "tailscale already installed"}, status=HTTPStatus.CONFLICT)
-            return
+        reauth = bool(body.get("reauth"))
         raw_key = str(body.get("auth_key", "")).strip()
         if not raw_key:
             _json_response(self, {"error": "auth key required"}, status=HTTPStatus.BAD_REQUEST)
@@ -1430,7 +1492,13 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
         if not ok:
             _json_response(self, {"error": msg}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
             return
-        threading.Thread(target=_tailscale_run_install_and_up, daemon=True).start()
+        if _tailscale_installed():
+            if not reauth:
+                _json_response(self, {"error": "tailscale already installed"}, status=HTTPStatus.CONFLICT)
+                return
+            threading.Thread(target=_tailscale_run_reauth, daemon=True).start()
+        else:
+            threading.Thread(target=_tailscale_run_install_and_up, daemon=True).start()
         _json_response(self, {"ok": True})
 
 
