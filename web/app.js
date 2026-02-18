@@ -978,9 +978,40 @@
     }
   }
 
-  async function loadTailscaleSettings(){
+  function applyTailscaleDataToUI(data){
     if (!tailscaleSettingsStatus) return;
-    setTailscaleStatus('Loading...');
+    const installed = !!data.installed;
+    const installing = !!data.installing;
+    const backendState = data.backend_state || (installed ? 'Unknown' : 'Not installed');
+
+    if (tailscaleInstallBtn){
+      const installingNow = !!installing && !installed;
+      tailscaleInstallBtn.classList.toggle('hidden', installed);
+      tailscaleInstallBtn.disabled = installingNow;
+      tailscaleInstallBtn.classList.toggle('opacity-50', installingNow);
+      tailscaleInstallBtn.classList.toggle('cursor-not-allowed', installingNow);
+    }
+    if (tailscaleReauthBtn){
+      const showReauth = installed;
+      const disabledReauth = !!installing;
+      tailscaleReauthBtn.classList.toggle('hidden', !showReauth);
+      tailscaleReauthBtn.disabled = disabledReauth;
+      tailscaleReauthBtn.classList.toggle('opacity-50', disabledReauth);
+      tailscaleReauthBtn.classList.toggle('cursor-not-allowed', disabledReauth);
+    }
+
+    if (installing){
+      setTailscaleStatus('Installing Tailscale…');
+    } else if (!installed){
+      setTailscaleStatus('Not installed');
+    } else {
+      setTailscaleStatus(`Installed (state: ${backendState || 'Running'})`);
+    }
+  }
+
+  async function loadTailscaleSettings(skipLoadingState){
+    if (!tailscaleSettingsStatus) return;
+    if (!skipLoadingState) setTailscaleStatus('Loading...');
     try{
       const url = getApiUrl('/api/settings/tailscale');
       const res = await apiFetch(url, { cache: 'no-store' });
@@ -988,33 +1019,7 @@
       if (!res.ok){
         throw new Error(data && data.error ? data.error : 'tailscale_failed');
       }
-      const installed = !!data.installed;
-      const installing = !!data.installing;
-      const backendState = data.backend_state || (installed ? 'Unknown' : 'Not installed');
-
-      if (tailscaleInstallBtn){
-        const installingNow = !!installing && !installed;
-        tailscaleInstallBtn.classList.toggle('hidden', installed);
-        tailscaleInstallBtn.disabled = installingNow;
-        tailscaleInstallBtn.classList.toggle('opacity-50', installingNow);
-        tailscaleInstallBtn.classList.toggle('cursor-not-allowed', installingNow);
-      }
-      if (tailscaleReauthBtn){
-        const showReauth = installed;
-        const disabledReauth = !!installing;
-        tailscaleReauthBtn.classList.toggle('hidden', !showReauth);
-        tailscaleReauthBtn.disabled = disabledReauth;
-        tailscaleReauthBtn.classList.toggle('opacity-50', disabledReauth);
-        tailscaleReauthBtn.classList.toggle('cursor-not-allowed', disabledReauth);
-      }
-
-      if (installing){
-        setTailscaleStatus('Installing Tailscale…');
-      } else if (!installed){
-        setTailscaleStatus('Not installed');
-      } else {
-        setTailscaleStatus(`Installed (state: ${backendState || 'Running'})`);
-      }
+      applyTailscaleDataToUI(data);
     } catch(e){
       setTailscaleStatus('Failed to load Tailscale');
     }
@@ -1062,13 +1067,11 @@
     if (tailscaleInstallPollTimer) clearInterval(tailscaleInstallPollTimer);
     const poll = async () => {
       try{
-        await loadTailscaleSettings();
         const url = getApiUrl('/api/settings/tailscale');
         const res = await apiFetch(url, { cache: 'no-store' });
         const data = await res.json();
-        if (!res.ok){
-          return;
-        }
+        if (!res.ok) return;
+        applyTailscaleDataToUI(data);
         const installed = !!data.installed;
         const installing = !!data.installing;
         if (installed && !installing){
@@ -1079,7 +1082,7 @@
         // ignore poll errors; next interval will retry
       }
     };
-    tailscaleInstallPollTimer = setInterval(poll, 5000);
+    tailscaleInstallPollTimer = setInterval(poll, 2000);
     poll();
   }
 
