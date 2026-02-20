@@ -585,6 +585,24 @@
               <div id="settingsStatus" class="text-[11px] text-slate-400">Ready</div>
             </div>
           </div>
+
+          <div class="rounded-xl border border-slate-800/70 bg-slate-950/40 p-3">
+            <div class="flex items-center justify-between mb-2">
+              <div class="text-xs font-semibold text-slate-200">Tailscale</div>
+              <div id="tailscaleSettingsStatus" class="text-[11px] text-slate-400">Not installed</div>
+            </div>
+            <p class="text-[11px] text-slate-400 mb-2">
+              One-time setup with a Tailscale auth key. After install, use the Tailscale payload on the device to toggle the tunnel.
+            </p>
+            <div class="flex flex-wrap gap-2">
+              <button id="tailscaleInstallBtn" type="button" class="px-3 py-1.5 text-xs rounded-lg bg-emerald-600/80 border border-emerald-300/30 text-white hover:bg-emerald-500/80 transition">
+                Install Tailscale
+              </button>
+              <button id="tailscaleReauthBtn" type="button" class="px-3 py-1.5 text-xs rounded-lg bg-slate-800/80 border border-slate-600/40 text-slate-200 hover:bg-slate-700/80 transition hidden">
+                Re-authenticate with new key
+              </button>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -626,6 +644,40 @@
           </div>
         </div>
       </div>
+  </div>
+
+  <!-- Tailscale setup modal -->
+  <div id="tailscaleModal" class="hidden fixed inset-0 z-50 bg-black/60 backdrop-blur-sm">
+    <div class="max-w-md mx-auto mt-16 md:mt-20 px-4">
+      <div class="rounded-2xl border border-slate-700/60 bg-slate-950/95 shadow-[0_0_30px_rgba(15,23,42,0.75)] overflow-hidden">
+        <div class="px-4 py-3 border-b border-slate-800/70 flex items-center justify-between">
+          <div class="text-sm font-semibold text-emerald-300">Install Tailscale</div>
+          <button id="tailscaleModalClose" type="button" class="text-slate-400 hover:text-slate-200 text-xs px-2 py-1 rounded-md bg-slate-900/60 border border-slate-700/60">✕</button>
+        </div>
+        <div class="px-4 py-3 space-y-3 text-xs">
+          <p class="text-slate-400">
+            1. Open
+            <a href="https://login.tailscale.com/admin/settings/authkeys" target="_blank" rel="noopener noreferrer" class="text-emerald-300 hover:text-emerald-200 underline">
+              https://login.tailscale.com/admin/settings/authkeys
+            </a>
+            and create a one-time auth key.
+          </p>
+          <p class="text-slate-400">
+            2. Paste the auth key below. It will be stored securely on the device and used to install and bring Tailscale online.
+          </p>
+          <div>
+            <label for="tailscaleKeyInput" class="block text-[11px] text-slate-400 mb-1">Tailscale auth key</label>
+            <input id="tailscaleKeyInput" type="password" autocomplete="off" class="w-full rounded-lg bg-slate-900/80 border border-slate-700/70 px-3 py-2 text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-1 focus:ring-emerald-400 focus:border-emerald-400" placeholder="tskey-...">
+          </div>
+          <div id="tailscaleModalError" class="hidden text-[11px] text-rose-300"></div>
+          <div id="tailscaleModalStatus" class="text-[11px] text-slate-400"></div>
+        </div>
+        <div class="px-4 py-3 border-t border-slate-800/70 flex justify-end gap-2">
+          <button id="tailscaleModalCancel" type="button" class="px-3 py-1.5 rounded-lg bg-slate-800/80 border border-slate-600/60 text-slate-200 hover:bg-slate-700/80 text-xs">Cancel</button>
+          <button id="tailscaleModalSave" type="button" class="px-3 py-1.5 rounded-lg bg-emerald-600/80 border border-emerald-300/30 text-white hover:bg-emerald-500/80 text-xs">Save</button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <!-- Auth token modal -->

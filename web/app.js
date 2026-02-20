@@ -78,6 +78,16 @@
   const discordWebhookInput = document.getElementById('discordWebhookInput');
   const discordWebhookSave = document.getElementById('discordWebhookSave');
   const discordWebhookClear = document.getElementById('discordWebhookClear');
+  const tailscaleSettingsStatus = document.getElementById('tailscaleSettingsStatus');
+  const tailscaleInstallBtn = document.getElementById('tailscaleInstallBtn');
+  const tailscaleReauthBtn = document.getElementById('tailscaleReauthBtn');
+  const tailscaleModal = document.getElementById('tailscaleModal');
+  const tailscaleKeyInput = document.getElementById('tailscaleKeyInput');
+  const tailscaleModalError = document.getElementById('tailscaleModalError');
+  const tailscaleModalStatus = document.getElementById('tailscaleModalStatus');
+  const tailscaleModalSave = document.getElementById('tailscaleModalSave');
+  const tailscaleModalCancel = document.getElementById('tailscaleModalCancel');
+  const tailscaleModalClose = document.getElementById('tailscaleModalClose');
   const terminalEl = document.getElementById('terminal');
   const shellStatusEl = document.getElementById('shellStatus');
   const shellConnectBtn = document.getElementById('shellConnect');
@@ -147,6 +157,7 @@
   let authInFlight = null;
   let authMode = 'login';
   let authRecoveryMode = false;
+  let tailscaleReauthMode = false;
 
   function saveAuthToken(token){
     if (shared.saveToken){
@@ -558,6 +569,13 @@
     }
   }
 
+  function setTailscaleStatus(txt){
+    if (tailscaleSettingsStatus){
+      tailscaleSettingsStatus.textContent = txt;
+      applyStatusTone(tailscaleSettingsStatus, txt);
+    }
+  }
+
   // Handheld themes (frontend-only)
   const themes = [
     { id: 'neon', label: 'Neon' },
@@ -960,6 +978,53 @@
     }
   }
 
+  function applyTailscaleDataToUI(data){
+    if (!tailscaleSettingsStatus) return;
+    const installed = !!data.installed;
+    const installing = !!data.installing;
+    const backendState = data.backend_state || (installed ? 'Unknown' : 'Not installed');
+
+    if (tailscaleInstallBtn){
+      const installingNow = !!installing && !installed;
+      tailscaleInstallBtn.classList.toggle('hidden', installed);
+      tailscaleInstallBtn.disabled = installingNow;
+      tailscaleInstallBtn.classList.toggle('opacity-50', installingNow);
+      tailscaleInstallBtn.classList.toggle('cursor-not-allowed', installingNow);
+    }
+    if (tailscaleReauthBtn){
+      const showReauth = installed;
+      const disabledReauth = !!installing;
+      tailscaleReauthBtn.classList.toggle('hidden', !showReauth);
+      tailscaleReauthBtn.disabled = disabledReauth;
+      tailscaleReauthBtn.classList.toggle('opacity-50', disabledReauth);
+      tailscaleReauthBtn.classList.toggle('cursor-not-allowed', disabledReauth);
+    }
+
+    if (installing){
+      setTailscaleStatus('Installing Tailscale…');
+    } else if (!installed){
+      setTailscaleStatus('Not installed');
+    } else {
+      setTailscaleStatus(`Installed (state: ${backendState || 'Running'})`);
+    }
+  }
+
+  async function loadTailscaleSettings(skipLoadingState){
+    if (!tailscaleSettingsStatus) return;
+    if (!skipLoadingState) setTailscaleStatus('Loading...');
+    try{
+      const url = getApiUrl('/api/settings/tailscale');
+      const res = await apiFetch(url, { cache: 'no-store' });
+      const data = await res.json();
+      if (!res.ok){
+        throw new Error(data && data.error ? data.error : 'tailscale_failed');
+      }
+      applyTailscaleDataToUI(data);
+    } catch(e){
+      setTailscaleStatus('Failed to load Tailscale');
+    }
+  }
+
   async function saveDiscordWebhook(url){
     setSettingsStatus('Saving...');
     try{
@@ -976,6 +1041,103 @@
       setSettingsStatus(data.status === 'cleared' ? 'Webhook cleared' : 'Webhook saved');
     } catch(e){
       setSettingsStatus('Failed to save webhook');
+    }
+  }
+
+  function openTailscaleModal(){
+    if (!tailscaleModal) return;
+    if (tailscaleKeyInput) tailscaleKeyInput.value = '';
+    if (tailscaleModalError){
+      tailscaleModalError.textContent = '';
+      tailscaleModalError.classList.add('hidden');
+    }
+    if (tailscaleModalStatus) tailscaleModalStatus.textContent = '';
+    tailscaleModal.classList.remove('hidden');
+    if (tailscaleKeyInput) tailscaleKeyInput.focus();
+  }
+
+  function closeTailscaleModal(){
+    if (!tailscaleModal) return;
+    tailscaleModal.classList.add('hidden');
+  }
+
+  let tailscaleInstallPollTimer = null;
+
+  function startTailscaleInstallPoll(){
+    if (tailscaleInstallPollTimer) clearInterval(tailscaleInstallPollTimer);
+    const poll = async () => {
+      try{
+        const url = getApiUrl('/api/settings/tailscale');
+        const res = await apiFetch(url, { cache: 'no-store' });
+        const data = await res.json();
+        if (!res.ok) return;
+        applyTailscaleDataToUI(data);
+        const installed = !!data.installed;
+        const installing = !!data.installing;
+        if (installed && !installing){
+          clearInterval(tailscaleInstallPollTimer);
+          tailscaleInstallPollTimer = null;
+        }
+      }catch(e){
+        // ignore poll errors; next interval will retry
+      }
+    };
+    tailscaleInstallPollTimer = setInterval(poll, 2000);
+    poll();
+  }
+
+  async function submitTailscaleInstall(){
+    if (!tailscaleKeyInput) return;
+    const key = String(tailscaleKeyInput.value || '').trim();
+    if (!key){
+      if (tailscaleModalError){
+        tailscaleModalError.textContent = 'Auth key required';
+        tailscaleModalError.classList.remove('hidden');
+      }
+      return;
+    }
+    if (!key.startsWith('tskey-')){
+      if (tailscaleModalError){
+        tailscaleModalError.textContent = "Auth key must start with 'tskey-'.";
+        tailscaleModalError.classList.remove('hidden');
+      }
+      return;
+    }
+    if (tailscaleModalError){
+      tailscaleModalError.textContent = '';
+      tailscaleModalError.classList.add('hidden');
+    }
+    if (tailscaleModalStatus) tailscaleModalStatus.textContent = tailscaleReauthMode ? 'Starting re-auth…' : 'Starting install…';
+    const setDisabled = (flag) => {
+      if (tailscaleKeyInput) tailscaleKeyInput.disabled = flag;
+      if (tailscaleModalSave) tailscaleModalSave.disabled = flag;
+      if (tailscaleModalCancel) tailscaleModalCancel.disabled = flag;
+    };
+    setDisabled(true);
+    try{
+      const endpoint = getApiUrl('/api/settings/tailscale');
+      const res = await apiFetch(endpoint, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ auth_key: key, reauth: tailscaleReauthMode }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok){
+        const msg = data && data.error ? data.error : 'install_failed';
+        throw new Error(msg);
+      }
+      if (tailscaleModalStatus) tailscaleModalStatus.textContent = tailscaleReauthMode ? 'Re-authenticating…' : 'Installing Tailscale…';
+      closeTailscaleModal();
+      setTailscaleStatus(tailscaleReauthMode ? 'Re-authenticating…' : 'Installing Tailscale…');
+      startTailscaleInstallPoll();
+    } catch(e){
+      const msg = e && e.message ? e.message : 'Failed to start install';
+      if (tailscaleModalError){
+        tailscaleModalError.textContent = msg;
+        tailscaleModalError.classList.remove('hidden');
+      }
+    } finally{
+      setDisabled(false);
     }
   }
 
@@ -1301,6 +1463,7 @@
   if (navSettings) navSettings.addEventListener('click', () => {
     setActiveTab('settings');
     loadDiscordWebhook();
+    loadTailscaleSettings();
   });
   if (navPayloadStudio) navPayloadStudio.href = './ide.html' + getForwardSearch();
   themeButtons.forEach(btn => {
@@ -1360,6 +1523,20 @@
   if (discordWebhookClear) discordWebhookClear.addEventListener('click', () => {
     if (discordWebhookInput) discordWebhookInput.value = '';
     saveDiscordWebhook('');
+  });
+  if (tailscaleInstallBtn) tailscaleInstallBtn.addEventListener('click', () => {
+    tailscaleReauthMode = false;
+    openTailscaleModal();
+  });
+  if (tailscaleReauthBtn) tailscaleReauthBtn.addEventListener('click', () => {
+    tailscaleReauthMode = true;
+    openTailscaleModal();
+  });
+  if (tailscaleModalSave) tailscaleModalSave.addEventListener('click', submitTailscaleInstall);
+  if (tailscaleModalCancel) tailscaleModalCancel.addEventListener('click', closeTailscaleModal);
+  if (tailscaleModalClose) tailscaleModalClose.addEventListener('click', closeTailscaleModal);
+  if (tailscaleModal) tailscaleModal.addEventListener('click', (e) => {
+    if (e.target === tailscaleModal) closeTailscaleModal();
   });
   if (lootPreviewClose) lootPreviewClose.addEventListener('click', closePreview);
   if (lootPreview) lootPreview.addEventListener('click', (e) => {
