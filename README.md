@@ -70,6 +70,7 @@ From a fresh Raspberry Pi OS Lite install:
 ```bash
 sudo apt update
 sudo apt install -y git
+sudo -i
 cd /root
 git clone https://github.com/7h30th3r0n3/raspyjack.git Raspyjack
 cd Raspyjack
