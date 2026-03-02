@@ -37,8 +37,6 @@ RaspyJack is for **authorized security testing, research, and education only**.
 
 ## 🧱 Hardware
 
-<div align="center">
-
 ## ✅ Required Hardware
 <table>
   <tr>
@@ -99,7 +97,6 @@ RaspyJack is for **authorized security testing, research, and education only**.
 </table>
 
 <p><em>Note:</em> Raspberry Pi 4/5 is not fully tested yet. It should work trough Webui but screen probably need some ajustement. Feedback is welcome.</p>
-</div>
 
 ---
 
