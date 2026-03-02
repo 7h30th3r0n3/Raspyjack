@@ -33,6 +33,8 @@ RaspyJack is for **authorized security testing, research, and education only**.
 - Responder / DNS spoof tooling integration
 - WiFi utilities + optional attack flows (with compatible USB dongle)
 
+Check the WIKI for more ! https://github.com/7h30th3r0n3/Raspyjack/wiki
+
 ---
 
 ## 🧱 Hardware
