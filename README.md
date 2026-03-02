@@ -86,9 +86,12 @@ After reboot, RaspyJack should be available on-device.
 ## 🔄 Update
 
 ```bash
-cd /root/Raspyjack
-git fetch --all
-git pull --rebase
+sudo -i
+cd /root
+rm -rf Raspyjack
+git clone https://github.com/7h30th3r0n3/raspyjack.git Raspyjack
+chmod +x install_raspyjack.sh
+./install_raspyjack.sh
 reboot
 ```
 
