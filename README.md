@@ -37,17 +37,103 @@ RaspyJack is for **authorized security testing, research, and education only**.
 
 ## 🧱 Hardware
 
-### Common build
+<div align="center">
 
-- Raspberry Pi Zero 2 W / WH (recommended compact build)
-- Waveshare 1.44" LCD HAT
-- microSD card
-- Power source / battery setup
+## ✅ Required Hardware
+<table>
+  <tr>
+    <th>Item</th>
+    <th>Description</th>
+    <th>Buy</th>
+  </tr>
+  <tr>
+    <td><strong>Waveshare 1.44" LCD HAT</strong></td>
+    <td>SPI TFT + joystick + 3 buttons</td>
+    <td>
+      <a href="https://s.click.aliexpress.com/e/_c3HTOQQn">Buy</a><br/>
+      <a href="https://s.click.aliexpress.com/e/_EwDqSv4">Buy</a>
+    </td>
+  </tr>
+  <tr>
+    <td><strong>Raspberry Pi Zero 2 WH</strong></td>
+    <td>Quad-core 1 GHz, 512 MB RAM – super compact</td>
+    <td><a href="https://s.click.aliexpress.com/e/_omuGisy">Buy</a></td>
+  </tr>
+  <tr>
+    <td><strong>RPI 0W + Waveshare Ethernet/USB HUB HAT</strong></td>
+    <td>3 USB + 1 Ethernet</td>
+    <td><a href="https://s.click.aliexpress.com/e/_oDK0eYc">Buy</a></td>
+  </tr>
+  <tr>
+    <td><strong>Alternative: Dual Ethernet/USB HUB HAT</strong></td>
+    <td>2 USB + 2 Ethernet</td>
+    <td><a href="https://s.click.aliexpress.com/e/_oCX3pUA">Buy</a></td>
+  </tr>
+</table>
+<p><em>Note:</em> Raspyjack on RPI 0w1/2 can run headless trough WebUi, but need an ethernet module at least.</p>
 
-### Also used by contributors
+---
 
-- Raspberry Pi 4
-- Raspberry Pi 5 (community testing welcome)
+## ➕ Other Hardware (Not Mandatory)
+<table>
+  <tr>
+    <th>Item</th>
+    <th>Description</th>
+    <th>Buy</th>
+  </tr>
+   <tr>
+    <td><strong>Raspberry Pi 3 Model B</strong> </td>
+    <td>Almost same specs as RPI 0w2</td>
+    <td><a href="https://s.click.aliexpress.com/e/_c4k1RESn">Buy</a></td>
+  </tr>
+  <tr>
+    <td><strong>Raspberry Pi 4 Model B</strong> (4 GB)</td>
+    <td>Quad-core 1.5 GHz, full-size HDMI, GigE LAN</td>
+    <td><a href="https://s.click.aliexpress.com/e/_oFOHQdm">Buy</a></td>
+  </tr>
+  <tr>
+    <td><strong>Raspberry Pi 5</strong> (8 GB)</td>
+    <td>Quad-core Cortex-A76 2.4 GHz, PCIe 2.0 x1</td>
+    <td><a href="https://s.click.aliexpress.com/e/_oC6NEZe">Buy</a></td>
+  </tr>
+</table>
+
+<p><em>Note:</em> Raspberry Pi 4/5 is not fully tested yet. It should work trough Webui but screen probably need some ajustement. Feedback is welcome.</p>
+</div>
+
+---
+
+## 📡 WiFi Attack Requirements
+<strong>Important:</strong> The onboard Raspberry Pi WiFi (Broadcom 43430) cannot be used for WiFi attacks.
+
+<table>
+  <tr>
+    <th>Dongle</th>
+    <th>Chipset</th>
+    <th>Monitor Mode</th>
+  </tr>
+  <tr>
+    <td><strong>Alfa AWUS036ACH</strong></td>
+    <td>Realtek RTL8812AU</td>
+    <td>✅ Full support</td>
+  </tr>
+  <tr>
+    <td><strong>TP-Link TL-WN722N v1</strong></td>
+    <td>Atheros AR9271</td>
+    <td>✅ Full support</td>
+  </tr>
+  <tr>
+    <td><strong>Panda PAU09</strong></td>
+    <td>Realtek RTL8812AU</td>
+    <td>✅ Full support</td>
+  </tr>
+</table>
+
+<ul>
+  <li>Deauth attacks on 2.4 GHz and 5 GHz networks</li>
+  <li>Multi-target attacks with interface switching</li>
+  <li>Automatic USB dongle detection and setup</li>
+</ul>
 
 ---
 
