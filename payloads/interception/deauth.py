@@ -316,6 +316,12 @@ def setup_monitor_mode():
         show_status("Switch to USB dongle")
         return False
     
+    # Unblock WiFi via rfkill (soft-block prevents monitor mode silently)
+    show_status("rfkill unblock...")
+    rfkill_result = run_command(f"rfkill unblock wifi")
+    log(f"rfkill unblock wifi: {rfkill_result}")
+    time.sleep(0.5)
+
     # Tell NetworkManager to stop managing this interface only (keeps wlan0/WebUI alive)
     show_status("Unmanage iface...")
     run_command(f"nmcli device set {WIFI_INTERFACE} managed no")
