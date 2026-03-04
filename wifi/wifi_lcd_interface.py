@@ -58,6 +58,22 @@ class WiFiLCDInterface:
         self.in_submenu = False
         self.running = True
         
+        # Keyboard state
+        self.kb_layout = [
+            "abcdefghijkl",
+            "mnopqrstuvwx",
+            "yzABCDEFGHIJ",
+            "KLMNOPQRSTUV",
+            "WXYZ01234567",
+            "89!@#$%^&*()",
+            "_+-=[]{}|;':",
+            "\",./<>?     "
+        ]
+        self.kb_text = ""
+        self.kb_cursor_x = 0
+        self.kb_cursor_y = 0
+        self.kb_target_ssid = ""
+        
         # Data
         self.scanned_networks = []
         self.saved_profiles = []
@@ -171,9 +187,11 @@ class WiFiLCDInterface:
         else:
             y_pos = 18
             display_count = min(6, len(self.saved_profiles))
-            start_idx = max(0, self.menu_index - 2)
+            start_idx = max(0, min(self.menu_index, len(self.saved_profiles) - display_count))
             
-            for i in range(start_idx, min(start_idx + display_count, len(self.saved_profiles))):
+            for i in range(start_idx, start_idx + display_count):
+                if i >= len(self.saved_profiles):
+                    break
                 profile = self.saved_profiles[i]
                 ssid = profile.get('ssid', 'Unknown')[:12]
                 priority = profile.get('priority', 1)
@@ -187,7 +205,7 @@ class WiFiLCDInterface:
                 self.draw.text((4, y_pos), f"📁 {ssid} ({priority})", fill=color, font=self.font)
                 y_pos += 12
         
-        self.draw.text((2, 100), "⭕ Connect  🗑️ Del", fill="cyan", font=self.font)
+        self.draw.text((2, 100), "⭕ Con  K2: Del  K3: Back", fill="cyan", font=self.font)
         self.draw_status_bar()
     
     def draw_interface_config(self):
@@ -247,6 +265,39 @@ class WiFiLCDInterface:
                 y_pos += 10
         
         self.draw.text((2, 115), "KEY3: Back", fill="cyan", font=self.font)
+
+    def draw_keyboard(self):
+        """Draw the on-screen keyboard for password entry."""
+        self.draw_header(f"PW: {self.kb_target_ssid[:12]}")
+        
+        # Draw current text
+        display_text = self.kb_text
+        if len(display_text) > 18:
+            display_text = "..." + display_text[-15:]
+        self.draw.text((4, 16), f"> {display_text}_", fill="green", font=self.font)
+        
+        # Draw grid
+        start_y = 30
+        cell_w = 10
+        cell_h = 10
+        
+        for r, row in enumerate(self.kb_layout):
+            for c, char in enumerate(row):
+                x = 4 + c * cell_w
+                y = start_y + r * cell_h
+                
+                if r == self.kb_cursor_y and c == self.kb_cursor_x:
+                    self.draw.rectangle([(x-1, y-1), (x+8, y+9)], fill="blue")
+                    txt_color = "white"
+                else:
+                    txt_color = "white"
+                    
+                display_char = char
+                if char == ' ':
+                    display_char = '_'
+                self.draw.text((x, y), display_char, fill=txt_color, font=self.font)
+        
+        self.draw.text((2, 115), "K1:Del K2:OK K3:Back", fill="cyan", font=self.font)
     
     def handle_main_menu(self, button):
         """Handle main menu button presses."""
@@ -288,13 +339,19 @@ class WiFiLCDInterface:
     
     def handle_profiles_menu(self, button):
         """Handle saved profiles menu."""
-        if button == "UP" and self.saved_profiles:
+        if not self.saved_profiles:
+            if button == "KEY3":
+                self.current_menu = "main"
+                self.menu_index = 0
+            return
+            
+        if button == "UP":
             self.menu_index = (self.menu_index - 1) % len(self.saved_profiles)
-        elif button == "DOWN" and self.saved_profiles:
+        elif button == "DOWN":
             self.menu_index = (self.menu_index + 1) % len(self.saved_profiles)
-        elif button == "CENTER" and self.saved_profiles:
+        elif button == "CENTER":
             self.connect_to_saved_profile()
-        elif button == "LEFT" and self.saved_profiles:  # Delete
+        elif button == "KEY2":
             self.delete_profile()
         elif button == "KEY3":
             self.current_menu = "main"
@@ -315,6 +372,38 @@ class WiFiLCDInterface:
         elif button == "KEY3":
             self.current_menu = "main"
             self.menu_index = 0
+            
+    def handle_keyboard_menu(self, button):
+        """Handle keyboard input."""
+        if button == "UP":
+            self.kb_cursor_y = (self.kb_cursor_y - 1) % len(self.kb_layout)
+        elif button == "DOWN":
+            self.kb_cursor_y = (self.kb_cursor_y + 1) % len(self.kb_layout)
+        elif button == "LEFT":
+            self.kb_cursor_x = (self.kb_cursor_x - 1) % len(self.kb_layout[0])
+        elif button == "RIGHT":
+            self.kb_cursor_x = (self.kb_cursor_x + 1) % len(self.kb_layout[0])
+        elif button == "CENTER":
+            char = self.kb_layout[self.kb_cursor_y][self.kb_cursor_x]
+            if char == ' ':
+                self.kb_text += ' '
+            else:
+                self.kb_text += char
+        elif button == "KEY1":  # Backspace
+            if len(self.kb_text) > 0:
+                self.kb_text = self.kb_text[:-1]
+        elif button == "KEY2":  # Submit
+            self.show_message(f"Connecting...")
+            success = self.wifi_manager.connect_to_network(self.kb_target_ssid, self.kb_text)
+            if success:
+                self.show_message("Connected!")
+                self.wifi_manager.save_profile(self.kb_target_ssid, self.kb_text, "auto", 1, True)
+                self.current_menu = "main"
+                self.menu_index = 0
+            else:
+                self.show_message("Connection failed")
+        elif button == "KEY3":  # Cancel
+            self.current_menu = "scan"
     
     def quick_connect(self):
         """Quick connect to best available network."""
@@ -332,9 +421,12 @@ class WiFiLCDInterface:
             ssid = network.get('ssid')
             
             if network.get('encrypted', False):
-                # For demo, use a simple password prompt
-                # In real implementation, you'd have a password input screen
-                self.show_message("Need password input")
+                # Switch to keyboard mode for password input
+                self.kb_target_ssid = ssid
+                self.kb_text = ""
+                self.kb_cursor_x = 0
+                self.kb_cursor_y = 0
+                self.current_menu = "keyboard"
                 return
             
             self.show_message(f"Connecting to {ssid}...")
@@ -384,16 +476,25 @@ class WiFiLCDInterface:
         time.sleep(duration)
     
     def check_buttons(self):
-        """Check for button presses."""
+        """Check for button presses with non-blocking debouncing."""
+        if not hasattr(self, '_last_pressed'):
+            self._last_pressed = {}
+            self._button_states = {name: 1 for name in self.buttons.keys()}
+            
+        current_time = time.time()
         for name, pin in self.buttons.items():
-            if GPIO.input(pin) == 0:  # Button pressed
-                # Debounce
-                time.sleep(0.1)
-                if GPIO.input(pin) == 0:
-                    # Wait for release
-                    while GPIO.input(pin) == 0:
-                        time.sleep(0.05)
+            current_state = GPIO.input(pin)
+            
+            # Detect falling edge (1 -> 0)
+            if self._button_states[name] == 1 and current_state == 0:
+                # Basic debounce (ignore if pressed in last 150ms)
+                if current_time - self._last_pressed.get(name, 0) > 0.15:
+                    self._last_pressed[name] = current_time
+                    self._button_states[name] = current_state
                     return name
+            
+            self._button_states[name] = current_state
+            
         return None
     
     def update_display(self):
@@ -408,6 +509,8 @@ class WiFiLCDInterface:
             self.draw_interface_config()
         elif self.current_menu == "status":
             self.draw_status_info()
+        elif self.current_menu == "keyboard":
+            self.draw_keyboard()
         
         self.LCD.LCD_ShowImage(self.canvas, 0, 0)
     
@@ -415,9 +518,17 @@ class WiFiLCDInterface:
         """Main interface loop."""
         self.wifi_manager.log("Starting WiFi LCD interface")
         
+        # Force initial display update
+        self.update_display()
+        last_update = time.time()
+        
         try:
             while self.running:
-                self.update_display()
+                # Update display periodically if no buttons pressed (e.g. for status changes)
+                # But don't do it every single tight loop iteration
+                if time.time() - last_update > 2.0:
+                    self.update_display()
+                    last_update = time.time()
                 
                 button = self.check_buttons()
                 if button:
@@ -429,12 +540,19 @@ class WiFiLCDInterface:
                         self.handle_profiles_menu(button)
                     elif self.current_menu == "interface":
                         self.handle_interface_menu(button)
+                    elif self.current_menu == "keyboard":
+                        self.handle_keyboard_menu(button)
                     elif self.current_menu == "status":
                         if button == "KEY3":
                             self.current_menu = "main"
                             self.menu_index = 0
+                            
+                    # Update display immediately after a button press
+                    self.update_display()
+                    last_update = time.time()
                 
-                time.sleep(0.1)
+                # Tiny sleep to prevent 100% CPU usage, but fast enough for snappy input
+                time.sleep(0.01)
                 
         except KeyboardInterrupt:
             pass
