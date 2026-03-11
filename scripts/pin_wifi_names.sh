@@ -84,6 +84,9 @@ if ip link show wlan_tmp0 >/dev/null 2>&1 && ! ip link show wlan1 >/dev/null 2>&
   ip link set wlan_tmp0 name wlan1 >/dev/null 2>&1 || true
 fi
 
+# Unblock WiFi radios before bringing interfaces up (Bookworm soft-blocks by default).
+rfkill unblock wifi 2>/dev/null || true
+
 # Bring final interfaces up (best effort).
 ip link show wlan0 >/dev/null 2>&1 && ip link set wlan0 up >/dev/null 2>&1 || true
 ip link show wlan1 >/dev/null 2>&1 && ip link set wlan1 up >/dev/null 2>&1 || true

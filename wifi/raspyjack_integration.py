@@ -1027,6 +1027,10 @@ def auto_connect_to_same_network(target_interface, source_interface="wlan0", lcd
                     print(f"✅ Extracted SSID: '{current_ssid}' from line: '{line.strip()}'")
                     break
         
+        # "off/any" means not connected — treat as no SSID
+        if current_ssid and current_ssid == 'off/any':
+            current_ssid = None
+        
         if not current_ssid:
             print(f"❌ Could not determine {source_interface}'s SSID")
             print(f"🔄 FALLBACK: Trying to find any available WiFi profile...")
