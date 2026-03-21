@@ -9,6 +9,7 @@ Routes:
   /api/loot/list      -> JSON directory listing (read-only)
   /api/loot/download  -> file download (read-only)
   /api/loot/view      -> text preview (read-only)
+    /api/loot/nmap      -> normalized Nmap XML (read-only)
   /api/system/status  -> live system monitor metrics
   /api/settings/discord_webhook -> get/save Discord webhook
   /api/auth/*         -> bootstrap/login/session endpoints
@@ -42,6 +43,8 @@ from http.cookies import SimpleCookie
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse, unquote
+
+from nmap_parser import parse_nmap_xml_file
 
 ROOT_DIR = Path(__file__).resolve().parent
 WEB_DIR = ROOT_DIR / "web"
@@ -880,6 +883,9 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
             if parsed.path == "/api/loot/view":
                 self._handle_loot_view(query)
                 return
+            if parsed.path == "/api/loot/nmap":
+                self._handle_loot_nmap(query)
+                return
             if parsed.path == "/api/system/status":
                 self._handle_system_status()
                 return
@@ -1369,6 +1375,26 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
             })
         except Exception:
             _json_response(self, {"error": "read error"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+
+    def _handle_loot_nmap(self, query: dict) -> None:
+        raw = unquote(query.get("path", [""])[0])
+        target = _safe_loot_path(raw)
+        if target is None or not target.exists() or not target.is_file():
+            _json_response(self, {"error": "not found"}, status=HTTPStatus.NOT_FOUND)
+            return
+        if target.suffix.lower() != ".xml":
+            _json_response(self, {"error": "not xml"}, status=HTTPStatus.UNSUPPORTED_MEDIA_TYPE)
+            return
+
+        include_raw = str(query.get("include_raw", [""])[0]).strip().lower() in {"1", "true", "yes", "on"}
+        try:
+            payload = parse_nmap_xml_file(target, include_raw_xml=include_raw)
+            payload.setdefault("file", {})["loot_path"] = raw
+            _json_response(self, payload)
+        except ValueError as exc:
+            _json_response(self, {"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+        except Exception as exc:
+            _json_response(self, {"error": f"parse error: {exc}"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
 
     def _handle_system_status(self) -> None:
         try:

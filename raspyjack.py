@@ -2488,6 +2488,8 @@ class DisposableMenu:
     # Génération à chaud du sous-menu Payload -------------------------------
     def _build_payload_menu(self):
         """Crée (ou rafraîchit) le menu 'ap' par catégories."""
+        self.menu_parent = {}
+
         category_order = [
             "reconnaissance",
             "interception",
@@ -2543,12 +2545,14 @@ class DisposableMenu:
                     [f" {os.path.splitext(os.path.basename(p))[0]}", partial(exec_payload, p)]
                     for p in subdir_paths
                 )
+                self.menu_parent[subkey] = f"ap_{cat}"
                 cat_items.append([f" 📁 {subdir}", subkey])
 
             # Only create category menu if there are items
             if cat_items:
                 key = f"ap_{cat}"
                 self.menu[key] = tuple(cat_items)
+                self.menu_parent[key] = "ap"
                 menu_items.append([_label(cat), key])
 
         # Add any unexpected categories at the end
@@ -2583,17 +2587,20 @@ class DisposableMenu:
                     [f" {os.path.splitext(os.path.basename(p))[0]}", partial(exec_payload, p)]
                     for p in subdir_paths
                 )
+                self.menu_parent[subkey] = f"ap_{cat}"
                 cat_items.append([f" 📁 {subdir}", subkey])
 
             if cat_items:
                 key = f"ap_{cat}"
                 self.menu[key] = tuple(cat_items)
+                self.menu_parent[key] = "ap"
                 menu_items.append([_label(cat), key])
 
         self.menu["ap"] = tuple(menu_items) or ([" <vide>", lambda: None],)
 
     def __init__(self):
         # cette fois, `default` est déjà instancié → pas d'erreur
+        self.menu_parent = {}
         self._build_payload_menu()
 
 
@@ -2910,12 +2917,7 @@ def main():
         elif len(m.which) > 1:
             # Handle dynamic payload category menus (ap_<category>_<subcategory>)
             if m.which.startswith("ap_"):
-                parts = m.which.split('_')
-                if len(parts) > 2:
-                    m.which = '_'.join(parts[:2])
-                else:
-                    # Just category: ap_reconnaissance -> ap
-                    m.which = "ap"
+                m.which = getattr(m, "menu_parent", {}).get(m.which, "ap")
             else:
                 m.which = m.which[:-1]
 

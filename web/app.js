@@ -70,6 +70,16 @@
   const lootPreviewClose = document.getElementById('lootPreviewClose');
   const lootPreviewDownload = document.getElementById('lootPreviewDownload');
   const lootPreviewMeta = document.getElementById('lootPreviewMeta');
+  const nmapVizModal = document.getElementById('nmapVizModal');
+  const nmapVizTitle = document.getElementById('nmapVizTitle');
+  const nmapVizMeta = document.getElementById('nmapVizMeta');
+  const nmapVizStatus = document.getElementById('nmapVizStatus');
+  const nmapVizBody = document.getElementById('nmapVizBody');
+  const nmapVizError = document.getElementById('nmapVizError');
+  const nmapVizClose = document.getElementById('nmapVizClose');
+  const nmapVizDownloadXml = document.getElementById('nmapVizDownloadXml');
+  const nmapVizDownloadJson = document.getElementById('nmapVizDownloadJson');
+  const nmapVizFilterVuln = document.getElementById('nmapVizFilterVuln');
   const payloadSidebar = document.getElementById('payloadSidebar');
   const payloadStatus = document.getElementById('payloadStatus');
   const payloadStatusDot = document.getElementById('payloadStatusDot');
@@ -502,6 +512,7 @@
   const pressed = new Set(); // keyboard pressed state
   let activeTab = 'device';
   let lootState = { path: '', parent: '' };
+  let nmapVizState = { data: null, jsonUrl: '' };
   let payloadState = { categories: [], open: {}, activePath: null };
   let term = null;
   let fitAddon = null;
@@ -1184,6 +1195,320 @@
     lootPreview.classList.add('hidden');
   }
 
+  function setNmapVizStatus(text){
+    if (!nmapVizStatus) return;
+    nmapVizStatus.textContent = text || 'Ready';
+    applyStatusTone(nmapVizStatus, text || 'Ready');
+  }
+
+  function setNmapVizError(message){
+    if (!nmapVizError) return;
+    const text = String(message || '').trim();
+    nmapVizError.textContent = text;
+    nmapVizError.classList.toggle('hidden', !text);
+  }
+
+  function revokeNmapJsonUrl(){
+    if (!nmapVizState.jsonUrl) return;
+    try { URL.revokeObjectURL(nmapVizState.jsonUrl); } catch {}
+    nmapVizState.jsonUrl = '';
+  }
+
+  function closeNmapViz(){
+    if (!nmapVizModal) return;
+    nmapVizModal.classList.add('hidden');
+    setNmapVizError('');
+    setNmapVizStatus('Ready');
+  }
+
+  function hasStructuredData(value){
+    if (Array.isArray(value)) return value.length > 0;
+    if (value && typeof value === 'object') return Object.keys(value).length > 0;
+    return value !== null && value !== undefined && value !== '';
+  }
+
+  function formatSeverityLabel(value){
+    const text = String(value || 'unknown').toLowerCase();
+    return text.charAt(0).toUpperCase() + text.slice(1);
+  }
+
+  function getSeverityClasses(value){
+    const severity = String(value || 'unknown').toLowerCase();
+    if (severity === 'critical') return 'border-rose-400/30 bg-rose-500/15 text-rose-200';
+    if (severity === 'high') return 'border-orange-400/30 bg-orange-500/15 text-orange-200';
+    if (severity === 'medium') return 'border-amber-400/30 bg-amber-500/15 text-amber-200';
+    if (severity === 'low') return 'border-sky-400/30 bg-sky-500/15 text-sky-200';
+    return 'border-slate-500/30 bg-slate-800/60 text-slate-300';
+  }
+
+  function formatScriptContext(script){
+    if (!script || !script.context) return 'Host script';
+    if (script.context.scope === 'port'){
+      const port = script.context.port ?? '?';
+      const proto = script.context.protocol || '?';
+      return `Port ${port}/${proto}`;
+    }
+    return 'Host script';
+  }
+
+  function toPrettyJson(value){
+    try{
+      return JSON.stringify(value, null, 2);
+    }catch{
+      return String(value || '');
+    }
+  }
+
+  function isNmapLootXml(parentPath, name){
+    const current = String(parentPath || '');
+    const fileName = String(name || '');
+    return /\.xml$/i.test(fileName) && (current === 'Nmap' || current.startsWith('Nmap/'));
+  }
+
+  function renderNmapSummaryCards(data, hosts){
+    const hostCount = hosts.length;
+    const upCount = hosts.filter(host => String(host && host.status || '').toLowerCase() === 'up').length;
+    const portCount = hosts.reduce((sum, host) => sum + ((host && Array.isArray(host.ports)) ? host.ports.length : 0), 0);
+    const vulnCount = hosts.reduce((sum, host) => sum + ((host && Array.isArray(host.vulnerabilities)) ? host.vulnerabilities.length : 0), 0);
+    const elapsed = data && data.stats && data.stats.elapsed ? `${Number(data.stats.elapsed).toFixed(2)}s` : 'Unknown';
+    const cards = [
+      { label: 'Hosts', value: String(hostCount), tone: 'text-emerald-200' },
+      { label: 'Up', value: String(upCount), tone: 'text-cyan-200' },
+      { label: 'Ports', value: String(portCount), tone: 'text-slate-100' },
+      { label: 'Vulnerabilities', value: String(vulnCount), tone: vulnCount ? 'text-rose-200' : 'text-slate-100' },
+      { label: 'Elapsed', value: elapsed, tone: 'text-slate-100' },
+    ];
+    return `
+      <div class="grid grid-cols-2 xl:grid-cols-5 gap-3">
+        ${cards.map(card => `
+          <div class="rounded-xl border border-slate-800/70 bg-slate-900/50 px-4 py-3">
+            <div class="text-[11px] uppercase tracking-[0.18em] text-slate-500">${escapeHtml(card.label)}</div>
+            <div class="mt-2 text-lg font-semibold ${card.tone}">${escapeHtml(card.value)}</div>
+          </div>
+        `).join('')}
+      </div>
+    `;
+  }
+
+  function renderVulnerabilityList(vulnerabilities){
+    if (!Array.isArray(vulnerabilities) || !vulnerabilities.length){
+      return '<div class="text-xs text-slate-500">No vulnerabilities identified.</div>';
+    }
+    return vulnerabilities.map(vuln => {
+      const refs = Array.isArray(vuln.references) ? vuln.references : [];
+      const portLabel = vuln.port ? ` · Port ${escapeHtml(String(vuln.port))}/${escapeHtml(String(vuln.protocol || '?'))}` : '';
+      return `
+        <div class="rounded-xl border ${getSeverityClasses(vuln.severity)} px-3 py-3">
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="text-xs font-semibold">${escapeHtml(vuln.id || 'Finding')}</span>
+            <span class="px-2 py-0.5 rounded-full border text-[10px] ${getSeverityClasses(vuln.severity)}">${escapeHtml(formatSeverityLabel(vuln.severity))}</span>
+            <span class="text-[11px] text-slate-400">${escapeHtml(vuln.source_script_id || 'script')}${portLabel}</span>
+          </div>
+          <div class="mt-2 text-xs text-slate-100 whitespace-pre-wrap">${escapeHtml(vuln.description || 'No description available.')}</div>
+          ${refs.length ? `<div class="mt-2 text-[11px] text-slate-400">Refs: ${escapeHtml(refs.join(', '))}</div>` : ''}
+        </div>
+      `;
+    }).join('');
+  }
+
+  function renderPortList(ports){
+    if (!Array.isArray(ports) || !ports.length){
+      return '<div class="text-xs text-slate-500">No port data in this scan.</div>';
+    }
+    return `
+      <div class="space-y-2">
+        ${ports.map(port => {
+          const serviceBits = [port.service, port.product, port.version].filter(Boolean);
+          return `
+            <div class="rounded-xl border border-slate-800/70 bg-slate-900/40 px-3 py-3">
+              <div class="flex flex-wrap items-center justify-between gap-2">
+                <div class="text-sm text-slate-100 font-medium">${escapeHtml(String(port.port ?? '?'))}/${escapeHtml(String(port.protocol || '?'))}</div>
+                <div class="flex flex-wrap items-center gap-2">
+                  <span class="px-2 py-0.5 rounded-full border text-[10px] ${String(port.state || '').toLowerCase() === 'open' ? 'border-emerald-400/30 bg-emerald-500/10 text-emerald-200' : 'border-slate-600/40 bg-slate-800/70 text-slate-300'}">${escapeHtml(String(port.state || 'unknown'))}</span>
+                  ${port.scripts && port.scripts.length ? `<span class="text-[11px] text-slate-400">${escapeHtml(String(port.scripts.length))} scripts</span>` : ''}
+                </div>
+              </div>
+              <div class="mt-2 text-xs text-slate-300">${escapeHtml(serviceBits.join(' · ') || 'Service metadata unavailable')}</div>
+              ${port.extrainfo ? `<div class="mt-1 text-[11px] text-slate-500">${escapeHtml(String(port.extrainfo))}</div>` : ''}
+            </div>
+          `;
+        }).join('')}
+      </div>
+    `;
+  }
+
+  function renderOsSection(osInfo){
+    if (!osInfo || (!osInfo.name && !(Array.isArray(osInfo.matches) && osInfo.matches.length))){
+      return '<div class="text-xs text-slate-500">No OS detection data in this scan.</div>';
+    }
+    const matches = Array.isArray(osInfo.matches) ? osInfo.matches.slice(0, 3) : [];
+    return `
+      <div class="space-y-2">
+        <div class="rounded-xl border border-slate-800/70 bg-slate-900/40 px-3 py-3">
+          <div class="text-sm font-medium text-slate-100">${escapeHtml(String(osInfo.name || 'Best match unavailable'))}</div>
+          <div class="mt-1 text-[11px] text-slate-400">Accuracy: ${escapeHtml(String(osInfo.accuracy ?? 'unknown'))}</div>
+        </div>
+        ${matches.map(match => `
+          <div class="rounded-xl border border-slate-800/70 bg-slate-950/40 px-3 py-2">
+            <div class="text-xs text-slate-200">${escapeHtml(String(match.name || 'Unknown match'))}</div>
+            <div class="text-[11px] text-slate-500">Accuracy ${escapeHtml(String(match.accuracy ?? 'unknown'))}</div>
+          </div>
+        `).join('')}
+      </div>
+    `;
+  }
+
+  function renderScriptOutputs(scripts){
+    if (!Array.isArray(scripts) || !scripts.length){
+      return '<div class="text-xs text-slate-500">No script output in this scan.</div>';
+    }
+    return scripts.map(script => {
+      const structured = hasStructuredData(script.structured)
+        ? `<div class="mt-3"><div class="text-[11px] uppercase tracking-[0.16em] text-slate-500 mb-1">Structured</div><pre class="text-[11px] text-cyan-100 whitespace-pre-wrap rounded-lg border border-slate-800/70 bg-slate-950/70 p-3 overflow-auto">${escapeHtml(toPrettyJson(script.structured))}</pre></div>`
+        : '';
+      const vulnerabilities = Array.isArray(script.vulnerabilities) && script.vulnerabilities.length
+        ? `<div class="mt-3 space-y-2">${renderVulnerabilityList(script.vulnerabilities)}</div>`
+        : '';
+      return `
+        <details class="rounded-xl border border-slate-800/70 bg-slate-900/45 px-3 py-3 group">
+          <summary class="flex flex-wrap items-center gap-2 cursor-pointer list-none">
+            <span class="text-xs font-semibold text-slate-100">${escapeHtml(String(script.id || 'script'))}</span>
+            <span class="text-[11px] text-slate-400">${escapeHtml(formatScriptContext(script))}</span>
+            ${script.is_vulnerability ? `<span class="px-2 py-0.5 rounded-full border text-[10px] border-rose-400/30 bg-rose-500/15 text-rose-200">Vulnerability</span>` : ''}
+          </summary>
+          <div class="mt-3 text-[11px] uppercase tracking-[0.16em] text-slate-500 mb-1">Raw Output</div>
+          <pre class="text-[11px] text-slate-100 whitespace-pre-wrap rounded-lg border border-slate-800/70 bg-slate-950/70 p-3 overflow-auto">${escapeHtml(String(script.output || 'No raw output available.'))}</pre>
+          ${structured}
+          ${vulnerabilities}
+        </details>
+      `;
+    }).join('');
+  }
+
+  function renderHostCard(host){
+    const hostnames = Array.isArray(host.hostnames) && host.hostnames.length ? host.hostnames.join(', ') : 'No hostnames';
+    const ports = Array.isArray(host.ports) ? host.ports : [];
+    const vulnerabilities = Array.isArray(host.vulnerabilities) ? host.vulnerabilities : [];
+    const scripts = Array.isArray(host.raw_scripts) ? host.raw_scripts : [];
+    const highest = host && host.severity_summary ? host.severity_summary.highest : null;
+    return `
+      <section class="rounded-2xl border border-slate-800/70 bg-slate-950/45 overflow-hidden">
+        <div class="px-4 py-4 border-b border-slate-800/70 bg-slate-900/45">
+          <div class="flex flex-wrap items-center gap-2">
+            <div class="text-base font-semibold text-slate-100">${escapeHtml(String(host.ip || 'Unknown host'))}</div>
+            <span class="px-2 py-0.5 rounded-full border text-[10px] ${String(host.status || '').toLowerCase() === 'up' ? 'border-emerald-400/30 bg-emerald-500/10 text-emerald-200' : 'border-slate-600/40 bg-slate-800/70 text-slate-300'}">${escapeHtml(String(host.status || 'unknown'))}</span>
+            ${highest ? `<span class="px-2 py-0.5 rounded-full border text-[10px] ${getSeverityClasses(highest)}">${escapeHtml(formatSeverityLabel(highest))}</span>` : ''}
+          </div>
+          <div class="mt-2 text-xs text-slate-400">${escapeHtml(hostnames)}</div>
+          <div class="mt-2 flex flex-wrap gap-3 text-[11px] text-slate-500">
+            <span>MAC: ${escapeHtml(String(host.mac || 'n/a'))}</span>
+            <span>Vendor: ${escapeHtml(String(host.vendor || 'n/a'))}</span>
+            <span>Ports: ${escapeHtml(String(ports.length))}</span>
+            <span>Findings: ${escapeHtml(String(vulnerabilities.length))}</span>
+          </div>
+        </div>
+        <div class="grid xl:grid-cols-2 gap-4 p-4">
+          <div>
+            <div class="text-[11px] uppercase tracking-[0.18em] text-slate-500 mb-2">Ports & Services</div>
+            ${renderPortList(ports)}
+          </div>
+          <div>
+            <div class="text-[11px] uppercase tracking-[0.18em] text-slate-500 mb-2">OS Detection</div>
+            ${renderOsSection(host.os)}
+          </div>
+        </div>
+        <div class="grid xl:grid-cols-2 gap-4 px-4 pb-4">
+          <div>
+            <div class="text-[11px] uppercase tracking-[0.18em] text-slate-500 mb-2">Vulnerabilities</div>
+            ${renderVulnerabilityList(vulnerabilities)}
+          </div>
+          <div>
+            <div class="text-[11px] uppercase tracking-[0.18em] text-slate-500 mb-2">Script Outputs</div>
+            <div class="space-y-2">${renderScriptOutputs(scripts)}</div>
+          </div>
+        </div>
+      </section>
+    `;
+  }
+
+  function renderNmapVisualization(){
+    if (!nmapVizBody) return;
+    const data = nmapVizState.data;
+    if (!data){
+      nmapVizBody.innerHTML = '<div class="text-sm text-slate-400">No Nmap data loaded.</div>';
+      return;
+    }
+
+    const allHosts = Array.isArray(data.hosts) ? data.hosts : [];
+    const vulnerableOnly = !!(nmapVizFilterVuln && nmapVizFilterVuln.checked);
+    const hosts = vulnerableOnly
+      ? allHosts.filter(host => Array.isArray(host.vulnerabilities) && host.vulnerabilities.length)
+      : allHosts;
+    const warnings = Array.isArray(data.warnings) ? data.warnings : [];
+    const args = data && data.scan ? data.scan.args : '';
+    const rawXmlSection = data.raw_xml
+      ? `<details class="rounded-xl border border-slate-800/70 bg-slate-900/45 px-4 py-3"><summary class="cursor-pointer text-xs font-semibold text-slate-200">Raw XML</summary><pre class="mt-3 text-[11px] text-slate-100 whitespace-pre-wrap rounded-lg border border-slate-800/70 bg-slate-950/70 p-3 overflow-auto">${escapeHtml(String(data.raw_xml || ''))}</pre></details>`
+      : '';
+    const warningsSection = warnings.length
+      ? `<div class="rounded-xl border border-amber-400/20 bg-amber-500/10 px-4 py-3 text-xs text-amber-100">Warnings: ${escapeHtml(warnings.join(' | '))}</div>`
+      : '';
+
+    nmapVizBody.innerHTML = `
+      ${renderNmapSummaryCards(data, hosts)}
+      ${args ? `<div class="rounded-xl border border-slate-800/70 bg-slate-900/45 px-4 py-3 text-xs text-slate-300"><span class="text-slate-500 uppercase tracking-[0.16em] mr-2">Args</span>${escapeHtml(String(args))}</div>` : ''}
+      ${warningsSection}
+      <div class="space-y-4">
+        ${hosts.length ? hosts.map(renderHostCard).join('') : '<div class="rounded-xl border border-slate-800/70 bg-slate-900/45 px-4 py-6 text-sm text-slate-400">No hosts match the current filter.</div>'}
+      </div>
+      ${rawXmlSection}
+    `;
+  }
+
+  async function loadNmapVisualization(path, name){
+    if (!nmapVizModal) return;
+    const xmlUrl = getApiUrl('/api/loot/download', { path });
+    if (nmapVizTitle) nmapVizTitle.textContent = name || 'Nmap Visualization';
+    if (nmapVizMeta) nmapVizMeta.textContent = path ? `/${path}` : '';
+    if (nmapVizDownloadXml) nmapVizDownloadXml.href = xmlUrl;
+    if (nmapVizFilterVuln) nmapVizFilterVuln.checked = false;
+    setNmapVizError('');
+    setNmapVizStatus('Loading...');
+    nmapVizState.data = null;
+    revokeNmapJsonUrl();
+    if (nmapVizBody) nmapVizBody.innerHTML = '<div class="text-sm text-slate-400">Parsing XML and normalizing results...</div>';
+    nmapVizModal.classList.remove('hidden');
+
+    try{
+      const url = getApiUrl('/api/loot/nmap', { path, include_raw: '1' });
+      const res = await apiFetch(url, { cache: 'no-store' });
+      const data = await res.json();
+      if (!res.ok){
+        throw new Error(data && data.error ? data.error : 'Failed to parse Nmap XML');
+      }
+      nmapVizState.data = data;
+      if (nmapVizMeta){
+        const metaBits = [
+          path ? `/${path}` : '',
+          data && data.scan && data.scan.version ? `Nmap ${data.scan.version}` : '',
+          data && data.stats && data.stats.time_str ? data.stats.time_str : '',
+        ].filter(Boolean);
+        nmapVizMeta.textContent = metaBits.join(' · ');
+      }
+      if (nmapVizDownloadJson){
+        const jsonBlob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+        nmapVizState.jsonUrl = URL.createObjectURL(jsonBlob);
+        nmapVizDownloadJson.href = nmapVizState.jsonUrl;
+        nmapVizDownloadJson.download = String(name || 'nmap').replace(/\.xml$/i, '.json');
+      }
+      renderNmapVisualization();
+      setNmapVizStatus('Ready');
+    }catch(e){
+      setNmapVizStatus('Parse failed');
+      setNmapVizError(e && e.message ? e.message : 'Failed to parse Nmap XML');
+      if (nmapVizBody) nmapVizBody.innerHTML = '<div class="text-sm text-slate-400">The XML file could not be visualized.</div>';
+    }
+  }
+
   function renderLoot(items){
     if (!lootList) return;
     if (!items.length){
@@ -1196,11 +1521,14 @@
       const meta = itemType === 'dir' ? 'Folder' : `${formatBytes(item.size)} · ${formatTime(item.mtime)}`;
       const safeName = escapeHtml(item.name || '');
       const encodedName = encodeData(item.name || '');
+      const vizAction = isNmapLootXml(lootState.path, item.name)
+        ? `<span role="button" tabindex="0" title="Visualize Nmap XML" aria-label="Visualize Nmap XML" data-visualize-nmap="${encodedName}" class="ml-2 inline-flex h-6 w-6 items-center justify-center rounded-md border border-emerald-400/20 bg-emerald-500/10 text-emerald-200 hover:bg-emerald-500/20 transition align-middle"><i class="fa-solid fa-network-wired pointer-events-none text-[11px]"></i></span>`
+        : '';
       return `
         <button class="w-full text-left px-3 py-2 flex items-center gap-3 hover:bg-slate-800/60 transition loot-item" data-type="${itemType}" data-name="${encodedName}">
           <span class="text-lg">${icon}</span>
           <div class="flex-1 min-w-0">
-            <div class="text-sm text-slate-100 truncate">${safeName}</div>
+            <div class="text-sm text-slate-100 truncate"><span>${safeName}</span>${vizAction}</div>
             <div class="text-[11px] text-slate-400">${escapeHtml(meta)}</div>
           </div>
           <div class="text-xs text-slate-400">${itemType === 'dir' ? 'Open' : 'Download'}</div>
@@ -1480,6 +1808,15 @@
     }
   });
   if (lootList) lootList.addEventListener('click', (e) => {
+    const vizBtn = e.target.closest('[data-visualize-nmap]');
+    if (vizBtn){
+      e.preventDefault();
+      const encodedViz = vizBtn.getAttribute('data-visualize-nmap') || '';
+      const vizName = decodeURIComponent(encodedViz);
+      const vizPath = buildLootPath(lootState.path, vizName);
+      loadNmapVisualization(vizPath, vizName);
+      return;
+    }
     const btn = e.target.closest('.loot-item');
     if (!btn) return;
     const encoded = btn.getAttribute('data-name') || '';
@@ -1542,6 +1879,11 @@
   if (lootPreview) lootPreview.addEventListener('click', (e) => {
     if (e.target === lootPreview) closePreview();
   });
+  if (nmapVizClose) nmapVizClose.addEventListener('click', closeNmapViz);
+  if (nmapVizModal) nmapVizModal.addEventListener('click', (e) => {
+    if (e.target === nmapVizModal) closeNmapViz();
+  });
+  if (nmapVizFilterVuln) nmapVizFilterVuln.addEventListener('change', renderNmapVisualization);
   if (authModalConfirm) authModalConfirm.addEventListener('click', () => {
     resolveAuthPrompt({
       recovery: authRecoveryMode,
