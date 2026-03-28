@@ -5,7 +5,6 @@ import hashlib
 import hmac
 import os
 import secrets
-import shutil
 import subprocess
 import netifaces
 from scapy.all import ARP, Ether, srp
@@ -115,12 +114,6 @@ _lock_screensaver_cache = {
     "frames": [],
     "durations": [],
 }
-TOOLBAR_TAILSCALE_ICON = "\uf3ed"
-TOOLBAR_DISCORD_ICON = "\uf392"
-TOOLBAR_STATUS_GAP = 4
-TOOLBAR_ICON_RIGHT_PADDING = 6
-TOOLBAR_ICON_SPACING = 2
-TOOLBAR_ICON_Y = 0
 
 # WebUI frame mirror (used by device_server.py)
 FRAME_MIRROR_PATH = os.environ.get("RJ_FRAME_PATH", "/dev/shm/raspyjack_last.jpg")
@@ -613,68 +606,12 @@ def LoadConfig():
 
 ####### Drawing functions #######
 
-def _tailscale_installed() -> bool:
-    try:
-        return shutil.which("tailscale") is not None
-    except Exception:
-        return False
-
-
-def _draw_crisp_toolbar_icon(icon_text: str, icon_font_ref, current_right: int) -> int:
-    bbox = draw.textbbox((0, 0), icon_text, font=icon_font_ref)
-    icon_width = max(1, bbox[2] - bbox[0])
-    icon_height = max(1, bbox[3] - bbox[1])
-
-    scaled_font = icon_font_ref
-    font_path = getattr(icon_font_ref, "path", None)
-    font_size = getattr(icon_font_ref, "size", None)
-    if font_path and font_size:
-        try:
-            scaled_font = ImageFont.truetype(font_path, max(1, int(font_size) * 4))
-        except Exception:
-            scaled_font = icon_font_ref
-
-    scaled_bbox = draw.textbbox((0, 0), icon_text, font=scaled_font)
-    scaled_width = max(1, scaled_bbox[2] - scaled_bbox[0])
-    scaled_height = max(1, scaled_bbox[3] - scaled_bbox[1])
-    mask = Image.new("L", (scaled_width + 2, scaled_height + 2), 0)
-    mask_draw = ImageDraw.Draw(mask)
-    mask_draw.text((1 - scaled_bbox[0], 1 - scaled_bbox[1]), icon_text, fill=255, font=scaled_font)
-
-    if mask.size != (icon_width, icon_height):
-        resampling = getattr(Image, "Resampling", Image)
-        mask = mask.resize((icon_width, icon_height), resampling.LANCZOS)
-    mask = mask.point(lambda value: 255 if value >= 96 else 0)
-
-    x = current_right - icon_width
-    image.paste((255, 255, 255), (x, TOOLBAR_ICON_Y, x + icon_width, TOOLBAR_ICON_Y + icon_height), mask)
-    return x - TOOLBAR_ICON_SPACING
-
-
-def _draw_toolbar_service_icons() -> None:
-    icons = []
-    if _tailscale_installed():
-        icons.append((TOOLBAR_TAILSCALE_ICON, toolbar_icon_font))
-    if get_discord_webhook():
-        icons.append((TOOLBAR_DISCORD_ICON, toolbar_brand_icon_font))
-
-    current_right = 127 - TOOLBAR_ICON_RIGHT_PADDING
-    for icon_text, icon_font_ref in icons:
-        current_right = _draw_crisp_toolbar_icon(icon_text, icon_font_ref, current_right)
-
-
 def _draw_toolbar():
     try:
         draw.line([(0, 4), (128, 4)], fill="#222", width=10)
-        temp_text = f"{_temp_c:.0f} °C "
-        draw.text((0, 0), temp_text, fill="WHITE", font=font)
+        draw.text((0, 0), f"{_temp_c:.0f} °C ", fill="WHITE", font=font)
         if _status_text:
-            status_x = draw.textbbox((0, 0), temp_text, font=font)[2] + TOOLBAR_STATUS_GAP
-            status_max_width = max(0, 126 - status_x)
-            status_text = _truncate_to_width(_status_text, status_max_width, font)
-            draw.text((status_x, 0), status_text, fill="WHITE", font=font)
-        else:
-            _draw_toolbar_service_icons()
+            draw.text((30, 0), _status_text, fill="WHITE", font=font)
     except Exception:
         pass
 
@@ -3624,15 +3561,6 @@ image = Image.new("RGB", (LCD.width, LCD.height), "WHITE")
 draw = ImageDraw.Draw(image)
 text_font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 9)
 icon_font = ImageFont.truetype('/usr/share/fonts/truetype/fontawesome/fa-solid-900.ttf', 12)
-toolbar_icon_font = ImageFont.truetype('/usr/share/fonts/truetype/fontawesome/fa-solid-900.ttf', 8)
-try:
-    brand_icon_font = ImageFont.truetype('/usr/share/fonts/truetype/fontawesome/fa-brands-400.ttf', 12)
-except Exception:
-    brand_icon_font = icon_font
-try:
-    toolbar_brand_icon_font = ImageFont.truetype('/usr/share/fonts/truetype/fontawesome/fa-brands-400.ttf', 9)
-except Exception:
-    toolbar_brand_icon_font = toolbar_icon_font
 font = text_font  # Keep backward compatibility
 
 ### Defining PINS, threads, loading JSON ###

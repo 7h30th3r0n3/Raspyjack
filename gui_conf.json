@@ -14,8 +14,8 @@
         "pin_hash": ""
     },
     "PATHS": {
-           "IMAGEBROWSER_START": "/root/Raspyjack/img/",
-           "SCREENSAVER_GIF": "/root/Raspyjack/img/screensaver/default.gif"
+        "IMAGEBROWSER_START": "/root/Raspyjack/img/",
+        "SCREENSAVER_GIF": "/root/Raspyjack/img/screensaver/default.gif"
     },
     "PINS": {
         "KEY1_PIN": 21,
