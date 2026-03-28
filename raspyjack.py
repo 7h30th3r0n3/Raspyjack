@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
 
+import base64
+import hashlib
+import hmac
 import os
+import secrets
+import shutil
 import subprocess
 import netifaces
 from scapy.all import ARP, Ether, srp
 from datetime import datetime
 import threading, smbus, time, pyudev, serial, struct, json
 from subprocess import STDOUT, check_output
-from PIL import Image, ImageDraw, ImageFont, ImageColor
+from PIL import Image, ImageDraw, ImageFont, ImageColor, ImageSequence
 import LCD_Config
 import LCD_1in44
 import RPi.GPIO as GPIO
@@ -80,6 +85,42 @@ _debounce_seconds = 0.10
 _button_down_since = 0.0
 _repeat_delay = 0.25
 _repeat_interval = 0.08
+_double_click_window = 0.35
+LOCK_PIN_PBKDF2_ROUNDS = 40000
+LOCK_SCREEN_STATIC_SECONDS = 1.2
+LOCK_DEFAULTS = {
+    "enabled": False,
+    "pin_hash": "",
+    "auto_lock_seconds": 0,
+}
+LOCK_TIMEOUT_OPTIONS = [
+    (0, "Never"),
+    (15, "15 sec"),
+    (30, "30 sec"),
+    (60, "1 min"),
+    (300, "5 min"),
+    (600, "10 min"),
+]
+lock_config = LOCK_DEFAULTS.copy()
+lock_runtime = {
+    "locked": False,
+    "last_activity": time.monotonic(),
+    "in_lock_flow": False,
+    "suspend_auto_lock": False,
+    "showing_screensaver": False,
+}
+_lock_screensaver_cache = {
+    "path": None,
+    "mtime": None,
+    "frames": [],
+    "durations": [],
+}
+TOOLBAR_TAILSCALE_ICON = "\uf3ed"
+TOOLBAR_DISCORD_ICON = "\uf392"
+TOOLBAR_STATUS_GAP = 4
+TOOLBAR_ICON_RIGHT_PADDING = 6
+TOOLBAR_ICON_SPACING = 2
+TOOLBAR_ICON_Y = 0
 
 # WebUI frame mirror (used by device_server.py)
 FRAME_MIRROR_PATH = os.environ.get("RJ_FRAME_PATH", "/dev/shm/raspyjack_last.jpg")
@@ -116,11 +157,12 @@ def _stats_loop():
             if is_responder_running():
                 status = "(Responder)"
             _status_text = status
-            try:
-                draw_lock.acquire()
-                _draw_toolbar()
-            finally:
-                draw_lock.release()
+            if not lock_runtime.get("showing_screensaver"):
+                try:
+                    draw_lock.acquire()
+                    _draw_toolbar()
+                finally:
+                    draw_lock.release()
         except Exception:
             pass
         time.sleep(2)
@@ -172,6 +214,7 @@ class Defaults():
 
     install_path = "/root/Raspyjack/"
     config_file = install_path + "gui_conf.json"
+    screensaver_gif = install_path + "img/screensaver/default.gif"
 
     payload_path = install_path + "payloads/"
     payload_log  = install_path + "loot/payload.log"
@@ -259,6 +302,9 @@ class template():
 def getButton():
     global _last_button, _last_button_time, _button_down_since
     while 1:
+        if _should_auto_lock():
+            lock_device("Auto lock")
+            continue
         # WebUI payload requests: launch immediately while waiting for input
         if not screen_lock.is_set():
             requested = _check_payload_request()
@@ -268,6 +314,7 @@ def getButton():
         # 1) virtual buttons from Web UI
         v = rj_input.get_virtual_button()
         if v:
+            _mark_user_activity()
             return v
         pressed = None
         for item in PINS:
@@ -283,6 +330,7 @@ def getButton():
         now = time.time()
         if pressed != _last_button:
             _set_last_button(pressed, now)
+            _mark_user_activity()
             return pressed
 
         # Same button still held: debounce first, then allow auto-repeat
@@ -291,6 +339,7 @@ def getButton():
             continue
         if (now - _button_down_since) >= _repeat_delay and (now - _last_button_time) >= _repeat_interval:
             _last_button_time = now
+            _mark_user_activity()
             return pressed
         time.sleep(0.01)
 
@@ -365,15 +414,175 @@ def is_mitm_running():
     return tcpdump_running or arpspoof_running
 
 
+def _b64url_encode(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _normalize_lock_config(raw: dict | None) -> dict[str, object]:
+    cfg = raw if isinstance(raw, dict) else {}
+    normalized = LOCK_DEFAULTS.copy()
+    normalized["enabled"] = bool(cfg.get("enabled", normalized["enabled"]))
+    normalized["pin_hash"] = str(cfg.get("pin_hash", normalized["pin_hash"]) or "").strip()
+    try:
+        auto_lock_seconds = int(cfg.get("auto_lock_seconds", normalized["auto_lock_seconds"]))
+    except (TypeError, ValueError):
+        auto_lock_seconds = int(normalized["auto_lock_seconds"])
+    normalized["auto_lock_seconds"] = max(0, auto_lock_seconds)
+    if normalized["enabled"] and not normalized["pin_hash"]:
+        normalized["enabled"] = False
+    return normalized
+
+
+def _lock_has_pin() -> bool:
+    return bool(str(lock_config.get("pin_hash") or "").strip())
+
+
+def _lock_is_enabled() -> bool:
+    return bool(lock_config.get("enabled")) and _lock_has_pin()
+
+
+def _mark_user_activity() -> None:
+    lock_runtime["last_activity"] = time.monotonic()
+
+
+def _should_auto_lock() -> bool:
+    if lock_runtime["locked"] or lock_runtime["in_lock_flow"] or lock_runtime["suspend_auto_lock"]:
+        return False
+    if not _lock_is_enabled():
+        return False
+    timeout = int(lock_config.get("auto_lock_seconds") or 0)
+    if timeout <= 0:
+        return False
+    return (time.monotonic() - float(lock_runtime.get("last_activity") or 0.0)) >= timeout
+
+
+def _lock_timeout_label(seconds: int | None = None) -> str:
+    value = int(lock_config.get("auto_lock_seconds") or 0) if seconds is None else int(seconds)
+    for candidate, label in LOCK_TIMEOUT_OPTIONS:
+        if candidate == value:
+            return label
+    if value <= 0:
+        return "Never"
+    return f"{value} sec"
+
+
+def _handle_main_menu_key3_double_click() -> bool:
+    deadline = time.monotonic() + _double_click_window
+    key3_released = False
+    while time.monotonic() < deadline:
+        try:
+            if GPIO.input(PINS["KEY3_PIN"]) != 0:
+                key3_released = True
+            elif key3_released:
+                _mark_user_activity()
+                if _lock_has_pin():
+                    lock_device("Locked")
+                else:
+                    Dialog_info("Set PIN first", wait=False, timeout=1.0)
+                return True
+        except Exception:
+            pass
+        virtual_button = rj_input.get_virtual_button()
+        if virtual_button == "KEY3_PIN":
+            _mark_user_activity()
+            if _lock_has_pin():
+                lock_device("Locked")
+            else:
+                Dialog_info("Set PIN first", wait=False, timeout=1.0)
+            return True
+        time.sleep(0.01)
+    return False
+
+
+def _hash_pin(pin: str, rounds: int = LOCK_PIN_PBKDF2_ROUNDS) -> str:
+    salt = secrets.token_hex(16)
+    dk = hashlib.pbkdf2_hmac("sha256", pin.encode("utf-8"), salt.encode("utf-8"), rounds)
+    return f"pbkdf2_sha256${rounds}${salt}${_b64url_encode(dk)}"
+
+
+def _parse_pin_hash(encoded: str) -> tuple[str, int, str, str] | None:
+    try:
+        algo, rounds, salt, digest = encoded.split("$", 3)
+        return algo, int(rounds), salt, digest
+    except Exception:
+        return None
+
+
+def _verify_pin(pin: str, encoded: str) -> bool:
+    parsed = _parse_pin_hash(encoded)
+    if not parsed:
+        return False
+    algo, rounds, salt, digest = parsed
+    if algo != "pbkdf2_sha256":
+        return False
+    try:
+        dk = hashlib.pbkdf2_hmac("sha256", pin.encode("utf-8"), salt.encode("utf-8"), rounds)
+        return hmac.compare_digest(_b64url_encode(dk), digest)
+    except Exception:
+        return False
+
+
+def _should_rehash_pin(encoded: str) -> bool:
+    parsed = _parse_pin_hash(encoded)
+    if not parsed:
+        return False
+    algo, rounds, _salt, _digest = parsed
+    return algo == "pbkdf2_sha256" and rounds != LOCK_PIN_PBKDF2_ROUNDS
+
+
+def _rehash_pin_if_needed(pin: str, encoded: str) -> None:
+    if not _should_rehash_pin(encoded):
+        return
+    lock_config["pin_hash"] = _hash_pin(pin)
+    SaveConfig()
+
+
+def _wait_for_button_release(timeout: float = 1.0) -> None:
+    deadline = time.monotonic() + max(0.0, timeout)
+    while time.monotonic() < deadline:
+        try:
+            if all(GPIO.input(pin) != 0 for pin in PINS.values()):
+                return
+        except Exception:
+            return
+        time.sleep(0.01)
+
+
+def _write_config_atomic(data: dict) -> None:
+    os.makedirs(os.path.dirname(default.config_file), exist_ok=True)
+    tmp_path = default.config_file + ".tmp"
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as wf:
+            json.dump(data, wf, indent=4, sort_keys=True)
+        os.replace(tmp_path, default.config_file)
+        try:
+            os.chmod(default.config_file, 0o600)
+        except Exception:
+            pass
+    finally:
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
+
+
 def SaveConfig() -> None:
     data = {
         "PINS":   PINS,
-        "PATHS":  {"IMAGEBROWSER_START": default.imgstart_path},
+        "PATHS":  {
+            "IMAGEBROWSER_START": default.imgstart_path,
+            "SCREENSAVER_GIF": default.screensaver_gif,
+        },
         "COLORS": color.Dictonary(),
+        "LOCK":   {
+            "enabled": bool(lock_config.get("enabled")),
+            "pin_hash": str(lock_config.get("pin_hash") or ""),
+            "auto_lock_seconds": max(0, int(lock_config.get("auto_lock_seconds") or 0)),
+        },
     }
     print(json.dumps(data, indent=4, sort_keys=True))
-    with open(default.config_file, "w") as wf:
-        json.dump(data, wf, indent=4, sort_keys=True)
+    _write_config_atomic(data)
     print("Config has been saved!")
 
 
@@ -381,15 +590,18 @@ def SaveConfig() -> None:
 def LoadConfig():
     global PINS
     global default
+    global lock_config
 
     if not (os.path.exists(default.config_file) and os.path.isfile(default.config_file)):
         print("Can't find a config file! Creating one at '" + default.config_file + "'...")
         SaveConfig()
 
-    with open(default.config_file, "r") as rf:
+    with open(default.config_file, "r", encoding="utf-8") as rf:
         data = json.load(rf)
         default.imgstart_path = data["PATHS"].get("IMAGEBROWSER_START", default.imgstart_path)
+        default.screensaver_gif = data["PATHS"].get("SCREENSAVER_GIF", default.screensaver_gif)
         PINS = data.get("PINS", PINS)
+        lock_config = _normalize_lock_config(data.get("LOCK"))
         try:
             color.LoadDictonary(data["COLORS"])
         except:
@@ -401,12 +613,68 @@ def LoadConfig():
 
 ####### Drawing functions #######
 
+def _tailscale_installed() -> bool:
+    try:
+        return shutil.which("tailscale") is not None
+    except Exception:
+        return False
+
+
+def _draw_crisp_toolbar_icon(icon_text: str, icon_font_ref, current_right: int) -> int:
+    bbox = draw.textbbox((0, 0), icon_text, font=icon_font_ref)
+    icon_width = max(1, bbox[2] - bbox[0])
+    icon_height = max(1, bbox[3] - bbox[1])
+
+    scaled_font = icon_font_ref
+    font_path = getattr(icon_font_ref, "path", None)
+    font_size = getattr(icon_font_ref, "size", None)
+    if font_path and font_size:
+        try:
+            scaled_font = ImageFont.truetype(font_path, max(1, int(font_size) * 4))
+        except Exception:
+            scaled_font = icon_font_ref
+
+    scaled_bbox = draw.textbbox((0, 0), icon_text, font=scaled_font)
+    scaled_width = max(1, scaled_bbox[2] - scaled_bbox[0])
+    scaled_height = max(1, scaled_bbox[3] - scaled_bbox[1])
+    mask = Image.new("L", (scaled_width + 2, scaled_height + 2), 0)
+    mask_draw = ImageDraw.Draw(mask)
+    mask_draw.text((1 - scaled_bbox[0], 1 - scaled_bbox[1]), icon_text, fill=255, font=scaled_font)
+
+    if mask.size != (icon_width, icon_height):
+        resampling = getattr(Image, "Resampling", Image)
+        mask = mask.resize((icon_width, icon_height), resampling.LANCZOS)
+    mask = mask.point(lambda value: 255 if value >= 96 else 0)
+
+    x = current_right - icon_width
+    image.paste((255, 255, 255), (x, TOOLBAR_ICON_Y, x + icon_width, TOOLBAR_ICON_Y + icon_height), mask)
+    return x - TOOLBAR_ICON_SPACING
+
+
+def _draw_toolbar_service_icons() -> None:
+    icons = []
+    if _tailscale_installed():
+        icons.append((TOOLBAR_TAILSCALE_ICON, toolbar_icon_font))
+    if get_discord_webhook():
+        icons.append((TOOLBAR_DISCORD_ICON, toolbar_brand_icon_font))
+
+    current_right = 127 - TOOLBAR_ICON_RIGHT_PADDING
+    for icon_text, icon_font_ref in icons:
+        current_right = _draw_crisp_toolbar_icon(icon_text, icon_font_ref, current_right)
+
+
 def _draw_toolbar():
     try:
         draw.line([(0, 4), (128, 4)], fill="#222", width=10)
-        draw.text((0, 0), f"{_temp_c:.0f} °C ", fill="WHITE", font=font)
+        temp_text = f"{_temp_c:.0f} °C "
+        draw.text((0, 0), temp_text, fill="WHITE", font=font)
         if _status_text:
-            draw.text((30, 0), _status_text, fill="WHITE", font=font)
+            status_x = draw.textbbox((0, 0), temp_text, font=font)[2] + TOOLBAR_STATUS_GAP
+            status_max_width = max(0, 126 - status_x)
+            status_text = _truncate_to_width(_status_text, status_max_width, font)
+            draw.text((status_x, 0), status_text, fill="WHITE", font=font)
+        else:
+            _draw_toolbar_service_icons()
     except Exception:
         pass
 
@@ -496,6 +764,332 @@ def _draw_centered_text(box, text, fill="WHITE", font=None, line_gap=2):
         x = x0 + max(0, (box_w - w) // 2)
         draw.text((x, y), line, fill=fill, font=font)
         y += h + line_gap
+
+
+def _draw_lock_screen(title: str, prompt: str, entered: list[str] | None = None,
+                      selection: tuple[int, int] = (0, 0), allow_cancel: bool = True) -> None:
+    keypad = (("1", "2", "3"), ("4", "5", "6"), ("7", "8", "9"), ("C", "0", "OK"))
+    entered = entered or []
+    selected_row, selected_col = selection
+    try:
+        draw_lock.acquire()
+        draw.rectangle((0, 0, 127, 127), fill=color.background)
+        _draw_toolbar()
+        color.DrawBorder()
+        draw.text((8, 16), _truncate_to_width(title, 110, text_font), fill=color.selected_text, font=text_font)
+        draw.text((8, 28), _truncate_to_width(prompt, 110, font), fill=color.text, font=font)
+
+        for index in range(4):
+            x0 = 10 + (index * 28)
+            y0 = 42
+            x1 = x0 + 20
+            y1 = 58
+            filled = index < len(entered)
+            box_fill = color.select if filled else color.background
+            box_text = "*" if filled else "-"
+            draw.rectangle((x0, y0, x1, y1), outline=color.border, fill=box_fill)
+            _draw_centered_text((x0, y0 + 1, x1, y1), box_text, fill=color.selected_text if filled else color.text, font=text_font)
+
+        start_x = 10
+        start_y = 66
+        cell_w = 34
+        cell_h = 14
+        for row_index, row in enumerate(keypad):
+            for col_index, key in enumerate(row):
+                x0 = start_x + (col_index * 36)
+                y0 = start_y + (row_index * 14)
+                x1 = x0 + cell_w
+                y1 = y0 + cell_h
+                is_selected = row_index == selected_row and col_index == selected_col
+                fill = color.select if is_selected else color.background
+                text_fill = color.selected_text if is_selected else color.text
+                draw.rectangle((x0, y0, x1, y1), outline=color.border, fill=fill)
+                key_font = text_font if len(key) == 1 else font
+                _draw_centered_text((x0, y0 + 1, x1, y1), key, fill=text_fill, font=key_font)
+    finally:
+        draw_lock.release()
+
+
+def _show_lock_wake_screen(reason: str = "Locked") -> None:
+    try:
+        draw_lock.acquire()
+        draw.rectangle((0, 0, 127, 127), fill=color.background)
+        _draw_toolbar()
+        color.DrawBorder()
+        lock_icon = MENU_ICONS.get(" Lock", "\uf023")
+        lock_icon_font = ImageFont.truetype('/usr/share/fonts/truetype/fontawesome/fa-solid-900.ttf', 28)
+        draw.text((64, 34), lock_icon, font=lock_icon_font, fill=color.selected_text, anchor="mm")
+        _draw_centered_text((8, 46, 120, 78), reason, fill=color.selected_text, font=text_font)
+        _draw_centered_text((8, 82, 120, 110), "Press a key", fill=color.text, font=text_font)
+    finally:
+        draw_lock.release()
+
+
+def _draw_lock_screensaver_frame(frame: Image.Image) -> None:
+    try:
+        draw_lock.acquire()
+        image.paste(frame)
+        lock_icon = MENU_ICONS.get(" Lock", "\uf023")
+        lock_icon_font = ImageFont.truetype('/usr/share/fonts/truetype/fontawesome/fa-solid-900.ttf', 14)
+        draw.text((120, 2), lock_icon, fill=color.selected_text, font=lock_icon_font, anchor="ra")
+    finally:
+        draw_lock.release()
+
+
+def _get_fresh_lock_button() -> str | None:
+    virtual_button = rj_input.get_virtual_button()
+    if virtual_button:
+        _mark_user_activity()
+        return virtual_button
+    try:
+        for item in PINS:
+            if GPIO.input(PINS[item]) == 0:
+                _mark_user_activity()
+                return item
+    except Exception:
+        return None
+    return None
+
+
+def _load_lock_screensaver_frames() -> tuple[list[Image.Image], list[float]]:
+    screensaver_path = str(default.screensaver_gif or "").strip()
+    if not screensaver_path or not os.path.isfile(screensaver_path):
+        return [], []
+
+    try:
+        mtime = os.path.getmtime(screensaver_path)
+    except OSError:
+        return [], []
+
+    if (
+        _lock_screensaver_cache["path"] == screensaver_path
+        and _lock_screensaver_cache["mtime"] == mtime
+        and _lock_screensaver_cache["frames"]
+    ):
+        return _lock_screensaver_cache["frames"], _lock_screensaver_cache["durations"]
+
+    frames: list[Image.Image] = []
+    durations: list[float] = []
+    try:
+        with Image.open(screensaver_path) as gif:
+            for gif_frame in ImageSequence.Iterator(gif):
+                prepared = gif_frame.convert("RGB").resize((LCD.width, LCD.height))
+                frames.append(prepared.copy())
+                duration_ms = gif_frame.info.get("duration") or gif.info.get("duration") or 100
+                durations.append(max(0.08, float(duration_ms) / 1000.0))
+    except Exception:
+        frames = []
+        durations = []
+
+    _lock_screensaver_cache["path"] = screensaver_path
+    _lock_screensaver_cache["mtime"] = mtime if frames else None
+    _lock_screensaver_cache["frames"] = frames
+    _lock_screensaver_cache["durations"] = durations
+    return frames, durations
+
+
+def _play_lock_screensaver_until_input(reason: str = "Locked") -> str:
+    _show_lock_wake_screen(reason)
+    static_deadline = time.monotonic() + LOCK_SCREEN_STATIC_SECONDS
+    while time.monotonic() < static_deadline:
+        button = _get_fresh_lock_button()
+        if button:
+            return button
+        time.sleep(0.01)
+
+    frames, durations = _load_lock_screensaver_frames()
+    if not frames:
+        while True:
+            button = _get_fresh_lock_button()
+            if button:
+                return button
+            time.sleep(0.01)
+
+    lock_runtime["showing_screensaver"] = True
+    try:
+        frame_index = 0
+        while True:
+            _draw_lock_screensaver_frame(frames[frame_index])
+            frame_deadline = time.monotonic() + durations[frame_index]
+            while time.monotonic() < frame_deadline:
+                button = _get_fresh_lock_button()
+                if button:
+                    return button
+                time.sleep(0.01)
+            frame_index = (frame_index + 1) % len(frames)
+    finally:
+        lock_runtime["showing_screensaver"] = False
+
+
+def _enter_pin_via_keypad(title: str, prompt: str, allow_cancel: bool = True,
+                          allow_hide: bool = False) -> str | None:
+    keypad = (("1", "2", "3"), ("4", "5", "6"), ("7", "8", "9"), ("C", "0", "OK"))
+    entered: list[str] = []
+    row = 0
+    col = 0
+    hint = prompt
+    previous_suspend = bool(lock_runtime["suspend_auto_lock"])
+    lock_runtime["suspend_auto_lock"] = True
+    try:
+        while True:
+            _draw_lock_screen(title, hint, entered, (row, col), allow_cancel=allow_cancel)
+            btn = getButton()
+            if btn == "KEY_UP_PIN":
+                row = (row - 1) % len(keypad)
+            elif btn == "KEY_DOWN_PIN":
+                row = (row + 1) % len(keypad)
+            elif btn == "KEY_LEFT_PIN":
+                col = (col - 1) % len(keypad[0])
+            elif btn == "KEY_RIGHT_PIN":
+                col = (col + 1) % len(keypad[0])
+            elif btn == "KEY1_PIN":
+                if entered:
+                    entered.pop()
+                hint = prompt
+            elif btn == "KEY3_PIN":
+                if allow_cancel:
+                    return None
+                if allow_hide:
+                    return "__hide__"
+            elif btn in ("KEY2_PIN", "KEY_PRESS_PIN"):
+                action = keypad[row][col]
+                if action == "C":
+                    if entered:
+                        entered.pop()
+                    hint = prompt
+                elif action == "OK":
+                    if len(entered) == 4:
+                        return "".join(entered)
+                    hint = "Need 4 digits"
+                elif len(entered) < 4:
+                    entered.append(action)
+                    if len(entered) == 4:
+                        return "".join(entered)
+                    hint = prompt
+    finally:
+        lock_runtime["suspend_auto_lock"] = previous_suspend
+
+
+def _set_pin_flow(require_current: bool = False) -> bool:
+    if require_current:
+        current = _enter_pin_via_keypad("Change PIN", "Current PIN", allow_cancel=True)
+        if current is None:
+            return False
+        if not _verify_pin(current, str(lock_config.get("pin_hash") or "")):
+            Dialog_info("Wrong current PIN", wait=False, timeout=1.2)
+            return False
+
+    while True:
+        first_pin = _enter_pin_via_keypad("Set PIN", "Enter new 4-digit PIN", allow_cancel=True)
+        if first_pin is None:
+            return False
+        confirm_pin = _enter_pin_via_keypad("Confirm PIN", "Re-enter PIN", allow_cancel=True)
+        if confirm_pin is None:
+            return False
+        if first_pin != confirm_pin:
+            Dialog_info("PIN mismatch", wait=False, timeout=1.2)
+            continue
+        lock_config["pin_hash"] = _hash_pin(first_pin)
+        SaveConfig()
+        Dialog_info("PIN saved", wait=False, timeout=1.0)
+        return True
+
+
+def configure_auto_lock_timeout() -> None:
+    labels = [f" {label}" for _, label in LOCK_TIMEOUT_OPTIONS]
+    current_value = int(lock_config.get("auto_lock_seconds") or 0)
+    while True:
+        selected_index = 0
+        for index, (value, _label) in enumerate(LOCK_TIMEOUT_OPTIONS):
+            if value == current_value:
+                selected_index = index
+                break
+        idx, _value = GetMenuString(labels, duplicates=True)
+        if idx == -1:
+            return
+        current_value = LOCK_TIMEOUT_OPTIONS[idx][0]
+        lock_config["auto_lock_seconds"] = current_value
+        SaveConfig()
+        Dialog_info(f"Auto-lock\n{_lock_timeout_label(current_value)}", wait=False, timeout=1.0)
+        return
+
+
+def toggle_lock_enabled() -> None:
+    if not _lock_has_pin():
+        if not _set_pin_flow(require_current=False):
+            return
+    lock_config["enabled"] = not bool(lock_config.get("enabled"))
+    SaveConfig()
+    status = "Lock enabled" if lock_config["enabled"] else "Lock disabled"
+    Dialog_info(status, wait=False, timeout=1.0)
+
+
+def lock_device(reason: str = "Locked") -> bool:
+    if not _lock_has_pin():
+        return False
+    if lock_runtime["locked"]:
+        return True
+
+    lock_runtime["locked"] = True
+    previous_suspend = bool(lock_runtime["suspend_auto_lock"])
+    lock_runtime["in_lock_flow"] = True
+    lock_runtime["suspend_auto_lock"] = True
+    try:
+        show_keypad = False
+        _wait_for_button_release()
+        while True:
+            if not show_keypad:
+                _play_lock_screensaver_until_input(reason)
+                _wait_for_button_release()
+                show_keypad = True
+                continue
+
+            entered = _enter_pin_via_keypad("Unlock", "Enter 4-digit PIN", allow_cancel=False, allow_hide=True)
+            if entered == "__hide__":
+                _wait_for_button_release()
+                show_keypad = False
+                continue
+            stored_pin_hash = str(lock_config.get("pin_hash") or "")
+            if entered and _verify_pin(entered, stored_pin_hash):
+                _rehash_pin_if_needed(entered, stored_pin_hash)
+                lock_runtime["locked"] = False
+                _mark_user_activity()
+                RenderCurrentMenuOnce()
+                return True
+            Dialog_info("Wrong PIN", wait=False, timeout=1.0)
+    finally:
+        lock_runtime["showing_screensaver"] = False
+        lock_runtime["in_lock_flow"] = False
+        lock_runtime["suspend_auto_lock"] = previous_suspend
+
+
+def OpenLockMenu() -> None:
+    if not _lock_has_pin():
+        if not _set_pin_flow(require_current=False):
+            return
+        lock_config["enabled"] = True
+        SaveConfig()
+        lock_device("Locked")
+        return
+
+    while True:
+        options = [
+            " Lock now",
+            f" {'Deactivate' if lock_config.get('enabled') else 'Activate'} lock",
+            " Change PIN",
+            f" Auto-lock: {_lock_timeout_label()}",
+        ]
+        idx, _value = GetMenuString(options, duplicates=True)
+        if idx == -1:
+            return
+        if idx == 0:
+            lock_device("Locked")
+        elif idx == 1:
+            toggle_lock_enabled()
+        elif idx == 2:
+            _set_pin_flow(require_current=True)
+        elif idx == 3:
+            configure_auto_lock_timeout()
 
 ### Simple message box ###
 # (Text, Wait for confirmation)  #
@@ -737,6 +1331,83 @@ def RenderMenuWindowOnce(inlist, selected_index=0):
     finally:
         draw_lock.release()
 
+
+def RenderMenuCarouselOnce(inlist, selected_index=0):
+    """Render a non-interactive snapshot of the carousel view."""
+    if not inlist:
+        inlist = ["Nothing here :("]
+
+    total = len(inlist)
+    index = max(0, min(selected_index, total - 1))
+
+    try:
+        draw_lock.acquire()
+        _draw_toolbar()
+        color.DrawMenuBackground()
+
+        current_item = inlist[index]
+        main_x = 64
+        main_y = 64
+
+        icon = MENU_ICONS.get(current_item, "\uf192")
+        huge_icon_font = ImageFont.truetype('/usr/share/fonts/truetype/fontawesome/fa-solid-900.ttf', 48)
+        draw.text((main_x, main_y - 12), icon, font=huge_icon_font, fill=color.selected_text, anchor="mm")
+
+        title = current_item.strip()
+        carousel_text_font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 12)
+        draw.text((main_x, main_y + 28), title, font=carousel_text_font, fill=color.selected_text, anchor="mm")
+
+        if total > 1:
+            arrow_font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 18)
+            draw.text((20, main_y), "◀", font=arrow_font, fill=color.text, anchor="mm")
+            draw.text((108, main_y), "▶", font=arrow_font, fill=color.text, anchor="mm")
+    finally:
+        draw_lock.release()
+
+
+def RenderMenuGridOnce(inlist, selected_index=0):
+    """Render a non-interactive snapshot of the grid view."""
+    GRID_COLS = 2
+    GRID_ROWS = 4
+    GRID_ITEMS = GRID_COLS * GRID_ROWS
+
+    if not inlist:
+        inlist = ["Nothing here :("]
+
+    total = len(inlist)
+    index = max(0, min(selected_index, total - 1))
+    start_idx = (index // GRID_ITEMS) * GRID_ITEMS
+    window = inlist[start_idx:start_idx + GRID_ITEMS]
+
+    try:
+        draw_lock.acquire()
+        _draw_toolbar()
+        color.DrawMenuBackground()
+
+        for i, item in enumerate(window):
+            row = i // GRID_COLS
+            col = i % GRID_COLS
+            x = default.start_text[0] + (col * 55)
+            y = default.start_text[1] + (row * 25)
+            is_selected = (start_idx + i == index)
+
+            if is_selected:
+                draw.rectangle((x - 2, y - 2, x + 53, y + 23), fill=color.select)
+                fill_color = color.selected_text
+            else:
+                fill_color = color.text
+
+            icon = MENU_ICONS.get(item, "")
+            if icon:
+                draw.text((x + 2, y), icon, font=icon_font, fill=fill_color)
+                short_text = item.strip()[:8]
+                draw.text((x, y + 13), short_text, font=text_font, fill=fill_color)
+            else:
+                short_text = item.strip()[:10]
+                draw.text((x, y + 8), short_text, font=text_font, fill=fill_color)
+    finally:
+        draw_lock.release()
+
 def RenderCurrentMenuOnce():
     """
     Render the current menu using the active view mode.
@@ -744,11 +1415,10 @@ def RenderCurrentMenuOnce():
     """
     inlist = m.GetMenuList()
     if m.which == "a" and m.view_mode in ["grid", "carousel"]:
-        # These draw their own frames; discard selection result
         if m.view_mode == "grid":
-            GetMenuGrid(inlist)
+            RenderMenuGridOnce(inlist, m.select)
         else:
-            GetMenuCarousel(inlist)
+            RenderMenuCarouselOnce(inlist, m.select)
     else:
         RenderMenuWindowOnce(inlist, m.select)
 
@@ -875,6 +1545,10 @@ def GetMenuString(inlist, duplicates=False):
             toggle_view_mode()
             return (-1, "") if duplicates else ""
         elif btn == "KEY_LEFT_PIN":
+            return (-1, "") if duplicates else ""
+        elif btn == "KEY3_PIN" and m.which == "a":
+            if _handle_main_menu_key3_double_click():
+                continue
             return (-1, "") if duplicates else ""
 
 
@@ -2354,6 +3028,7 @@ def exec_payload(filename: str, *args) -> None:
 
     # rebuild the current menu image (respect current view mode)
     RenderCurrentMenuOnce()
+    _mark_user_activity()
 
     # small debounce: 300 ms max
     t0 = time.time()
@@ -2384,6 +3059,7 @@ class DisposableMenu:
             [" Other features", "ag"],     # g
             [" Read file",      "ah"],     # h
             [" Payload", "ap"],            # p
+            [" Lock",           OpenLockMenu],
         ),
 
         "ab": tuple(
@@ -2616,6 +3292,7 @@ MENU_ICONS = {
     " Other features": "\uf085",   # cogs
     " Read file": "\uf15c",        # file-alt
     " Payload": "\uf121",          # code/terminal icon
+    " Lock": "\uf023",             # lock
 }
 
 ### Menu Descriptions for Carousel View ###
@@ -2630,6 +3307,7 @@ MENU_DESCRIPTIONS = {
     " Other features": "Additional tools\nand system\nconfiguration",
     " Read file": "View captured\ndata and scan\nresults",
     " Payload": "Execute custom\nPython scripts\nand tools",
+    " Lock": "Set a 4-digit PIN,\nlock the device,\nand manage auto-lock",
 }
 
 
@@ -2712,6 +3390,8 @@ def GetMenuCarousel(inlist, duplicates=False):
             toggle_view_mode()
             return ""
         elif btn == "KEY3_PIN":
+            if m.which == "a" and _handle_main_menu_key3_double_click():
+                continue
             return ""  # Go back
 
 
@@ -2815,6 +3495,8 @@ def GetMenuGrid(inlist, duplicates=False):
             toggle_view_mode()
             return ""
         elif btn == "KEY3_PIN":
+            if m.which == "a" and _handle_main_menu_key3_double_click():
+                continue
             return ""  # Go back
 
 
@@ -2875,6 +3557,9 @@ def main():
 
     start_background_loops()
     threading.Thread(target=boot_health_check, daemon=True).start()
+
+    if _lock_is_enabled():
+        lock_device("Startup lock")
 
     print("Booted in %s seconds! :)" % (time.time() - start_time))
 
@@ -2939,6 +3624,15 @@ image = Image.new("RGB", (LCD.width, LCD.height), "WHITE")
 draw = ImageDraw.Draw(image)
 text_font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 9)
 icon_font = ImageFont.truetype('/usr/share/fonts/truetype/fontawesome/fa-solid-900.ttf', 12)
+toolbar_icon_font = ImageFont.truetype('/usr/share/fonts/truetype/fontawesome/fa-solid-900.ttf', 8)
+try:
+    brand_icon_font = ImageFont.truetype('/usr/share/fonts/truetype/fontawesome/fa-brands-400.ttf', 12)
+except Exception:
+    brand_icon_font = icon_font
+try:
+    toolbar_brand_icon_font = ImageFont.truetype('/usr/share/fonts/truetype/fontawesome/fa-brands-400.ttf', 9)
+except Exception:
+    toolbar_brand_icon_font = toolbar_icon_font
 font = text_font  # Keep backward compatibility
 
 ### Defining PINS, threads, loading JSON ###

@@ -8,8 +8,14 @@
         "SELECTED_TEXT_BACKGROUND": "#2d0fff",
         "TEXT": "#05ff00"
     },
+    "LOCK": {
+        "auto_lock_seconds": 0,
+        "enabled": false,
+        "pin_hash": ""
+    },
     "PATHS": {
-        "IMAGEBROWSER_START": "/root/"
+           "IMAGEBROWSER_START": "/root/Raspyjack/img/",
+           "SCREENSAVER_GIF": "/root/Raspyjack/img/screensaver/default.gif"
     },
     "PINS": {
         "KEY1_PIN": 21,
