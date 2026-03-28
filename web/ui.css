@@ -303,6 +303,48 @@ main > .flex.items-center.justify-between.mb-4.md\:mb-6 {
   border-radius: 10px;
 }
 
+#lootList {
+  max-height: min(60vh, 34rem);
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(16, 185, 129, 0.55) rgba(15, 23, 42, 0.72);
+  background:
+    linear-gradient(180deg, rgba(2, 6, 23, 0.24), rgba(2, 6, 23, 0.08)),
+    rgba(2, 6, 23, 0.36) !important;
+}
+
+#lootList::-webkit-scrollbar {
+  width: 12px;
+}
+
+#lootList::-webkit-scrollbar-track {
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.9), rgba(2, 6, 23, 0.85));
+  border-left: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+#lootList::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(16, 185, 129, 0.78), rgba(5, 150, 105, 0.72));
+  border: 2px solid rgba(15, 23, 42, 0.95);
+  border-radius: 999px;
+  box-shadow: inset 0 0 0 1px rgba(209, 250, 229, 0.08);
+}
+
+#lootList::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, rgba(52, 211, 153, 0.85), rgba(16, 185, 129, 0.8));
+}
+
+#lootList::-webkit-scrollbar-corner {
+  background: rgba(2, 6, 23, 0.9);
+}
+
+@media (max-width: 768px) {
+  #lootList {
+    max-height: min(52vh, 26rem);
+  }
+}
+
 #deviceShell.theme-neon,
 #deviceShell[data-theme="neon"] {
   filter: saturate(0.92) brightness(0.98);
