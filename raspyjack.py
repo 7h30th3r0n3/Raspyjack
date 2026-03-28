@@ -951,6 +951,33 @@ def configure_auto_lock_timeout() -> None:
         return
 
 
+def select_lock_screensaver_gif() -> None:
+    screensaver_dir = os.path.join(default.install_path, "img", "screensaver")
+    os.makedirs(screensaver_dir, exist_ok=True)
+
+    try:
+        has_gif = any(name.lower().endswith(".gif") for name in os.listdir(screensaver_dir))
+    except Exception:
+        has_gif = False
+
+    if not has_gif:
+        Dialog_info("No GIF found\nin screensaver\nfolder", wait=False, timeout=1.2)
+        return
+
+    selected = Explorer(screensaver_dir + "/", extensions=".gif")
+    if not selected:
+        return
+
+    default.screensaver_gif = selected
+    SaveConfig()
+    Dialog_info("Setting screensaver\nLoading GIF...\nPlease wait", wait=False)
+    frames, _durations = _load_lock_screensaver_frames()
+    if not frames:
+        Dialog_info("Failed to load\nselected GIF", wait=False, timeout=1.2)
+        return
+    Dialog_info(f"Screensaver set\n{os.path.basename(selected)[:18]}", wait=False, timeout=1.2)
+
+
 def toggle_lock_enabled() -> None:
     if not _lock_has_pin():
         if not _set_pin_flow(require_current=False):
@@ -1015,6 +1042,7 @@ def OpenLockMenu() -> None:
             f" {'Deactivate' if lock_config.get('enabled') else 'Activate'} lock",
             " Change PIN",
             f" Auto-lock: {_lock_timeout_label()}",
+            " Screensaver GIF",
         ]
         idx, _value = GetMenuString(options, duplicates=True)
         if idx == -1:
@@ -1027,6 +1055,8 @@ def OpenLockMenu() -> None:
             _set_pin_flow(require_current=True)
         elif idx == 3:
             configure_auto_lock_timeout()
+        elif idx == 4:
+            select_lock_screensaver_gif()
 
 ### Simple message box ###
 # (Text, Wait for confirmation)  #
