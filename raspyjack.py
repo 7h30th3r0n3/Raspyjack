@@ -1594,6 +1594,7 @@ def SetColor(a):
     c = GetColor(color.Get(a))
     if YNDialog(a="Set color to?", y="Yes", n="No",b=("    " + c) ):
         color.Set(a, c)
+        SaveConfig()
         Dialog("   Done!")
     m.which = m.which[:-1]
 
