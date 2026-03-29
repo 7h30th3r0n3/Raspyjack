@@ -1075,6 +1075,22 @@ def Dialog(a, wait=True):
         time.sleep(0.25)
         getButton()
 
+def Dialog_result(title, detail="", wait=True):
+    try:
+        draw_lock.acquire()
+        _draw_toolbar()
+        draw.rectangle([7, 25, 120, 102], fill="#ADADAD")
+        _draw_centered_text((10, 30, 117, 53), title, fill="#000000", font=text_font)
+        if detail:
+            _draw_centered_text((10, 52, 117, 77), detail, fill="#000000", font=text_font)
+        draw.rectangle([43, 82, 83, 96], fill="#FF0000")
+        _draw_centered_text((43, 82, 83, 96), "OK", fill=color.selected_text, font=text_font)
+    finally:
+        draw_lock.release()
+    if wait:
+        time.sleep(0.25)
+        getButton()
+
 def Dialog_info(a, wait=True, timeout=None):
     try:
         draw_lock.acquire()
@@ -2095,6 +2111,79 @@ def ReadTextFileDNSSpoof():
             content = f.read().splitlines()
         GetMenuString(content)
 
+def _list_wardriving_files(directory: str) -> list[str]:
+    try:
+        files = []
+        for name in os.listdir(directory):
+            path = os.path.join(directory, name)
+            if not os.path.isfile(path):
+                continue
+            lower_name = name.lower()
+            if not lower_name.endswith(".csv"):
+                continue
+            if "wigle" not in lower_name:
+                continue
+            files.append(name)
+        return sorted(
+            files,
+            key=lambda filename: os.path.getmtime(os.path.join(directory, filename)),
+            reverse=True,
+        )
+    except Exception:
+        return []
+
+
+def _rename_uploaded_wigle_file(file_path: str) -> str:
+    directory = os.path.dirname(file_path)
+    filename = os.path.basename(file_path)
+    if filename.startswith("[uploaded]"):
+        return file_path
+
+    target_name = f"[uploaded]{filename}"
+    target_path = os.path.join(directory, target_name)
+    if not os.path.exists(target_path):
+        os.replace(file_path, target_path)
+        return target_path
+
+    stem, ext = os.path.splitext(filename)
+    suffix = 2
+    while True:
+        candidate_name = f"[uploaded]{stem}_{suffix}{ext}"
+        candidate_path = os.path.join(directory, candidate_name)
+        if not os.path.exists(candidate_path):
+            os.replace(file_path, candidate_path)
+            return candidate_path
+        suffix += 1
+
+def ReadTextFileWardriving():
+    directory = "/root/Raspyjack/loot/wardriving/"
+    while 1:
+        files = _list_wardriving_files(directory)
+        selection_index, selection = GetMenuString([f" {name}" for name in files], duplicates=True)
+        if selection_index == -1:
+            break
+        if selection_index == -2:
+            Dialog_info("No WiGLE files", wait=False, timeout=1.0)
+            continue
+        rfile = os.path.join(directory, selection.strip())
+        action_index, _action = GetMenuString([
+            " Upload to WiGLE",
+            " View file",
+        ], duplicates=True)
+        if action_index == -1:
+            continue
+        if action_index == 0:
+            result = upload_wigle_file_with_dialog(rfile)
+            if result.get("ok"):
+                try:
+                    _rename_uploaded_wigle_file(rfile)
+                except Exception as exc:
+                    print(f"Failed to rename uploaded WiGLE file: {exc}")
+            continue
+        with open(rfile) as f:
+            content = f.read().splitlines()
+        GetMenuString(content)
+
 def ImageExplorer() -> None:
     m.which += "1"
     path = default.imgstart_path
@@ -2137,6 +2226,7 @@ def ImageExplorer() -> None:
 
 
 WAIT_TXT = "Scan in progess..."
+WIGLE_UPLOAD_URL = "https://api.wigle.net/api/v2/file/upload"
 
 def get_discord_webhook():
     """Read Discord webhook URL from configuration file."""
@@ -2150,6 +2240,121 @@ def get_discord_webhook():
     except Exception as e:
         print(f"Error reading Discord webhook: {e}")
     return None
+
+
+def get_wigle_credentials():
+    credentials_file = "/root/Raspyjack/.wigle_credentials.json"
+    try:
+        if not os.path.exists(credentials_file):
+            return "", ""
+        with open(credentials_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return "", ""
+        api_name = str(data.get("api_name") or "").strip()
+        api_token = str(data.get("api_token") or "").strip()
+        return api_name, api_token
+    except Exception as e:
+        print(f"Error reading WiGLE credentials: {e}")
+        return "", ""
+
+
+def upload_wigle_file(file_path: str) -> dict:
+    api_name, api_token = get_wigle_credentials()
+    if not api_name or not api_token:
+        return {"ok": False, "message": "Missing WiGLE\ncredentials"}
+    if not os.path.exists(file_path):
+        return {"ok": False, "message": "File not found"}
+
+    try:
+        file_size = os.path.getsize(file_path)
+    except OSError:
+        return {"ok": False, "message": "File unreadable"}
+
+    if file_size <= 0:
+        return {"ok": False, "message": "Empty file"}
+    if file_size > 180 * 1024 * 1024:
+        return {"ok": False, "message": "File exceeds\nWiGLE limit"}
+
+    try:
+        with open(file_path, 'rb') as f:
+            files = {
+                'file': (os.path.basename(file_path), f, 'text/csv')
+            }
+            response = requests.post(
+                WIGLE_UPLOAD_URL,
+                files=files,
+                auth=(api_name, api_token),
+                timeout=60,
+            )
+    except requests.exceptions.Timeout:
+        return {"ok": False, "message": "Upload timeout"}
+    except requests.exceptions.ConnectionError:
+        return {"ok": False, "message": "Network error"}
+    except requests.exceptions.RequestException as e:
+        print(f"WiGLE upload request error: {e}")
+        return {"ok": False, "message": "Upload failed"}
+
+    if response.status_code == 401:
+        return {"ok": False, "message": "WiGLE auth\nfailed"}
+    if response.status_code != 200:
+        return {"ok": False, "message": f"Upload error\nHTTP {response.status_code}"}
+
+    try:
+        data = response.json()
+    except ValueError:
+        return {"ok": False, "message": "Bad WiGLE\nresponse"}
+
+    if not data.get("success"):
+        warning = str(data.get("warning") or "").strip()
+        message = warning or str(data.get("message") or "Upload rejected").strip()
+        return {"ok": False, "message": message[:42] or "Upload rejected"}
+
+    results = data.get("results") or {}
+    transids = results.get("transids") or []
+    transid = ""
+    if isinstance(transids, list) and transids:
+        transid = str((transids[0] or {}).get("transId") or "").strip()
+    observer = str(data.get("observer") or "").strip()
+    message = "Upload OK"
+    if transid:
+        message += f"\n{transid}"
+    elif observer:
+        message += f"\n{observer[:16]}"
+    return {
+        "ok": True,
+        "message": message,
+        "transid": transid,
+        "observer": observer,
+    }
+
+
+def upload_wigle_file_with_dialog(file_path: str) -> dict:
+    result_box = {"result": None}
+
+    def _worker():
+        result_box["result"] = upload_wigle_file(file_path)
+
+    thread = threading.Thread(target=_worker, daemon=True)
+    thread.start()
+
+    dots = 0
+    while thread.is_alive():
+        dots = (dots + 1) % 4
+        suffix = "." * dots if dots else "."
+        Dialog_info(f"Uploading to\nWiGLE{suffix}\nPlease wait", wait=False)
+        time.sleep(0.25)
+
+    thread.join()
+    result = result_box.get("result") or {"ok": False, "message": "Upload failed"}
+    _wait_for_button_release(0.75)
+    if result.get("ok"):
+        detail = result.get("transid") or result.get("observer") or "Upload accepted"
+        Dialog_result("WiGLE Accepted", detail, wait=True)
+    else:
+        detail = result.get("message") or "Upload failed"
+        Dialog_result("WiGLE Failed", detail, wait=True)
+    return result
 
 def send_to_discord(scan_label: str, file_path: str, target_network: str, interface: str):
     """Send Nmap scan results as a file attachment to Discord webhook."""
@@ -3075,6 +3280,7 @@ class DisposableMenu:
         "ah": (
             [" Nmap",      ReadTextFileNmap],
             [" Responder", ReadTextFileResponder],
+            [" Wardriving", ReadTextFileWardriving],
             [" DNSSpoof",  ReadTextFileDNSSpoof]
         ),
 
@@ -3133,22 +3339,21 @@ class DisposableMenu:
     def _build_payload_menu(self):
         """Crée (ou rafraîchit) le menu 'ap' par catégories."""
         self.menu_parent = {}
-
         category_order = [
-            "reconnaissance",
-            "wifi",
-            "network",
-            "credentials",
-            "bluetooth",
-            "usb",
-            "exfiltration",
-            "evasion",
-            "remote_access",
-            "utilities",
-            "hardware",
-            "games",
-            "examples",
-        ]
+    "reconnaissance",
+    "wifi",
+    "network",
+    "credentials",
+    "bluetooth",
+    "usb",
+    "exfiltration",
+    "evasion",
+    "remote_access",
+    "utilities",
+    "hardware",
+    "games",
+    "examples",
+]
 
         def _label(cat: str) -> str:
             return f" {cat.replace('_', ' ').title()}"

@@ -88,6 +88,11 @@
   const discordWebhookInput = document.getElementById('discordWebhookInput');
   const discordWebhookSave = document.getElementById('discordWebhookSave');
   const discordWebhookClear = document.getElementById('discordWebhookClear');
+  const wigleApiNameInput = document.getElementById('wigleApiNameInput');
+  const wigleApiTokenInput = document.getElementById('wigleApiTokenInput');
+  const wigleSave = document.getElementById('wigleSave');
+  const wigleClear = document.getElementById('wigleClear');
+  const wigleSettingsStatus = document.getElementById('wigleSettingsStatus');
   const tailscaleSettingsStatus = document.getElementById('tailscaleSettingsStatus');
   const tailscaleInstallBtn = document.getElementById('tailscaleInstallBtn');
   const tailscaleReauthBtn = document.getElementById('tailscaleReauthBtn');
@@ -587,6 +592,35 @@
     }
   }
 
+  function setWigleStatus(txt){
+    if (wigleSettingsStatus){
+      wigleSettingsStatus.textContent = txt;
+      applyStatusTone(wigleSettingsStatus, txt);
+    }
+  }
+
+  function getWigleConfiguredStatus(data){
+    if (!data || !data.configured) return 'WiGLE not configured';
+    const parts = [];
+    if (data.api_name_masked) parts.push(`Name ${data.api_name_masked}`);
+    if (data.api_token_masked) parts.push(`Token ${data.api_token_masked}`);
+    return parts.length ? `WiGLE configured: ${parts.join(' | ')}` : 'WiGLE configured';
+  }
+
+  function applyWigleSettingsToUI(data){
+    const configured = !!(data && data.configured);
+    const nameMasked = String(data && data.api_name_masked || '');
+    const tokenMasked = String(data && data.api_token_masked || '');
+    if (wigleApiNameInput){
+      wigleApiNameInput.value = '';
+      wigleApiNameInput.placeholder = configured && nameMasked ? `Saved: ${nameMasked}` : 'WiGLE API name';
+    }
+    if (wigleApiTokenInput){
+      wigleApiTokenInput.value = '';
+      wigleApiTokenInput.placeholder = configured && tokenMasked ? `Saved: ${tokenMasked}` : 'WiGLE API token';
+    }
+  }
+
   // Handheld themes (frontend-only)
   const themes = [
     { id: 'neon', label: 'Neon' },
@@ -989,6 +1023,23 @@
     }
   }
 
+  async function loadWigleSettings(skipLoadingState){
+    if (!wigleSettingsStatus) return;
+    if (!skipLoadingState) setWigleStatus('Loading...');
+    try{
+      const url = getApiUrl('/api/settings/wigle');
+      const res = await apiFetch(url, { cache: 'no-store' });
+      const data = await res.json();
+      if (!res.ok){
+        throw new Error(data && data.error ? data.error : 'wigle_failed');
+      }
+      applyWigleSettingsToUI(data);
+      setWigleStatus(getWigleConfiguredStatus(data));
+    } catch(e){
+      setWigleStatus(e && e.message ? e.message : 'Failed to load WiGLE');
+    }
+  }
+
   function applyTailscaleDataToUI(data){
     if (!tailscaleSettingsStatus) return;
     const installed = !!data.installed;
@@ -1052,6 +1103,30 @@
       setSettingsStatus(data.status === 'cleared' ? 'Webhook cleared' : 'Webhook saved');
     } catch(e){
       setSettingsStatus('Failed to save webhook');
+    }
+  }
+
+  async function saveWigleSettings(apiName, apiToken, clearRequested){
+    setWigleStatus('Saving...');
+    try{
+      const endpoint = getApiUrl('/api/settings/wigle');
+      const res = await apiFetch(endpoint, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          api_name: String(apiName || '').trim(),
+          api_token: String(apiToken || '').trim(),
+          clear: !!clearRequested,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok){
+        throw new Error(data && data.error ? data.error : 'save_failed');
+      }
+      applyWigleSettingsToUI(data);
+      setWigleStatus(data.status === 'cleared' ? 'WiGLE cleared' : getWigleConfiguredStatus(data));
+    } catch(e){
+      setWigleStatus(e && e.message ? e.message : 'Failed to save WiGLE');
     }
   }
 
@@ -1791,6 +1866,7 @@
   if (navSettings) navSettings.addEventListener('click', () => {
     setActiveTab('settings');
     loadDiscordWebhook();
+    loadWigleSettings();
     loadTailscaleSettings();
   });
   if (navPayloadStudio) navPayloadStudio.href = './ide.html' + getForwardSearch();
@@ -1860,6 +1936,18 @@
   if (discordWebhookClear) discordWebhookClear.addEventListener('click', () => {
     if (discordWebhookInput) discordWebhookInput.value = '';
     saveDiscordWebhook('');
+  });
+  if (wigleSave) wigleSave.addEventListener('click', () => {
+    saveWigleSettings(
+      wigleApiNameInput ? wigleApiNameInput.value : '',
+      wigleApiTokenInput ? wigleApiTokenInput.value : '',
+      false
+    );
+  });
+  if (wigleClear) wigleClear.addEventListener('click', () => {
+    if (wigleApiNameInput) wigleApiNameInput.value = '';
+    if (wigleApiTokenInput) wigleApiTokenInput.value = '';
+    saveWigleSettings('', '', true);
   });
   if (tailscaleInstallBtn) tailscaleInstallBtn.addEventListener('click', () => {
     tailscaleReauthMode = false;
