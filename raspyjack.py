@@ -2100,6 +2100,10 @@ def ReadTextFileWardriving():
         rfile = Explorer("/root/Raspyjack/loot/wardriving/",extensions="wigle.*\\.csv")
         if rfile == "":
             break
+        filename = os.path.basename(rfile)
+        if YNDialog("Upload to WiGLE?","Upload","View",filename[:18]):
+            upload_wigle_file_with_dialog(rfile)
+            continue
         with open(rfile) as f:
             content = f.read().splitlines()
         GetMenuString(content)
@@ -2146,6 +2150,7 @@ def ImageExplorer() -> None:
 
 
 WAIT_TXT = "Scan in progess..."
+WIGLE_UPLOAD_URL = "https://api.wigle.net/api/v2/file/upload"
 
 def get_discord_webhook():
     """Read Discord webhook URL from configuration file."""
@@ -2159,6 +2164,115 @@ def get_discord_webhook():
     except Exception as e:
         print(f"Error reading Discord webhook: {e}")
     return None
+
+
+def get_wigle_credentials():
+    credentials_file = "/root/Raspyjack/.wigle_credentials.json"
+    try:
+        if not os.path.exists(credentials_file):
+            return "", ""
+        with open(credentials_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return "", ""
+        api_name = str(data.get("api_name") or "").strip()
+        api_token = str(data.get("api_token") or "").strip()
+        return api_name, api_token
+    except Exception as e:
+        print(f"Error reading WiGLE credentials: {e}")
+        return "", ""
+
+
+def upload_wigle_file(file_path: str) -> dict:
+    api_name, api_token = get_wigle_credentials()
+    if not api_name or not api_token:
+        return {"ok": False, "message": "Missing WiGLE\ncredentials"}
+    if not os.path.exists(file_path):
+        return {"ok": False, "message": "File not found"}
+
+    try:
+        file_size = os.path.getsize(file_path)
+    except OSError:
+        return {"ok": False, "message": "File unreadable"}
+
+    if file_size <= 0:
+        return {"ok": False, "message": "Empty file"}
+    if file_size > 180 * 1024 * 1024:
+        return {"ok": False, "message": "File exceeds\nWiGLE limit"}
+
+    try:
+        with open(file_path, 'rb') as f:
+            files = {
+                'file': (os.path.basename(file_path), f, 'text/csv')
+            }
+            response = requests.post(
+                WIGLE_UPLOAD_URL,
+                files=files,
+                auth=(api_name, api_token),
+                timeout=60,
+            )
+    except requests.exceptions.Timeout:
+        return {"ok": False, "message": "Upload timeout"}
+    except requests.exceptions.ConnectionError:
+        return {"ok": False, "message": "Network error"}
+    except requests.exceptions.RequestException as e:
+        print(f"WiGLE upload request error: {e}")
+        return {"ok": False, "message": "Upload failed"}
+
+    if response.status_code == 401:
+        return {"ok": False, "message": "WiGLE auth\nfailed"}
+    if response.status_code != 200:
+        return {"ok": False, "message": f"Upload error\nHTTP {response.status_code}"}
+
+    try:
+        data = response.json()
+    except ValueError:
+        return {"ok": False, "message": "Bad WiGLE\nresponse"}
+
+    if not data.get("success"):
+        warning = str(data.get("warning") or "").strip()
+        message = warning or str(data.get("message") or "Upload rejected").strip()
+        return {"ok": False, "message": message[:42] or "Upload rejected"}
+
+    results = data.get("results") or {}
+    transids = results.get("transids") or []
+    transid = ""
+    if isinstance(transids, list) and transids:
+        transid = str((transids[0] or {}).get("transId") or "").strip()
+    observer = str(data.get("observer") or "").strip()
+    message = "Upload OK"
+    if transid:
+        message += f"\n{transid}"
+    elif observer:
+        message += f"\n{observer[:16]}"
+    return {
+        "ok": True,
+        "message": message,
+        "transid": transid,
+        "observer": observer,
+    }
+
+
+def upload_wigle_file_with_dialog(file_path: str) -> dict:
+    result_box = {"result": None}
+
+    def _worker():
+        result_box["result"] = upload_wigle_file(file_path)
+
+    thread = threading.Thread(target=_worker, daemon=True)
+    thread.start()
+
+    dots = 0
+    while thread.is_alive():
+        dots = (dots + 1) % 4
+        suffix = "." * dots if dots else "."
+        Dialog_info(f"Uploading to\nWiGLE{suffix}\nPlease wait", wait=False)
+        time.sleep(0.25)
+
+    thread.join()
+    result = result_box.get("result") or {"ok": False, "message": "Upload failed"}
+    Dialog_info(result.get("message") or "Upload failed", wait=True)
+    return result
 
 def send_to_discord(scan_label: str, file_path: str, target_network: str, interface: str):
     """Send Nmap scan results as a file attachment to Discord webhook."""

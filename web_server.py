@@ -52,6 +52,7 @@ LOOT_DIR = ROOT_DIR / "loot"
 PAYLOADS_DIR = ROOT_DIR / "payloads"
 PAYLOAD_STATE_PATH = Path("/dev/shm/rj_payload_state.json")
 DISCORD_WEBHOOK_PATH = ROOT_DIR / "discord_webhook.txt"
+WIGLE_CREDENTIALS_PATH = ROOT_DIR / ".wigle_credentials.json"
 TOKEN_FILE = Path(os.environ.get("RJ_WS_TOKEN_FILE", str(ROOT_DIR / ".webui_token")))
 AUTH_FILE = Path(os.environ.get("RJ_WEB_AUTH_FILE", "/root/Raspyjack/.webui_auth.json"))
 AUTH_SECRET_FILE = Path(os.environ.get("RJ_WEB_AUTH_SECRET_FILE", "/root/Raspyjack/.webui_session_secret"))
@@ -185,6 +186,54 @@ def _write_discord_webhook_url(url: str) -> tuple[bool, str]:
         return True, "saved"
     except Exception as exc:
         return False, f"write error: {exc}"
+
+
+def _read_wigle_credentials() -> dict[str, str]:
+    try:
+        if not WIGLE_CREDENTIALS_PATH.exists():
+            return {"api_name": "", "api_token": ""}
+        raw = WIGLE_CREDENTIALS_PATH.read_text(encoding="utf-8")
+        data = json.loads(raw) if raw else {}
+        if not isinstance(data, dict):
+            return {"api_name": "", "api_token": ""}
+        return {
+            "api_name": str(data.get("api_name") or "").strip(),
+            "api_token": str(data.get("api_token") or "").strip(),
+        }
+    except Exception:
+        return {"api_name": "", "api_token": ""}
+
+
+def _write_wigle_credentials(api_name: str, api_token: str) -> tuple[bool, str]:
+    clean_name = str(api_name or "").strip()
+    clean_token = str(api_token or "").strip()
+    try:
+        if not clean_name and not clean_token:
+            if WIGLE_CREDENTIALS_PATH.exists():
+                WIGLE_CREDENTIALS_PATH.unlink()
+            return True, "cleared"
+        if not clean_name or not clean_token:
+            return False, "api name and api token are required"
+        WIGLE_CREDENTIALS_PATH.write_text(
+            json.dumps({"api_name": clean_name, "api_token": clean_token}) + "\n",
+            encoding="utf-8",
+        )
+        try:
+            os.chmod(WIGLE_CREDENTIALS_PATH, 0o600)
+        except Exception:
+            pass
+        return True, "saved"
+    except Exception as exc:
+        return False, f"write error: {exc}"
+
+
+def _mask_secret(value: str, keep_start: int = 3, keep_end: int = 2) -> str:
+    secret = str(value or "")
+    if not secret:
+        return ""
+    if len(secret) <= (keep_start + keep_end):
+        return "*" * len(secret)
+    return secret[:keep_start] + ("*" * (len(secret) - keep_start - keep_end)) + secret[-keep_end:]
 
 
 def _tailscale_write_status(payload: dict) -> None:
@@ -892,6 +941,9 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
             if parsed.path == "/api/settings/discord_webhook":
                 self._handle_settings_webhook_get()
                 return
+            if parsed.path == "/api/settings/wigle":
+                self._handle_settings_wigle_get()
+                return
             if parsed.path == "/api/settings/tailscale":
                 self._handle_settings_tailscale_get()
                 return
@@ -956,6 +1008,13 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
                 _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
                 return
             self._handle_settings_webhook_put()
+            return
+        if parsed.path == "/api/settings/wigle":
+            query = parse_qs(parsed.query or "")
+            if not _auth_ok(self, query):
+                _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
+                return
+            self._handle_settings_wigle_put()
             return
         if parsed.path == "/api/settings/tailscale":
             query = parse_qs(parsed.query or "")
@@ -1566,6 +1625,35 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
             "status": status,
             "configured": bool(url),
             "url": url if url else "",
+        })
+
+    def _handle_settings_wigle_get(self) -> None:
+        creds = _read_wigle_credentials()
+        api_name = creds.get("api_name", "")
+        api_token = creds.get("api_token", "")
+        _json_response(self, {
+            "configured": bool(api_name and api_token),
+            "api_name": api_name,
+            "api_token": api_token,
+            "api_name_masked": _mask_secret(api_name),
+            "api_token_masked": _mask_secret(api_token),
+        })
+
+    def _handle_settings_wigle_put(self) -> None:
+        body = _read_json(self)
+        if body is None:
+            _json_response(self, {"error": "invalid json"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        api_name = str(body.get("api_name", "")).strip()
+        api_token = str(body.get("api_token", "")).strip()
+        ok, status = _write_wigle_credentials(api_name, api_token)
+        if not ok:
+            _json_response(self, {"error": status}, status=HTTPStatus.BAD_REQUEST)
+            return
+        _json_response(self, {
+            "ok": True,
+            "status": status,
+            "configured": bool(api_name and api_token),
         })
 
     def _handle_settings_tailscale_get(self) -> None:

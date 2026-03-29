@@ -587,6 +587,19 @@
           </div>
 
           <div class="rounded-xl border border-slate-800/70 bg-slate-950/40 p-3">
+            <div class="text-xs font-semibold text-slate-200 mb-2">WiGLE Upload</div>
+            <label for="wigleApiNameInput" class="block text-[11px] text-slate-400 mb-1">API Name</label>
+            <input id="wigleApiNameInput" type="password" autocomplete="off" placeholder="WiGLE API name" class="w-full px-3 py-2 rounded-lg bg-slate-900/70 border border-slate-700/60 text-slate-100 text-xs focus:outline-none focus:ring-1 focus:ring-emerald-400/50">
+            <label for="wigleApiTokenInput" class="block text-[11px] text-slate-400 mb-1 mt-2">API Token</label>
+            <input id="wigleApiTokenInput" type="password" autocomplete="off" placeholder="WiGLE API token" class="w-full px-3 py-2 rounded-lg bg-slate-900/70 border border-slate-700/60 text-slate-100 text-xs focus:outline-none focus:ring-1 focus:ring-emerald-400/50">
+            <div class="mt-2 flex items-center gap-2">
+              <button id="wigleSave" type="button" class="px-3 py-1.5 text-xs rounded-lg bg-emerald-600/80 border border-emerald-300/30 text-white hover:bg-emerald-500/80 transition">Save</button>
+              <button id="wigleClear" type="button" class="px-3 py-1.5 text-xs rounded-lg bg-slate-800/80 border border-slate-600/40 text-slate-200 hover:bg-slate-700/80 transition">Clear</button>
+              <div id="wigleSettingsStatus" class="text-[11px] text-slate-400">Not configured</div>
+            </div>
+          </div>
+
+          <div class="rounded-xl border border-slate-800/70 bg-slate-950/40 p-3">
             <div class="flex items-center justify-between mb-2">
               <div class="text-xs font-semibold text-slate-200">Tailscale</div>
               <div id="tailscaleSettingsStatus" class="text-[11px] text-slate-400">Not installed</div>
