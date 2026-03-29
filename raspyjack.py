@@ -2095,6 +2095,15 @@ def ReadTextFileDNSSpoof():
             content = f.read().splitlines()
         GetMenuString(content)
 
+def ReadTextFileWardriving():
+    while 1:
+        rfile = Explorer("/root/Raspyjack/loot/wardriving/",extensions="wigle.*\\.csv")
+        if rfile == "":
+            break
+        with open(rfile) as f:
+            content = f.read().splitlines()
+        GetMenuString(content)
+
 def ImageExplorer() -> None:
     m.which += "1"
     path = default.imgstart_path
@@ -3075,6 +3084,7 @@ class DisposableMenu:
         "ah": (
             [" Nmap",      ReadTextFileNmap],
             [" Responder", ReadTextFileResponder],
+            [" Wardriving", ReadTextFileWardriving],
             [" DNSSpoof",  ReadTextFileDNSSpoof]
         ),
 
