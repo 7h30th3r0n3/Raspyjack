@@ -3339,21 +3339,21 @@ class DisposableMenu:
     def _build_payload_menu(self):
         """Crée (ou rafraîchit) le menu 'ap' par catégories."""
         self.menu_parent = {}
-
         category_order = [
-            "reconnaissance",
-            "interception",
-            "evil_portal",
-            "exfiltration",
-            "remote_access",
-            "general",
-            "examples",
-            "games",
-            "virtual_pager",
-            "incident_response",
-            "known_unstable",
-            "prank",
-        ]
+    "reconnaissance",
+    "wifi",
+    "network",
+    "credentials",
+    "bluetooth",
+    "usb",
+    "exfiltration",
+    "evasion",
+    "remote_access",
+    "utilities",
+    "hardware",
+    "games",
+    "examples",
+]
 
         def _label(cat: str) -> str:
             return f" {cat.replace('_', ' ').title()}"

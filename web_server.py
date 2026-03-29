@@ -112,7 +112,7 @@ TOKEN = _load_shared_token()
 AUTH_SECRET = _load_or_create_auth_secret()
 
 # WebUI only listens on these interfaces — wlan1+ are for attacks/monitor mode
-WEBUI_INTERFACES = ["eth0", "wlan0", "tailscale0"]
+WEBUI_INTERFACES = ["eth0", "eth1","wlan0", "tailscale0"]
 
 
 def _get_interface_ip(interface: str) -> str | None:
