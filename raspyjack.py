@@ -1075,6 +1075,22 @@ def Dialog(a, wait=True):
         time.sleep(0.25)
         getButton()
 
+def Dialog_result(title, detail="", wait=True):
+    try:
+        draw_lock.acquire()
+        _draw_toolbar()
+        draw.rectangle([7, 25, 120, 102], fill="#ADADAD")
+        _draw_centered_text((10, 30, 117, 53), title, fill="#000000", font=text_font)
+        if detail:
+            _draw_centered_text((10, 52, 117, 77), detail, fill="#000000", font=text_font)
+        draw.rectangle([43, 82, 83, 96], fill="#FF0000")
+        _draw_centered_text((43, 82, 83, 96), "OK", fill=color.selected_text, font=text_font)
+    finally:
+        draw_lock.release()
+    if wait:
+        time.sleep(0.25)
+        getButton()
+
 def Dialog_info(a, wait=True, timeout=None):
     try:
         draw_lock.acquire()
@@ -2095,11 +2111,61 @@ def ReadTextFileDNSSpoof():
             content = f.read().splitlines()
         GetMenuString(content)
 
+def _list_wardriving_files(directory: str) -> list[str]:
+    try:
+        files = []
+        for name in os.listdir(directory):
+            path = os.path.join(directory, name)
+            if not os.path.isfile(path):
+                continue
+            lower_name = name.lower()
+            if not lower_name.endswith(".csv"):
+                continue
+            if "wigle" not in lower_name:
+                continue
+            files.append(name)
+        return sorted(
+            files,
+            key=lambda filename: os.path.getmtime(os.path.join(directory, filename)),
+            reverse=True,
+        )
+    except Exception:
+        return []
+
+
+def _rename_uploaded_wigle_file(file_path: str) -> str:
+    directory = os.path.dirname(file_path)
+    filename = os.path.basename(file_path)
+    if filename.startswith("[uploaded]"):
+        return file_path
+
+    target_name = f"[uploaded]{filename}"
+    target_path = os.path.join(directory, target_name)
+    if not os.path.exists(target_path):
+        os.replace(file_path, target_path)
+        return target_path
+
+    stem, ext = os.path.splitext(filename)
+    suffix = 2
+    while True:
+        candidate_name = f"[uploaded]{stem}_{suffix}{ext}"
+        candidate_path = os.path.join(directory, candidate_name)
+        if not os.path.exists(candidate_path):
+            os.replace(file_path, candidate_path)
+            return candidate_path
+        suffix += 1
+
 def ReadTextFileWardriving():
+    directory = "/root/Raspyjack/loot/wardriving/"
     while 1:
-        rfile = Explorer("/root/Raspyjack/loot/wardriving/",extensions="wigle.*\\.csv")
-        if rfile == "":
+        files = _list_wardriving_files(directory)
+        selection_index, selection = GetMenuString([f" {name}" for name in files], duplicates=True)
+        if selection_index == -1:
             break
+        if selection_index == -2:
+            Dialog_info("No WiGLE files", wait=False, timeout=1.0)
+            continue
+        rfile = os.path.join(directory, selection.strip())
         action_index, _action = GetMenuString([
             " Upload to WiGLE",
             " View file",
@@ -2107,7 +2173,12 @@ def ReadTextFileWardriving():
         if action_index == -1:
             continue
         if action_index == 0:
-            upload_wigle_file_with_dialog(rfile)
+            result = upload_wigle_file_with_dialog(rfile)
+            if result.get("ok"):
+                try:
+                    _rename_uploaded_wigle_file(rfile)
+                except Exception as exc:
+                    print(f"Failed to rename uploaded WiGLE file: {exc}")
             continue
         with open(rfile) as f:
             content = f.read().splitlines()
@@ -2276,7 +2347,13 @@ def upload_wigle_file_with_dialog(file_path: str) -> dict:
 
     thread.join()
     result = result_box.get("result") or {"ok": False, "message": "Upload failed"}
-    Dialog_info(result.get("message") or "Upload failed", wait=True)
+    _wait_for_button_release(0.75)
+    if result.get("ok"):
+        detail = result.get("transid") or result.get("observer") or "Upload accepted"
+        Dialog_result("WiGLE Accepted", detail, wait=True)
+    else:
+        detail = result.get("message") or "Upload failed"
+        Dialog_result("WiGLE Failed", detail, wait=True)
     return result
 
 def send_to_discord(scan_label: str, file_path: str, target_network: str, interface: str):
