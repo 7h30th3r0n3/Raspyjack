@@ -939,12 +939,21 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
                 self._handle_system_status()
                 return
             if parsed.path == "/api/settings/discord_webhook":
+                if not _auth_ok(self, query):
+                    _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
+                    return
                 self._handle_settings_webhook_get()
                 return
             if parsed.path == "/api/settings/wigle":
+                if not _auth_ok(self, query):
+                    _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
+                    return
                 self._handle_settings_wigle_get()
                 return
             if parsed.path == "/api/settings/tailscale":
+                if not _auth_ok(self, query):
+                    _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
+                    return
                 self._handle_settings_tailscale_get()
                 return
 
@@ -1633,8 +1642,6 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
         api_token = creds.get("api_token", "")
         _json_response(self, {
             "configured": bool(api_name and api_token),
-            "api_name": api_name,
-            "api_token": api_token,
             "api_name_masked": _mask_secret(api_name),
             "api_token_masked": _mask_secret(api_token),
         })
@@ -1644,8 +1651,16 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
         if body is None:
             _json_response(self, {"error": "invalid json"}, status=HTTPStatus.BAD_REQUEST)
             return
-        api_name = str(body.get("api_name", "")).strip()
-        api_token = str(body.get("api_token", "")).strip()
+        clear_requested = bool(body.get("clear"))
+        incoming_name = str(body.get("api_name", "")).strip()
+        incoming_token = str(body.get("api_token", "")).strip()
+        current = _read_wigle_credentials()
+        if clear_requested:
+            api_name = ""
+            api_token = ""
+        else:
+            api_name = incoming_name or current.get("api_name", "")
+            api_token = incoming_token or current.get("api_token", "")
         ok, status = _write_wigle_credentials(api_name, api_token)
         if not ok:
             _json_response(self, {"error": status}, status=HTTPStatus.BAD_REQUEST)
@@ -1654,6 +1669,8 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
             "ok": True,
             "status": status,
             "configured": bool(api_name and api_token),
+            "api_name_masked": _mask_secret(api_name),
+            "api_token_masked": _mask_secret(api_token),
         })
 
     def _handle_settings_tailscale_get(self) -> None:

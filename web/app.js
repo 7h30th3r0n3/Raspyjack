@@ -599,6 +599,28 @@
     }
   }
 
+  function getWigleConfiguredStatus(data){
+    if (!data || !data.configured) return 'WiGLE not configured';
+    const parts = [];
+    if (data.api_name_masked) parts.push(`Name ${data.api_name_masked}`);
+    if (data.api_token_masked) parts.push(`Token ${data.api_token_masked}`);
+    return parts.length ? `WiGLE configured: ${parts.join(' | ')}` : 'WiGLE configured';
+  }
+
+  function applyWigleSettingsToUI(data){
+    const configured = !!(data && data.configured);
+    const nameMasked = String(data && data.api_name_masked || '');
+    const tokenMasked = String(data && data.api_token_masked || '');
+    if (wigleApiNameInput){
+      wigleApiNameInput.value = '';
+      wigleApiNameInput.placeholder = configured && nameMasked ? `Saved: ${nameMasked}` : 'WiGLE API name';
+    }
+    if (wigleApiTokenInput){
+      wigleApiTokenInput.value = '';
+      wigleApiTokenInput.placeholder = configured && tokenMasked ? `Saved: ${tokenMasked}` : 'WiGLE API token';
+    }
+  }
+
   // Handheld themes (frontend-only)
   const themes = [
     { id: 'neon', label: 'Neon' },
@@ -1011,11 +1033,10 @@
       if (!res.ok){
         throw new Error(data && data.error ? data.error : 'wigle_failed');
       }
-      if (wigleApiNameInput) wigleApiNameInput.value = String(data.api_name || '');
-      if (wigleApiTokenInput) wigleApiTokenInput.value = String(data.api_token || '');
-      setWigleStatus(data.configured ? 'WiGLE configured' : 'WiGLE not configured');
+      applyWigleSettingsToUI(data);
+      setWigleStatus(getWigleConfiguredStatus(data));
     } catch(e){
-      setWigleStatus('Failed to load WiGLE');
+      setWigleStatus(e && e.message ? e.message : 'Failed to load WiGLE');
     }
   }
 
@@ -1085,7 +1106,7 @@
     }
   }
 
-  async function saveWigleSettings(apiName, apiToken){
+  async function saveWigleSettings(apiName, apiToken, clearRequested){
     setWigleStatus('Saving...');
     try{
       const endpoint = getApiUrl('/api/settings/wigle');
@@ -1095,14 +1116,15 @@
         body: JSON.stringify({
           api_name: String(apiName || '').trim(),
           api_token: String(apiToken || '').trim(),
+          clear: !!clearRequested,
         }),
       });
       const data = await res.json();
       if (!res.ok || !data.ok){
         throw new Error(data && data.error ? data.error : 'save_failed');
       }
-      setWigleStatus(data.status === 'cleared' ? 'WiGLE cleared' : 'WiGLE saved');
-      await loadWigleSettings(true);
+      applyWigleSettingsToUI(data);
+      setWigleStatus(data.status === 'cleared' ? 'WiGLE cleared' : getWigleConfiguredStatus(data));
     } catch(e){
       setWigleStatus(e && e.message ? e.message : 'Failed to save WiGLE');
     }
@@ -1918,13 +1940,14 @@
   if (wigleSave) wigleSave.addEventListener('click', () => {
     saveWigleSettings(
       wigleApiNameInput ? wigleApiNameInput.value : '',
-      wigleApiTokenInput ? wigleApiTokenInput.value : ''
+      wigleApiTokenInput ? wigleApiTokenInput.value : '',
+      false
     );
   });
   if (wigleClear) wigleClear.addEventListener('click', () => {
     if (wigleApiNameInput) wigleApiNameInput.value = '';
     if (wigleApiTokenInput) wigleApiTokenInput.value = '';
-    saveWigleSettings('', '');
+    saveWigleSettings('', '', true);
   });
   if (tailscaleInstallBtn) tailscaleInstallBtn.addEventListener('click', () => {
     tailscaleReauthMode = false;

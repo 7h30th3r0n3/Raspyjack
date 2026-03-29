@@ -2100,8 +2100,13 @@ def ReadTextFileWardriving():
         rfile = Explorer("/root/Raspyjack/loot/wardriving/",extensions="wigle.*\\.csv")
         if rfile == "":
             break
-        filename = os.path.basename(rfile)
-        if YNDialog("Upload to WiGLE?","Upload","View",filename[:18]):
+        action_index, _action = GetMenuString([
+            " Upload to WiGLE",
+            " View file",
+        ], duplicates=True)
+        if action_index == -1:
+            continue
+        if action_index == 0:
             upload_wigle_file_with_dialog(rfile)
             continue
         with open(rfile) as f:
