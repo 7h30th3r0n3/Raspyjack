@@ -16,7 +16,7 @@ from datetime import datetime
 import ipaddress
 
 # Ensure RaspyJack modules are importable
-sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..")))
+sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..", "..")))
 
 import RPi.GPIO as GPIO  # type: ignore
 import LCD_1in44, LCD_Config  # type: ignore

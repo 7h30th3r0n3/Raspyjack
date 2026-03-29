@@ -18,7 +18,7 @@ style of ``example_show_buttons.py``.
 # 0) Allow imports of RaspyJack helper modules when run manually  
 # ---------------------------------------------------------------------------
 import os, sys
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
+sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..', '..')))
 
 # ---------------------------- Standard library ----------------------------
 import time               # timing & debouncing

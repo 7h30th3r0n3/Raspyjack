@@ -27,7 +27,7 @@ import os, sys
 # «…/Raspyjack/» is two directories up from this script. Add it to sys.path so
 # that `import LCD_1in44` works even when we run the script manually from
 # inside the “payloads” folder.
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
+sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..', '..')))
 
 # ---------------------------- Standard library ----------------------------
 import time           # sleep() for timing / debouncing

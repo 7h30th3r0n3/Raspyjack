@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
 # Allow imports from RaspyJack root
-sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..")))
+sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..", "..")))
 
 try:
     import RPi.GPIO as GPIO
@@ -69,7 +69,7 @@ WIDTH = 128
 HEIGHT = 128
 FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 FONT_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-BASE_DIR = os.path.abspath(os.path.join(__file__, "..", ".."))
+BASE_DIR = os.path.abspath(os.path.join(__file__, "..", "..", ".."))
 LOOT_DIR = os.path.join(BASE_DIR, "loot")
 WOF_LOOT_DIR = os.path.join(LOOT_DIR, "WOF")
 HISTORY_PATH = os.path.join(WOF_LOOT_DIR, "history.json")

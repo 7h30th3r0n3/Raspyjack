@@ -44,7 +44,7 @@ except ModuleNotFoundError as exc:
 # 2) Configuration – tweak these paths if your layout differs
 # ---------------------------------------------------------------------------
 # (Paths are **relative** to the folder where you launch the script.)
-LOOT_DIR       = Path("loot")
+LOOT_DIR       = Path("/root/Raspyjack/loot")
 MITM_DIR       = LOOT_DIR / "MITM"
 NMAP_DIR       = LOOT_DIR / "Nmap"
 RESPONDER_DIR  = Path("Responder") / "logs"
