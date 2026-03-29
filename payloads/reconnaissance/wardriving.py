@@ -32,7 +32,7 @@ from pathlib import Path
 
 # Add RaspyJack modules to path
 sys.path.append('/root/Raspyjack/wifi/')
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))  # Add root directory like working examples
+sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..', '..')))  # Add root directory like working examples
 
 try:
     import LCD_1in44, LCD_Config

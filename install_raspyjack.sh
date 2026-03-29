@@ -41,9 +41,11 @@ PACKAGES=(
   python3-scapy python3-netifaces python3-pyudev python3-serial \
   python3-smbus python3-rpi.gpio python3-spidev python3-pil python3-qrcode python3-numpy \
   python3-setuptools python3-cryptography python3-requests python3-websockets \
-  libglib2.0-dev python3-bluez \
-  fonts-dejavu-core nmap ncat tcpdump arp-scan dsniff ettercap-text-only php procps \
+  python3-evdev \
+  libglib2.0-dev python3-bluez bluez \
+  fonts-dejavu-core nmap ncat tcpdump tshark arp-scan dsniff ettercap-text-only php procps \
   aircrack-ng wireless-tools wpasupplicant iw \
+  hostapd dnsmasq-base sshpass bridge-utils john autossh reaver ebtables \
   firmware-linux-nonfree firmware-realtek firmware-atheros \
   git i2c-tools
 )
@@ -57,6 +59,16 @@ if ((${#to_install[@]})); then
 else
   info "All packages already installed & up‑to‑date."
 fi
+
+# ───── 2‑a2 ▸ pip packages not available via APT ─────────────────
+step "Installing Python packages via pip …"
+sudo pip3 install --break-system-packages smbus2 2>/dev/null \
+  || sudo pip3 install smbus2 2>/dev/null \
+  || warn "smbus2 pip install failed – i2c_scanner payload may not work"
+
+# Disable hostapd/dnsmasq auto-start (only used on-demand by payloads)
+sudo systemctl disable --now hostapd 2>/dev/null || true
+sudo systemctl disable --now dnsmasq 2>/dev/null || true
 
 # ───── 2‑b ▸ Wall-of-Flippers: bluepy (clone + setup.py install) ─
 # WoF uses bluepy.btle (BLE). Install from source; no bleak.
@@ -357,38 +369,45 @@ if ! dpkg -s caddy >/dev/null 2>&1; then
   fi
 fi
 
+# Install a boot-time script that auto-detects ALL interface IPs and regenerates
+# the Caddyfile on every boot. This ensures any new IP (DHCP, Tailscale, etc.)
+# is always included without manual intervention.
 if [ "$TLS_SETUP_OK" -eq 1 ]; then
-  CADDY_HOSTS=()
-  for IFACE in eth0 wlan0 tailscale0; do
-    IFACE_IP=$(ip -4 -o addr show "$IFACE" 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -n1)
-    if [ -n "$IFACE_IP" ]; then
-      CADDY_HOSTS+=("$IFACE_IP")
-    fi
-  done
-  CADDY_HOSTS+=("localhost")
+  step "Installing Caddy auto-config service …"
 
-  if [ "${#CADDY_HOSTS[@]}" -eq 0 ]; then
-    warn "No interface IPs detected for Caddy TLS vhosts; skipping Caddy config."
-    TLS_SETUP_OK=0
+  sudo tee /usr/local/sbin/raspyjack-caddy-autoconfig.sh >/dev/null <<'SCRIPT'
+#!/usr/bin/env bash
+# RaspyJack: auto-detect all IPv4 addresses and regenerate Caddyfile
+set -euo pipefail
+
+HOSTS=""
+for iface in $(ls /sys/class/net/); do
+  # Skip loopback and virtual docker/veth interfaces
+  case "$iface" in lo|docker*|veth*|br-*) continue ;; esac
+  IP=$(ip -4 -o addr show "$iface" 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -n1)
+  if [ -n "$IP" ]; then
+    if [ -z "$HOSTS" ]; then
+      HOSTS="$IP"
+    else
+      HOSTS="$HOSTS, $IP"
+    fi
   fi
+done
+
+# Always include localhost
+if [ -z "$HOSTS" ]; then
+  HOSTS="localhost"
+else
+  HOSTS="$HOSTS, localhost"
 fi
 
-if [ "$TLS_SETUP_OK" -eq 1 ]; then
-  CADDY_SITE_ADDRS=""
-  for host in "${CADDY_HOSTS[@]}"; do
-    if [ -z "$CADDY_SITE_ADDRS" ]; then
-      CADDY_SITE_ADDRS="$host"
-    else
-      CADDY_SITE_ADDRS="${CADDY_SITE_ADDRS}, ${host}"
-    fi
-  done
-  if ! sudo tee /etc/caddy/Caddyfile >/dev/null <<CADDYFILE
+cat > /etc/caddy/Caddyfile <<EOF
 {
     # RaspyJack self-signed internal CA (local trust only)
     auto_https disable_redirects
 }
 
-${CADDY_SITE_ADDRS} {
+${HOSTS} {
     tls internal
 
     @ws path /ws*
@@ -402,11 +421,35 @@ ${CADDY_SITE_ADDRS} {
         header_up X-Forwarded-Host {host}
     }
 }
-CADDYFILE
-  then
-    warn "Failed to write /etc/caddy/Caddyfile; skipping HTTPS proxy setup."
-    TLS_SETUP_OK=0
-  fi
+EOF
+
+systemctl reload caddy 2>/dev/null || systemctl restart caddy
+echo "[raspyjack-caddy] Caddyfile updated with: ${HOSTS}"
+SCRIPT
+  sudo chmod +x /usr/local/sbin/raspyjack-caddy-autoconfig.sh
+
+  sudo tee /etc/systemd/system/raspyjack-caddy-autoconfig.service >/dev/null <<'UNIT'
+[Unit]
+Description=RaspyJack Caddy auto-config (detect all IPs)
+After=network-online.target caddy.service
+Wants=network-online.target
+Requires=caddy.service
+
+[Service]
+Type=oneshot
+ExecStartPre=/bin/sleep 5
+ExecStart=/usr/local/sbin/raspyjack-caddy-autoconfig.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+  sudo systemctl daemon-reload
+  sudo systemctl enable raspyjack-caddy-autoconfig.service
+
+  # Run it now to generate the initial Caddyfile
+  sudo /usr/local/sbin/raspyjack-caddy-autoconfig.sh
 fi
 
 if [ "$TLS_SETUP_OK" -eq 1 ]; then
@@ -418,7 +461,7 @@ fi
 
 if [ "$TLS_SETUP_OK" -eq 1 ]; then
   info "HTTPS proxy is enabled. Access WebUI at: https://<device-ip>/"
-  info "For first use, trust Caddy's local CA certificate on your client if prompted."
+  info "Caddy auto-config will detect all IPs on every boot."
 else
   warn "TLS setup incomplete. WebUI remains available on: http://<device-ip>:8080"
   warn "Manual remediation: sudo apt-get install caddy && sudo systemctl restart caddy"

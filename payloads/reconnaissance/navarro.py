@@ -26,7 +26,7 @@ import os, sys, time, signal, subprocess, json, fcntl, re
 from urllib.parse import urlparse
 from datetime import datetime
 
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))
+sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..', '..')))
 
 import RPi.GPIO as GPIO
 import LCD_1in44

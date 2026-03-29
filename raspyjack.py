@@ -3136,17 +3136,18 @@ class DisposableMenu:
 
         category_order = [
             "reconnaissance",
-            "interception",
-            "evil_portal",
+            "wifi",
+            "network",
+            "credentials",
+            "bluetooth",
+            "usb",
             "exfiltration",
+            "evasion",
             "remote_access",
-            "general",
-            "examples",
+            "utilities",
+            "hardware",
             "games",
-            "virtual_pager",
-            "incident_response",
-            "known_unstable",
-            "prank",
+            "examples",
         ]
 
         def _label(cat: str) -> str:

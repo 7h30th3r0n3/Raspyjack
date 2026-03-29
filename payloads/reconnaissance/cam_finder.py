@@ -22,7 +22,7 @@ import time
 import subprocess
 from datetime import datetime
 
-sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..")))
+sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..", "..")))
 
 # Import the working wardriving scanner — we inherit everything from it
 from payloads.reconnaissance.wardriving import (  # type: ignore
