@@ -43,7 +43,7 @@ SEND_TIMEOUT = 0.5
 PING_INTERVAL = 15
 
 # WebSocket server only listens on these interfaces — wlan1+ are for attacks
-WEBUI_INTERFACES = ["eth0", "eth1", "wlan0", "tailscale0"]
+WEBUI_INTERFACES = ["eth0", "eth1","wlan0", "tailscale0"]
 
 
 def _load_shared_token():
