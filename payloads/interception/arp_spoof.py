@@ -32,6 +32,7 @@ import time
 import signal
 import subprocess
 import re
+import threading
 
 sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..")))
 
@@ -202,22 +203,62 @@ def get_gateway(interface):
 
 
 def scan_hosts(interface):
-    """Run arp-scan and return list of {ip, mac} dicts."""
-    cmd = f"arp-scan --localnet --interface {interface} --quiet"
-    try:
-        result = subprocess.run(
-            cmd, shell=True, capture_output=True, text=True, timeout=30,
-        )
-        output = result.stdout
-    except Exception:
-        return []
+    """Run arp-scan and fping in parallel, merge and deduplicate results by IP."""
+    seen = {}
+    lock = threading.Lock()
 
-    hosts = []
-    for line in output.splitlines():
-        parts = line.split()
-        if len(parts) >= 2 and re.match(r"^\d+\.\d+\.\d+\.\d+$", parts[0]):
-            hosts.append({"ip": parts[0], "mac": parts[1]})
-    return hosts
+    def run_arp_scan():
+        cmd = (
+            f"arp-scan --localnet --interface {interface} --quiet "
+            f"--retry=3 --timeout=500 --interval=10"
+        )
+        try:
+            result = subprocess.run(
+                cmd, shell=True, capture_output=True, text=True, timeout=60,
+            )
+            for line in result.stdout.splitlines():
+                parts = line.split()
+                if len(parts) >= 2 and re.match(r"^\d+\.\d+\.\d+\.\d+$", parts[0]):
+                    ip, mac = parts[0], parts[1]
+                    with lock:
+                        if ip not in seen:
+                            seen[ip] = {"ip": ip, "mac": mac}
+        except Exception:
+            pass
+
+    def run_fping():
+        # Get CIDR for this interface (e.g. 192.168.1.0/24) to pass to fping -g
+        cidr_cmd = f"ip -4 addr show {interface} | awk '/inet / {{print $2}}'"
+        try:
+            cidr = subprocess.run(
+                cidr_cmd, shell=True, capture_output=True, text=True, timeout=5,
+            ).stdout.strip()
+        except Exception:
+            cidr = ""
+        if not cidr:
+            return
+        cmd = f"fping -a -g {cidr} -t 500 -r 2 -q 2>/dev/null"
+        try:
+            result = subprocess.run(
+                cmd, shell=True, capture_output=True, text=True, timeout=30,
+            )
+            for line in result.stdout.splitlines():
+                ip = line.strip()
+                if re.match(r"^\d+\.\d+\.\d+\.\d+$", ip):
+                    with lock:
+                        if ip not in seen:
+                            seen[ip] = {"ip": ip, "mac": "??:??:??:??:??:??"}
+        except Exception:
+            pass
+
+    t1 = threading.Thread(target=run_arp_scan, daemon=True)
+    t2 = threading.Thread(target=run_fping, daemon=True)
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
+
+    return list(seen.values())
 
 # ---------------------------------------------------------------------------
 # Attack control
