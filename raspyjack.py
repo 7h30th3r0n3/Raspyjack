@@ -3801,15 +3801,26 @@ icon_font = ImageFont.truetype('/usr/share/fonts/truetype/fontawesome/fa-solid-9
 font = text_font  # Keep backward compatibility
 
 ### Defining PINS, threads, loading JSON ###
+# Default button map for Waveshare 1.54" Spotpear ST7789 (13 keys) + RaspyJack happy path.
 PINS = {
-    "KEY_UP_PIN": 6,
-    "KEY_DOWN_PIN": 19,
-    "KEY_LEFT_PIN": 5,
-    "KEY_RIGHT_PIN": 26,
-    "KEY_PRESS_PIN": 13,
-    "KEY1_PIN": 21,
-    "KEY2_PIN": 20,
-    "KEY3_PIN": 16
+    "KEY_UP_PIN": 16,
+    "KEY_DOWN_PIN": 5,
+    "KEY_LEFT_PIN": 6,
+    "KEY_RIGHT_PIN": 13,
+    "KEY_PRESS_PIN": 3,
+    "KEY1_PIN": 3,
+    "KEY2_PIN": 5,
+    "KEY3_PIN": 6,
+    "KEY4_PIN": 16,
+    "KEY5_PIN": 13,
+    "KEY6_PIN": 26,
+    "KEY7_PIN": 19,
+    "KEY8_PIN": 21,
+    "KEY9_PIN": 20,
+    "KEY10_PIN": 15,
+    "KEY11_PIN": 12,
+    "KEY12_PIN": 14,
+    "KEY13_PIN": 23
 }
 LoadConfig()
 m = DisposableMenu()

@@ -74,6 +74,26 @@ Check the WIKI for more ! https://github.com/7h30th3r0n3/Raspyjack/wiki
 
 ---
 
+## 🖥️ Alternate LCD: Spotpear 1.54" ST7789
+
+To use the Spotpear 240x240 ST7789 display (pinout as in your instructions), set:
+
+- `RJ_LCD_MODEL=1in54` (environment variable)
+
+This triggers:
+
+- `LCD_Config` to use `LCD_DC_PIN=22` (Spotpear wiring)
+- `LCD_1in54` driver for ST7789 init sequence and 240x240 content
+- `LCD_1in44` import path compatibility (existing code continues to work)
+
+Wrap with your shell start command for RaspyJack, e.g.:
+
+```bash
+sudo RJ_LCD_MODEL=1in54 python3 raspyjack.py
+```
+
+---
+
 ## ➕ Other Hardware (Not Mandatory)
 <table>
   <tr>

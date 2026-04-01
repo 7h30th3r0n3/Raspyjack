@@ -24,15 +24,23 @@
  # THE SOFTWARE.
  #
  
+import os
 import spidev
 import RPi.GPIO as GPIO
 import time
 
-# Pin definition
-LCD_RST_PIN         = 27
-LCD_DC_PIN          = 25
-LCD_CS_PIN          = 8
-LCD_BL_PIN          = 24
+# Support model-specific pinouts through env var RJ_LCD_MODEL:
+#  - 1in44 (default): DC=25, RST=27, CS=8, BL=24
+#  - 1in54 (Spotpear ST7789): DC=22, RST=27, CS=8, BL=24
+LCD_MODEL = os.environ.get("RJ_LCD_MODEL", "1in44").strip().lower()
+
+LCD_RST_PIN = 27
+LCD_DC_PIN = 25
+LCD_CS_PIN = 8
+LCD_BL_PIN = 24
+
+if LCD_MODEL == "1in54":
+    LCD_DC_PIN = 22
 
 # SPI device, bus = 0, device = 0
 SPI = spidev.SpiDev(0, 0)

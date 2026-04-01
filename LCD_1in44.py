@@ -333,3 +333,29 @@ class LCD:
 					_last_frame_save = now
 			except Exception:
 				pass
+
+# Environment-based model switch.
+# Set RJ_LCD_MODEL=1in54 to use the new ST7789 driver (240x240, Spotpear HAT).
+if os.environ.get("RJ_LCD_MODEL", "1in44").strip().lower() == "1in54":
+	try:
+		import LCD_1in54 as _lcd_1in54
+	
+		LCD = _lcd_1in54.LCD
+		LCD_WIDTH = _lcd_1in54.LCD_WIDTH
+		LCD_HEIGHT = _lcd_1in54.LCD_HEIGHT
+		LCD_X = _lcd_1in54.LCD_X
+		LCD_Y = _lcd_1in54.LCD_Y
+		LCD_X_MAXPIXEL = _lcd_1in54.LCD_X_MAXPIXEL
+		LCD_Y_MAXPIXEL = _lcd_1in54.LCD_Y_MAXPIXEL
+		SCAN_DIR_DFT = _lcd_1in54.SCAN_DIR_DFT
+		L2R_U2D = _lcd_1in54.L2R_U2D
+		L2R_D2U = _lcd_1in54.L2R_D2U
+		R2L_U2D = _lcd_1in54.R2L_U2D
+		R2L_D2U = _lcd_1in54.R2L_D2U
+		U2D_L2R = _lcd_1in54.U2D_L2R
+		U2D_R2L = _lcd_1in54.U2D_R2L
+		D2U_L2R = _lcd_1in54.D2U_L2R
+		D2U_R2L = _lcd_1in54.D2U_R2L
+		print("[LCD_1in44] RJ_LCD_MODEL=1in54: using LCD_1in54 driver")
+	except Exception as e:
+		print(f"[LCD_1in44] failed to load LCD_1in54 driver, continuing with default ST7735: {e}")

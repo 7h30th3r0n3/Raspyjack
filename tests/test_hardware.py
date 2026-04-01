@@ -181,3 +181,22 @@ class TestLEDControl:
     def test_source_has_main(self):
         src = _read_source("led_control.py")
         assert "def main()" in src
+
+
+def test_lcd_1in54_env_select(monkeypatch):
+    monkeypatch.setenv("RJ_LCD_MODEL", "1in54")
+
+    import importlib
+    import sys
+
+    sys.modules.pop("LCD_1in44", None)
+    sys.modules.pop("LCD_1in54", None)
+
+    lcd_mod = importlib.import_module("LCD_1in44")
+    assert lcd_mod.LCD_WIDTH == 240
+    assert lcd_mod.LCD_HEIGHT == 240
+
+    lcd = lcd_mod.LCD()
+    assert lcd.width == 240
+    assert lcd.height == 240
+
