@@ -23,7 +23,8 @@ for pin in PINS.values():
 
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-WIDTH, HEIGHT = 128, 128
+WIDTH, HEIGHT = LCD.width, LCD.height
+_GAME_W, _GAME_H = 128, 128
 font = ImageFont.load_default()
 
 # Quadrant definitions: (name, button, normal_color, flash_color, rect)
@@ -57,7 +58,7 @@ signal.signal(signal.SIGTERM, cleanup)
 
 def draw_screen(highlight=None, score=0, status="", best=0):
     """Draw the four quadrants, optionally highlighting one."""
-    img = Image.new("RGB", (WIDTH, HEIGHT), COL_BG)
+    img = Image.new("RGB", (_GAME_W, _GAME_H), COL_BG)
     d = ImageDraw.Draw(img)
 
     # HUD
@@ -76,6 +77,8 @@ def draw_screen(highlight=None, score=0, status="", best=0):
         d.text((lx, ly), labels[name], font=font,
                fill=(0, 0, 0) if name == highlight else (255, 255, 255))
 
+    if _GAME_W != WIDTH or _GAME_H != HEIGHT:
+        img = img.resize((WIDTH, HEIGHT), Image.NEAREST)
     LCD.LCD_ShowImage(img, 0, 0)
 
 
@@ -88,13 +91,15 @@ def flash_quad(name, score, best, flash_ms=200, pause_ms=300):
 
 
 def show_message(msg, score=0, best=0):
-    img = Image.new("RGB", (WIDTH, HEIGHT), COL_BG)
+    img = Image.new("RGB", (_GAME_W, _GAME_H), COL_BG)
     d = ImageDraw.Draw(img)
     d.text((2, 1), f"Score:{score} Best:{best}", font=font, fill=COL_TEXT)
     for name, q in QUADS.items():
         d.rectangle(q["rect"], fill=q["col"], outline=COL_BORDER, width=1)
     d.rectangle([14, 50, 114, 78], fill=COL_BG, outline=COL_BORDER)
     d.text((18, 56), msg, font=font, fill=COL_TEXT)
+    if _GAME_W != WIDTH or _GAME_H != HEIGHT:
+        img = img.resize((WIDTH, HEIGHT), Image.NEAREST)
     LCD.LCD_ShowImage(img, 0, 0)
 
 

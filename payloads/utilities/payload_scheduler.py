@@ -36,6 +36,7 @@ import RPi.GPIO as GPIO
 import LCD_1in44
 import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
+from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
 
 PINS = {
@@ -48,8 +49,8 @@ for pin in PINS.values():
 
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-WIDTH, HEIGHT = 128, 128
-font = ImageFont.load_default()
+WIDTH, HEIGHT = LCD.width, LCD.height
+font = scaled_font()
 
 SCHEDULE_DIR = "/root/Raspyjack/config/scheduler"
 SCHEDULE_FILE = os.path.join(SCHEDULE_DIR, "schedule.json")
@@ -204,7 +205,7 @@ class AddWizard:
 
 def _draw_schedule(lcd, entries, cursor, scroll, status=""):
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
 
     d.rectangle((0, 0, 127, 12), fill="#111")
     d.text((2, 1), "SCHEDULER", font=font, fill="#00ccff")
@@ -240,7 +241,7 @@ def _draw_schedule(lcd, entries, cursor, scroll, status=""):
 
 def _draw_wizard(lcd, wiz):
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
 
     d.rectangle((0, 0, 127, 12), fill="#111")
     d.text((2, 1), "ADD ENTRY", font=font, fill="#ffaa00")

@@ -47,7 +47,7 @@ except ModuleNotFoundError as exc:
 LOOT_DIR       = Path("/root/Raspyjack/loot")
 MITM_DIR       = LOOT_DIR / "MITM"
 NMAP_DIR       = LOOT_DIR / "Nmap"
-RESPONDER_DIR  = Path("Responder") / "logs"
+RESPONDER_DIR  = Path("/root/Raspyjack/Responder") / "logs"
 
 WEBHOOK_URL = "https://discord.com/api/webhooks/xxxxxxxxxxxxxxxx/YYYYYYYYYYYYY" #<- EDIT ME!
 

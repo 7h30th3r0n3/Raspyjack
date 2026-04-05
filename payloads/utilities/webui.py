@@ -23,6 +23,7 @@ sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..', '..')))
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
+from payloads._display_helper import ScaledDraw
 from payloads._input_helper import get_button
 
 # --------------------------- LCD and GPIO setup ---------------------------
@@ -43,10 +44,10 @@ for pin in PINS.values():
 
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-WIDTH, HEIGHT = 128, 128
-font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 11)
-bold = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 12)
-small_font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 9)
+WIDTH, HEIGHT = LCD.width, LCD.height
+font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', int(11 * LCD_1in44.LCD_SCALE))
+bold = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', int(12 * LCD_1in44.LCD_SCALE))
+small_font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', int(9 * LCD_1in44.LCD_SCALE))
 
 # ------------------------------- Helpers -------------------------------
 
@@ -80,7 +81,7 @@ def get_ip_for_url() -> str:
 
 def draw_info(https_url: str, http_url: str):
     img = Image.new('RGB', (WIDTH, HEIGHT), 'black')
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
     
     # Header
     d.rectangle((0, 0, 128, 20), fill='#00A321')

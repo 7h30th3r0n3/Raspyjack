@@ -25,6 +25,7 @@ sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..', '..')))
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
+from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
 
 
@@ -105,7 +106,7 @@ def parse_bps(res: dict) -> float | None:
 
 # --------------------------- LCD + Buttons ----------------------------------
 
-WIDTH, HEIGHT = 128, 128
+WIDTH, HEIGHT = LCD.width, LCD.height
 PINS = {"UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26, "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16}
 
 GPIO.setmode(GPIO.BCM)
@@ -116,12 +117,12 @@ LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
 
 canvas = Image.new("RGB", (WIDTH, HEIGHT), "black")
-draw = ImageDraw.Draw(canvas)
+draw = ScaledDraw(canvas)
 def _font(size: int):
     try:
         return ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', size)
     except Exception:
-        return ImageFont.load_default()
+        return scaled_font()
 font_small = _font(8)
 font_med = _font(10)
 font_big = _font(12)

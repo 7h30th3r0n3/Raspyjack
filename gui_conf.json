@@ -1,4 +1,8 @@
 {
+    "DISPLAY": {
+        "type": "ST7789_240",
+        "supported_types": ["ST7735_128", "ST7789_240"]
+    },
     "COLORS": {
         "BACKGROUND": "#000000",
         "BORDER": "#05ff00",

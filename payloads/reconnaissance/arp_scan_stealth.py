@@ -36,6 +36,7 @@ import RPi.GPIO as GPIO
 import LCD_1in44
 import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
+from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
 
 try:
@@ -53,7 +54,7 @@ PINS = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
     "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16,
 }
-WIDTH, HEIGHT = 128, 128
+WIDTH, HEIGHT = LCD_1in44.LCD_WIDTH, LCD_1in44.LCD_HEIGHT
 ROWS_VISIBLE = 6
 ROW_H = 12
 
@@ -264,7 +265,7 @@ def _export_loot():
 def _draw_frame(lcd, font):
     """Render current state to the LCD."""
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
 
     # Header
     d.rectangle((0, 0, 127, 13), fill="#111")
@@ -338,11 +339,11 @@ def main():
     lcd = LCD_1in44.LCD()
     lcd.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
     lcd.LCD_Clear()
-    font = ImageFont.load_default()
+    font = scaled_font()
 
     if not SCAPY_OK:
         img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-        d = ImageDraw.Draw(img)
+        d = ScaledDraw(img)
         d.text((4, 50), "scapy not found!", font=font, fill="#FF0000")
         d.text((4, 65), "pip install scapy", font=font, fill="#888")
         lcd.LCD_ShowImage(img, 0, 0)
@@ -354,7 +355,7 @@ def main():
 
     # Splash
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
     d.text((8, 16), "STEALTH ARP SCAN", font=font, fill="#00AAFF")
     d.text((4, 36), "Slow randomized scan", font=font, fill="#888")
     d.text((4, 48), f"Iface: {iface or 'none'}", font=font, fill="#666")
@@ -385,7 +386,7 @@ def main():
                     ).start()
                 else:
                     img2 = Image.new("RGB", (WIDTH, HEIGHT), "black")
-                    d2 = ImageDraw.Draw(img2)
+                    d2 = ScaledDraw(img2)
                     d2.text((4, 50), "No network found!", font=font, fill="#FF0000")
                     lcd.LCD_ShowImage(img2, 0, 0)
                     time.sleep(1.5)
@@ -401,14 +402,14 @@ def main():
                 if has_data:
                     fname = _export_loot()
                     img2 = Image.new("RGB", (WIDTH, HEIGHT), "black")
-                    d2 = ImageDraw.Draw(img2)
+                    d2 = ScaledDraw(img2)
                     d2.text((4, 50), "Exported!", font=font, fill="#00FF00")
                     d2.text((4, 65), fname[:22], font=font, fill="#888")
                     lcd.LCD_ShowImage(img2, 0, 0)
                     time.sleep(1.5)
                 else:
                     img2 = Image.new("RGB", (WIDTH, HEIGHT), "black")
-                    d2 = ImageDraw.Draw(img2)
+                    d2 = ScaledDraw(img2)
                     d2.text((4, 50), "No data to export", font=font, fill="#FF8800")
                     lcd.LCD_ShowImage(img2, 0, 0)
                     time.sleep(1.0)

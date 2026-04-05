@@ -42,6 +42,7 @@ import RPi.GPIO as GPIO
 import LCD_1in44
 import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
+from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
 
 # ── Pin / LCD setup ──────────────────────────────────────────────────────────
@@ -55,8 +56,8 @@ for pin in PINS.values():
 
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-WIDTH, HEIGHT = 128, 128
-font = ImageFont.load_default()
+WIDTH, HEIGHT = LCD.width, LCD.height
+font = scaled_font()
 
 # ── Constants ────────────────────────────────────────────────────────────────
 HCI_DEV = "hci0"
@@ -379,7 +380,7 @@ def _export_log():
 
 def _draw_screen():
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
 
     with lock:
         msg = status_msg
@@ -450,7 +451,7 @@ def main():
 
     # Splash
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
     d.text((8, 10), "BLE MITM PROXY", font=font, fill="#9C27B0")
     d.text((4, 28), "GATT man-in-the-middle", font=font, fill="#888")
     d.text((4, 40), "proxy for BLE devices.", font=font, fill="#888")

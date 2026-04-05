@@ -35,6 +35,7 @@ sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..", "..")))
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
+from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
 
 PINS = {
@@ -47,8 +48,8 @@ for pin in PINS.values():
 
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-WIDTH, HEIGHT = 128, 128
-font = ImageFont.load_default()
+WIDTH, HEIGHT = LCD.width, LCD.height
+font = scaled_font()
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -228,7 +229,7 @@ def _draw_footer(d, text):
 def draw_list_view():
     """Render the device list view."""
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
     _draw_header(d, "BT CLASSIC")
 
     with lock:
@@ -266,7 +267,7 @@ def draw_list_view():
 def draw_services_view():
     """Render the services view for the selected device."""
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
 
     with lock:
         sel = selected_idx
@@ -308,7 +309,7 @@ def main():
 
     # Splash
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
     d.text((4, 20), "BT CLASSIC SCAN", font=font, fill="#3388FF")
     d.text((4, 40), "Device discovery +", font=font, fill="#888")
     d.text((4, 52), "SDP enumeration", font=font, fill="#888")
@@ -397,7 +398,7 @@ def main():
 def _show_message(line1, line2=""):
     """Show a brief overlay message."""
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
     d.text((10, 50), line1, font=font, fill="#00FF00")
     if line2:
         d.text((4, 65), line2, font=font, fill="#888")

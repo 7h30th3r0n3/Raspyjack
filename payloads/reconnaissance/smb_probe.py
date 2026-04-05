@@ -21,11 +21,12 @@ sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..", "..")))
 import RPi.GPIO as GPIO  # type: ignore
 import LCD_1in44, LCD_Config  # type: ignore
 from PIL import Image, ImageDraw, ImageFont  # type: ignore
+from payloads._display_helper import ScaledDraw, scaled_font
 
 # Shared input helper (WebUI virtual + GPIO)
 from payloads._input_helper import get_button
 
-WIDTH, HEIGHT = 128, 128
+WIDTH, HEIGHT = LCD_1in44.LCD_WIDTH, LCD_1in44.LCD_HEIGHT
 KEY_UP = 6
 KEY_DOWN = 19
 KEY_PRESS = 13
@@ -42,8 +43,8 @@ def lcd_init():
 
 def draw_lines(lcd, lines, color="white", bg="black"):
     img = Image.new("RGB", (WIDTH, HEIGHT), bg)
-    d = ImageDraw.Draw(img)
-    font = ImageFont.load_default()
+    d = ScaledDraw(img)
+    font = scaled_font()
     y = 5
     for line in lines:
         if line:

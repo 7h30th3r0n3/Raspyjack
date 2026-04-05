@@ -4,7 +4,7 @@ RaspyJack payload -- Asteroids
 ==============================
 Author: 7h30th3r0n3
 
-Classic Asteroids on 128x128 LCD. Ship rotates, thrusts, and fires bullets
+Classic Asteroids on LCD. Ship rotates, thrusts, and fires bullets
 at irregular polygon asteroids that break into smaller pieces.
 
 Controls: LEFT/RIGHT=rotate, UP=thrust, OK=fire, KEY1=restart, KEY3=exit.
@@ -38,7 +38,8 @@ for pin in PINS.values():
 # ---------------------------------------------------------------------------
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-WIDTH, HEIGHT = 128, 128
+WIDTH, HEIGHT = LCD.width, LCD.height
+_GAME_W, _GAME_H = 128, 128
 font = ImageFont.load_default()
 
 # ---------------------------------------------------------------------------
@@ -109,9 +110,9 @@ def spawn_initial_asteroids(count):
     asteroids = []
     for _ in range(count):
         while True:
-            x = random.uniform(0, WIDTH)
-            y = random.uniform(0, HEIGHT)
-            dist = math.hypot(x - WIDTH / 2, y - HEIGHT / 2)
+            x = random.uniform(0, _GAME_W)
+            y = random.uniform(0, _GAME_H)
+            dist = math.hypot(x - _GAME_W / 2, y - _GAME_H / 2)
             if dist > 40:
                 break
         asteroids.append(spawn_asteroid(x, y, 12))
@@ -123,7 +124,7 @@ def spawn_initial_asteroids(count):
 # ---------------------------------------------------------------------------
 def wrap(x, y):
     """Wrap coordinates toroidally."""
-    return x % WIDTH, y % HEIGHT
+    return x % _GAME_W, y % _GAME_H
 
 
 def ship_polygon(x, y, angle):
@@ -145,7 +146,7 @@ def asteroid_polygon(ast):
 # ---------------------------------------------------------------------------
 def draw_frame(ship, asteroids, bullets, score, lives, level, invuln_timer):
     """Render one frame and push to LCD."""
-    img = Image.new("RGB", (WIDTH, HEIGHT), COL_BG)
+    img = Image.new("RGB", (_GAME_W, _GAME_H), COL_BG)
     d = ImageDraw.Draw(img)
 
     # Asteroids
@@ -172,25 +173,29 @@ def draw_frame(ship, asteroids, bullets, score, lives, level, invuln_timer):
     d.text((50, 2), f"L:{level}", font=font, fill=COL_TEXT)
     # Lives as small triangles
     for i in range(lives):
-        lx = WIDTH - 12 - i * 10
+        lx = _GAME_W - 12 - i * 10
         ly = 7
         tri = [(lx, ly - 4), (lx - 3, ly + 3), (lx + 3, ly + 3)]
         d.polygon(tri, outline=COL_DIM)
 
+    if _GAME_W != WIDTH or _GAME_H != HEIGHT:
+        img = img.resize((WIDTH, HEIGHT), Image.NEAREST)
     LCD.LCD_ShowImage(img, 0, 0)
 
 
 def draw_message(line1, line2=""):
     """Show a centered message screen."""
-    img = Image.new("RGB", (WIDTH, HEIGHT), COL_BG)
+    img = Image.new("RGB", (_GAME_W, _GAME_H), COL_BG)
     d = ImageDraw.Draw(img)
     bbox1 = d.textbbox((0, 0), line1, font=font)
     w1 = bbox1[2] - bbox1[0]
-    d.text(((WIDTH - w1) // 2, HEIGHT // 2 - 14), line1, font=font, fill=COL_TEXT)
+    d.text(((_GAME_W - w1) // 2, _GAME_H // 2 - 14), line1, font=font, fill=COL_TEXT)
     if line2:
         bbox2 = d.textbbox((0, 0), line2, font=font)
         w2 = bbox2[2] - bbox2[0]
-        d.text(((WIDTH - w2) // 2, HEIGHT // 2 + 2), line2, font=font, fill=COL_DIM)
+        d.text(((_GAME_W - w2) // 2, _GAME_H // 2 + 2), line2, font=font, fill=COL_DIM)
+    if _GAME_W != WIDTH or _GAME_H != HEIGHT:
+        img = img.resize((WIDTH, HEIGHT), Image.NEAREST)
     LCD.LCD_ShowImage(img, 0, 0)
 
 
@@ -199,7 +204,7 @@ def draw_message(line1, line2=""):
 # ---------------------------------------------------------------------------
 def new_ship():
     """Create a fresh ship at center."""
-    return {"x": WIDTH / 2, "y": HEIGHT / 2, "vx": 0, "vy": 0, "angle": -math.pi / 2}
+    return {"x": _GAME_W / 2, "y": _GAME_H / 2, "vx": 0, "vy": 0, "angle": -math.pi / 2}
 
 
 def score_for_radius(radius):

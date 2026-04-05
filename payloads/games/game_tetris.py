@@ -23,7 +23,8 @@ from PIL import Image, ImageDraw, ImageFont  # type: ignore
 # Shared input helper (WebUI virtual + GPIO)
 from payloads._input_helper import get_button
 
-WIDTH, HEIGHT = 128, 128
+WIDTH, HEIGHT = LCD_1in44.LCD_WIDTH, LCD_1in44.LCD_HEIGHT
+_GAME_W, _GAME_H = 128, 128
 KEY_UP = 6
 KEY_DOWN = 19
 KEY_LEFT = 5
@@ -113,7 +114,7 @@ def clear_lines(board):
 
 
 def draw(lcd, board, shape, sx, sy, color, score):
-    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+    img = Image.new("RGB", (_GAME_W, _GAME_H), "black")
     d = ImageDraw.Draw(img)
     font = ImageFont.load_default()
 
@@ -137,9 +138,11 @@ def draw(lcd, board, shape, sx, sy, color, score):
             if v:
                 x0 = OX + (sx + c) * CELL
                 y0 = OY + (sy + r) * CELL
-                if y0 >= OY and y0 <= HEIGHT - CELL:
+                if y0 >= OY and y0 <= _GAME_H - CELL:
                     d.rectangle((x0, y0, x0 + CELL - 1, y0 + CELL - 1), fill=color)
 
+    if _GAME_W != WIDTH or _GAME_H != HEIGHT:
+        img = img.resize((WIDTH, HEIGHT), Image.NEAREST)
     lcd.LCD_ShowImage(img, 0, 0)
 
 
@@ -209,12 +212,14 @@ def main():
                     sx, sy = 3, -2
                     if not can_place(board, shape, sx, sy):
                         # Game over
-                        img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+                        img = Image.new("RGB", (_GAME_W, _GAME_H), "black")
                         d = ImageDraw.Draw(img)
                         font = ImageFont.load_default()
                         d.text((20, 45), "GAME OVER", font=font, fill="white")
                         d.text((12, 62), "KEY1=Restart", font=font, fill="white")
                         d.text((20, 78), "KEY3=Exit", font=font, fill="white")
+                        if _GAME_W != WIDTH or _GAME_H != HEIGHT:
+                            img = img.resize((WIDTH, HEIGHT), Image.NEAREST)
                         lcd.LCD_ShowImage(img, 0, 0)
                         while True:
                             btn = get_button({"KEY1": KEY1, "KEY3": KEY3}, GPIO)

@@ -36,6 +36,7 @@ import RPi.GPIO as GPIO
 import LCD_1in44
 import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
+from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
 
 PINS = {
@@ -48,8 +49,8 @@ for pin in PINS.values():
 
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-WIDTH, HEIGHT = 128, 128
-font = ImageFont.load_default()
+WIDTH, HEIGHT = LCD.width, LCD.height
+font = scaled_font()
 
 LOOT_ROOT = "/root/Raspyjack/loot"
 WEBHOOK_FILE = "/root/Raspyjack/discord_webhook.txt"
@@ -232,7 +233,7 @@ def _draw_footer(d, hint):
 
 def _draw_overview(lcd, snap):
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
     _draw_header(d, "Overview")
 
     y = 16
@@ -256,7 +257,7 @@ def _draw_overview(lcd, snap):
 
 def _draw_payloads(lcd, snap, scroll, cursor):
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
     _draw_header(d, "Payloads")
 
     plist = snap.payloads
@@ -279,7 +280,7 @@ def _draw_payloads(lcd, snap, scroll, cursor):
 
 def _draw_loot(lcd, snap, scroll):
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
     _draw_header(d, "Loot")
 
     items = list(snap.loot_stats.items())
@@ -301,7 +302,7 @@ def _draw_loot(lcd, snap, scroll):
 
 def _draw_network(lcd, snap, scroll):
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
     _draw_header(d, "Network")
 
     ifaces = snap.interfaces

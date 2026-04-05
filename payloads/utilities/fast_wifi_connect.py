@@ -10,13 +10,14 @@ import os
 import sys
 import subprocess
 import time
+from payloads._display_helper import ScaledDraw, scaled_font
 
 # Ensure RaspyJack modules are importable when launched directly
 sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..", "..")))
 
 LCD_OK = False
 LCD = None
-WIDTH, HEIGHT = 128, 128
+WIDTH, HEIGHT = LCD.width, LCD.height
 font = None
 
 
@@ -30,7 +31,7 @@ def _init_lcd():
         LCD = LCD_1in44.LCD()
         LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
         LCD.LCD_Clear()
-        font = ImageFont.load_default()
+        font = scaled_font()
         LCD_OK = True
     except Exception:
         LCD_OK = False
@@ -43,9 +44,10 @@ def _show(lines, progress=None):
         return
     try:
         from PIL import Image, ImageDraw  # type: ignore
+        from payloads._display_helper import ScaledDraw, scaled_font
 
         img = Image.new("RGB", (WIDTH, HEIGHT), "BLACK")
-        draw = ImageDraw.Draw(img)
+        draw = ScaledDraw(img)
         y = 5
         for line in lines:
             if line:

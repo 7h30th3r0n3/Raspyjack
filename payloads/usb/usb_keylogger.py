@@ -37,6 +37,7 @@ sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..", "..")))
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
+from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
 
 PINS = {
@@ -49,8 +50,8 @@ for pin in PINS.values():
 
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-WIDTH, HEIGHT = 128, 128
-font = ImageFont.load_default()
+WIDTH, HEIGHT = LCD.width, LCD.height
+font = scaled_font()
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -498,7 +499,7 @@ def _uptime_str():
 def _draw_main_view():
     """Render main logging status to LCD."""
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
 
     # Header
     d.rectangle((0, 0, 127, 13), fill="#111")
@@ -542,7 +543,7 @@ def _draw_main_view():
 def _draw_history_view():
     """Render last 50 keystrokes scrollable list."""
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
 
     d.rectangle((0, 0, 127, 13), fill="#111")
     d.text((2, 1), "KEY HISTORY", font=font, fill="#00CCFF")
@@ -591,7 +592,7 @@ def main():
 
     # Splash
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
     d.text((8, 16), "USB KEYLOGGER", font=font, fill="#FF4444")
     d.text((4, 36), "Transparent HID proxy", font=font, fill="#888")
     d.text((4, 48), "Keyboard -> Pi -> Target", font=font, fill="#888")

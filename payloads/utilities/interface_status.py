@@ -16,11 +16,12 @@ sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..", "..")))
 import RPi.GPIO as GPIO  # type: ignore
 import LCD_1in44, LCD_Config  # type: ignore
 from PIL import Image, ImageDraw, ImageFont  # type: ignore
+from payloads._display_helper import ScaledDraw, scaled_font
 
 # Shared input helper (WebUI virtual + GPIO)
 from payloads._input_helper import get_button
 
-WIDTH, HEIGHT = 128, 128
+WIDTH, HEIGHT = LCD_1in44.LCD_WIDTH, LCD_1in44.LCD_HEIGHT
 KEY3 = 16
 REFRESH = 0.5
 
@@ -94,8 +95,8 @@ def _split_ip_lines(ip):
 
 def draw(lcd, left, right):
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
-    font = ImageFont.load_default()
+    d = ScaledDraw(img)
+    font = scaled_font()
 
     # Header
     d.rectangle((0, 0, 127, 12), fill="#1a1a1a")

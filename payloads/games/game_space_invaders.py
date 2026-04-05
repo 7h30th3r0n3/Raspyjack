@@ -4,7 +4,7 @@ RaspyJack Payload -- Space Invaders
 =====================================
 Author: 7h30th3r0n3
 
-Classic Space Invaders on 128x128 LCD with green/black theme.
+Classic Space Invaders on LCD with green/black theme.
 4 rows of 6 aliens, 3 destructible shields, 3 lives, score counter.
 
 Controls:
@@ -36,7 +36,8 @@ for pin in PINS.values():
 
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-WIDTH, HEIGHT = 128, 128
+WIDTH, HEIGHT = LCD.width, LCD.height
+_GAME_W, _GAME_H = 128, 128
 font = ImageFont.load_default()
 
 # ---------------------------------------------------------------------------
@@ -116,7 +117,7 @@ def _move_aliens(state):
     for alien in state["aliens"]:
         if alien["alive"]:
             nx = alien["x"] + dx * 2
-            if nx <= 0 or nx + ALIEN_W >= WIDTH:
+            if nx <= 0 or nx + ALIEN_W >= _GAME_W:
                 hit_edge = True
                 break
 
@@ -143,7 +144,7 @@ def _move_bullets(state):
     state["alien_bullets"] = [
         {"x": b["x"], "y": b["y"] + ALIEN_BULLET_SPEED}
         for b in state["alien_bullets"]
-        if b["y"] + ALIEN_BULLET_SPEED < HEIGHT
+        if b["y"] + ALIEN_BULLET_SPEED < _GAME_H
     ]
 
 
@@ -234,7 +235,7 @@ def _alien_shoot(state):
 
 def draw_game(state):
     """Render the full game frame."""
-    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+    img = Image.new("RGB", (_GAME_W, _GAME_H), "black")
     d = ImageDraw.Draw(img)
 
     d.rectangle((0, 0, 127, 11), fill="#001100")
@@ -280,6 +281,8 @@ def draw_game(state):
         d.text((15, 62), f"Score: {state['score']}", font=font, fill="#00FF00")
         d.text((12, 72), "K1:Restart K3:Exit", font=font, fill="#888")
 
+    if _GAME_W != WIDTH or _GAME_H != HEIGHT:
+        img = img.resize((WIDTH, HEIGHT), Image.NEAREST)
     LCD.LCD_ShowImage(img, 0, 0)
 
 
@@ -290,12 +293,14 @@ def draw_game(state):
 def main():
     state = _make_state()
 
-    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+    img = Image.new("RGB", (_GAME_W, _GAME_H), "black")
     d = ImageDraw.Draw(img)
     d.text((10, 25), "SPACE INVADERS", font=font, fill="#00FF00")
     d.text((10, 50), "L/R=Move  OK=Fire", font=font, fill="#006600")
     d.text((10, 62), "K1=Restart", font=font, fill="#006600")
     d.text((10, 74), "K3=Exit", font=font, fill="#006600")
+    if _GAME_W != WIDTH or _GAME_H != HEIGHT:
+        img = img.resize((WIDTH, HEIGHT), Image.NEAREST)
     LCD.LCD_ShowImage(img, 0, 0)
     time.sleep(1.0)
 
@@ -322,7 +327,7 @@ def main():
             if btn == "LEFT":
                 state["ship_x"] = max(0, state["ship_x"] - 3)
             elif btn == "RIGHT":
-                state["ship_x"] = min(WIDTH - SHIP_W, state["ship_x"] + 3)
+                state["ship_x"] = min(_GAME_W - SHIP_W, state["ship_x"] + 3)
             elif btn == "OK" and fire_cooldown <= 0:
                 state["player_bullets"].append({
                     "x": state["ship_x"] + SHIP_W // 2,

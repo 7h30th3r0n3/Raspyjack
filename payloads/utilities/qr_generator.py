@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-RaspyJack Payload -- QR Code Generator (128x128 LCD)
+RaspyJack Payload -- QR Code Generator (LCD)
 =====================================================
 Author: 7h30th3r0n3
 
@@ -32,6 +32,7 @@ sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..", "..")))
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
+from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
 
 try:
@@ -49,17 +50,17 @@ for pin in PINS.values():
 
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-WIDTH, HEIGHT = 128, 128
-font = ImageFont.load_default()
+WIDTH, HEIGHT = LCD.width, LCD.height
+font = scaled_font()
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 MODES = ["WebUI", "Pi IP", "WiFi", "Custom"]
-QR_SIZE = 120
+QR_SIZE = WIDTH - 8
 QR_OFFSET_X = 4
 QR_OFFSET_Y = 2
-LABEL_Y = 118
+LABEL_Y = HEIGHT - 10
 
 # Characters for custom text input
 CHARSET = list(
@@ -76,7 +77,7 @@ lock = threading.Lock()
 mode_idx = 0
 inverted = False
 status_msg = ""
-qr_image = None         # current PIL Image of QR code (128x128)
+qr_image = None         # current PIL Image of QR code (LCD)
 
 # Custom text state
 custom_text = []         # list of characters
@@ -136,13 +137,13 @@ def _generate_qr(data):
 def _error_image(msg):
     """Create a small error placeholder image."""
     img = Image.new("RGB", (QR_SIZE, QR_SIZE), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
     d.text((4, QR_SIZE // 2 - 5), msg[:18], font=font, fill="#FF4444")
     return img
 
 
 def _compose_display(qr_img, label, is_inverted):
-    """Compose the final 128x128 display image with QR and label."""
+    """Compose the final LCD display image with QR and label."""
     if is_inverted:
         from PIL import ImageOps
         qr_img = ImageOps.invert(qr_img.convert("RGB"))
@@ -150,7 +151,7 @@ def _compose_display(qr_img, label, is_inverted):
     canvas = Image.new("RGB", (WIDTH, HEIGHT), "black")
     canvas.paste(qr_img, (QR_OFFSET_X, QR_OFFSET_Y))
 
-    d = ImageDraw.Draw(canvas)
+    d = ScaledDraw(canvas)
     truncated = label[:22] if len(label) > 22 else label
     d.text((2, LABEL_Y), truncated, font=font, fill="#888888")
 
@@ -220,7 +221,7 @@ def _draw_qr_view():
 def _draw_mode_select():
     """Show mode selection when no QR is displayed yet."""
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
 
     d.rectangle((0, 0, 127, 13), fill="#111")
     d.text((2, 1), "QR GENERATOR", font=font, fill="#00CCFF")
@@ -247,7 +248,7 @@ def _draw_mode_select():
 def _draw_custom_editor():
     """Show the custom text character editor."""
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
 
     d.rectangle((0, 0, 127, 13), fill="#111")
     d.text((2, 1), "CUSTOM TEXT", font=font, fill="#FFAA00")
@@ -291,7 +292,7 @@ def main():
 
     if qrcode is None:
         img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-        d = ImageDraw.Draw(img)
+        d = ScaledDraw(img)
         d.text((4, 50), "qrcode not installed", font=font, fill="#FF4444")
         d.text((4, 65), "pip3 install qrcode", font=font, fill="#888")
         LCD.LCD_ShowImage(img, 0, 0)
@@ -301,10 +302,10 @@ def main():
 
     # Splash
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
     d.text((8, 16), "QR GENERATOR", font=font, fill="#00CCFF")
     d.text((4, 36), "Generate QR codes", font=font, fill="#888")
-    d.text((4, 48), "for the 128x128 LCD", font=font, fill="#888")
+    d.text((4, 48), "for the LCD", font=font, fill="#888")
     d.text((4, 66), "L/R=Mode  OK=Generate", font=font, fill="#666")
     d.text((4, 78), "K1=Invert K3=Exit", font=font, fill="#666")
     LCD.LCD_ShowImage(img, 0, 0)

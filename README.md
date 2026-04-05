@@ -25,8 +25,9 @@ RaspyJack is for **authorized security testing, research, and education only**.
 
 ## ✨ What RaspyJack includes
 
-- LCD-driven handheld-style interface (Waveshare 1.44" HAT)
-- Payload categories (reconnaissance, interception, exfiltration, etc.)
+- LCD-driven handheld-style interface (Waveshare 1.44" or 1.3" HAT)
+- **Dual-display support** — 128x128 (ST7735) and 240x240 (ST7789)
+- **158 payloads** across 13 categories
 - Loot collection + browsing
 - WebUI remote control dashboard
 - Payload IDE (browser editor + run flow)
@@ -47,18 +48,18 @@ Check the WIKI for more ! https://github.com/7h30th3r0n3/Raspyjack/wiki
     <th>Buy</th>
   </tr>
   <tr>
-    <td><strong>Waveshare 1.44" LCD HAT (original bigger)</strong></td>
-    <td>SPI TFT 128x128 + joystick + 3 buttons</td>
+    <td><strong>Waveshare 1.44" LCD HAT</strong> (128x128)</td>
+    <td>SPI TFT ST7735 + joystick + 3 buttons</td>
     <td>
       <a href="https://s.click.aliexpress.com/e/_c3HTOQQn">Buy</a><br/>
       <a href="https://s.click.aliexpress.com/e/_EwDqSv4">Buy</a>
     </td>
   </tr>
   <tr>
-    <td><strong>Waveshare 1.3" LCD HAT</strong> (higher resolution but smaller)</td>
-    <td>SPI TFT ST7789 240x240 + joystick + 3 buttons</td>
+    <td><strong>Waveshare 1.3" LCD HAT</strong> (240x240)</td>
+    <td>SPI TFT ST7789 + joystick + 3 buttons</td>
     <td>
-      <a href="https://s.click.aliexpress.com/e/_c3j1Wy4N">Buy</a>
+      <a href="#">Buy (affiliate link TODO)</a>
     </td>
   </tr>
   <tr>
@@ -225,35 +226,122 @@ This validates syntax for:
 
 ---
 
-## 📦 Project layout (high-level)
+## 🖥️ Dual-Display Support
+
+RaspyJack supports two LCD screens from the same codebase. The installer asks which screen you have.
+
+| Display | Chip | Resolution | Config value |
+|---------|------|------------|--------------|
+| 1.44" (original) | ST7735S | 128x128 | `ST7735_128` |
+| 1.3" | ST7789 | 240x240 | `ST7789_240` |
+
+To switch screens, change `"type"` in `gui_conf.json` and reboot:
+```json
+"DISPLAY": { "type": "ST7789_240" }
+```
+
+---
+
+## 🧩 Creating a Payload
+
+1. Copy `payloads/examples/_payload_template.py` into the appropriate category folder
+2. Use `ScaledDraw` and `scaled_font()` so it works on both screens
+3. Keep `KEY3` as exit button
+4. Add an icon in `menu_icons.json`
+
+### Minimal template
+
+```python
+#!/usr/bin/env python3
+import os, sys, time
+sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..', '..')))
+
+import RPi.GPIO as GPIO
+import LCD_1in44, LCD_Config
+from PIL import Image, ImageDraw, ImageFont
+from payloads._display_helper import ScaledDraw, scaled_font
+from payloads._input_helper import get_button
+
+PINS = {"UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
+        "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16}
+GPIO.setmode(GPIO.BCM)
+for pin in PINS.values():
+    GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+
+LCD = LCD_1in44.LCD()
+LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
+WIDTH, HEIGHT = LCD.width, LCD.height
+font = scaled_font()
+
+try:
+    while True:
+        btn = get_button(PINS, GPIO)
+        if btn == "KEY3":
+            break
+        img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+        d = ScaledDraw(img)
+        d.text((6, 6), "Hello Payload", font=font, fill="#00FF00")
+        LCD.LCD_ShowImage(img, 0, 0)
+        time.sleep(0.05)
+finally:
+    LCD.LCD_Clear()
+    GPIO.cleanup()
+```
+
+### Adding an icon
+
+Edit `menu_icons.json` and add your payload name in the `payloads` section:
+
+```json
+"payloads": {
+    " my_payload": "\uf002",
+}
+```
+
+Icons are FontAwesome 6 Solid. Browse available icons at https://fontawesome.com/v6/search?o=r&s=solid
+
+### Display rules
+
+- **UI/tool payloads**: Use `ScaledDraw` with 128-base coordinates (0-127). Never use `WIDTH`/`HEIGHT` in draw calls.
+- **Game payloads**: Render at 128x128 with regular `ImageDraw.Draw`, then resize to `(WIDTH, HEIGHT)` before showing.
+
+---
+
+## 📦 Project layout
 
 ```text
 Raspyjack/
-├── raspyjack.py
-├── web_server.py
-├── device_server.py
-├── rj_input.py
-├── web/
-│   ├── index.html
-│   ├── app.js
-│   ├── ide.html
-│   ├── ide.js
-│   ├── shared.js
-│   ├── ui.css
-│   ├── device-shell.css
-│   └── README.md
+├── raspyjack.py          # Main UI engine
+├── gui_conf.json          # Display type, colors, pins, lock
+├── menu_icons.json        # FontAwesome icons for menus
+├── LCD_1in44.py           # LCD driver (ST7735 + ST7789)
+├── LCD_Config.py          # SPI/GPIO config
+├── web_server.py          # WebUI HTTP server
+├── device_server.py       # WebSocket device server
+├── rj_input.py            # Input handler
+├── install_raspyjack.sh   # Installer
+├── web/                   # WebUI frontend
 ├── payloads/
-│   ├── reconnaissance/
-│   ├── interception/
-│   ├── exfiltration/
-│   ├── remote_access/
-│   ├── general/
-│   ├── games/
-│   └── examples/
-├── loot/
+│   ├── _display_helper.py # ScaledDraw + scaled_font
+│   ├── _input_helper.py   # GPIO + WebUI input
+│   ├── reconnaissance/    # 28 payloads
+│   ├── wifi/              # 13 payloads
+│   ├── network/           # 30 payloads
+│   ├── credentials/       # 9 payloads
+│   ├── bluetooth/         # 7 payloads
+│   ├── usb/               # 6 payloads
+│   ├── exfiltration/      # 9 payloads
+│   ├── evasion/           # 6 payloads
+│   ├── remote_access/     # 6 payloads
+│   ├── utilities/         # 21 payloads
+│   ├── hardware/          # 5 payloads
+│   ├── games/             # 16 payloads
+│   └── examples/          # 2 payloads
+├── loot/                  # Captured data
+├── config/                # Payload configs
 ├── DNSSpoof/
 ├── Responder/
-└── wifi/
+└── wifi/                  # WiFi manager
 ```
 
 ---

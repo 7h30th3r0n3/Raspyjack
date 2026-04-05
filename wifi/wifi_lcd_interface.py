@@ -44,7 +44,7 @@ class WiFiLCDInterface:
         # LCD setup
         self.LCD = LCD_1in44.LCD()
         self.LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-        self.canvas = Image.new("RGB", (128, 128), "black")
+        self.canvas = Image.new("RGB", (self.LCD.width, self.LCD.height), "black")
         self.draw = ImageDraw.Draw(self.canvas)
         self.font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 8)
         
@@ -103,7 +103,7 @@ class WiFiLCDInterface:
     
     def draw_header(self, title):
         """Draw menu header."""
-        self.canvas.paste(Image.new("RGB", (128, 128), "black"))
+        self.canvas.paste(Image.new("RGB", (self.LCD.width, self.LCD.height), "black"))
         self.draw.text((2, 0), title[:18], fill="yellow", font=self.font)
         self.draw.line([(0, 12), (128, 12)], fill="blue", width=1)
     
@@ -470,7 +470,7 @@ class WiFiLCDInterface:
     
     def show_message(self, message, duration=2):
         """Show a temporary message."""
-        self.canvas.paste(Image.new("RGB", (128, 128), "black"))
+        self.canvas.paste(Image.new("RGB", (self.LCD.width, self.LCD.height), "black"))
         self.draw.text((4, 50), message[:16], fill="yellow", font=self.font)
         self.LCD.LCD_ShowImage(self.canvas, 0, 0)
         time.sleep(duration)

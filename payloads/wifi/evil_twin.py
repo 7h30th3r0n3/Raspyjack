@@ -49,6 +49,7 @@ sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..", "..")))
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
+from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
 
 PINS = {
@@ -61,8 +62,8 @@ for pin in PINS.values():
 
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-WIDTH, HEIGHT = 128, 128
-font = ImageFont.load_default()
+WIDTH, HEIGHT = LCD.width, LCD.height
+font = scaled_font()
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -597,7 +598,7 @@ def _draw_footer(d, text):
 def draw_scan_view():
     """Draw AP scan results."""
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
     _draw_header(d, "EVIL TWIN")
 
     with lock:
@@ -630,7 +631,7 @@ def draw_scan_view():
 def draw_attack_view():
     """Draw attack status."""
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
     _draw_header(d, "EVIL TWIN")
 
     with lock:
@@ -662,7 +663,7 @@ def draw_attack_view():
 def draw_creds_view():
     """Draw captured credentials."""
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
     _draw_header(d, "CAPTURED CREDS")
 
     with lock:
@@ -696,7 +697,7 @@ def main():
 
     # Splash
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
     d.text((10, 16), "EVIL TWIN AP", font=font, fill="#FF4444")
     d.text((4, 36), "Clone APs & capture", font=font, fill="#888")
     d.text((4, 48), "credentials via portal", font=font, fill="#888")

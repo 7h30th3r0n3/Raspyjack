@@ -31,6 +31,7 @@ sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..', '..')))
 import RPi.GPIO as GPIO               # Raspberry Pi GPIO access
 import LCD_1in44                      # Waveshare LCD driver
 from PIL import Image, ImageDraw, ImageFont  # Pillow – draw text
+from payloads._display_helper import ScaledDraw, scaled_font
 
 # Shared input helper (WebUI virtual + GPIO)
 from payloads._input_helper import get_button
@@ -58,9 +59,9 @@ for pin in PINS.values():
 
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-WIDTH, HEIGHT = 128, 128
-FONT = ImageFont.load_default()
-FONT_BIG = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 14)
+WIDTH, HEIGHT = LCD.width, LCD.height
+FONT = scaled_font()
+FONT_BIG = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", int(14 * LCD_1in44.LCD_SCALE))
 
 # ---------------------------------------------------------------------------
 # 3) Tiny UI helpers
@@ -69,7 +70,7 @@ FONT_BIG = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
 def draw(lines: List[str]) -> None:
     """Clear the LCD and write *lines* (≤5)."""
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
     y = 4
     for ln in lines[:5]:
         bbox = d.textbbox((0, 0), ln, font=FONT)

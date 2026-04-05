@@ -36,6 +36,7 @@ import RPi.GPIO as GPIO
 import LCD_1in44
 import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
+from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
 
 # ---------------------------------------------------------------------------
@@ -45,7 +46,7 @@ PINS = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
     "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16,
 }
-WIDTH, HEIGHT = 128, 128
+WIDTH, HEIGHT = LCD_1in44.LCD_WIDTH, LCD_1in44.LCD_HEIGHT
 ROWS_VISIBLE = 5
 ROW_H = 12
 
@@ -230,7 +231,7 @@ def _draw_frame(lcd, font_obj):
 
     bg_color = "#330000" if is_flashing else "black"
     img = Image.new("RGB", (WIDTH, HEIGHT), bg_color)
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
 
     # Header
     header_color = "#FF0000" if armed else "#111"
@@ -296,7 +297,7 @@ def main():
     lcd = LCD_1in44.LCD()
     lcd.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
     lcd.LCD_Clear()
-    font_obj = ImageFont.load_default()
+    font_obj = scaled_font()
 
     _load_config()
 

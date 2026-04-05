@@ -29,6 +29,7 @@ import csv
 import socket
 from datetime import datetime
 from pathlib import Path
+from payloads._display_helper import ScaledDraw, scaled_font
 
 # Add RaspyJack modules to path
 sys.path.append('/root/Raspyjack/wifi/')
@@ -37,6 +38,7 @@ sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..', '..')))  # Ad
 try:
     import LCD_1in44, LCD_Config
     from PIL import Image, ImageDraw, ImageFont
+    from payloads._display_helper import ScaledDraw, scaled_font
     import RPi.GPIO as GPIO
     from payloads._input_helper import get_button
     LCD_AVAILABLE = True
@@ -175,10 +177,10 @@ class WardrivingScanner:
             self.LCD.LCD_Clear()
             self.log("LCD cleared - this should fix white screen issue")
             
-            self.WIDTH, self.HEIGHT = 128, 128
+            self.WIDTH, self.HEIGHT = self.LCD.width, self.LCD.height
             self.log(f"LCD dimensions set: {self.WIDTH}x{self.HEIGHT}")
-            
-            self.font = ImageFont.load_default()
+
+            self.font = scaled_font()
             self.log("Default font loaded")
             
             self.lcd_ready = True
@@ -199,20 +201,10 @@ class WardrivingScanner:
             
             # EXACT COPY of example_show_buttons.py draw() function
             img = Image.new("RGB", (self.WIDTH, self.HEIGHT), "black")
-            d = ImageDraw.Draw(img)
+            d = ScaledDraw(img)
 
-            # Measure text size (Pillow ≥ 9.2 offers textbbox())
-            if hasattr(d, "textbbox"):
-                x0, y0, x1, y1 = d.textbbox((0, 0), text, font=self.font)
-                w, h = x1 - x0, y1 - y0
-            else:  # Pillow < 9.2 fallback
-                w, h = d.textsize(text, font=self.font)
-
-            # Centre coordinates
-            pos = ((self.WIDTH - w) // 2, (self.HEIGHT - h) // 2)
-
-            # Draw the text and push the image to the LCD
-            d.text(pos, text, font=self.font, fill="#00FF00")
+            # Draw centred text
+            d.text((64, 64), text, font=self.font, fill="#00FF00", anchor="mm")
             self.LCD.LCD_ShowImage(img, 0, 0)
             self.log("LCD draw completed successfully")
             
@@ -1142,26 +1134,16 @@ class WardrivingScanner:
             
             # EXACT COPY of example_show_buttons.py draw() function
             img = Image.new("RGB", (self.WIDTH, self.HEIGHT), "black")
-            d = ImageDraw.Draw(img)
+            d = ScaledDraw(img)
             
             # Display multiple lines
             y = 2
             for i, line in enumerate(lines):
-                if y > self.HEIGHT - 15:  # Don't overflow
+                if y > 113:  # Don't overflow (128 - 15)
                     break
                 
-                # Measure text size (EXACT from example_show_buttons.py)
-                if hasattr(d, "textbbox"):
-                    x0, y0, x1, y1 = d.textbbox((0, 0), line, font=self.font)
-                    w, h = x1 - x0, y1 - y0
-                else:  # Pillow < 9.2 fallback
-                    w, h = d.textsize(line, font=self.font)
-                
-                # Centre coordinates (EXACT from example_show_buttons.py)
-                x = (self.WIDTH - w) // 2
-                
-                # Draw the text (EXACT from example_show_buttons.py)
-                d.text((x, y), line, font=self.font, fill="#00FF00")
+                # Draw centred text
+                d.text((64, y), line, font=self.font, fill="#00FF00", anchor="mm")
                 y += 12
             
             # Push image to LCD (EXACT from example_show_buttons.py)

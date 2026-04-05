@@ -23,12 +23,13 @@ sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..", "..")))
 import RPi.GPIO as GPIO  # type: ignore
 import LCD_1in44, LCD_Config  # type: ignore
 from PIL import Image, ImageDraw, ImageFont  # type: ignore
+from payloads._display_helper import ScaledDraw, scaled_font
 
 # Shared input helper (WebUI virtual + GPIO)
 from payloads._input_helper import get_button
 
 KEY3_PIN = 16
-WIDTH, HEIGHT = 128, 128
+WIDTH, HEIGHT = LCD_1in44.LCD_WIDTH, LCD_1in44.LCD_HEIGHT
 BRIDGE = "br0"
 REFRESH_SEC = 1.0
 
@@ -111,8 +112,8 @@ def lcd_init():
 
 def draw_lines(lcd, lines, color="white", bg="black", line_height=14, y_start=5):
     img = Image.new("RGB", (WIDTH, HEIGHT), bg)
-    d = ImageDraw.Draw(img)
-    font = ImageFont.load_default()
+    d = ScaledDraw(img)
+    font = scaled_font()
     y = y_start
     for line in lines:
         if line:
@@ -126,8 +127,8 @@ def draw_stats(lcd, if1, if2):
         counts = {k: proto_counts[k] for k in PROTO_LIST}
 
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
-    font = ImageFont.load_default()
+    d = ScaledDraw(img)
+    font = scaled_font()
 
     # Header
     d.rectangle((0, 0, 127, 14), fill="#1a1a1a")

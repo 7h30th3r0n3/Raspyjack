@@ -4,7 +4,7 @@ RaspyJack payload -- Sokoban
 ============================
 Author: 7h30th3r0n3
 
-Classic Sokoban puzzle game on 128x128 LCD. Push boxes onto targets.
+Classic Sokoban puzzle game on LCD. Push boxes onto targets.
 10 built-in levels of increasing difficulty.
 
 Controls: D-pad=move, OK=undo, KEY1=restart level, KEY2=skip level, KEY3=exit.
@@ -37,7 +37,8 @@ for pin in PINS.values():
 # ---------------------------------------------------------------------------
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-WIDTH, HEIGHT = 128, 128
+WIDTH, HEIGHT = LCD.width, LCD.height
+_GAME_W, _GAME_H = 128, 128
 font = ImageFont.load_default()
 
 # ---------------------------------------------------------------------------
@@ -219,13 +220,13 @@ def pop_history(history):
 def draw_level(walls, boxes, targets, player, rows, cols, level_num, moves):
     """Render the Sokoban grid and HUD."""
     # Calculate cell size and offset to center the grid
-    cell_w = min(10, (WIDTH - 4) // cols)
-    cell_h = min(10, (HEIGHT - 16) // rows)
+    cell_w = min(10, (_GAME_W - 4) // cols)
+    cell_h = min(10, (_GAME_H - 16) // rows)
     cell = min(cell_w, cell_h)
-    ox = (WIDTH - cols * cell) // 2
-    oy = 14 + (HEIGHT - 14 - rows * cell) // 2
+    ox = (_GAME_W - cols * cell) // 2
+    oy = 14 + (_GAME_H - 14 - rows * cell) // 2
 
-    img = Image.new("RGB", (WIDTH, HEIGHT), COL_BG)
+    img = Image.new("RGB", (_GAME_W, _GAME_H), COL_BG)
     d = ImageDraw.Draw(img)
 
     # HUD
@@ -263,20 +264,24 @@ def draw_level(walls, boxes, targets, player, rows, cols, level_num, moves):
                 if pos == player:
                     d.rectangle([x1 + 1, y1 + 1, x2 - 1, y2 - 1], fill=COL_PLAYER)
 
+    if _GAME_W != WIDTH or _GAME_H != HEIGHT:
+        img = img.resize((WIDTH, HEIGHT), Image.NEAREST)
     LCD.LCD_ShowImage(img, 0, 0)
 
 
 def draw_message(line1, line2=""):
     """Show a centered message."""
-    img = Image.new("RGB", (WIDTH, HEIGHT), COL_BG)
+    img = Image.new("RGB", (_GAME_W, _GAME_H), COL_BG)
     d = ImageDraw.Draw(img)
     bbox1 = d.textbbox((0, 0), line1, font=font)
     w1 = bbox1[2] - bbox1[0]
-    d.text(((WIDTH - w1) // 2, HEIGHT // 2 - 14), line1, font=font, fill=COL_TEXT)
+    d.text(((_GAME_W - w1) // 2, _GAME_H // 2 - 14), line1, font=font, fill=COL_TEXT)
     if line2:
         bbox2 = d.textbbox((0, 0), line2, font=font)
         w2 = bbox2[2] - bbox2[0]
-        d.text(((WIDTH - w2) // 2, HEIGHT // 2 + 2), line2, font=font, fill=COL_DIM)
+        d.text(((_GAME_W - w2) // 2, _GAME_H // 2 + 2), line2, font=font, fill=COL_DIM)
+    if _GAME_W != WIDTH or _GAME_H != HEIGHT:
+        img = img.resize((WIDTH, HEIGHT), Image.NEAREST)
     LCD.LCD_ShowImage(img, 0, 0)
 
 
@@ -287,12 +292,14 @@ def win_animation():
     """Flash a congratulations screen."""
     for i in range(6):
         col = COL_TEXT if i % 2 == 0 else COL_BG
-        img = Image.new("RGB", (WIDTH, HEIGHT), COL_BG)
+        img = Image.new("RGB", (_GAME_W, _GAME_H), COL_BG)
         d = ImageDraw.Draw(img)
         txt = "COMPLETE!"
         bbox = d.textbbox((0, 0), txt, font=font)
         w = bbox[2] - bbox[0]
-        d.text(((WIDTH - w) // 2, HEIGHT // 2 - 6), txt, font=font, fill=col)
+        d.text(((_GAME_W - w) // 2, _GAME_H // 2 - 6), txt, font=font, fill=col)
+        if _GAME_W != WIDTH or _GAME_H != HEIGHT:
+            img = img.resize((WIDTH, HEIGHT), Image.NEAREST)
         LCD.LCD_ShowImage(img, 0, 0)
         time.sleep(0.3)
 

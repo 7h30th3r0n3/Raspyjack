@@ -25,6 +25,7 @@ import RPi.GPIO as GPIO
 import LCD_1in44
 import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
+from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
 
 PINS = {
@@ -37,8 +38,8 @@ for pin in PINS.values():
 
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-WIDTH, HEIGHT = 128, 128
-font = ImageFont.load_default()
+WIDTH, HEIGHT = LCD.width, LCD.height
+font = scaled_font()
 
 LOOT_ROOT = "/root/Raspyjack/loot"
 DEBOUNCE = 0.25
@@ -128,7 +129,7 @@ def _file_type_label(path):
 def _draw_browser(lcd, cwd, entries, cursor, scroll_offset, status=""):
     """Draw file browser UI."""
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
 
     rel_path = cwd.replace(LOOT_ROOT, "loot") if cwd.startswith(LOOT_ROOT) else cwd
     if len(rel_path) > 16:
@@ -179,7 +180,7 @@ def _draw_browser(lcd, cwd, entries, cursor, scroll_offset, status=""):
 def _draw_preview(lcd, path, lines):
     """Draw a file preview screen."""
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
 
     name = os.path.basename(path)
     if len(name) > 18:
@@ -200,7 +201,7 @@ def _draw_preview(lcd, path, lines):
 def _draw_confirm(lcd, filename):
     """Draw delete confirmation dialog."""
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
 
     d.text((10, 30), "Delete file?", font=font, fill="#ff4444")
     name = filename[:18]
@@ -214,7 +215,7 @@ def _draw_confirm(lcd, filename):
 def _draw_stats(lcd, path, file_count, total_size):
     """Draw stats overlay."""
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
 
     d.text((10, 20), "Loot Stats", font=font, fill="#00ff00")
     d.text((10, 40), f"Files: {file_count}", font=font, fill="white")

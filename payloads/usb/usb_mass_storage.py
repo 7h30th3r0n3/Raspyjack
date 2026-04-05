@@ -35,6 +35,7 @@ import RPi.GPIO as GPIO
 import LCD_1in44
 import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
+from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
 
 # ---------------------------------------------------------------------------
@@ -44,7 +45,7 @@ PINS = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
     "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16,
 }
-WIDTH, HEIGHT = 128, 128
+WIDTH, HEIGHT = LCD_1in44.LCD_WIDTH, LCD_1in44.LCD_HEIGHT
 
 GADGET_NAME = "raspyjack_usb"
 CONFIGFS_BASE = "/sys/kernel/config/usb_gadget"
@@ -310,7 +311,7 @@ def _monitor_thread():
 def _draw_frame(lcd, font_obj):
     """Render current state to the LCD."""
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
 
     # Header
     d.rectangle((0, 0, 127, 13), fill="#111")
@@ -369,12 +370,12 @@ def main():
     lcd = LCD_1in44.LCD()
     lcd.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
     lcd.LCD_Clear()
-    font_obj = ImageFont.load_default()
+    font_obj = scaled_font()
 
     # Check for configfs
     if not os.path.isdir(CONFIGFS_BASE):
         img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-        d = ImageDraw.Draw(img)
+        d = ScaledDraw(img)
         d.text((4, 40), "configfs not found", font=font_obj, fill="#FF0000")
         d.text((4, 55), "modprobe libcomposite", font=font_obj, fill="#888")
         lcd.LCD_ShowImage(img, 0, 0)

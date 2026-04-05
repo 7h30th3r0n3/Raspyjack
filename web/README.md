@@ -8,22 +8,22 @@ It streams LCD frames to the browser and forwards button input back to the devic
   - `web/index.html`
   - `web/app.js`
   - `web/raspyjack.png`
-- `payloads/general/webui.py` (on-device controller that starts/stops the WebUI stack)
+- `payloads/utilities/webui.py` (on-device controller that starts/stops the WebUI stack)
 - `device_server.py` (WebSocket server for frames + input)
 - `web_server.py` (static WebUI + read-only loot API)
 - `rj_input.py` (virtual input bridge for browser controls)
-- `LCD_1in44.py` and `LCD_Config.py` (LCD driver used by `payloads/general/webui.py`)
+- `LCD_1in44.py` and `LCD_Config.py` (LCD driver used by `payloads/utilities/webui.py`)
 
 ## Dependencies (install script)
 These are the WebUI-relevant packages in `install_raspyjack.sh`:
 - `python3-websockets` (WebSocket server dependency for `device_server.py`)
-- `python3-pil` (Pillow for LCD rendering in `payloads/general/webui.py`)
-- `python3-rpi.gpio` (GPIO input in `payloads/general/webui.py`)
+- `python3-pil` (Pillow for LCD rendering in `payloads/utilities/webui.py`)
+- `python3-rpi.gpio` (GPIO input in `payloads/utilities/webui.py`)
 - `fonts-dejavu-core` (font files used by the on-device UI)
 - `procps` (provides `pkill`, used to stop the WebUI processes)
 
 ## How it runs
-`payloads/general/webui.py` launches:
+`payloads/utilities/webui.py` launches:
 - `device_server.py` (WebSocket server on port `8765`)
 - `web_server.py` (static frontend + loot API) on port `8080`
 

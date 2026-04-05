@@ -4,7 +4,7 @@ RaspyJack Payload -- Pong Game
 -------------------------------
 Author: 7h30th3r0n3
 
-Classic Pong on the 128x128 LCD. Green-on-black theme.
+Classic Pong on the LCD. Green-on-black theme.
 
 Controls:
   UP/DOWN  = move player paddle
@@ -36,7 +36,8 @@ for pin in PINS.values():
 
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-WIDTH, HEIGHT = 128, 128
+WIDTH, HEIGHT = LCD.width, LCD.height
+_GAME_W, _GAME_H = 128, 128
 font = ImageFont.load_default()
 
 # Colors (green theme)
@@ -64,10 +65,10 @@ FRAME_DELAY = 1.0 / FPS
 def _create_initial_state():
     """Create a fresh game state dict."""
     return {
-        "player_y": HEIGHT // 2 - PADDLE_H // 2,
-        "ai_y": HEIGHT // 2 - PADDLE_H // 2,
-        "ball_x": float(WIDTH // 2),
-        "ball_y": float(HEIGHT // 2),
+        "player_y": _GAME_H // 2 - PADDLE_H // 2,
+        "ai_y": _GAME_H // 2 - PADDLE_H // 2,
+        "ball_x": float(_GAME_W // 2),
+        "ball_y": float(_GAME_H // 2),
         "ball_dx": INITIAL_BALL_SPEED * random.choice([-1, 1]),
         "ball_dy": INITIAL_BALL_SPEED * random.choice([-0.7, 0.7]),
         "player_score": 0,
@@ -95,8 +96,8 @@ def _update_ball(state):
     if new_by <= 12:
         new_by = 12.0
         new_dy = abs(new_dy)
-    elif new_by + BALL_SIZE >= HEIGHT:
-        new_by = float(HEIGHT - BALL_SIZE)
+    elif new_by + BALL_SIZE >= _GAME_H:
+        new_by = float(_GAME_H - BALL_SIZE)
         new_dy = -abs(new_dy)
 
     # Player paddle collision (left side)
@@ -112,7 +113,7 @@ def _update_ball(state):
         new_dy = ratio * new_speed * 1.5
 
     # AI paddle collision (right side)
-    a_x = WIDTH - 6 - PADDLE_W
+    a_x = _GAME_W - 6 - PADDLE_W
     if (new_bx + BALL_SIZE >= a_x and
             new_bx + BALL_SIZE <= a_x + PADDLE_W + 2 and
             new_by + BALL_SIZE >= state["ai_y"] and
@@ -127,17 +128,17 @@ def _update_ball(state):
     game_over = False
     if new_bx < 0:
         a_score += 1
-        new_bx = float(WIDTH // 2)
-        new_by = float(HEIGHT // 2)
+        new_bx = float(_GAME_W // 2)
+        new_by = float(_GAME_H // 2)
         new_speed = INITIAL_BALL_SPEED
         new_dx = new_speed
         new_dy = INITIAL_BALL_SPEED * random.choice([-0.7, 0.7])
         if a_score >= 9:
             game_over = True
-    elif new_bx > WIDTH:
+    elif new_bx > _GAME_W:
         p_score += 1
-        new_bx = float(WIDTH // 2)
-        new_by = float(HEIGHT // 2)
+        new_bx = float(_GAME_W // 2)
+        new_by = float(_GAME_H // 2)
         new_speed = INITIAL_BALL_SPEED
         new_dx = -new_speed
         new_dy = INITIAL_BALL_SPEED * random.choice([-0.7, 0.7])
@@ -173,7 +174,7 @@ def _update_ai(state):
         move = AI_SPEED if diff > 0 else -AI_SPEED
         new_ai_y = state["ai_y"] + move
 
-    new_ai_y = max(12, min(HEIGHT - PADDLE_H, new_ai_y))
+    new_ai_y = max(12, min(_GAME_H - PADDLE_H, new_ai_y))
 
     return {
         **state,
@@ -183,7 +184,7 @@ def _update_ai(state):
 
 def _draw_game(lcd, state):
     """Render the game state to LCD."""
-    img = Image.new("RGB", (WIDTH, HEIGHT), COL_BG)
+    img = Image.new("RGB", (_GAME_W, _GAME_H), COL_BG)
     d = ImageDraw.Draw(img)
 
     # Score bar
@@ -192,8 +193,8 @@ def _draw_game(lcd, state):
     d.text((40, SCORE_Y), score_text, font=font, fill=COL_SCORE)
 
     # Center net (dashed line)
-    for yy in range(14, HEIGHT, 8):
-        d.line((63, yy, 63, min(yy + 4, HEIGHT)), fill=COL_NET)
+    for yy in range(14, _GAME_H, 8):
+        d.line((63, yy, 63, min(yy + 4, _GAME_H)), fill=COL_NET)
 
     # Player paddle (left)
     p_x = 6
@@ -201,7 +202,7 @@ def _draw_game(lcd, state):
     d.rectangle((p_x, py, p_x + PADDLE_W, py + PADDLE_H), fill=COL_PADDLE)
 
     # AI paddle (right)
-    a_x = WIDTH - 6 - PADDLE_W
+    a_x = _GAME_W - 6 - PADDLE_W
     ay = int(state["ai_y"])
     d.rectangle((a_x, ay, a_x + PADDLE_W, ay + PADDLE_H), fill=COL_PADDLE)
 
@@ -222,6 +223,8 @@ def _draw_game(lcd, state):
         d.text((38, 60), winner, font=font, fill=COL_TEXT)
         d.text((28, 78), "K1=reset K3=quit", font=font, fill=(0, 150, 0))
 
+    if _GAME_W != WIDTH or _GAME_H != HEIGHT:
+        img = img.resize((WIDTH, HEIGHT), Image.NEAREST)
     lcd.LCD_ShowImage(img, 0, 0)
 
 
@@ -247,7 +250,7 @@ def main():
                 new_py = max(12, state["player_y"] - PADDLE_SPEED)
                 state = {**state, "player_y": new_py}
             elif btn == "DOWN" and not state["paused"]:
-                new_py = min(HEIGHT - PADDLE_H, state["player_y"] + PADDLE_SPEED)
+                new_py = min(_GAME_H - PADDLE_H, state["player_y"] + PADDLE_SPEED)
                 state = {**state, "player_y": new_py}
 
             state = _update_ball(state)

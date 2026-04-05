@@ -41,6 +41,7 @@ sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..", "..")))
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
+from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
 
 PINS = {
@@ -53,8 +54,8 @@ for pin in PINS.values():
 
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-WIDTH, HEIGHT = 128, 128
-font = ImageFont.load_default()
+WIDTH, HEIGHT = LCD.width, LCD.height
+font = scaled_font()
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -282,7 +283,7 @@ def _export_json():
 def _draw_list():
     """Draw scrollable host list."""
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
 
     # Header
     d.rectangle((0, 0, 127, 12), fill="#111")
@@ -328,7 +329,7 @@ def _draw_list():
 def _draw_detail():
     """Draw detailed port list for selected host."""
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
 
     hosts = _get("hosts")
     idx = _get("detail_idx")
@@ -372,7 +373,7 @@ def _draw_footer(d):
 
 def _show_msg(line1, line2=""):
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
     d.text((4, 50), line1[:21], font=font, fill="#00FF00")
     if line2:
         d.text((4, 65), line2[:21], font=font, fill="#888")
@@ -386,7 +387,7 @@ def _show_msg(line1, line2=""):
 def main():
     # Splash
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
     d.text((4, 20), "SUBNET MAPPER", font=font, fill="#00CCFF")
     d.text((4, 36), "ARP + SYN scan", font=font, fill="#888")
     d.text((4, 56), "OK=Scan  RIGHT=Detail", font=font, fill="#666")

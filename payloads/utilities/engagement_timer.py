@@ -33,6 +33,7 @@ import RPi.GPIO as GPIO
 import LCD_1in44
 import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
+from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
 
 # ---------------------------------------------------------------------------
@@ -42,7 +43,7 @@ PINS = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
     "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16,
 }
-WIDTH, HEIGHT = 128, 128
+WIDTH, HEIGHT = LCD_1in44.LCD_WIDTH, LCD_1in44.LCD_HEIGHT
 
 PHASES = ["Recon", "Exploit", "Persist", "Exfil", "Cleanup"]
 PHASE_COLORS = {
@@ -237,7 +238,7 @@ def _draw_frame(lcd):
 
     bg = "#330000" if is_flashing else "black"
     img = Image.new("RGB", (WIDTH, HEIGHT), bg)
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
 
     # Header
     phase_name = PHASES[pidx]
@@ -299,7 +300,7 @@ def _draw_frame(lcd):
 # ---------------------------------------------------------------------------
 
 # Module-level font (used by _draw_big_time and _draw_frame)
-font = ImageFont.load_default()
+font = scaled_font()
 
 
 def main():

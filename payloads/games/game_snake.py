@@ -56,10 +56,11 @@ PINS: dict[str, int] = {
 # ---------------------------------------------------------------------------
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-WIDTH, HEIGHT = 128, 128
+WIDTH, HEIGHT = LCD.width, LCD.height
+_GAME_W, _GAME_H = 128, 128
 
 CELL = 8                      # size of a grid cell in pixels → 16×16 board
-GRID_W, GRID_H = WIDTH // CELL, HEIGHT // CELL
+GRID_W, GRID_H = _GAME_W // CELL, _GAME_H // CELL
 
 COL_BG   = (0, 0, 0)          # black
 COL_SNAKE = (0, 255, 0)        # bright green
@@ -84,7 +85,7 @@ def grid_to_px(x: int, y: int) -> Tuple[int, int, int, int]:
 def draw_board(snake: List[Tuple[int, int]], food: Tuple[int, int], score: int,
                message: Optional[str] = None) -> None:
     """Render the whole scene and push it to the LCD."""
-    img = Image.new("RGB", (WIDTH, HEIGHT), COL_BG)
+    img = Image.new("RGB", (_GAME_W, _GAME_H), COL_BG)
     d = ImageDraw.Draw(img)
 
     # Snake
@@ -100,9 +101,11 @@ def draw_board(snake: List[Tuple[int, int]], food: Tuple[int, int], score: int,
     # Optional centred message (Game Over)
     if message:
         w, h = d.textsize(message, font=font)
-        d.text(((WIDTH - w) // 2, (HEIGHT - h) // 2), message,
+        d.text(((_GAME_W - w) // 2, (_GAME_H - h) // 2), message,
                font=font, fill=COL_TEXT)
 
+    if _GAME_W != WIDTH or _GAME_H != HEIGHT:
+        img = img.resize((WIDTH, HEIGHT), Image.NEAREST)
     LCD.LCD_ShowImage(img, 0, 0)
 
 # ---------------------------------------------------------------------------

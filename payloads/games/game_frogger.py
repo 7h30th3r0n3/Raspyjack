@@ -23,7 +23,8 @@ for pin in PINS.values():
 
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-WIDTH, HEIGHT = 128, 128
+WIDTH, HEIGHT = LCD.width, LCD.height
+_GAME_W, _GAME_H = 128, 128
 font = ImageFont.load_default()
 
 CELL = 8
@@ -84,7 +85,7 @@ class Lane:
         self.direction = direction  # 1=right, -1=left
         self.offset = 0.0
         total = self.obj_len + self.gap
-        self.positions = list(range(0, WIDTH + total, total))
+        self.positions = list(range(0, _GAME_W + total, total))
 
     def update(self, speed_mult=1.0):
         self.offset += self.speed * self.direction * speed_mult
@@ -97,7 +98,7 @@ class Lane:
         total = self.obj_len + self.gap
         rects = []
         start_x = -total + int(self.offset) % total - total
-        while start_x < WIDTH + total:
+        while start_x < _GAME_W + total:
             rects.append((start_x, start_x + self.obj_len))
             start_x += total
         return rects
@@ -145,7 +146,7 @@ def _build_lanes(speed_mult):
 
 def draw_frame(frog_x, frog_y, lanes, homes_filled, score, lives, level,
                timer_left, paused, msg=None):
-    img = Image.new("RGB", (WIDTH, HEIGHT), COL_BG)
+    img = Image.new("RGB", (_GAME_W, _GAME_H), COL_BG)
     d = ImageDraw.Draw(img)
 
     # Draw row backgrounds
@@ -153,15 +154,15 @@ def draw_frame(frog_x, frog_y, lanes, homes_filled, score, lives, level,
         y0 = row * CELL
         y1 = y0 + CELL
         if row == ROW_HOME:
-            d.rectangle([0, y0, WIDTH, y1], fill=COL_WATER)
+            d.rectangle([0, y0, _GAME_W, y1], fill=COL_WATER)
         elif row in (ROW_SAFE_TOP, ROW_SAFE_MID, ROW_SAFE_BOT):
-            d.rectangle([0, y0, WIDTH, y1], fill=COL_SAFE)
+            d.rectangle([0, y0, _GAME_W, y1], fill=COL_SAFE)
         elif row in RIVER_ROWS:
-            d.rectangle([0, y0, WIDTH, y1], fill=COL_WATER)
+            d.rectangle([0, y0, _GAME_W, y1], fill=COL_WATER)
         elif row in ROAD_ROWS:
-            d.rectangle([0, y0, WIDTH, y1], fill=COL_ROAD)
+            d.rectangle([0, y0, _GAME_W, y1], fill=COL_ROAD)
         elif row in START_ROWS:
-            d.rectangle([0, y0, WIDTH, y1], fill=COL_SAFE)
+            d.rectangle([0, y0, _GAME_W, y1], fill=COL_SAFE)
 
     # Home slots
     for i, hx in enumerate(HOME_SLOTS):
@@ -175,8 +176,8 @@ def draw_frame(frog_x, frog_y, lanes, homes_filled, score, lives, level,
         y0 = row * CELL + 1
         y1 = y0 + CELL - 2
         for x0, x1 in lane.get_rects():
-            if x1 > 0 and x0 < WIDTH:
-                d.rectangle([max(0, x0), y0, min(WIDTH, x1), y1], fill=COL_LOG)
+            if x1 > 0 and x0 < _GAME_W:
+                d.rectangle([max(0, x0), y0, min(_GAME_W, x1), y1], fill=COL_LOG)
 
     # Draw road objects (cars)
     car_idx = 0
@@ -187,8 +188,8 @@ def draw_frame(frog_x, frog_y, lanes, homes_filled, score, lives, level,
         col = CAR_COLS[car_idx % len(CAR_COLS)]
         car_idx += 1
         for x0, x1 in lane.get_rects():
-            if x1 > 0 and x0 < WIDTH:
-                d.rectangle([max(0, x0), y0, min(WIDTH, x1), y1], fill=col)
+            if x1 > 0 and x0 < _GAME_W:
+                d.rectangle([max(0, x0), y0, min(_GAME_W, x1), y1], fill=col)
 
     # Frog
     fx = int(frog_x * CELL)
@@ -198,7 +199,7 @@ def draw_frame(frog_x, frog_y, lanes, homes_filled, score, lives, level,
     d.ellipse([fx + 5, fy + 1, fx + 6, fy + 3], fill=COL_FROG_DARK)
 
     # HUD row
-    d.rectangle([0, ROW_HUD * CELL, WIDTH, HEIGHT], fill=COL_BG)
+    d.rectangle([0, ROW_HUD * CELL, _GAME_W, _GAME_H], fill=COL_BG)
     d.text((1, ROW_HUD * CELL), f"S:{score}", font=font, fill=COL_TEXT)
     d.text((45, ROW_HUD * CELL), f"L:{level}", font=font, fill=COL_TEXT)
     t_str = f"T:{int(timer_left)}"
@@ -214,6 +215,8 @@ def draw_frame(frog_x, frog_y, lanes, homes_filled, score, lives, level,
         d.rectangle([10, 50, 118, 70], fill=COL_BG, outline=COL_TEXT)
         d.text((14, 54), msg, font=font, fill=COL_TEXT)
 
+    if _GAME_W != WIDTH or _GAME_H != HEIGHT:
+        img = img.resize((WIDTH, HEIGHT), Image.NEAREST)
     LCD.LCD_ShowImage(img, 0, 0)
 
 

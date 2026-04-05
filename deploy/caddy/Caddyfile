@@ -1,14 +1,14 @@
 # RaspyJack HTTPS reverse proxy template (self-signed).
 # Installer writes a runtime copy to /etc/caddy/Caddyfile using detected IPs.
-# This repository template is for transparency/documentation.
+# Binds to local IP only — Tailscale serve handles its own port 443.
 
 {
-    # Keep behavior predictable for IP access. Caddy still serves HTTPS on :443.
     auto_https disable_redirects
+    # default_bind is set dynamically by the autoconfig script to the local IP
 }
 
-# Replace host list with your device IPs/hostnames if deploying manually.
-localhost {
+# Replace with your device IP if deploying manually.
+https://localhost {
     tls internal
 
     # WebSocket stream/input endpoint

@@ -4,7 +4,7 @@ RaspyJack payload -- Connect 4 (Puissance 4)
 =============================================
 Author: 7h30th3r0n3
 
-Connect 4 vs AI with minimax alpha-beta pruning on 128x128 LCD.
+Connect 4 vs AI with minimax alpha-beta pruning on LCD.
 
 Controls: LEFT/RIGHT=move cursor, OK=drop disc, KEY1=toggle difficulty,
           KEY3=exit.
@@ -37,7 +37,8 @@ for pin in PINS.values():
 # ---------------------------------------------------------------------------
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-WIDTH, HEIGHT = 128, 128
+WIDTH, HEIGHT = LCD.width, LCD.height
+_GAME_W, _GAME_H = 128, 128
 font = ImageFont.load_default()
 
 # ---------------------------------------------------------------------------
@@ -66,8 +67,8 @@ CELL_W = 16
 CELL_H = 16
 BOARD_W = COLS * CELL_W    # 112
 BOARD_H = ROWS * CELL_H    # 96
-BOARD_OX = (WIDTH - BOARD_W) // 2
-BOARD_OY = HEIGHT - BOARD_H - 2
+BOARD_OX = (_GAME_W - BOARD_W) // 2
+BOARD_OY = _GAME_H - BOARD_H - 2
 DISC_R = 6
 
 DIFFICULTIES = [
@@ -271,7 +272,7 @@ def cell_center(r, c):
 def draw_board(board, cursor_col, diff_idx, p_score, a_score,
                win_cells=None, message=None):
     """Render the game state to LCD."""
-    img = Image.new("RGB", (WIDTH, HEIGHT), COL_BG)
+    img = Image.new("RGB", (_GAME_W, _GAME_H), COL_BG)
     d = ImageDraw.Draw(img)
 
     # HUD
@@ -313,11 +314,13 @@ def draw_board(board, cursor_col, diff_idx, p_score, a_score,
         bbox = d.textbbox((0, 0), message, font=font)
         tw = bbox[2] - bbox[0]
         th = bbox[3] - bbox[1]
-        mx = (WIDTH - tw) // 2
+        mx = (_GAME_W - tw) // 2
         my = BOARD_OY - 16
         d.rectangle([mx - 2, my - 1, mx + tw + 2, my + th + 1], fill=COL_BG)
         d.text((mx, my), message, font=font, fill=COL_TEXT)
 
+    if _GAME_W != WIDTH or _GAME_H != HEIGHT:
+        img = img.resize((WIDTH, HEIGHT), Image.NEAREST)
     LCD.LCD_ShowImage(img, 0, 0)
 
 

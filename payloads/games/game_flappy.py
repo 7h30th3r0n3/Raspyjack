@@ -4,7 +4,7 @@ RaspyJack Payload -- Flappy Bird Clone
 ----------------------------------------
 Author: 7h30th3r0n3
 
-Flappy bird on the 128x128 LCD. Green-on-black theme.
+Flappy bird on the LCD. Green-on-black theme.
 
 Controls:
   OK / KEY1  = flap (impulse upward)
@@ -34,7 +34,8 @@ for pin in PINS.values():
 
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-WIDTH, HEIGHT = 128, 128
+WIDTH, HEIGHT = LCD.width, LCD.height
+_GAME_W, _GAME_H = 128, 128  # internal render resolution
 font = ImageFont.load_default()
 
 # Colors (green/black theme)
@@ -73,12 +74,12 @@ def _create_pipe(x_pos):
 def _create_initial_state():
     """Create a fresh game state."""
     return {
-        "bird_y": float(HEIGHT // 2),
+        "bird_y": float(_GAME_H // 2),
         "bird_vy": 0.0,
         "pipes": [
-            _create_pipe(WIDTH + 20),
-            _create_pipe(WIDTH + 20 + PIPE_SPACING),
-            _create_pipe(WIDTH + 20 + PIPE_SPACING * 2),
+            _create_pipe(_GAME_W + 20),
+            _create_pipe(_GAME_W + 20 + PIPE_SPACING),
+            _create_pipe(_GAME_W + 20 + PIPE_SPACING * 2),
         ],
         "score": 0,
         "alive": True,
@@ -147,11 +148,11 @@ def _update_state(state):
 
 def _draw_game(lcd, state):
     """Render game state to LCD."""
-    img = Image.new("RGB", (WIDTH, HEIGHT), COL_BG)
+    img = Image.new("RGB", (_GAME_W, _GAME_H), COL_BG)
     d = ImageDraw.Draw(img)
 
     # Ground
-    d.rectangle((0, GROUND_Y, WIDTH, HEIGHT), fill=COL_GROUND)
+    d.rectangle((0, GROUND_Y, _GAME_W, _GAME_H), fill=COL_GROUND)
 
     # Pipes
     for pipe in state["pipes"]:
@@ -186,7 +187,7 @@ def _draw_game(lcd, state):
 
     # Score
     score_str = str(state["score"])
-    d.text((WIDTH // 2 - 4, 4), score_str, font=font, fill=COL_SCORE)
+    d.text((_GAME_W // 2 - 4, 4), score_str, font=font, fill=COL_SCORE)
 
     # Start screen
     if not state["started"] and state["alive"]:
@@ -204,6 +205,8 @@ def _draw_game(lcd, state):
         d.text((40, 56), f"Score: {state['score']}", font=font, fill=COL_SCORE)
         d.text((25, 74), "OK=retry K3=quit", font=font, fill=COL_DIM)
 
+    if _GAME_W != WIDTH or _GAME_H != HEIGHT:
+        img = img.resize((WIDTH, HEIGHT), Image.NEAREST)
     lcd.LCD_ShowImage(img, 0, 0)
 
 

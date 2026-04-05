@@ -37,6 +37,7 @@ sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..", "..")))
 import RPi.GPIO as GPIO                          # type: ignore
 import LCD_1in44, LCD_Config                      # type: ignore
 from PIL import Image, ImageDraw, ImageFont       # type: ignore
+from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
 
 # Scapy (optional – WiFi capture won't work without it)
@@ -55,7 +56,7 @@ HCI_FLT  = getattr(socket, "HCI_FILTER", 2)
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-W, H = 128, 128
+W, H = LCD_1in44.LCD_WIDTH, LCD_1in44.LCD_HEIGHT
 
 PINS = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
@@ -641,7 +642,7 @@ def _draw_btfreq(d, font):
 def draw_frame(lcd, font):
     """Render one complete frame to the LCD."""
     img = Image.new("RGB", (W, H), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
 
     band = BANDS[band_idx]
     _header(d, font, band)
@@ -704,11 +705,11 @@ def main():
     GPIO.setmode(GPIO.BCM)
     for pin in PINS.values():
         GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-    font = ImageFont.load_default()
+    font = scaled_font()
 
     # Splash screen
     img = Image.new("RGB", (W, H), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
     d.text((16, 25), "RF ANALYZER", font=font, fill="#00FF00")
     d.text((4, 48), "KEY1  Start / Stop", font=font, fill="#888")
     d.text((4, 60), "KEY2  Exit", font=font, fill="#888")

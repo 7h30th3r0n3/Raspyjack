@@ -26,6 +26,7 @@ import RPi.GPIO as GPIO
 import LCD_1in44
 import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
+from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
 
 PINS = {
@@ -38,8 +39,8 @@ for pin in PINS.values():
 
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-WIDTH, HEIGHT = 128, 128
-font = ImageFont.load_default()
+WIDTH, HEIGHT = LCD.width, LCD.height
+font = scaled_font()
 
 DEBOUNCE = 0.25
 
@@ -153,7 +154,7 @@ def _clean_item(item_name):
 def _draw_checklist(lcd, items, selected_items, cursor, scroll_offset, status=""):
     """Draw the checklist UI."""
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
 
     d.rectangle((0, 0, 127, 12), fill="#1a1a1a")
     d.text((2, 1), "Log Cleaner", font=font, fill="#00ff00")
@@ -188,7 +189,7 @@ def _draw_checklist(lcd, items, selected_items, cursor, scroll_offset, status=""
 def _draw_progress(lcd, message, progress, total):
     """Draw a progress screen."""
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
 
     d.text((4, 20), "Cleaning...", font=font, fill="#00ff00")
     d.text((4, 40), message[:20], font=font, fill="#aaaaaa")

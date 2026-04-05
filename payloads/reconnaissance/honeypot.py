@@ -59,6 +59,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from payloads._input_helper import get_virtual_button
+from payloads._display_helper import ScaledDraw, scaled_font
 
 # ---------------------------------------------------------------------------
 # Optional dependencies (Discord + LCD)
@@ -76,6 +77,7 @@ try:
     import RPi.GPIO as GPIO
     import LCD_1in44, LCD_Config
     from PIL import Image, ImageDraw, ImageFont
+    from payloads._display_helper import ScaledDraw, scaled_font
     HAS_LCD = True
 except Exception as _lcd_exc:
     HAS_LCD = False
@@ -618,10 +620,10 @@ class HoneypotLCD:
             raise
         self.W, self.H = 128, 128
         try:
-            self.font_large = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
+            self.font_large = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", int(12 * LCD_1in44.LCD_SCALE))
         except Exception:
-            self.font_large = ImageFont.load_default()
-        self.font_small = ImageFont.load_default()
+            self.font_large = scaled_font()
+        self.font_small = scaled_font()
 
         # Clear to known state once after init
         try:
@@ -707,7 +709,7 @@ class HoneypotLCD:
         try:
             # Initial splash using the same drawing path as frames
             splash = Image.new("RGB", (self.W, self.H), "black")
-            d = ImageDraw.Draw(splash)
+            d = ScaledDraw(splash)
             self._text(d, 2, 4, "HONEYPOT", self.font_large, "#00FF00")
             self._text(d, 2, 20, self.hp.fingerprints.get("label", "Ubuntu"))
             self._text(d, 2, 34, f"Host: {self.hp.hostname}")
@@ -725,7 +727,7 @@ class HoneypotLCD:
             while self.running and self.hp.running:
                 touched = self._poll_inputs()
                 img = Image.new("RGB", (self.W, self.H), "black")
-                draw = ImageDraw.Draw(img)
+                draw = ScaledDraw(img)
                 try:
                     if self.mode == 0:
                         self._render_stats(draw)

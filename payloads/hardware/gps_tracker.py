@@ -37,6 +37,7 @@ import RPi.GPIO as GPIO
 import LCD_1in44
 import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
+from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
 
 try:
@@ -56,8 +57,8 @@ for pin in PINS.values():
 
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-WIDTH, HEIGHT = 128, 128
-font = ImageFont.load_default()
+WIDTH, HEIGHT = LCD.width, LCD.height
+font = scaled_font()
 
 SERIAL_PORTS = ["/dev/ttyUSB0", "/dev/serial0", "/dev/ttyAMA0"]
 BAUD_RATE = 9600
@@ -263,7 +264,7 @@ def _speed_kmh(knots):
 
 def _draw_coords(lcd, fix, logging, entries, scr, status):
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
 
     d.rectangle((0, 0, 127, 12), fill="#111")
     rec_color = "#ff2222" if logging else "#444"
@@ -293,7 +294,7 @@ def _draw_coords(lcd, fix, logging, entries, scr, status):
 def _draw_grid(lcd, fix, entries):
     """Simple map grid showing recent positions."""
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
     d.rectangle((0, 0, 127, 12), fill="#111")
     d.text((2, 1), "GPS MAP GRID", font=font, fill="#00ccff")
     cx, cy, gs = 64, 68, 50
@@ -317,7 +318,7 @@ def _draw_grid(lcd, fix, entries):
 def _draw_log(lcd, entries, scr):
     """Show scrollable log entries."""
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
 
     d.rectangle((0, 0, 127, 12), fill="#111")
     d.text((2, 1), f"LOG ({len(entries)} pts)", font=font, fill="#00ccff")
@@ -345,7 +346,7 @@ def main():
 
     if not SERIAL_OK:
         img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-        d = ImageDraw.Draw(img)
+        d = ScaledDraw(img)
         d.text((4, 50), "pyserial not found!", font=font, fill="#ff0000")
         d.text((4, 65), "pip install pyserial", font=font, fill="#888")
         LCD.LCD_ShowImage(img, 0, 0)

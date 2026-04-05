@@ -41,6 +41,7 @@ import RPi.GPIO as GPIO
 import LCD_1in44
 import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
+from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
 
 try:
@@ -61,8 +62,8 @@ for pin in PINS.values():
 
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-WIDTH, HEIGHT = 128, 128
-font = ImageFont.load_default()
+WIDTH, HEIGHT = LCD.width, LCD.height
+font = scaled_font()
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -284,7 +285,7 @@ def _restore_arp():
 
 def _draw_screen():
     img = Image.new("RGB", (WIDTH, HEIGHT), "BLACK")
-    draw = ImageDraw.Draw(img)
+    draw = ScaledDraw(img)
     draw.text((2, 2), "PROXY ARP", fill="CYAN", font=font)
 
     with lock:
@@ -326,7 +327,7 @@ def main():
 
     if not SCAPY_OK:
         img = Image.new("RGB", (WIDTH, HEIGHT), "BLACK")
-        d = ImageDraw.Draw(img)
+        d = ScaledDraw(img)
         d.text((4, 50), "scapy not found!", font=font, fill="RED")
         LCD.LCD_ShowImage(img, 0, 0)
         time.sleep(3)
@@ -396,7 +397,7 @@ def main():
             _restore_arp()
         try:
             img = Image.new("RGB", (WIDTH, HEIGHT), "BLACK")
-            d = ImageDraw.Draw(img)
+            d = ScaledDraw(img)
             d.text((10, 50), "ARP restored", fill="YELLOW", font=font)
             d.text((10, 66), "Proxy stopped", fill="RED", font=font)
             LCD.LCD_ShowImage(img, 0, 0)

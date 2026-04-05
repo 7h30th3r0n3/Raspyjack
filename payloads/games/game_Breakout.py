@@ -57,7 +57,8 @@ PINS: dict[str, int] = {
 # ---------------------------------------------------------------------------
 # 2) Gameplay constants
 # ---------------------------------------------------------------------------
-WIDTH, HEIGHT   = 128, 128           # LCD resolution (pixels)
+WIDTH, HEIGHT   = LCD_1in44.LCD_WIDTH, LCD_1in44.LCD_HEIGHT  # LCD resolution (pixels)
+_GAME_W, _GAME_H = 128, 128  # internal render resolution
 MARGIN_TOP      = 10                 # leave room for score display
 FPS             = 30                 # refresh rate (frames per second)
 FRAME_DELAY     = 1 / FPS
@@ -65,7 +66,7 @@ FRAME_DELAY     = 1 / FPS
 # Paddle
 PADDLE_WIDTH    = 26
 PADDLE_HEIGHT   = 4
-PADDLE_Y        = HEIGHT - 15        # vertical position of the paddle
+PADDLE_Y        = _GAME_H - 15        # vertical position of the paddle
 PADDLE_SPEED    = 3                  # pixels per frame
 
 # Ball
@@ -96,7 +97,7 @@ FONT = ImageFont.load_default()
 class Paddle:
     """Player paddle controlled by the joystick."""
     def __init__(self) -> None:
-        self.x = (WIDTH - PADDLE_WIDTH) // 2  # centred
+        self.x = (_GAME_W - PADDLE_WIDTH) // 2  # centred
 
     @property
     def rect(self) -> Tuple[int, int, int, int]:
@@ -105,7 +106,7 @@ class Paddle:
     def move(self, direction: int):
         """Move paddle horizontally; *direction* = -1 (left) or +1 (right)."""
         self.x += direction * PADDLE_SPEED
-        self.x = max(0, min(self.x, WIDTH - PADDLE_WIDTH))
+        self.x = max(0, min(self.x, _GAME_W - PADDLE_WIDTH))
 
 class Ball:
     """Ball object – handles movement & collisions."""
@@ -113,8 +114,8 @@ class Ball:
         self.reset()
 
     def reset(self):
-        self.x = WIDTH  // 2
-        self.y = HEIGHT // 2
+        self.x = _GAME_W  // 2
+        self.y = _GAME_H // 2
         # random initial heading (avoid near-vertical angles)
         angle = random.uniform(-60, 60) if random.random() < 0.5 else random.uniform(120, 240)
         rad = angle * 3.14159 / 180
@@ -136,7 +137,7 @@ import math
 
 def create_bricks() -> List[Tuple[int, int, int, int]]:
     """Return a list of brick rectangles (x0, y0, x1, y1)."""
-    brick_width = (WIDTH - BRICK_GAP * (BRICK_COLS + 1)) // BRICK_COLS
+    brick_width = (_GAME_W - BRICK_GAP * (BRICK_COLS + 1)) // BRICK_COLS
     bricks: List[Tuple[int, int, int, int]] = []
     for row in range(BRICK_ROWS):
         for col in range(BRICK_COLS):
@@ -202,7 +203,7 @@ def main():
             break
 
         # Start/reset on KEY1 when ball is out of play
-        if btn == "KEY1" and (ball.y > HEIGHT or not bricks):
+        if btn == "KEY1" and (ball.y > _GAME_H or not bricks):
             paddle = Paddle()
             ball = Ball()
             bricks = create_bricks()
@@ -215,8 +216,8 @@ def main():
         # Wall collisions
         if ball.x <= 0:
             ball.x = 0; ball.vx = abs(ball.vx)
-        if ball.x + BALL_SIZE >= WIDTH:
-            ball.x = WIDTH - BALL_SIZE; ball.vx = -abs(ball.vx)
+        if ball.x + BALL_SIZE >= _GAME_W:
+            ball.x = _GAME_W - BALL_SIZE; ball.vx = -abs(ball.vx)
         if ball.y <= MARGIN_TOP:
             ball.y = MARGIN_TOP; ball.vy = abs(ball.vy)
 
@@ -238,13 +239,15 @@ def main():
                 break  # avoid double collisions in same frame
 
         # Ball falls below paddle → game over (wait for reset)
-        if ball.y > HEIGHT:
+        if ball.y > _GAME_H:
             ball.vx = ball.vy = 0  # freeze ball
 
         # -------------------------------- Render -------------------------------
-        img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+        img = Image.new("RGB", (_GAME_W, _GAME_H), "black")
         d = ImageDraw.Draw(img)
         draw_screen(d, paddle, ball, bricks, score)
+        if _GAME_W != WIDTH or _GAME_H != HEIGHT:
+            img = img.resize((WIDTH, HEIGHT), Image.NEAREST)
         LCD.LCD_ShowImage(img, 0, 0)
 
         # -------------------------------- Timing -------------------------------

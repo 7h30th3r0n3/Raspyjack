@@ -20,6 +20,7 @@ sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..', '..')))
 
 import LCD_1in44, LCD_Config          # Waveshare LCD driver
 from PIL import Image, ImageDraw, ImageFont
+from payloads._display_helper import ScaledDraw, scaled_font
 from evdev import InputDevice, categorize, ecodes, list_devices
 import RPi.GPIO as GPIO               # Raspberry Pi GPIO access
 
@@ -31,7 +32,7 @@ from payloads._input_helper import get_virtual_button
 # ---------------------------------------------------------
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-WIDTH, HEIGHT = 128, 128
+WIDTH, HEIGHT = LCD.width, LCD.height
 
 # ---------------------------------------------------------
 # 2) Font management (zoom)
@@ -47,7 +48,7 @@ def load_font(size: int):
             "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", size
         )
     except Exception:
-        return ImageFont.load_default()
+        return scaled_font()
 
 
 # Globals recalculated in set_font()
@@ -61,7 +62,7 @@ def set_font(size: int):
     font = load_font(FONT_SIZE)
     # Measure one glyph
     _img = Image.new("RGB", (10, 10))
-    _d = ImageDraw.Draw(_img)
+    _d = ScaledDraw(_img)
     CHAR_W, CHAR_H = _d.textsize("M", font=font)
     COLS, ROWS = WIDTH // CHAR_W, HEIGHT // CHAR_H
 
@@ -100,7 +101,7 @@ current_line: str = ""
 def draw_buffer(lines: list[str], partial: str = "") -> None:
     """Render last ROWS‑1 lines + *partial* line to LCD."""
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
     visible = lines[-(ROWS - 1):] + [partial]
     y = 0
     for line in visible:

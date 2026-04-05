@@ -4,7 +4,7 @@ RaspyJack Payload -- Minesweeper
 =================================
 Author: 7h30th3r0n3
 
-8x8 grid, 10 mines, 14x14px cells on a 128x128 LCD.
+8x8 grid, 10 mines, 14x14px cells on a LCD.
 
 Controls:
   UP/DOWN/LEFT/RIGHT -- Move cursor
@@ -36,7 +36,8 @@ for pin in PINS.values():
 
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-WIDTH, HEIGHT = 128, 128
+WIDTH, HEIGHT = LCD.width, LCD.height
+_GAME_W, _GAME_H = 128, 128
 font = ImageFont.load_default()
 
 # ---------------------------------------------------------------------------
@@ -46,7 +47,7 @@ GRID_W = 8
 GRID_H = 8
 MINE_COUNT = 10
 CELL_PX = 14
-GRID_OX = (WIDTH - GRID_W * CELL_PX) // 2
+GRID_OX = (_GAME_W - GRID_W * CELL_PX) // 2
 GRID_OY = 16
 
 NUM_COLORS = {
@@ -173,7 +174,7 @@ def _draw_cell(d, r, c, mines, counts, revealed, flagged, cursor_r, cursor_c, sh
 def draw_board(mines, counts, revealed, flagged, cursor_r, cursor_c,
                game_over, won, show_all):
     """Render the full game board."""
-    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+    img = Image.new("RGB", (_GAME_W, _GAME_H), "black")
     d = ImageDraw.Draw(img)
 
     flags = _count_flags(flagged)
@@ -195,6 +196,8 @@ def draw_board(mines, counts, revealed, flagged, cursor_r, cursor_c,
         d.text((25, 55), "YOU WIN!", font=font, fill="#00FF00")
         d.text((15, 65), "K2:New  K3:Exit", font=font, fill="#888")
 
+    if _GAME_W != WIDTH or _GAME_H != HEIGHT:
+        img = img.resize((WIDTH, HEIGHT), Image.NEAREST)
     LCD.LCD_ShowImage(img, 0, 0)
 
 

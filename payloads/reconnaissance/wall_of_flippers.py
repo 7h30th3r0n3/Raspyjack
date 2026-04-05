@@ -31,6 +31,7 @@ try:
     import RPi.GPIO as GPIO
     import LCD_1in44
     from PIL import Image, ImageDraw, ImageFont
+    from payloads._display_helper import ScaledDraw, scaled_font
 
     LCD_AVAILABLE = True
 except Exception:
@@ -42,6 +43,7 @@ except Exception:
     LCD_AVAILABLE = False
 
 from payloads._input_helper import get_button
+from payloads._display_helper import ScaledDraw, scaled_font
 
 try:
     from bleak import BleakScanner
@@ -65,8 +67,8 @@ PINS = {
     "KEY3": 16,
 }
 
-WIDTH = 128
-HEIGHT = 128
+WIDTH = LCD_1in44.LCD_WIDTH if LCD_1in44 else 128
+HEIGHT = LCD_1in44.LCD_HEIGHT if LCD_1in44 else 128
 FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 FONT_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 BASE_DIR = os.path.abspath(os.path.join(__file__, "..", "..", ".."))
@@ -595,22 +597,23 @@ class Ui:
         if LCD_AVAILABLE:
             self.lcd = LCD_1in44.LCD()
             self.lcd.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-            self.font_small = self._load_font(8)
-            self.font_med = self._load_font(10)
-            self.font_big = self._load_font(11, bold=True)
+            _s = LCD_1in44.LCD_SCALE
+            self.font_small = self._load_font(int(8 * _s))
+            self.font_med = self._load_font(int(10 * _s))
+            self.font_big = self._load_font(int(11 * _s), bold=True)
 
     def _load_font(self, size: int, bold: bool = False):
         try:
             return ImageFont.truetype(FONT_BOLD if bold else FONT_PATH, size)
         except Exception:
-            return ImageFont.load_default()
+            return scaled_font()
 
     def draw(self) -> None:
         if self.lcd is None:
             self._draw_console()
             return
         img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-        d = ImageDraw.Draw(img)
+        d = ScaledDraw(img)
         with state_lock:
             screen = state.current_screen
             live = state.live_devices()
@@ -637,7 +640,7 @@ class Ui:
         self.lcd.LCD_ShowImage(img, 0, 0)
 
     def _header(self, d, title: str, status: str = "") -> None:
-        d.rectangle((0, 0, WIDTH, 13), fill="#09324A")
+        d.rectangle((0, 0, 127, 13), fill="#09324A")
         d.text((2, 2), _short(title, 13), font=self.font_med, fill="#D6F4FF")
         if status:
             badge_color = "#1F5E24"
@@ -649,9 +652,9 @@ class Ui:
             d.text((89, 2), _short(status, 7), font=self.font_small, fill="#E8F8E8")
 
     def _footer(self, d, txt: str) -> None:
-        d.rectangle((0, HEIGHT - 11, WIDTH, HEIGHT), fill="#111111")
+        d.rectangle((0, 117, 127, 127), fill="#111111")
         limit = 18 if settings.badge_mode else 26
-        d.text((1, HEIGHT - 10), _short(txt, limit), font=self.font_small, fill="#A0A0A0")
+        d.text((1, 118), _short(txt, limit), font=self.font_small, fill="#A0A0A0")
 
     def _screen_dashboard(self, d, live: List[DeviceRecord], offline: List[DeviceRecord]) -> None:
         self._header(d, "WallOfFlippers", "RUN" if state.scan_enabled else "PAUSE")
@@ -702,7 +705,7 @@ class Ui:
             gi = start + idx
             sel = gi == state.selected_live
             if sel:
-                d.rectangle((0, y - 1, WIDTH, y + 10), fill="#1A2B3A")
+                d.rectangle((0, y - 1, 127, y + 10), fill="#1A2B3A")
             is_live = (now - rec.last_seen) <= settings.offline_timeout
             status = rec.rssi if is_live else "off"
             flag = "L" if is_live else "O"
@@ -754,7 +757,7 @@ class Ui:
             gi = start + idx
             sel = gi == state.selected_threat
             if sel:
-                d.rectangle((0, y - 1, WIDTH, y + 10), fill="#3A2020")
+                d.rectangle((0, y - 1, 127, y + 10), fill="#3A2020")
             caret = ">" if sel else " "
             d.text((2, y), _short(f"{caret}{tt.replace('BLE_', '')}", 13), font=self.font_small, fill="#FFD7C0")
             d.text((102, y), str(cnt).rjust(3), font=self.font_small, fill="#FF8C8C")
@@ -792,7 +795,7 @@ class Ui:
             gi = start + idx
             sel = gi == state.selected_nearby
             if sel:
-                d.rectangle((0, y - 1, WIDTH, y + 10), fill="#143040")
+                d.rectangle((0, y - 1, 127, y + 10), fill="#143040")
             caret = ">" if sel else " "
             d.text((2, y), _short(f"{caret}{name}", 13), font=self.font_small, fill="#BDEEFF")
             d.text((89, y), str(meta.get("count", 0)).rjust(3), font=self.font_small, fill="#80D5FF")
@@ -817,7 +820,7 @@ class Ui:
             gi = start + idx
             sel = gi == state.selected_history
             if sel:
-                d.rectangle((0, y - 1, WIDTH, y + 12), fill="#262626")
+                d.rectangle((0, y - 1, 127, y + 12), fill="#262626")
             caret = ">" if sel else " "
             line1 = f"{caret}{_short(sess.get('ts', ''), 9)} L{sess.get('live', 0)} T{sess.get('threats', 0)}"
             line2 = f"N{sess.get('nearby', 0)} P{sess.get('packets', 0)} {_short(sess.get('backend', ''), 4)}"
@@ -846,7 +849,7 @@ class Ui:
         for i, txt in enumerate(items):
             sel = i == state.selected_setting
             if sel:
-                d.rectangle((0, y - 1, WIDTH, y + 10), fill="#1D3021")
+                d.rectangle((0, y - 1, 127, y + 10), fill="#1D3021")
             d.text((2, y), _short(txt, 21), font=self.font_small, fill="#D6FFD9")
             y += 12
         d.text((2, 86), f"Health: {_short(state.scanner_health, 12)}", font=self.font_small, fill="#A8A8A8")

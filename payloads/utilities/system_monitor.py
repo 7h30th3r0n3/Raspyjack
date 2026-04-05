@@ -33,6 +33,7 @@ import RPi.GPIO as GPIO
 import LCD_1in44
 import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
+from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
 
 PINS = {
@@ -45,8 +46,8 @@ for pin in PINS.values():
 
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-WIDTH, HEIGHT = 128, 128
-font = ImageFont.load_default()
+WIDTH, HEIGHT = LCD.width, LCD.height
+font = scaled_font()
 
 VIEWS = ["Dashboard", "CPU Graph", "Network"]
 REFRESH_INTERVAL = 2.0
@@ -275,7 +276,7 @@ def _draw_header(d, view_name):
 
 def _draw_dashboard(lcd, snap):
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
     _draw_header(d, "Dashboard")
 
     y = 16
@@ -323,7 +324,7 @@ def _draw_dashboard(lcd, snap):
 
 def _draw_cpu_graph(lcd, history):
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
     _draw_header(d, "CPU Graph")
 
     graph_top = 18
@@ -362,7 +363,7 @@ def _draw_cpu_graph(lcd, history):
 
 def _draw_network(lcd, snap, scroll):
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
     _draw_header(d, "Network")
 
     ifaces = list(snap.net_rates.items())

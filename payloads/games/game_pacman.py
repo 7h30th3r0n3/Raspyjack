@@ -23,7 +23,8 @@ for pin in PINS.values():
 
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-WIDTH, HEIGHT = 128, 128
+WIDTH, HEIGHT = LCD.width, LCD.height
+_GAME_W, _GAME_H = 128, 128
 font = ImageFont.load_default()
 
 CELL = 8
@@ -148,7 +149,7 @@ class Ghost:
 
 
 def draw_frame(maze, pac_x, pac_y, ghosts, score, lives, paused, msg=None):
-    img = Image.new("RGB", (WIDTH, HEIGHT), COL_BG)
+    img = Image.new("RGB", (_GAME_W, _GAME_H), COL_BG)
     d = ImageDraw.Draw(img)
     for ry in range(ROWS):
         for rx in range(COLS):
@@ -182,6 +183,8 @@ def draw_frame(maze, pac_x, pac_y, ghosts, score, lives, paused, msg=None):
         d.text((40, 60), "PAUSED", font=font, fill=COL_TEXT)
     if msg:
         d.text((20, 56), msg, font=font, fill=COL_TEXT)
+    if _GAME_W != WIDTH or _GAME_H != HEIGHT:
+        img = img.resize((WIDTH, HEIGHT), Image.NEAREST)
     LCD.LCD_ShowImage(img, 0, 0)
 
 

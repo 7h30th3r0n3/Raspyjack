@@ -23,7 +23,8 @@ from PIL import Image, ImageDraw, ImageFont  # type: ignore
 
 from payloads._input_helper import get_button
 
-WIDTH, HEIGHT = 128, 128
+WIDTH, HEIGHT = LCD_1in44.LCD_WIDTH, LCD_1in44.LCD_HEIGHT
+_GAME_W, _GAME_H = 128, 128
 FONT = ImageFont.load_default()
 
 PINS = {
@@ -91,7 +92,7 @@ def step(grid):
 
 
 def draw(lcd, grid, running, gen, alive, cx, cy):
-    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+    img = Image.new("RGB", (_GAME_W, _GAME_H), "black")
     d = ImageDraw.Draw(img)
 
     # Header
@@ -122,6 +123,8 @@ def draw(lcd, grid, running, gen, alive, cx, cy):
     d.text((48, 118), "K1 rnd", font=FONT, fill="#94a3b8")
     d.text((92, 118), "K3 x", font=FONT, fill="#94a3b8")
 
+    if _GAME_W != WIDTH or _GAME_H != HEIGHT:
+        img = img.resize((WIDTH, HEIGHT), Image.NEAREST)
     lcd.LCD_ShowImage(img, 0, 0)
 
 

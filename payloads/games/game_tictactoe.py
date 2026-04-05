@@ -23,7 +23,8 @@ for pin in PINS.values():
 
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-WIDTH, HEIGHT = 128, 128
+WIDTH, HEIGHT = LCD.width, LCD.height
+_GAME_W, _GAME_H = 128, 128
 font = ImageFont.load_default()
 
 COL_BG = (0, 0, 0)
@@ -35,7 +36,7 @@ COL_TEXT = (0, 255, 0)
 COL_DIM = (60, 60, 60)
 
 CELL_SIZE = 36
-GRID_OFFSET_X = (WIDTH - CELL_SIZE * 3) // 2
+GRID_OFFSET_X = (_GAME_W - CELL_SIZE * 3) // 2
 GRID_OFFSET_Y = 14
 EMPTY, PLAYER_X, PLAYER_O = 0, 1, 2
 
@@ -142,7 +143,7 @@ def _draw_o(d, cx, cy, size):
 
 
 def draw_board(board, cur_r, cur_c, scores, hard_mode, msg=None):
-    img = Image.new("RGB", (WIDTH, HEIGHT), COL_BG)
+    img = Image.new("RGB", (_GAME_W, _GAME_H), COL_BG)
     d = ImageDraw.Draw(img)
 
     # Score header
@@ -179,6 +180,8 @@ def draw_board(board, cur_r, cur_c, scores, hard_mode, msg=None):
         d.rectangle([10, 54, 118, 74], fill=COL_BG, outline=COL_GRID)
         d.text((14, 58), msg, font=font, fill=COL_TEXT)
 
+    if _GAME_W != WIDTH or _GAME_H != HEIGHT:
+        img = img.resize((WIDTH, HEIGHT), Image.NEAREST)
     LCD.LCD_ShowImage(img, 0, 0)
 
 

@@ -43,6 +43,7 @@ import RPi.GPIO as GPIO
 import LCD_1in44
 import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
+from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
 
 PINS = {
@@ -55,8 +56,8 @@ for pin in PINS.values():
 
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-WIDTH, HEIGHT = 128, 128
-font = ImageFont.load_default()
+WIDTH, HEIGHT = LCD.width, LCD.height
+font = scaled_font()
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -450,7 +451,7 @@ def _draw_lcd():
     """Render current state on LCD."""
     st = _get_state()
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
 
     # Header
     d.rectangle((0, 0, 127, 13), fill="#111")
@@ -541,7 +542,7 @@ def main():
 
     # Splash
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
     d.text((4, 16), "BLE EXFIL", font=font, fill="#8844FF")
     d.text((4, 32), "Stealth BLE adverts", font=font, fill="#888")
     ble_splash_color = "#00FF00" if ble_ok else "#FF0000"

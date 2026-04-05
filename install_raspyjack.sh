@@ -35,6 +35,47 @@ add_dtparam() {
   fi
 }
 
+# ───── 1‑b ▸ select display type ─────────────────────────────
+step "Display configuration"
+echo ""
+echo "  Which LCD screen are you using?"
+echo ""
+echo "    1) ST7735_128  — 1.44\" 128×128  (original Waveshare HAT)"
+echo "    2) ST7789_240  — 1.3\"  240×240"
+echo ""
+read -rp "  Enter choice [1/2] (default: 1): " DISPLAY_CHOICE
+case "$DISPLAY_CHOICE" in
+  2) DISPLAY_TYPE="ST7789_240" ;;
+  *) DISPLAY_TYPE="ST7735_128" ;;
+esac
+info "Selected display: $DISPLAY_TYPE"
+
+# Write DISPLAY section into gui_conf.json (preserve existing settings)
+GUI_CONF="/root/Raspyjack/gui_conf.json"
+if [ -f "$GUI_CONF" ]; then
+  python3 - "$DISPLAY_TYPE" <<'PY'
+import json, sys
+dtype = sys.argv[1]
+with open("/root/Raspyjack/gui_conf.json") as f:
+    data = json.load(f)
+data["DISPLAY"] = {"type": dtype, "supported_types": ["ST7735_128", "ST7789_240"]}
+with open("/root/Raspyjack/gui_conf.json", "w") as f:
+    json.dump(data, f, indent=4)
+print(f"[OK] gui_conf.json updated with DISPLAY type: {dtype}")
+PY
+else
+  info "gui_conf.json not found yet — will be created on first run."
+fi
+
+# ───── 1‑c ▸ create payload config directories ───────────────
+step "Creating payload config directories …"
+for d in ad_recon auto_loot_exfil bt_audio cctv_scanner cctv_viewer dns_tunnel \
+         exfil_ftp exfil_smb http_exfil reverse_ssh rtsp_viewer scheduler \
+         ssid_pool timer tripwire usb_gadget wifi_alert; do
+  mkdir -p "/root/Raspyjack/config/$d"
+done
+mkdir -p /root/Raspyjack/loot/wordlists
+
 # ───── 2 ▸ install / upgrade required APT packages ───────────
 PACKAGES=(
   python3 python3-pip python3-dev \
@@ -377,37 +418,37 @@ if [ "$TLS_SETUP_OK" -eq 1 ]; then
 
   sudo tee /usr/local/sbin/raspyjack-caddy-autoconfig.sh >/dev/null <<'SCRIPT'
 #!/usr/bin/env bash
-# RaspyJack: auto-detect all IPv4 addresses and regenerate Caddyfile
+# RaspyJack: auto-detect local IPv4 addresses and regenerate Caddyfile
+# Skips Tailscale interfaces to avoid port 443 conflict with tailscale serve
 set -euo pipefail
 
 HOSTS=""
+BIND_IP=""
 for iface in $(ls /sys/class/net/); do
-  # Skip loopback and virtual docker/veth interfaces
-  case "$iface" in lo|docker*|veth*|br-*) continue ;; esac
+  case "$iface" in lo|docker*|veth*|br-*|tailscale*) continue ;; esac
   IP=$(ip -4 -o addr show "$iface" 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -n1)
   if [ -n "$IP" ]; then
     if [ -z "$HOSTS" ]; then
       HOSTS="$IP"
+      BIND_IP="$IP"
     else
       HOSTS="$HOSTS, $IP"
     fi
   fi
 done
 
-# Always include localhost
 if [ -z "$HOSTS" ]; then
   HOSTS="localhost"
-else
-  HOSTS="$HOSTS, localhost"
+  BIND_IP="127.0.0.1"
 fi
 
 cat > /etc/caddy/Caddyfile <<EOF
 {
-    # RaspyJack self-signed internal CA (local trust only)
     auto_https disable_redirects
+    default_bind ${BIND_IP}
 }
 
-${HOSTS} {
+https://${HOSTS} {
     tls internal
 
     @ws path /ws*
@@ -424,7 +465,7 @@ ${HOSTS} {
 EOF
 
 systemctl reload caddy 2>/dev/null || systemctl restart caddy
-echo "[raspyjack-caddy] Caddyfile updated with: ${HOSTS}"
+echo "[raspyjack-caddy] Bound to ${BIND_IP}, hosts: ${HOSTS}"
 SCRIPT
   sudo chmod +x /usr/local/sbin/raspyjack-caddy-autoconfig.sh
 

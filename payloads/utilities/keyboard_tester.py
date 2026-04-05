@@ -28,6 +28,7 @@ sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..', '..')))
 # ---------------------------- Third‑party libs -----------------------------
 import LCD_1in44, LCD_Config          # Waveshare LCD driver
 from PIL import Image, ImageDraw, ImageFont
+from payloads._display_helper import ScaledDraw, scaled_font
 from evdev import InputDevice, categorize, ecodes, list_devices
 import RPi.GPIO as GPIO               # Raspberry Pi GPIO access
 
@@ -46,14 +47,14 @@ GPIO.setup(KEY3_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 # ---------------------------------------------------------------------------
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-WIDTH, HEIGHT = 128, 128
-font = ImageFont.load_default()
+WIDTH, HEIGHT = LCD.width, LCD.height
+font = scaled_font()
 
 
 def draw(text: str) -> None:
     """Clear the screen and draw *text* centred in bright green."""
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
 
     # Pillow ≥ 9.2 offers textbbox(); fall back to textsize() otherwise
     if hasattr(d, "textbbox"):

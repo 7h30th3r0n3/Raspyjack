@@ -31,6 +31,7 @@ sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..")))
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
+from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -406,7 +407,7 @@ PINS = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
     "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16,
 }
-WIDTH, HEIGHT = 128, 128
+WIDTH, HEIGHT = LCD.width, LCD.height
 LOG_FILE = "/root/Raspyjack/loot/network/wifi_installer.log"
 ONBOARD_DRIVERS = {"brcmfmac", "brcmsmac", "b43", "b43legacy"}
 
@@ -419,10 +420,10 @@ LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
 LCD.LCD_Clear()
 
 try:
-    FONT    = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 10)
-    FONT_SM = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 8)
+    FONT    = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", int(10 * LCD_1in44.LCD_SCALE))
+    FONT_SM = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", int(8 * LCD_1in44.LCD_SCALE))
 except Exception:
-    FONT = FONT_SM = ImageFont.load_default()
+    FONT = FONT_SM = scaled_font()
 
 os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
 
@@ -449,22 +450,22 @@ def show(lines: list, title: str = "WiFi Installer",
     progress : 0-100 draws a progress bar; -1 = no bar
     """
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d   = ImageDraw.Draw(img)
+    d   = ScaledDraw(img)
 
-    d.rectangle((0, 0, WIDTH - 1, 14), fill="#0d1b2a")
+    d.rectangle((0, 0, 127, 14), fill="#0d1b2a")
     d.text((3, 2), title[:20], font=FONT_SM, fill=title_col)
 
     y_start = 16
     if progress >= 0:
         bar_w = int((WIDTH - 6) * min(progress, 100) / 100)
-        d.rectangle((3, 16, WIDTH - 3, 23), outline="#333333")
+        d.rectangle((3, 16, 125, 23), outline="#333333")
         if bar_w > 0:
             d.rectangle((3, 16, 3 + bar_w, 23), fill="#00FF88")
         y_start = 26
 
     y = y_start
     for item in lines:
-        if y > HEIGHT - 12:
+        if y > 1272:
             break
         text, color = item if isinstance(item, tuple) else (str(item), "white")
         d.text((3, y), str(text)[:21], font=FONT_SM, fill=color)

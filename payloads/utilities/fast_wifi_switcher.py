@@ -24,6 +24,7 @@ import sys
 import time
 import subprocess
 import signal
+from payloads._display_helper import ScaledDraw, scaled_font
 
 # Add the required paths
 sys.path.append('/root/Raspyjack/')
@@ -34,6 +35,7 @@ try:
     import LCD_1in44, LCD_Config
     import RPi.GPIO as GPIO
     from PIL import Image, ImageDraw, ImageFont
+    from payloads._display_helper import ScaledDraw, scaled_font
     from payloads._input_helper import get_virtual_button
     
     # Import WiFi integration functions
@@ -59,8 +61,8 @@ class FastWiFiSwitcher:
         self.lcd = LCD_1in44.LCD()
         self.lcd.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
         self.lcd.LCD_Clear()
-        self.WIDTH, self.HEIGHT = 128, 128
-        self.font = ImageFont.load_default()
+        self.WIDTH, self.HEIGHT = self.lcd.width, self.lcd.height
+        self.font = scaled_font()
         
         # GPIO setup with FAST response
         GPIO.setmode(GPIO.BCM)
@@ -100,7 +102,7 @@ class FastWiFiSwitcher:
         try:
             # Create black canvas
             img = Image.new("RGB", (self.WIDTH, self.HEIGHT), "black")
-            d = ImageDraw.Draw(img)
+            d = ScaledDraw(img)
             
             # Draw text lines
             y = 5

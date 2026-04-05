@@ -37,6 +37,7 @@ sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..", "..")))
 import RPi.GPIO as GPIO                          # type: ignore
 import LCD_1in44, LCD_Config                      # type: ignore
 from PIL import Image, ImageDraw, ImageFont       # type: ignore
+from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
 
 # Scapy (optional – WiFi capture won't work without it)
@@ -57,7 +58,7 @@ HCI_FLT = getattr(socket, "HCI_FILTER", 2)
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-W, H = 128, 128
+W, H = LCD_1in44.LCD_WIDTH, LCD_1in44.LCD_HEIGHT
 
 PINS = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
@@ -555,19 +556,19 @@ def _persist_thread():
 # ===================================================================
 
 def _header(d, font, view_name):
-    d.rectangle((0, 0, 127, 13), fill="#111")
+    d.rectangle((0, 0, W - 1, 13), fill="#111")
     d.text((2, 1), "SCOUT", font=font, fill="#00FF00")
     if hasattr(d, "textbbox"):
         tw = d.textbbox((0, 0), view_name, font=font)[2]
     else:
         tw, _ = d.textsize(view_name, font=font)
-    d.text((125 - tw, 1), view_name, font=font, fill="white")
+    d.text((W - 3 - tw, 1), view_name, font=font, fill="white")
     d.ellipse((108, 3, 112, 7), fill="#00FF00" if running else "#FF0000")
 
 
 def _footer(d, font, text):
-    d.rectangle((0, 116, 127, 127), fill="#111")
-    d.text((2, 117), text[:24], font=font, fill="#AAA")
+    d.rectangle((0, H - 12, W - 1, H - 1), fill="#111")
+    d.text((2, H - 11), text[:24], font=font, fill="#AAA")
 
 
 def _draw_persist_bar(d, x, y, ratio, alert):
@@ -618,7 +619,7 @@ def _draw_device_list(d, font, devs, y0, alert_color=False):
     if total > ROWS_VISIBLE:
         bar_h = max(4, int(ROWS_VISIBLE / total * 88))
         bar_y = y0 + int(scroll / total * 88)
-        d.rectangle((126, bar_y, 127, bar_y + bar_h), fill="#444")
+        d.rectangle((W - 2, bar_y, W - 1, bar_y + bar_h), fill="#444")
 
 
 def _draw_devices_view(d, font):
@@ -696,7 +697,7 @@ def _draw_stats_view(d, font):
 def draw_frame(lcd, font):
     """Render one frame to the LCD."""
     img = Image.new("RGB", (W, H), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
 
     view = VIEWS[view_idx]
     _header(d, font, view)
@@ -772,11 +773,11 @@ def main():
     GPIO.setmode(GPIO.BCM)
     for pin in PINS.values():
         GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-    font = ImageFont.load_default()
+    font = scaled_font()
 
     # Splash screen
     img = Image.new("RGB", (W, H), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
     d.text((12, 20), "DEVICE SCOUT", font=font, fill="#00FF00")
     d.text((4, 42), "Anti-surveillance", font=font, fill="#888")
     d.text((4, 54), "tracker detector", font=font, fill="#888")
@@ -816,7 +817,7 @@ def main():
                 path = export_data()
                 # Brief confirmation on LCD
                 img2 = Image.new("RGB", (W, H), "black")
-                d2 = ImageDraw.Draw(img2)
+                d2 = ScaledDraw(img2)
                 d2.text((10, 50), "Data exported!", font=font, fill="#00FF00")
                 d2.text((4, 65), path[-22:], font=font, fill="#888")
                 lcd.LCD_ShowImage(img2, 0, 0)

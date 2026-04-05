@@ -5,7 +5,7 @@ RaspyJack Payload -- Visual Network Topology Mapper
 Author: 7h30th3r0n3
 
 Combines ARP scan results and Nmap loot to render a simple network
-topology on the 128x128 LCD.  Gateway at top, hosts arranged by
+topology on the LCD.  Gateway at top, hosts arranged by
 subnet.  Nodes are small labelled boxes with lines to the gateway.
 
 Controls:
@@ -31,6 +31,7 @@ sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..", "..")))
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
+from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
 
 PINS = {
@@ -43,8 +44,8 @@ for pin in PINS.values():
 
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-WIDTH, HEIGHT = 128, 128
-font = ImageFont.load_default()
+WIDTH, HEIGHT = LCD.width, LCD.height
+font = scaled_font()
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -204,7 +205,7 @@ def _node_label(info, ip):
 def draw_topology():
     """Render network topology on LCD."""
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
 
     d.rectangle((0, 0, 127, 11), fill="#111")
     d.text((2, 1), "NET MAP", font=font, fill="#00CCFF")
@@ -309,7 +310,7 @@ def export_text_map():
 
 def _show_message(line1, line2=""):
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
     d.text((10, 50), line1, font=font, fill="#00FF00")
     if line2:
         d.text((4, 65), line2, font=font, fill="#888")
@@ -325,7 +326,7 @@ def main():
     global scroll_y, zoom, label_mode_idx, stop_flag
 
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
     d.text((4, 20), "NETWORK MAPPER", font=font, fill="#00CCFF")
     d.text((4, 40), "Visual topology", font=font, fill="#888")
     d.text((4, 60), "OK=Refresh  K1=Labels", font=font, fill="#666")

@@ -36,6 +36,7 @@ sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..", "..")))
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
+from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
 
 PINS = {
@@ -48,8 +49,8 @@ for pin in PINS.values():
 
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-WIDTH, HEIGHT = 128, 128
-font = ImageFont.load_default()
+WIDTH, HEIGHT = LCD.width, LCD.height
+font = scaled_font()
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -331,7 +332,7 @@ def _monitor_polling():
 # ---------------------------------------------------------------------------
 def _draw_lcd():
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
 
     auto = _get("auto_copy")
     copying = _get("copying")
@@ -402,7 +403,7 @@ def _show_usb_info():
     free = _get_free_space(MOUNT_POINT) if _get("usb_mounted") else "?"
 
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
     d.text((2, 10), "USB Info", font=font, fill="#FFAA00")
     d.text((2, 28), f"Dev:  {info['device']}", font=font, fill="#AAA")
     d.text((2, 42), f"FS:   {info['fs']}", font=font, fill="#AAA")
@@ -425,7 +426,7 @@ def _show_usb_info():
 def main():
     # Splash
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
     d.text((4, 16), "USB AUTO-COPY", font=font, fill="#FFAA00")
     d.text((4, 32), "Loot to USB drive", font=font, fill="#888")
     d.text((4, 52), "OK=Force copy", font=font, fill="#666")

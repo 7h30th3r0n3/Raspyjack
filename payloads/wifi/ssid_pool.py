@@ -37,6 +37,7 @@ import RPi.GPIO as GPIO
 import LCD_1in44
 import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
+from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
 
 try:
@@ -58,8 +59,8 @@ for pin in PINS.values():
 
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-WIDTH, HEIGHT = 128, 128
-font = ImageFont.load_default()
+WIDTH, HEIGHT = LCD.width, LCD.height
+font = scaled_font()
 
 # ── Constants ────────────────────────────────────────────────────────────────
 CONFIG_FILE = "/root/Raspyjack/config/ssid_pool/ssids.json"
@@ -299,7 +300,7 @@ def _remove_selected():
 
 def _draw_screen():
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
 
     with lock:
         active = broadcasting
@@ -369,7 +370,7 @@ def main():
 
     # Splash
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
     d.text((8, 10), "SSID POOL", font=font, fill="#FF9800")
     d.text((4, 28), "Beacon flood with", font=font, fill="#888")
     d.text((4, 40), "multiple fake SSIDs.", font=font, fill="#888")

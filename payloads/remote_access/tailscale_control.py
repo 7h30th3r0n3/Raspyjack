@@ -68,11 +68,12 @@ sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..", "..")))
 import RPi.GPIO as GPIO  # type: ignore
 import LCD_1in44, LCD_Config  # type: ignore
 from PIL import Image, ImageDraw, ImageFont  # type: ignore
+from payloads._display_helper import ScaledDraw, scaled_font
 
 # Shared input helper (WebUI virtual + GPIO)
 from payloads._input_helper import get_button
 
-WIDTH, HEIGHT = 128, 128
+WIDTH, HEIGHT = LCD_1in44.LCD_WIDTH, LCD_1in44.LCD_HEIGHT
 
 PINS = {
     "KEY1": 21,
@@ -127,8 +128,8 @@ def _truncate(s, n):
 
 def draw(lcd, lines, message=""):
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
-    font = ImageFont.load_default()
+    d = ScaledDraw(img)
+    font = scaled_font()
 
     d.rectangle((0, 0, 127, 12), fill="#1a1a1a")
     d.text((4, 1), "Tailscale", font=font, fill="white")
@@ -147,8 +148,8 @@ def draw(lcd, lines, message=""):
 
 def draw_error(lcd, title, lines):
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
-    font = ImageFont.load_default()
+    d = ScaledDraw(img)
+    font = scaled_font()
 
     d.rectangle((0, 0, 127, 12), fill="#1a1a1a")
     d.text((4, 1), _truncate(title, 16), font=font, fill="white")

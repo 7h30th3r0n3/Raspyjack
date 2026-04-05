@@ -4,12 +4,12 @@ RaspyJack Payload -- CCTV Live Viewer
 =========================================
 Author: 7h30th3r0n3
 
-Streams MJPEG video feeds to the 128x128 LCD.  Loads camera URLs from
+Streams MJPEG video feeds to the LCD.  Loads camera URLs from
 ``/root/Raspyjack/loot/CCTV/cctv_live.txt`` (format: ``Name | URL``).
 Also accepts manual URL input via config file.
 
 Reads the HTTP multipart/x-mixed-replace stream, extracts JPEG frames,
-resizes them to 128x128, and displays on the LCD in real time.
+resizes them to LCD, and displays on the LCD in real time.
 ------------------------
 - **TurboJPEG** accelerated decoding (3-5x faster, PIL fallback)
 - **32 KB chunk reads** (8x larger than V1) for fewer syscalls
@@ -40,7 +40,7 @@ Menu options:
                    Default | 1920x1080 | 1280x960 | 640x480 | 320x240
   Compression   -- Request compression level from camera (URL param)
                    Default | 0 (none) | 20 | 50 | 70 | 90 (max)
-  Resize Filter -- Local downscale algorithm to 128x128
+  Resize Filter -- Local downscale algorithm to LCD
                    LANCZOS (sharp) | BILINEAR (fast) | NEAREST (turbo)
   Enhance       -- Local post-processing on each frame
                    Off | AutoContrast | Sharpen | Both
@@ -73,6 +73,7 @@ sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..", "..")))
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont, ImageEnhance, ImageFilter, ImageOps
+from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
 
 # -- TurboJPEG (optional, ~3-5x faster decode) --------------------------------
@@ -93,8 +94,8 @@ for pin in PINS.values():
 
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-WIDTH, HEIGHT = 128, 128
-font = ImageFont.load_default()
+WIDTH, HEIGHT = LCD.width, LCD.height
+font = scaled_font()
 
 # -- Paths ---------------------------------------------------------------------
 LIVE_FILE = "/root/Raspyjack/loot/CCTV/cctv_live.txt"
@@ -109,7 +110,7 @@ DEBOUNCE = 0.20
 CHUNK_SIZE = 32768          # 32 KB -- 8x V1
 MAX_BUF = 512000            # ~500 KB safety cap
 RECONNECT_DELAYS = (1, 2, 4, 8, 15)  # exponential back-off seconds
-ZOOM_LEVELS = (1, 2, 4)
+ZOOM_LEVELS = (1, 2, 4, 8)
 OVERLAY_MODES = ("full", "minimal", "off")
 LCD_REFRESH = 0.025         # ~40 Hz target refresh
 LONG_PRESS = 0.6            # seconds for long-press detection
@@ -206,17 +207,23 @@ _settings = {
 # =============================================================================
 # Settings menu UI
 # =============================================================================
+_last_settings_choices = None  # persists menu selections between calls
+
 def _run_settings_menu():
     """Interactive settings menu on LCD. Returns dict of chosen settings."""
-    # Current selection index for each menu item
-    choices = [item[3] for item in MENU_ITEMS]  # default indices
+    global _last_settings_choices
+    # Restore previous selections or use defaults
+    if _last_settings_choices is not None and len(_last_settings_choices) == len(MENU_ITEMS):
+        choices = list(_last_settings_choices)
+    else:
+        choices = [item[3] for item in MENU_ITEMS]
     cursor = 0  # which menu item is highlighted
     last_press = 0.0
 
     while True:
         # -- Draw menu --
         img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-        d = ImageDraw.Draw(img)
+        d = ScaledDraw(img)
 
         # Title bar
         d.rectangle((0, 0, 127, 12), fill="#003366")
@@ -291,16 +298,18 @@ def _run_settings_menu():
 
         elif btn == "OK":
             # Confirm and return settings
+            _last_settings_choices = list(choices)
             result = {}
             for i, (key, _, options, _) in enumerate(MENU_ITEMS):
                 result[key] = options[choices[i]][1]
             return result
 
         elif btn == "KEY3":
-            # Use defaults
+            # Keep current selections
+            _last_settings_choices = list(choices)
             result = {}
-            for key, _, options, default_idx in MENU_ITEMS:
-                result[key] = options[default_idx][1]
+            for i, (key, _, options, _) in enumerate(MENU_ITEMS):
+                result[key] = options[choices[i]][1]
             return result
 
         time.sleep(0.03)
@@ -317,6 +326,8 @@ _state = {
     "paused": False,
     "overlay_mode": 0,      # index into OVERLAY_MODES
     "zoom": 0,              # index into ZOOM_LEVELS
+    "pan_x": 0.5,           # pan offset 0.0-1.0 (0.5 = center)
+    "pan_y": 0.5,           # pan offset 0.0-1.0 (0.5 = center)
     "fps": 0.0,
     "status": "Loading...",
     "streaming": False,
@@ -460,7 +471,7 @@ def _apply_enhance(img):
 
 
 def _resize_with_zoom(img, zoom_level):
-    """Resize image to LCD, applying digital zoom + settings filter + enhance."""
+    """Resize image to LCD, applying digital zoom + pan + settings filter + enhance."""
     resample = _get_resize_filter()
 
     if zoom_level <= 1:
@@ -468,8 +479,11 @@ def _resize_with_zoom(img, zoom_level):
     else:
         w, h = img.size
         crop_w, crop_h = w // zoom_level, h // zoom_level
-        left = (w - crop_w) // 2
-        top = (h - crop_h) // 2
+        pan_x, pan_y = _get("pan_x"), _get("pan_y")
+        left = int((w - crop_w) * pan_x)
+        top = int((h - crop_h) * pan_y)
+        left = max(0, min(left, w - crop_w))
+        top = max(0, min(top, h - crop_h))
         cropped = img.crop((left, top, left + crop_w, top + crop_h))
         result = cropped.resize((WIDTH, HEIGHT), resample)
 
@@ -822,12 +836,12 @@ def _draw_grid():
             canvas.paste(frame, (px, py))
         else:
             d.rectangle((px, py, px + cell - 1, py + cell - 1), outline="#333")
-            d.text((px + 2, py + 25), "...", font=font, fill="#666")
+            d.text((px + 2, py + cell // 2), "...", font=font, fill="#666")
         # Camera label
         name = cameras[idx][0][:7]
         d.text((px + 1, py + 1), name, font=font, fill="#0F0")
 
-    d.text((2, 117), "GRID  DOWN=back", font=font, fill="#888")
+    d.text((2, HEIGHT - 11), "GRID  DOWN=back", font=font, fill="#888")
     LCD.LCD_ShowImage(canvas, 0, 0)
 
 
@@ -852,13 +866,13 @@ def _draw_lcd():
         img = _get("last_frame").copy()
     else:
         img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-        d = ImageDraw.Draw(img)
+        d = ScaledDraw(img)
         d.text((10, 55), status[:20], font=font, fill="#888")
         LCD.LCD_ShowImage(img, 0, 0)
         return
 
     if overlay != "off" and cameras:
-        d = ImageDraw.Draw(img)
+        d = ScaledDraw(img)
         name = cameras[cam_idx][0] if cam_idx < len(cameras) else "?"
 
         # Top bar
@@ -886,7 +900,7 @@ def _draw_lcd():
 
 def _draw_no_cameras():
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
     d.text((4, 16), "CCTV VIEWER V2", font=font, fill="#00CCFF")
     d.text((4, 36), "No cameras loaded", font=font, fill="#FF4444")
     d.text((4, 52), "Run CCTV Scanner", font=font, fill="#888")
@@ -947,7 +961,7 @@ def _toggle_recording():
 
 def _show_msg(line1, line2=""):
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
     d.text((4, 50), line1[:21], font=font, fill="#00FF00")
     if line2:
         d.text((4, 65), line2[:21], font=font, fill="#888")
@@ -961,7 +975,7 @@ def _show_msg(line1, line2=""):
 def main():
     # Splash
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
     d.text((4, 8), "CCTV VIEWER V2", font=font, fill="#00CCFF")
     d.text((4, 24), "TurboJPEG:", font=font, fill="#888")
     tj_status = "YES" if _tj else "no (PIL)"
@@ -987,7 +1001,7 @@ def main():
 
     # Show chosen settings briefly
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
     d.text((4, 4), "Config:", font=font, fill="#00CCFF")
     res_label = _settings["cam_resolution"] or "Default"
     comp_label = str(_settings["cam_compression"]) if _settings["cam_compression"] is not None else "Default"
@@ -1104,44 +1118,60 @@ def main():
                 _start_stream(url, auth)
 
             elif btn == "LEFT":
-                cameras = _get("cameras")
-                idx = _get("cam_idx")
-                new_idx = (idx - 1) % len(cameras)
-                _set(cam_idx=new_idx, zoom=0)
-                _stop_stream()
-                cam = cameras[new_idx]
-                url, auth = _parse_auth(
-                    cam[1], cam[2] if len(cam) > 2 else None
-                )
-                _start_stream(url, auth)
+                if _get("zoom") > 0:
+                    _set(pan_x=max(0.0, _get("pan_x") - 0.15))
+                else:
+                    cameras = _get("cameras")
+                    idx = _get("cam_idx")
+                    new_idx = (idx - 1) % len(cameras)
+                    _set(cam_idx=new_idx, zoom=0, pan_x=0.5, pan_y=0.5)
+                    _stop_stream()
+                    cam = cameras[new_idx]
+                    url, auth = _parse_auth(
+                        cam[1], cam[2] if len(cam) > 2 else None
+                    )
+                    _start_stream(url, auth)
 
             elif btn == "RIGHT":
-                cameras = _get("cameras")
-                idx = _get("cam_idx")
-                new_idx = (idx + 1) % len(cameras)
-                _set(cam_idx=new_idx, zoom=0)
-                _stop_stream()
-                cam = cameras[new_idx]
-                url, auth = _parse_auth(
-                    cam[1], cam[2] if len(cam) > 2 else None
-                )
-                _start_stream(url, auth)
+                if _get("zoom") > 0:
+                    _set(pan_x=min(1.0, _get("pan_x") + 0.15))
+                else:
+                    cameras = _get("cameras")
+                    idx = _get("cam_idx")
+                    new_idx = (idx + 1) % len(cameras)
+                    _set(cam_idx=new_idx, zoom=0, pan_x=0.5, pan_y=0.5)
+                    _stop_stream()
+                    cam = cameras[new_idx]
+                    url, auth = _parse_auth(
+                        cam[1], cam[2] if len(cam) > 2 else None
+                    )
+                    _start_stream(url, auth)
 
             elif btn == "UP":
-                # Zoom cycle
-                z = (_get("zoom") + 1) % len(ZOOM_LEVELS)
-                _set(zoom=z)
+                if _get("zoom") > 0:
+                    _set(pan_y=max(0.0, _get("pan_y") - 0.15))
+                else:
+                    # Enter zoom 2x
+                    _set(zoom=1, pan_x=0.5, pan_y=0.5)
 
             elif btn == "DOWN":
-                # Enter grid 2x2
-                _stop_stream()
-                _set(grid_mode=True, stop=False)
-                _start_grid(_get("cameras"))
+                if _get("zoom") > 0:
+                    _set(pan_y=min(1.0, _get("pan_y") + 0.15))
+                else:
+                    # Enter grid 2x2
+                    _stop_stream()
+                    _set(grid_mode=True, stop=False)
+                    _start_grid(_get("cameras"))
 
             elif btn == "KEY1":
-                # Cycle overlay
-                o = (_get("overlay_mode") + 1) % len(OVERLAY_MODES)
-                _set(overlay_mode=o)
+                if _get("zoom") > 0:
+                    # Cycle zoom level or back to 1x
+                    z = (_get("zoom") + 1) % len(ZOOM_LEVELS)
+                    _set(zoom=z, pan_x=0.5, pan_y=0.5)
+                else:
+                    # Cycle overlay
+                    o = (_get("overlay_mode") + 1) % len(OVERLAY_MODES)
+                    _set(overlay_mode=o)
 
             elif btn == "KEY2":
                 path = _take_screenshot()

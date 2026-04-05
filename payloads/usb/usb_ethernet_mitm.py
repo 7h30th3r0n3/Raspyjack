@@ -42,6 +42,7 @@ sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..", "..")))
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
+from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
 
 PINS = {
@@ -54,8 +55,8 @@ for pin in PINS.values():
 
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-WIDTH, HEIGHT = 128, 128
-font = ImageFont.load_default()
+WIDTH, HEIGHT = LCD.width, LCD.height
+font = scaled_font()
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -555,7 +556,7 @@ def _draw_footer(d, text):
 
 def draw_main_view():
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
     _draw_header(d, "USB ETH MITM")
 
     with lock:
@@ -590,7 +591,7 @@ def draw_main_view():
 
 def draw_captured_view():
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
     _draw_header(d, "CAPTURED DATA")
 
     with lock:
@@ -629,7 +630,7 @@ def main():
 
     # Splash
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
     d.text((4, 16), "USB ETHERNET MITM", font=font, fill="#00CCFF")
     d.text((4, 36), "RNDIS/ECM gadget", font=font, fill="#888")
     d.text((4, 48), "Traffic interception", font=font, fill="#888")

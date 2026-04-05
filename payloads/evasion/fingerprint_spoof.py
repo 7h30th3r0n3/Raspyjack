@@ -35,6 +35,7 @@ sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..", "..")))
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
+from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
 
 PINS = {
@@ -47,8 +48,8 @@ for pin in PINS.values():
 
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-WIDTH, HEIGHT = 128, 128
-font = ImageFont.load_default()
+WIDTH, HEIGHT = LCD.width, LCD.height
+font = scaled_font()
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -236,7 +237,7 @@ def _restore_defaults():
 # ---------------------------------------------------------------------------
 def _draw_lcd():
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
 
     idx = _get("profile_idx")
     status = _get("status")
@@ -284,7 +285,7 @@ def _draw_current_values():
     """Show all current sysctl values."""
     current = _read_current_values()
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
 
     d.text((2, 2), "Current Stack Values", font=font, fill="#FF6600")
     y = 18
@@ -317,7 +318,7 @@ def main():
 
     # Splash
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
     d.text((4, 16), "FINGERPRINT SPOOF", font=font, fill="#FF6600")
     d.text((4, 32), "TCP/IP stack spoofer", font=font, fill="#888")
     d.text((4, 52), "OK=Apply profile", font=font, fill="#666")

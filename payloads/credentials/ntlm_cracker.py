@@ -37,6 +37,7 @@ import RPi.GPIO as GPIO
 import LCD_1in44
 import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
+from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
 
 PINS = {
@@ -49,8 +50,8 @@ for pin in PINS.values():
 
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-WIDTH, HEIGHT = 128, 128
-font = ImageFont.load_default()
+WIDTH, HEIGHT = LCD.width, LCD.height
+font = scaled_font()
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -337,7 +338,7 @@ def _draw_footer(d, text):
 
 def _draw_files_view():
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
     _draw_header(d, "NTLM CRACKER")
 
     with lock:
@@ -372,7 +373,7 @@ def _draw_files_view():
 
 def _draw_modes_view():
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
     _draw_header(d, "NTLM CRACKER")
 
     with lock:
@@ -408,7 +409,7 @@ def _draw_modes_view():
 
 def _draw_cracking_view():
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
     _draw_header(d, "NTLM CRACKER")
 
     with lock:
@@ -445,7 +446,7 @@ def _draw_cracking_view():
 
 def _draw_results_view(show_lines):
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
     _draw_header(d, "CRACKED PASSWORDS")
 
     with lock:
@@ -474,7 +475,7 @@ def main():
 
     # Splash
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
     d.text((10, 16), "NTLM CRACKER", font=font, fill="#FF6600")
     d.text((4, 36), "John the Ripper", font=font, fill="#888")
     d.text((4, 52), "Scanning for hashes...", font=font, fill="#666")

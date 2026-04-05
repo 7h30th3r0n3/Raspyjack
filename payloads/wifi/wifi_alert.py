@@ -41,6 +41,7 @@ import RPi.GPIO as GPIO
 import LCD_1in44
 import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
+from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
 
 try:
@@ -69,8 +70,8 @@ for pin in PINS.values():
 
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-WIDTH, HEIGHT = 128, 128
-font = ImageFont.load_default()
+WIDTH, HEIGHT = LCD.width, LCD.height
+font = scaled_font()
 
 # ── Constants ────────────────────────────────────────────────────────────────
 CONFIG_DIR = "/root/Raspyjack/config/wifi_alert"
@@ -410,7 +411,7 @@ def _export_log():
 def _draw_screen():
     bg = "#200000" if time.time() < flash_until else "black"
     img = Image.new("RGB", (WIDTH, HEIGHT), bg)
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
 
     # Header
     d.rectangle((0, 0, 127, 13), fill="#111")
@@ -467,7 +468,7 @@ def main():
 
     # Splash
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
     d.text((8, 10), "WiFi ALERT", font=font, fill="#FF4444")
     d.text((4, 28), "Airspace watchlist", font=font, fill="#888")
     d.text((4, 44), "monitor with alerts.", font=font, fill="#888")

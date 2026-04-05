@@ -38,6 +38,7 @@ import RPi.GPIO as GPIO
 import LCD_1in44
 import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
+from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
 
 PINS = {
@@ -50,8 +51,8 @@ for pin in PINS.values():
 
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-WIDTH, HEIGHT = 128, 128
-font = ImageFont.load_default()
+WIDTH, HEIGHT = LCD.width, LCD.height
+font = scaled_font()
 
 LOOT_ROOT = "/root/Raspyjack/loot"
 NOTIF_FILE = os.path.join(LOOT_ROOT, ".notifications.jsonl")
@@ -212,7 +213,7 @@ _SEV_COLORS = {
 
 def _draw_notifications(lcd, notifs, cursor, scroll, status=""):
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
 
     d.rectangle((0, 0, 127, 12), fill="#111")
     unread = sum(1 for n in notifs if n.get("timestamp", "") not in read_set)
@@ -258,7 +259,7 @@ def _draw_notifications(lcd, notifs, cursor, scroll, status=""):
 
 def _draw_confirm(lcd, message):
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
     d.text((10, 40), message, font=font, fill="#ff4444")
     d.text((10, 60), "OK = Yes", font=font, fill="#00ff00")
     d.text((10, 75), "Any = Cancel", font=font, fill="#666")

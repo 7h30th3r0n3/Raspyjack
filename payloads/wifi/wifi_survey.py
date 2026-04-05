@@ -42,6 +42,7 @@ import RPi.GPIO as GPIO
 import LCD_1in44
 import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
+from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
 
 try:
@@ -64,8 +65,8 @@ for pin in PINS.values():
 
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-WIDTH, HEIGHT = 128, 128
-font = ImageFont.load_default()
+WIDTH, HEIGHT = LCD.width, LCD.height
+font = scaled_font()
 
 # ── Constants ────────────────────────────────────────────────────────────────
 LOOT_DIR = "/root/Raspyjack/loot/WiFiSurvey"
@@ -387,7 +388,7 @@ def _sorted_clients():
 
 def _draw_screen():
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
 
     with lock:
         active = surveying
@@ -466,7 +467,7 @@ def main():
     global view_idx, sort_idx, scroll_pos, status_msg
 
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
     d.text((8, 10), "WiFi SURVEY", font=font, fill="#00CCFF")
     d.text((4, 28), "PineAP-style recon", font=font, fill="#888")
     d.text((4, 44), "dashboard.", font=font, fill="#888")

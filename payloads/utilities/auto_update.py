@@ -28,6 +28,7 @@ sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..", "..")))
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
+from payloads._display_helper import ScaledDraw
 
 # Shared input helper (WebUI virtual + GPIO)
 from payloads._input_helper import get_button
@@ -44,8 +45,8 @@ GIT_BRANCH      = "main"
 INSTALL_SCRIPT  = "/root/Raspyjack/install_raspyjack.sh"
 
 PINS = {"KEY1": 21, "KEY3": 16}
-WIDTH, HEIGHT = 128, 128
-FONT = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 10)
+WIDTH, HEIGHT = LCD.width, LCD.height
+FONT = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", int(10 * LCD_1in44.LCD_SCALE))
 
 # ---------------------------------------------------------------------------
 # 2) Hardware init
@@ -68,7 +69,7 @@ def show(lines, *, invert=False, spacing=2):
     bg = "white" if invert else "black"
     fg = "black" if invert else "#00FF00"
     img  = Image.new("RGB", (WIDTH, HEIGHT), bg)
-    draw = ImageDraw.Draw(img)
+    draw = ScaledDraw(img)
     sizes = [draw.textbbox((0, 0), l, font=FONT)[2:] for l in lines]
     total_h = sum(h + spacing for _, h in sizes) - spacing
     y = (HEIGHT - total_h) // 2

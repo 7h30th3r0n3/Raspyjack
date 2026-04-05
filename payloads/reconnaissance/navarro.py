@@ -31,6 +31,7 @@ sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..', '..')))
 import RPi.GPIO as GPIO
 import LCD_1in44
 from PIL import Image, ImageDraw, ImageFont
+from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
 try:
     import qrcode 
@@ -50,10 +51,11 @@ PINS = {
     "KEY3": 16,
 }
 
-WIDTH, HEIGHT = 128, 128
+WIDTH, HEIGHT = LCD_1in44.LCD_WIDTH, LCD_1in44.LCD_HEIGHT
 FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
-FONT_SMALL_SIZE = 9
-FONT_BIG_SIZE = 11
+_S = LCD_1in44.LCD_SCALE
+FONT_SMALL_SIZE = int(9 * _S)
+FONT_BIG_SIZE = int(11 * _S)
 
 NAVARRO_PATHS = [
     "/root/Raspyjack/Navarro/navarro.py",
@@ -73,7 +75,7 @@ def load_font(size: int):
     try:
         return ImageFont.truetype(FONT_PATH, size)
     except Exception:
-        return ImageFont.load_default()
+        return scaled_font()
 
 font_small = load_font(FONT_SMALL_SIZE)
 font_big = load_font(FONT_BIG_SIZE)
@@ -88,7 +90,7 @@ for pin in PINS.values():
 # ------------------------- Drawing helpers ------------------------
 def new_canvas():
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    return img, ImageDraw.Draw(img)
+    return img, ScaledDraw(img)
 
 
 def draw_center(lines, *, small: bool = False, footer: str | None = None):
@@ -98,13 +100,13 @@ def draw_center(lines, *, small: bool = False, footer: str | None = None):
         lines = [lines]
     heights = [d.textbbox((0, 0), s, font=f)[3] for s in lines]
     total_h = sum(heights) + max(0, len(lines) - 1) * 2
-    y = (HEIGHT - total_h) // 2
+    y = (128 - total_h) // 2
     for s, h in zip(lines, heights):
         w = d.textbbox((0, 0), s, font=f)[2]
-        d.text(((WIDTH - w) // 2, y), s, font=f, fill="#00FF00")
+        d.text((64, y), s, font=f, fill="#00FF00", anchor="mt")
         y += h + 2
     if footer:
-        d.text((2, HEIGHT - 10), footer[:20], font=font_small, fill="#999999")
+        d.text((2, 118), footer[:20], font=font_small, fill="#999999")
     LCD.LCD_ShowImage(img, 0, 0)
 
 
@@ -122,8 +124,8 @@ def draw_home(username: str, cursor: int):
         d.text((4, y), f"{prefix} {k}: ", font=font_small, fill="#FFFFFF")
         d.text((70, y), v[:14], font=font_small, fill=("#00FF00" if i == cursor else "#CCCCCC"))
         y += 16
-    d.line([(0, HEIGHT - 12), (WIDTH, HEIGHT - 12)], fill="#202020")
-    d.text((2, HEIGHT - 10), "OK=Edit  K1 Start  K3 Back", font=font_small, fill="#999999")
+    d.line([(0, 116), (WIDTH, 116)], fill="#202020")
+    d.text((2, 118), "OK=Edit  K1 Start  K3 Back", font=font_small, fill="#999999")
     LCD.LCD_ShowImage(img, 0, 0)
 
 
@@ -135,7 +137,7 @@ def draw_keyboard(buffer: str, grid: list[list[str]], gx: int, gy: int, page_nam
     top = 36
     padding = 4
     max_cols = max(len(row) for row in grid) if grid else 1
-    cell_w = max(12, min(16, (WIDTH - 2 * padding) // max_cols))
+    cell_w = max(12, min(16, (128 - 2 * padding) // max_cols))
     cell_h = 16
     left = padding
     for y, row in enumerate(grid):
@@ -147,8 +149,8 @@ def draw_keyboard(buffer: str, grid: list[list[str]], gx: int, gy: int, page_nam
             label = key if key != " " else "␣"
             tw = d.textbbox((0, 0), label[:2], font=font_small)[2]
             d.text((rx + max(1, (cell_w - tw) // 2), ry + 2), label[:2], font=font_small, fill=("#00FF00" if sel else "#CCCCCC"))
-    d.line([(0, HEIGHT - 12), (WIDTH, HEIGHT - 12)], fill="#202020")
-    d.text((2, HEIGHT - 10), "OK=Add  K1=Backsp  K2=Page  Enter  K3=Cancel", font=font_small, fill="#999999")
+    d.line([(0, 116), (WIDTH, 116)], fill="#202020")
+    d.text((2, 118), "OK=Add  K1=Backsp  K2=Page  Enter  K3=Cancel", font=font_small, fill="#999999")
     LCD.LCD_ShowImage(img, 0, 0)
 
 
@@ -164,12 +166,12 @@ def draw_running(user: str, bounce_pos: int):
     bar_y1, bar_y2 = 36, 42
     d.rectangle((2, bar_y1, WIDTH - 2, bar_y2), outline="#404040")
     seg_w = 24
-    pos = max(2, min(WIDTH - 2 - seg_w, 2 + bounce_pos))
+    pos = max(2, min(126 - seg_w, 2 + bounce_pos))
     d.rectangle((pos, bar_y1 + 1, pos + seg_w, bar_y2 - 1), fill="#00AA00")
 
     # No duplicate bottom status line
 
-    d.text((2, HEIGHT - 10), "K3 Stop", font=font_small, fill="#999999")
+    d.text((2, 118), "K3 Stop", font=font_small, fill="#999999")
     LCD.LCD_ShowImage(img, 0, 0)
 
 
@@ -197,9 +199,9 @@ def draw_results(user: str, items: list[tuple[str, str]], page: int, selected_id
         render = platform[:20]
         fill = "#00FF00" if gi == selected_idx else "#FFFFFF"
         d.text((2, y), f"• {render}", font=font_small, fill=fill)
-    d.text((WIDTH - 34, HEIGHT - 10), f"{page}/{total_pages}", font=font_small, fill="#999999")
-    d.line([(0, HEIGHT - 12), (WIDTH, HEIGHT - 12)], fill="#202020")
-    d.text((2, HEIGHT - 10), "OK=Detail  LR=Pages  K3 Back", font=font_small, fill="#999999")
+    d.text((WIDTH - 34, 118), f"{page}/{total_pages}", font=font_small, fill="#999999")
+    d.line([(0, 116), (WIDTH, 116)], fill="#202020")
+    d.text((2, 118), "OK=Detail  LR=Pages  K3 Back", font=font_small, fill="#999999")
     LCD.LCD_ShowImage(img, 0, 0)
 
 
@@ -209,7 +211,7 @@ def draw_result_detail(user: str, platform: str, url: str, idx: int, total: int)
     d.line([(0, 14), (WIDTH, 14)], fill="#202020")
 
     # Try to render a QR code on the right (64x64). If unavailable, use full width for text
-    text_right = WIDTH - 4
+    text_right = 124
     if qrcode is not None:
         try:
             qr = qrcode.QRCode(version=None, box_size=2, border=1)
@@ -217,10 +219,10 @@ def draw_result_detail(user: str, platform: str, url: str, idx: int, total: int)
             qr.make(fit=True)
             qr_img = qr.make_image(fill_color="black", back_color="white").convert("RGB")
             qr_img = qr_img.resize((64, 64))
-            img.paste(qr_img, (WIDTH - 64 - 2, 20))
+            img.paste(qr_img, (62, 20))
             text_right = WIDTH - 64 - 6  # leave gap before QR
         except Exception:
-            text_right = WIDTH - 4
+            text_right = 124
 
     # wrap url text within the available area
     max_w = max(20, text_right - 2)
@@ -246,8 +248,8 @@ def draw_result_detail(user: str, platform: str, url: str, idx: int, total: int)
     for line in lines:
         d.text((2, y), line, font=font_small, fill="#FFFFFF")
         y += 12
-    d.line([(0, HEIGHT - 12), (WIDTH, HEIGHT - 12)], fill="#202020")
-    d.text((2, HEIGHT - 10), "LR=Prev/Next  K3 Back", font=font_small, fill="#999999")
+    d.line([(0, 116), (WIDTH, 116)], fill="#202020")
+    d.text((2, 118), "LR=Prev/Next  K3 Back", font=font_small, fill="#999999")
     LCD.LCD_ShowImage(img, 0, 0)
 
 
@@ -351,7 +353,7 @@ def run_navarro(username: str) -> tuple[list[str], str]:
                         # Ignore platform/percent; keep logging only
                 # update bouncing bar position
                 bounce_pos += bounce_dir
-                if bounce_pos >= (WIDTH - 2 - 24) or bounce_pos <= 2:
+                if bounce_pos >= 102 or bounce_pos <= 2:
                     bounce_dir *= -1
                 draw_running(username, bounce_pos)
                 # Allow stop

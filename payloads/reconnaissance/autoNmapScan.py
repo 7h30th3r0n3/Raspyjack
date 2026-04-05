@@ -32,6 +32,7 @@ from datetime import datetime, timedelta
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
+from payloads._display_helper import ScaledDraw, scaled_font
 
 # Shared input helper (WebUI virtual + GPIO)
 from payloads._input_helper import get_button
@@ -70,15 +71,15 @@ for pin in PINS.values():
 # ---------------------------------------------------------------------------
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-WIDTH, HEIGHT = 128, 128
-font_small = ImageFont.load_default()                    # 5×8 pix font
+WIDTH, HEIGHT = LCD.width, LCD.height
+font_small = scaled_font()                    # 5×8 pix font
 font_large = ImageFont.truetype(
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 10
 )
 
 # In-memory canvas reused every frame
 canvas = Image.new("RGB", (WIDTH, HEIGHT), "black")
-draw   = ImageDraw.Draw(canvas)
+draw   = ScaledDraw(canvas)
 
 # ---------------------------------------------------------------------------
 # 4) Helper: draw centred multiline text

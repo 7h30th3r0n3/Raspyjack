@@ -31,13 +31,14 @@ import RPi.GPIO as GPIO
 import LCD_1in44
 import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
+from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
 
 PINS = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
     "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16,
 }
-WIDTH, HEIGHT = 128, 128
+WIDTH, HEIGHT = LCD_1in44.LCD_WIDTH, LCD_1in44.LCD_HEIGHT
 BUFFER_SIZE = 4096
 
 # ---------------------------------------------------------------------------
@@ -215,7 +216,7 @@ def _format_bytes(n):
 def _draw_config(lcd, font):
     """Draw the configuration screen for the current rule."""
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
 
     # Header
     d.rectangle((0, 0, 127, 13), fill="#111")
@@ -271,7 +272,7 @@ def _draw_config(lcd, font):
 def _draw_rules_view(lcd, font):
     """Draw the active rules overview."""
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
 
     # Header
     d.rectangle((0, 0, 127, 13), fill="#111")
@@ -328,14 +329,14 @@ def main():
     lcd = LCD_1in44.LCD()
     lcd.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
     lcd.LCD_Clear()
-    font = ImageFont.load_default()
+    font = scaled_font()
 
     # Initialize first rule
     rules.append(_new_rule())
 
     # Splash
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
     d.text((4, 16), "TCP PORT FORWARDER", font=font, fill="#33CCFF")
     d.text((4, 36), "Forward local to remote", font=font, fill="#888")
     d.text((4, 56), "OK     Start/stop", font=font, fill="#666")

@@ -36,6 +36,7 @@ sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..", "..")))
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
+from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
 
 PINS = {
@@ -48,8 +49,8 @@ for pin in PINS.values():
 
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-WIDTH, HEIGHT = 128, 128
-font = ImageFont.load_default()
+WIDTH, HEIGHT = LCD.width, LCD.height
+font = scaled_font()
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -329,7 +330,7 @@ def _sorted_aps():
 
 def draw_ap_list():
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
     _draw_header(d, "CLIENT MAP")
 
     with lock:
@@ -365,7 +366,7 @@ def draw_ap_list():
 
 def draw_client_list(bssid, clients):
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
     _draw_header(d, "CLIENTS")
 
     d.text((2, 15), f"AP: {bssid[-11:]}", font=font, fill="#FFFF00")
@@ -384,7 +385,7 @@ def draw_client_list(bssid, clients):
 
 def _show_message(line1, line2=""):
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
     d.text((10, 50), line1, font=font, fill="#00FF00")
     if line2:
         d.text((4, 65), line2, font=font, fill="#888")
@@ -400,7 +401,7 @@ def main():
     global scroll_pos, client_scroll, stop_flag, ap_clients, pkt_count
 
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
     d.text((4, 20), "WIFI CLIENT MAP", font=font, fill="#00CCFF")
     d.text((4, 40), "Passive 802.11", font=font, fill="#888")
     d.text((4, 52), "association mapper", font=font, fill="#888")

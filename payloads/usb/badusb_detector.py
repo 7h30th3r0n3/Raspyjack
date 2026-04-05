@@ -17,6 +17,7 @@ sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..", "..")))
 
 import LCD_1in44, LCD_Config  # type: ignore
 from PIL import Image, ImageDraw, ImageFont  # type: ignore
+from payloads._display_helper import ScaledDraw, scaled_font
 import RPi.GPIO as GPIO  # type: ignore
 
 # Shared input helper (WebUI virtual + GPIO)
@@ -35,7 +36,7 @@ except Exception:
     list_devices = None
 
 
-WIDTH, HEIGHT = 128, 128
+WIDTH, HEIGHT = LCD_1in44.LCD_WIDTH, LCD_1in44.LCD_HEIGHT
 KEY3_PIN = 16
 ALERT_WINDOW_SEC = 8
 KEY_EVENT_THRESHOLD = 1
@@ -70,8 +71,8 @@ def lcd_init():
 
 def draw_screen(lcd, lines, color="white", bg="black"):
     img = Image.new("RGB", (WIDTH, HEIGHT), bg)
-    d = ImageDraw.Draw(img)
-    font = ImageFont.load_default()
+    d = ScaledDraw(img)
+    font = scaled_font()
     y = 5
     for line in lines:
         if line:
@@ -82,8 +83,8 @@ def draw_screen(lcd, lines, color="white", bg="black"):
 
 def draw_alert(lcd, reason):
     img = Image.new("RGB", (WIDTH, HEIGHT), "red")
-    d = ImageDraw.Draw(img)
-    font = ImageFont.load_default()
+    d = ScaledDraw(img)
+    font = scaled_font()
     d.rectangle((4, 4, 123, 123), outline="white")
     d.text((10, 12), "!!! ALERT !!!", font=font, fill="white")
     d.text((10, 34), "BadUSB DETECT", font=font, fill="white")
@@ -102,8 +103,8 @@ def _popup(message, duration=1.5):
 
 def draw_status(lcd):
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
-    font = ImageFont.load_default()
+    d = ScaledDraw(img)
+    font = scaled_font()
     d.rectangle((0, 0, 127, 16), fill="#1a1a1a")
     d.text((4, 2), "BadUSB Monitor", font=font, fill="white")
     # Simple USB/Keyboard icons

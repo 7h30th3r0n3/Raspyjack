@@ -25,6 +25,7 @@ from datetime import datetime
 sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..", "..")))
 
 # Import the working wardriving scanner — we inherit everything from it
+from payloads._display_helper import ScaledDraw, scaled_font
 from payloads.reconnaissance.wardriving import (  # type: ignore
     WardrivingScanner,
     LCD_AVAILABLE,
@@ -704,6 +705,7 @@ class CamFinderScanner(WardrivingScanner):
             return
         try:
             from PIL import Image, ImageDraw  # type: ignore
+            from payloads._display_helper import ScaledDraw, scaled_font
 
             lines = ["CAM FINDER", f"Cameras: {self.total_networks}"]
 
@@ -738,16 +740,12 @@ class CamFinderScanner(WardrivingScanner):
             lines.append("[KEY2] Exit")
 
             img = Image.new("RGB", (self.WIDTH, self.HEIGHT), "black")
-            d = ImageDraw.Draw(img)
+            d = ScaledDraw(img)
             y = 2
             for line in lines:
-                if y > self.HEIGHT - 15:
+                if y > 113:
                     break
-                if hasattr(d, "textbbox"):
-                    w = d.textbbox((0, 0), line, font=self.font)[2]
-                else:
-                    w, _ = d.textsize(line, font=self.font)
-                d.text(((self.WIDTH - w) // 2, y), line, font=self.font, fill="#00FF00")
+                d.text((64, y), line, font=self.font, fill="#00FF00", anchor="mt")
                 y += 12
             self.LCD.LCD_ShowImage(img, 0, 0)
         except Exception as e:

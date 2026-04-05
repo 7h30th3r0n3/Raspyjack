@@ -29,6 +29,7 @@ sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..', '..')))
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
+from payloads._display_helper import ScaledDraw
 
 # Shared input helper (WebUI virtual + GPIO)
 from payloads._input_helper import get_button
@@ -171,10 +172,10 @@ for pin in PINS.values():
 
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-WIDTH, HEIGHT = 128, 128
-font_large = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 10)
+WIDTH, HEIGHT = LCD.width, LCD.height
+font_large = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", int(10 * LCD_1in44.LCD_SCALE))
 canvas = Image.new("RGB", (WIDTH, HEIGHT), "black")
-draw = ImageDraw.Draw(canvas)
+draw = ScaledDraw(canvas)
 
 def show(lines):
     """Display text on LCD with word wrapping."""

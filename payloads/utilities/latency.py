@@ -3,7 +3,7 @@
 Latency/Jitter Monitor (RaspyJack payload)
 ==========================================
 Measures TCP connect RTT (no monitor mode), estimates jitter, and shows a
-rolling graph on the 128x128 LCD. Designed to work over Ethernet or managed
+rolling graph on the LCD. Designed to work over Ethernet or managed
 Wi‑Fi without special privileges.
 
 Controls
@@ -23,12 +23,13 @@ sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..', '..')))
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
+from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
 
 
 # --------------------------- Configuration ---------------------------------
 
-WIDTH, HEIGHT = 128, 128
+WIDTH, HEIGHT = LCD.width, LCD.height
 HISTORY_LEN = 64              # number of points to show in the sparkline
 PROBE_TIMEOUT_S = 1.0         # TCP connect timeout per probe
 JITTER_WINDOW = 10            # last N samples to compute jitter
@@ -190,12 +191,12 @@ LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
 
 canvas = Image.new("RGB", (WIDTH, HEIGHT), "black")
-draw = ImageDraw.Draw(canvas)
+draw = ScaledDraw(canvas)
 def _font(size: int):
     try:
         return ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', size)
     except Exception:
-        return ImageFont.load_default()
+        return scaled_font()
 font_small = _font(8)
 font_medium = _font(10)
 

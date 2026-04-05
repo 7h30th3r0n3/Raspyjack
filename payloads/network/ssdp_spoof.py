@@ -34,6 +34,7 @@ import RPi.GPIO as GPIO
 import LCD_1in44
 import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
+from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
 
 # ---------------------------------------------------------------------------
@@ -43,7 +44,7 @@ PINS = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
     "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16,
 }
-WIDTH, HEIGHT = 128, 128
+WIDTH, HEIGHT = LCD_1in44.LCD_WIDTH, LCD_1in44.LCD_HEIGHT
 ROWS_VISIBLE = 5
 ROW_H = 12
 LOOT_DIR = "/root/Raspyjack/loot/SSDP"
@@ -342,7 +343,7 @@ def _export_loot():
 def _draw_frame(lcd, font):
     """Render current state to the LCD."""
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
 
     d.rectangle((0, 0, 127, 13), fill="#111")
     d.text((2, 1), "SSDP SPOOF", font=font, fill="#FF00AA")
@@ -395,7 +396,7 @@ def main():
     lcd = LCD_1in44.LCD()
     lcd.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
     lcd.LCD_Clear()
-    font = ImageFont.load_default()
+    font = scaled_font()
 
     local_ip = _get_local_ip()
     status_msg = f"IP: {local_ip}"

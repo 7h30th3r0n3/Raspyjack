@@ -22,7 +22,8 @@ from PIL import Image, ImageDraw, ImageFont  # type: ignore
 # Shared input helper (WebUI virtual + GPIO)
 from payloads._input_helper import get_button
 
-WIDTH, HEIGHT = 128, 128
+WIDTH, HEIGHT = LCD_1in44.LCD_WIDTH, LCD_1in44.LCD_HEIGHT
+_GAME_W, _GAME_H = 128, 128
 KEY_UP = 6
 KEY_DOWN = 19
 KEY_LEFT = 5
@@ -61,7 +62,7 @@ def _tile_color(val):
 
 
 def draw_board(lcd, board, score):
-    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+    img = Image.new("RGB", (_GAME_W, _GAME_H), "black")
     d = ImageDraw.Draw(img)
     font = ImageFont.load_default()
 
@@ -93,6 +94,8 @@ def draw_board(lcd, board, score):
                     w, h = font.getsize(txt)
                 d.text((x0 + (cell - w) // 2, y0 + (cell - h) // 2), txt, font=font, fill=text_color)
 
+    if _GAME_W != WIDTH or _GAME_H != HEIGHT:
+        img = img.resize((WIDTH, HEIGHT), Image.NEAREST)
     lcd.LCD_ShowImage(img, 0, 0)
 
 
@@ -243,12 +246,14 @@ def main():
                 draw_board(lcd, board, score)
                 time.sleep(0.5)
                 # Show game over
-                img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+                img = Image.new("RGB", (_GAME_W, _GAME_H), "black")
                 d = ImageDraw.Draw(img)
                 font = ImageFont.load_default()
                 d.text((20, 50), "GAME OVER", font=font, fill="white")
                 d.text((10, 70), "KEY1=New", font=font, fill="white")
                 d.text((10, 82), "KEY3=Exit", font=font, fill="white")
+                if _GAME_W != WIDTH or _GAME_H != HEIGHT:
+                    img = img.resize((WIDTH, HEIGHT), Image.NEAREST)
                 lcd.LCD_ShowImage(img, 0, 0)
                 while True:
                     btn = get_button({"KEY1": KEY1, "KEY3": KEY3}, GPIO)

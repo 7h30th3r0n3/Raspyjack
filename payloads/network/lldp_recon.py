@@ -32,6 +32,7 @@ sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..", "..")))
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
+from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
 
 try:
@@ -53,8 +54,8 @@ for pin in PINS.values():
 
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-WIDTH, HEIGHT = 128, 128
-font = ImageFont.load_default()
+WIDTH, HEIGHT = LCD.width, LCD.height
+font = scaled_font()
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -410,7 +411,7 @@ def _draw_detail_view(draw):
 def _draw_screen():
     """Render current state on LCD."""
     img = Image.new("RGB", (WIDTH, HEIGHT), "BLACK")
-    draw = ImageDraw.Draw(img)
+    draw = ScaledDraw(img)
 
     with lock:
         vm = view_mode
@@ -434,7 +435,7 @@ def main():
     try:
         if not SCAPY_OK:
             img = Image.new("RGB", (WIDTH, HEIGHT), "BLACK")
-            draw = ImageDraw.Draw(img)
+            draw = ScaledDraw(img)
             draw.text((4, 50), "scapy not found!", font=font, fill="RED")
             draw.text((4, 65), "pip install scapy", font=font, fill="GRAY")
             LCD.LCD_ShowImage(img, 0, 0)
@@ -511,7 +512,7 @@ def main():
 
         try:
             img = Image.new("RGB", (WIDTH, HEIGHT), "BLACK")
-            draw = ImageDraw.Draw(img)
+            draw = ScaledDraw(img)
             draw.text((10, 50), "LLDP Recon stopped", fill="YELLOW", font=font)
             LCD.LCD_ShowImage(img, 0, 0)
         except Exception:

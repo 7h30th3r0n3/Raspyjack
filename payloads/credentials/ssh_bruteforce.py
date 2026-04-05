@@ -37,13 +37,14 @@ import RPi.GPIO as GPIO
 import LCD_1in44
 import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
+from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
 
 PINS = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
     "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16,
 }
-WIDTH, HEIGHT = 128, 128
+WIDTH, HEIGHT = LCD_1in44.LCD_WIDTH, LCD_1in44.LCD_HEIGHT
 ROWS_VISIBLE = 5
 LOOT_DIR = "/root/Raspyjack/loot/SSH"
 NMAP_LOOT = "/root/Raspyjack/loot"
@@ -290,7 +291,7 @@ def _export_loot():
 def _draw_frame(lcd, font, mode):
     """Render current state to the LCD."""
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
 
     # Header
     d.rectangle((0, 0, 127, 13), fill="#111")
@@ -373,14 +374,14 @@ def main():
     lcd = LCD_1in44.LCD()
     lcd.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
     lcd.LCD_Clear()
-    font = ImageFont.load_default()
+    font = scaled_font()
 
     # Check sshpass availability
     try:
         subprocess.run(["sshpass", "-V"], capture_output=True, timeout=3)
     except FileNotFoundError:
         img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-        d = ImageDraw.Draw(img)
+        d = ScaledDraw(img)
         d.text((4, 50), "sshpass not found!", font=font, fill="#FF0000")
         d.text((4, 65), "apt install sshpass", font=font, fill="#888")
         lcd.LCD_ShowImage(img, 0, 0)
@@ -390,7 +391,7 @@ def main():
 
     # Splash
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
     d.text((8, 16), "SSH CRED SPRAY", font=font, fill="#00CCFF")
     d.text((4, 36), "Spray common creds", font=font, fill="#888")
     d.text((4, 56), "OK    Start attack", font=font, fill="#666")

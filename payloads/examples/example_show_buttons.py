@@ -72,7 +72,8 @@ for pin in PINS.values():
 # ---------------------------------------------------------------------------
 LCD = LCD_1in44.LCD()                     # create driver instance
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)      # default scan direction (portrait)
-WIDTH, HEIGHT = 128, 128                  # pixels
+WIDTH, HEIGHT = LCD.width, LCD.height                  # pixels
+_GAME_W, _GAME_H = 128, 128  # internal render resolution
 font = ImageFont.load_default()           # tiny fixed‑width font
 
 # ---------------------------------------------------------------------------
@@ -82,7 +83,7 @@ font = ImageFont.load_default()           # tiny fixed‑width font
 def draw(text: str) -> None:
     """Clear the screen and draw *text* centred in bright green."""
     # 4.1 – create a black canvas
-    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+    img = Image.new("RGB", (_GAME_W, _GAME_H), "black")
     d = ImageDraw.Draw(img)
 
     # 4.2 – measure text size (Pillow ≥ 9.2 offers textbbox())
@@ -93,10 +94,12 @@ def draw(text: str) -> None:
         w, h = d.textsize(text, font=font)
 
     # 4.3 – centre coordinates
-    pos = ((WIDTH - w) // 2, (HEIGHT - h) // 2)
+    pos = ((_GAME_W - w) // 2, (_GAME_H - h) // 2)
 
     # 4.4 – draw the text and push the image to the LCD
     d.text(pos, text, font=font, fill="#00FF00")
+    if _GAME_W != WIDTH or _GAME_H != HEIGHT:
+        img = img.resize((WIDTH, HEIGHT), Image.NEAREST)
     LCD.LCD_ShowImage(img, 0, 0)
 
 # ---------------------------------------------------------------------------

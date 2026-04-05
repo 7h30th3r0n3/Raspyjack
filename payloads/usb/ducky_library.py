@@ -34,6 +34,7 @@ sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..", "..")))
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
+from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
 
 PINS = {
@@ -46,14 +47,14 @@ for pin in PINS.values():
 
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-WIDTH, HEIGHT = 128, 128
-font = ImageFont.load_default()
+WIDTH, HEIGHT = LCD.width, LCD.height
+font = scaled_font()
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 SCRIPTS_DIR = "/root/Raspyjack/payloads/hid_scripts"
-HID_INJECTOR = "/root/Raspyjack/payloads/general/hid_injector.py"
+HID_INJECTOR = "/root/Raspyjack/payloads/usb/hid_injector.py"
 ROWS_VISIBLE = 7
 IP_PLACEHOLDER = "ATTACKER_IP"
 
@@ -271,7 +272,7 @@ def _draw_footer(d, text):
 def _draw_list_view():
     """Render scrollable script list."""
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
     _draw_header(d, "DUCKY LIBRARY")
 
     with lock:
@@ -308,7 +309,7 @@ def _draw_list_view():
 def _draw_preview_view():
     """Render script preview (scrollable)."""
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
     _draw_header(d, "PREVIEW", "#FFAA00")
 
     with lock:
@@ -331,7 +332,7 @@ def _draw_preview_view():
 def _draw_ip_edit_view():
     """Render IP address editor."""
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
     _draw_header(d, "EDIT IP", "#00FF00")
 
     d.text((2, 20), "Set ATTACKER_IP:", font=font, fill="#888")
@@ -375,7 +376,7 @@ def main():
 
     # Splash
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ImageDraw.Draw(img)
+    d = ScaledDraw(img)
     d.text((8, 16), "DUCKY LIBRARY", font=font, fill="#00CCFF")
     d.text((4, 36), "DuckyScript launcher", font=font, fill="#888")
     d.text((4, 48), f"Scripts: {len(scripts)}", font=font, fill="#666")
