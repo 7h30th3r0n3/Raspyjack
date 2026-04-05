@@ -160,14 +160,22 @@ def _stats_loop():
             pass
         time.sleep(2)
 
+_display_dirty = True  # flag: image changed, needs refresh
+
+def mark_display_dirty():
+    global _display_dirty
+    _display_dirty = True
+
 def _display_loop():
+    global _display_dirty
     last_frame_save = 0.0
     while not _stop_evt.is_set():
-        if not screen_lock.is_set():
+        if not screen_lock.is_set() and _display_dirty:
             mirror_image = None
             try:
                 draw_lock.acquire()
                 LCD.LCD_ShowImage(image, 0, 0)
+                _display_dirty = False
                 if FRAME_MIRROR_ENABLED:
                     now = time.monotonic()
                     if (now - last_frame_save) >= FRAME_MIRROR_INTERVAL:
@@ -246,6 +254,7 @@ class template():
     # Render inside of the border
     def DrawMenuBackground(self):
         draw.rectangle((S(3), S(14), _SCR_W - S(4), _SCR_H - S(4)), fill=self.background)
+        mark_display_dirty()
 
     # I don't know how to python pass 'class.variable' as reference properly
     def Set(self, index, color):
@@ -624,6 +633,7 @@ def _draw_toolbar():
         draw.text((0, 0), f"{_temp_c:.0f} °C ", fill="WHITE", font=font)
         if _status_text:
             draw.text((S(30), 0), _status_text, fill="WHITE", font=font)
+        mark_display_dirty()
     except Exception:
         pass
 
@@ -1165,22 +1175,6 @@ def Dialog(a, wait=True):
         draw.rectangle([(_SCR_W - S(25)) // 2, S(65), (_SCR_W + S(25)) // 2, S(80)], fill="#FF0000")
 
         _draw_centered_text(((_SCR_W - S(25)) // 2, S(65), (_SCR_W + S(25)) // 2, S(80)), "OK", fill=color.selected_text, font=text_font)
-    finally:
-        draw_lock.release()
-    if wait:
-        time.sleep(0.25)
-        getButton()
-
-def Dialog_result(title, detail="", wait=True):
-    try:
-        draw_lock.acquire()
-        _draw_toolbar()
-        draw.rectangle([7, 25, 120, 102], fill="#ADADAD")
-        _draw_centered_text((10, 30, 117, 53), title, fill="#000000", font=text_font)
-        if detail:
-            _draw_centered_text((10, 52, 117, 77), detail, fill="#000000", font=text_font)
-        draw.rectangle([43, 82, 83, 96], fill="#FF0000")
-        _draw_centered_text((43, 82, 83, 96), "OK", fill=color.selected_text, font=text_font)
     finally:
         draw_lock.release()
     if wait:
@@ -3432,20 +3426,20 @@ class DisposableMenu:
         """Crée (ou rafraîchit) le menu 'ap' par catégories."""
         self.menu_parent = {}
         category_order = [
-    "reconnaissance",
-    "wifi",
-    "network",
-    "credentials",
-    "bluetooth",
-    "usb",
-    "exfiltration",
-    "evasion",
-    "remote_access",
-    "utilities",
-    "hardware",
-    "games",
-    "examples",
-]
+            "reconnaissance",
+            "wifi",
+            "network",
+            "credentials",
+            "bluetooth",
+            "usb",
+            "exfiltration",
+            "evasion",
+            "remote_access",
+            "utilities",
+            "hardware",
+            "games",
+            "examples",
+        ]
 
         def _label(cat: str) -> str:
             return f" {cat.replace('_', ' ').title()}"
