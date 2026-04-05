@@ -47,11 +47,18 @@ Check the WIKI for more ! https://github.com/7h30th3r0n3/Raspyjack/wiki
     <th>Buy</th>
   </tr>
   <tr>
-    <td><strong>Waveshare 1.44" LCD HAT</strong></td>
-    <td>SPI TFT + joystick + 3 buttons</td>
+    <td><strong>Waveshare 1.44" LCD HAT (original bigger)</strong></td>
+    <td>SPI TFT 128x128 + joystick + 3 buttons</td>
     <td>
       <a href="https://s.click.aliexpress.com/e/_c3HTOQQn">Buy</a><br/>
       <a href="https://s.click.aliexpress.com/e/_EwDqSv4">Buy</a>
+    </td>
+  </tr>
+  <tr>
+    <td><strong>Waveshare 1.3" LCD HAT</strong> (higher resolution but smaller)</td>
+    <td>SPI TFT ST7789 240x240 + joystick + 3 buttons</td>
+    <td>
+      <a href="https://s.click.aliexpress.com/e/_c3j1Wy4N">Buy</a>
     </td>
   </tr>
   <tr>
