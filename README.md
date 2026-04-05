@@ -59,7 +59,7 @@ Check the WIKI for more ! https://github.com/7h30th3r0n3/Raspyjack/wiki
     <td><strong>Waveshare 1.3" LCD HAT</strong> (240x240)</td>
     <td>SPI TFT ST7789 + joystick + 3 buttons</td>
     <td>
-      <a href="#">Buy (affiliate link TODO)</a>
+      <a href="https://s.click.aliexpress.com/e/_c3j1Wy4N">Buy</a>
     </td>
   </tr>
   <tr>
