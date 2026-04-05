@@ -187,6 +187,16 @@
         " game_tictactoe": "",
         " example_show_buttons": "",
         " _payload_template": "",
-        " display_selector": ""
+        " display_selector": "",
+        " game_firewall_defense": "",
+        " smb_share_crawler": "",
+        " eternalblue_checker": "",
+        " default_creds_scanner": "",
+        " kerberoast": "",
+        " vlan_map": "",
+        " pass_the_hash": "",
+        " ldap_dumper": "",
+        " bloodhound_collector": "",
+        " persistence_planter": ""
     }
 }

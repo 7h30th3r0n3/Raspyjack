@@ -27,7 +27,7 @@ RaspyJack is for **authorized security testing, research, and education only**.
 
 - LCD-driven handheld-style interface (Waveshare 1.44" or 1.3" HAT)
 - **Dual-display support** — 128x128 (ST7735) and 240x240 (ST7789)
-- **158 payloads** across 13 categories
+- **168 payloads** across 13 categories
 - Loot collection + browsing
 - WebUI remote control dashboard
 - Payload IDE (browser editor + run flow)
@@ -324,18 +324,18 @@ Raspyjack/
 ├── payloads/
 │   ├── _display_helper.py # ScaledDraw + scaled_font
 │   ├── _input_helper.py   # GPIO + WebUI input
-│   ├── reconnaissance/    # 28 payloads
+│   ├── reconnaissance/    # 33 payloads
 │   ├── wifi/              # 13 payloads
 │   ├── network/           # 30 payloads
-│   ├── credentials/       # 9 payloads
+│   ├── credentials/       # 12 payloads
 │   ├── bluetooth/         # 7 payloads
 │   ├── usb/               # 6 payloads
 │   ├── exfiltration/      # 9 payloads
 │   ├── evasion/           # 6 payloads
-│   ├── remote_access/     # 6 payloads
+│   ├── remote_access/     # 7 payloads
 │   ├── utilities/         # 21 payloads
 │   ├── hardware/          # 5 payloads
-│   ├── games/             # 16 payloads
+│   ├── games/             # 17 payloads
 │   └── examples/          # 2 payloads
 ├── loot/                  # Captured data
 ├── config/                # Payload configs
