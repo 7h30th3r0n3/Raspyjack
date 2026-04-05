@@ -424,7 +424,7 @@ class LCD:
 
         # Set SPI speed based on display type
         if self.display_type == "ST7789_240":
-            LCD_Config.SPI.max_speed_hz = 40000000  # ST7789 supports up to 62.5MHz
+            LCD_Config.SPI.max_speed_hz = 62000000  # ST7789 max: 62.5MHz
         else:
             LCD_Config.SPI.max_speed_hz = 9000000
 
