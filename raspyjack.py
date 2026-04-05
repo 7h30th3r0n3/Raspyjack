@@ -793,6 +793,7 @@ def _draw_lock_screensaver_frame(frame: Image.Image) -> None:
         lock_icon = MENU_ICONS.get(" Lock", "\uf023")
         lock_icon_font = ImageFont.truetype('/usr/share/fonts/truetype/fontawesome/fa-solid-900.ttf', S(14))
         draw.text((_SCR_W - 8, 2), lock_icon, fill=color.selected_text, font=lock_icon_font, anchor="ra")
+        mark_display_dirty()
     finally:
         draw_lock.release()
 
@@ -1016,6 +1017,7 @@ def _preview_gif_browser(gif_files: list[str], screensaver_dir: str, start_index
             # Show GIF name at bottom
             draw.rectangle((0, _SCR_H - S(14), _SCR_W, _SCR_H), fill="#000000")
             draw.text((S(2), _SCR_H - S(12)), gif_files[idx][:20], fill="#888888", font=text_font)
+            mark_display_dirty()
         finally:
             draw_lock.release()
 
@@ -2302,6 +2304,7 @@ def ImageExplorer() -> None:
                 full_img = os.path.join(path, output)
                 with Image.open(full_img) as img:
                     image.paste(img.resize((_SCR_W, _SCR_H)))
+                    mark_display_dirty()
                 time.sleep(1)
                 getButton()
                 color.DrawBorder()
