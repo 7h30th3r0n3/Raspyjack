@@ -1,67 +1,71 @@
 # [Europe]
-PL-Warsaw 720p | rtsp://185.46.171.115:554
-AZ-Baku 720p | rtsp://78.109.52.180:554
-IT-Monza 720p | rtsp://79.20.119.203:554
-GB-Reading 1080p | rtsp://86.18.131.126:554/11
-DE-Lathen 1080p | rtsp://178.142.83.183:554/11
-GB-Blackburn 720p | rtsp://31.104.92.167:554/11
-IT-Milan 720p | rtsp://2.36.10.242:554/11
-UA-Kyiv 720p | rtsp://178.136.28.229:554
 ES-Barcelona 1080p | rtsp://2.143.96.98:554/11
-FR-Paris 1080p | rtsp://82.67.184.155:554/user=admin&password=&channel=1&stream=0.sdp
 HU-Kaposvar 3MP | rtsp://185.174.16.81:554
-DE-Burgdorf 1080p | rtsp://212.58.74.139:554/11
-DE-Magdeburg 1080p | rtsp://178.24.139.209:554/live/main
-DE-Giessen 720p | rtsp://94.114.211.220:554
-DE-Hartenstein 1080p | rtsp://79.218.204.166:554/11
-DE-Germering 960p | rtsp://87.178.164.48:554/11
-NL-Katwijk 1080p | rtsp://84.105.180.241:554/11
 IE-Lucan 720p | rtsp://86.41.41.241:554/live/main
-GB-Portsmouth 1080p | rtsp://80.4.9.11:554
-GB-Lincoln 1080p | rtsp://86.18.246.144:554/11
-PT-SaoDomingos 720p | rtsp://144.64.132.135:554/11
-NL-Oosterhout 720p | rtsp://84.105.225.201:554/11
-IT-Verona 1080p | rtsp://79.40.241.228:554/11
-GR-Patra 720p | rtsp://46.190.124.72:554/11
 BA-Mostar 1080p | rtsp://46.35.138.244:554
-PL-Warsaw 5MP | rtsp://87.206.104.12:554/11
-AT-Vienna 720p | rtsp://194.166.35.28:554/11
 # [Asia]
 VN-LangSon 720p | rtsp://117.4.96.190:554
-CN-Shanghai 720p | rtsp://218.93.2.2:554
-CN-Taiyuan 1080p | rtsp://116.179.145.213:554/11
-JP-Chiba 1080p | rtsp://116.91.75.136:554/11
-TW-Tainan 1080p | rtsp://114.35.159.23:554/user=admin&password=&channel=1&stream=0.sdp
-TW-Taichung 240p | rtsp://123.193.229.190:554
-JP-Tokyo 1080p | rtsp://112.137.43.151:554/11
-VN-QuanBay 720p | rtsp://27.78.182.200:554
-VN-NamDinh 720p | rtsp://27.72.94.221:554
-VN-HoChiMinh 720p | rtsp://42.114.40.66:554/11
-TH-Nopphitam 1080p | rtsp://1.0.154.151:554/11
-CN-Shanghai2 720p | rtsp://124.112.85.195:554
 # [Americas]
-AR-Cordoba 720p | rtsp://181.14.44.148:554/11
-AR-ValleHermoso 720p | rtsp://181.111.15.168:554/11
-US-ThiefRiverFalls 1080p | rtsp://208.101.227.48:554/11
-CL-Santiago 720p | rtsp://190.44.240.179:554/11
-CA-TroisRivieres 720p | rtsp://24.226.235.189:554
-BR-Americana 1080p | rtsp://201.62.125.69:554/user=admin&password=&channel=1&stream=0.sdp
-CR-SanJose 720p | rtsp://186.32.16.62:554/11
-AR-Rafaela 1080p | rtsp://181.189.212.247:554
-US-Mitchell 720p | rtsp://216.106.243.212:554
-UY-Montevideo 720p | rtsp://179.24.112.92:554/11
-US-Ramsey 4MP | rtsp://74.105.134.61:554
 US-Lubbock 720p | rtsp://66.205.103.22:554
-CL-Santiago2 720p | rtsp://181.73.168.81:554/11
-PA-SanMiguelito 1080p | rtsp://190.218.137.64:554
-BR-Encanto 576p | rtsp://206.42.36.29:554
-AR-BuenosAires 288p | rtsp://181.171.208.179:554
-UY-Montevideo2 1080p | rtsp://186.48.174.165:554
-MX-Buenavista 720p | rtsp://187.193.151.26:554/11
-US-Rockville 1080p | rtsp://104.167.157.46:554/11
-US-Bardstown 720p | rtsp://107.161.243.156:554/11
-US-HighPoint 1080p | rtsp://199.101.120.21:554/11
-US-Murphy 1080p | rtsp://174.86.208.56:554/11
 # [Middle East / Africa]
-SA-Jeddah 720p | rtsp://176.224.57.242:554
-TR-Bursa 1440p | rtsp://5.26.229.92:554/11
+
+# [Scraped — non-residential]
+
+# [Scraped — non-residential]
+AR-Olivos (Telecom Personal Bs As) | rtsp://181.2.51.119:554
+AT-Linz (LIWEST Kabelmedien GmbH) | rtsp://86.56.212.95:554/11
+BR-Alfenas (NOVANET PROVEDORA DE INTERNET LTDA ME) | rtsp://181.191.20.7:554/11
+BR-Americana (TELEFÔNICA BRASIL S.A) | rtsp://177.94.202.101:554/live/main
+BR-Bagé (Claro NXT Telecomunicacoes Ltda) | rtsp://179.157.2.170:554/11
+BR-CacimbadeDentro (LEMOS E MORAIS LTDA.) | rtsp://177.86.181.26:554/11
+BR-Cafeara (B. D. MATOS & CIA LTDA - SINET INTERNET) | rtsp://177.128.17.51:554/11
+BR-Guarapuava (Claro NXT Telecomunicacoes Ltda) | rtsp://177.82.28.29:554/11
+BR-PortoAlegre (SOLUTTI NETWORKS LTDA) | rtsp://201.182.98.13:554
+BR-PortoAlegre (SOLUTTI NETWORKS LTDA) | rtsp://201.182.98.14:554
+BR-PortoAlegre (SOLUTTI NETWORKS LTDA) | rtsp://201.182.98.4:554
+BR-SãoPaulo (DVNET SOLUÇÕES E INFORMATICA LTDA) | rtsp://45.70.93.42:554
+BR-Sumaré (Desktop Sigmanet Comunicação Multimídia SA) | rtsp://201.77.114.238:554/live/main
+BR-Torres (DALZOCHIO E MATOS LTDA) | rtsp://45.191.38.65:554/11
+BR-Tramandaí (FRUGUI TELECOMUNICACOES LTDA) | rtsp://179.127.151.69:554/11
+BR-VenâncioAires (FELTEN & QUADROS TELEFONIA E INTERNET LTDA) | rtsp://45.5.224.163:554/11
+CL-PuertoVaras (Patagonia IP, SpA) | rtsp://206.62.252.178:554/11
+CN-Hohhot (China Mobile Communications Corporation) | rtsp://39.153.148.154:554/11
+CN-Ningbo (Jiaxing Jinkai Xingyuan Internet Bar) | rtsp://122.225.19.218:8554
+CO-Medellín (UNE EPM TELECOMUNICACIONES S.A.) | rtsp://181.142.116.28:554/11
+DE-Friedrichshafen (Vodafone GmbH) | rtsp://2.201.215.9:554/11
+DE-Gera (Vodafone Deutschland GmbH) | rtsp://77.24.2.137:554/11
+DE-Hamburg (KABEL-DEUTSCHLAND-CUSTOMER-SERVICES-24) | rtsp://31.17.69.20:554/11
+DE-Leipzig (KABEL-DEUTSCHLAND-CUSTOMER-SERVICES-25) | rtsp://146.52.118.141:554/11
+DE-MarburganderLahn (ARCOR AG) | rtsp://188.107.29.251:554/11
+DE-Meppen (ETN Internet GmbH & Co. KG) | rtsp://46.227.89.53:554
+DE-Neuenkirchen (inexio Informationstechnologie und Telekommunikation Gmbh) | rtsp://80.74.50.138:554/11
+DE-SchwäbischGmünd (ropa GmbH) | rtsp://37.123.122.56:554/11
+DE-Waiblingen (Vodafone BW GmbH) | rtsp://134.3.2.185:554/11
+DE-Wurzen (Vodafone GmbH) | rtsp://2.201.250.13:554/11
+DE-WykaufFöhr (LueneCom Kommunikationsloesungen GmbH) | rtsp://46.253.247.143:554/11
+ES-Cullera (DESIS INFORMATICA, SL) | rtsp://193.111.52.176:554/live/main
+ES-Narón (iteGal) | rtsp://147.78.24.8:554/live/main
+ES-SanMigueldeSalinas (AVATEL TELECOM, SA) | rtsp://45.138.246.240:554
+ES-SantFruitósdeBages (Network Hero, S.L.) | rtsp://185.32.69.250:554
+GB-Crawley (EE Limited) | rtsp://31.121.147.26:554
+GB-KingstonuponHull (KCOM GROUP LIMITED) | rtsp://194.207.157.69:554/11
+GR-Kifisiá (Ote SA (Hellenic Telecommunications Organisation) | rtsp://85.74.49.221:8554
+HK-HongKong (China Mobile Peoples Telephone Company Limited) | rtsp://182.239.81.33:8554
+HK-HongKong (HKT Limited) | rtsp://223.197.177.59:8554/11
+HR-Zagreb (Terrakom d.o.o.) | rtsp://85.94.80.18:8554
+IT-Campobasso (DIMENSIONE Srl) | rtsp://195.32.26.187:554
+IT-Cervia (Acantho S.p.a) | rtsp://77.89.48.10:554
+IT-Milan (DIMENSIONE Srl) | rtsp://195.32.11.226:554/11
+IT-Milan (NGI Spa) | rtsp://212.124.171.27:554
+IT-Milan (NGI Spa) | rtsp://88.149.253.199:554
+IT-Naples (Vodafone Italia S.p.A.) | rtsp://37.183.120.53:554/11
+IT-Rome (Bootstrap srl) | rtsp://95.128.154.102:554/live/main
+IT-Turin (Collegio San Luigi) | rtsp://78.40.130.93:554
+IT-Turin (SHELLNET S.P.A.) | rtsp://62.170.152.138:554/11
+IT-Vigevano (EOLO S.p.A.) | rtsp://128.116.216.109:554/11
+JP-Nagoya (Excite Japan Co., Ltd.) | rtsp://133.218.20.158:554/11
+JP-Nagoya (FreeBit Co., Ltd.) | rtsp://124.255.10.119:554/11
+JP-Osaka (Open Computer Network) | rtsp://180.44.55.33:554/11
+US-BatonRouge (Southern University) | rtsp://192.195.100.151:554/11
+US-BatonRouge (Southern University) | rtsp://192.195.100.152:554
+US-BatonRouge (Southern University) | rtsp://192.195.100.154:554
