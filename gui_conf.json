@@ -1,6 +1,6 @@
 {
     "DISPLAY": {
-        "type": "ST7789_240",
+        "type": "ST7735_128",
         "supported_types": ["ST7735_128", "ST7789_240"]
     },
     "COLORS": {
