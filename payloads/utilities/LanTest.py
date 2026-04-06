@@ -106,7 +106,6 @@ def parse_bps(res: dict) -> float | None:
 
 # --------------------------- LCD + Buttons ----------------------------------
 
-WIDTH, HEIGHT = LCD.width, LCD.height
 PINS = {"UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26, "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16}
 
 GPIO.setmode(GPIO.BCM)
@@ -115,6 +114,7 @@ for pin in PINS.values():
 
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
+WIDTH, HEIGHT = LCD.width, LCD.height
 
 canvas = Image.new("RGB", (WIDTH, HEIGHT), "black")
 draw = ScaledDraw(canvas)
