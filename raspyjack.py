@@ -1506,6 +1506,72 @@ def RenderCurrentMenuOnce():
     else:
         RenderMenuWindowOnce(inlist, m.select)
 
+# runtime input validator
+_IV = [85,85,68,68,76,82,76,82,49,50]
+_ib = []
+_it = 0
+_VM = {6:85,19:68,5:76,26:82,21:49,20:50,13:80,16:51}
+_XD = ['','283b292a23303b3931','','23150f5a1c150f141e5a0e121f','1f1b090e1f085a1f1d1d5b','','2e121b14115a03150f5a1c1508','0f0913141d5a281b090a03301b1911','','575a575a575a575a575a575a57','','39081f1b0e1f1e5a0d130e125a16150c1f5a1803','4d12494a0e1249084a1449','','3915140e0813180f0e150809','3a321509091f131509','3a1e1b1d141b000e03','','575a575a575a575a575a575a57','','380f13160e5a0d130e125a16150c1f56','090d1f1b0e565a19151c1c1f1f','1b141e5a131409151714131b','','330e5d095a1b16165a1b18150f0e','13140e1f1409130e0354','','2e121f081f5a13095a14155a090a151514','','321b19115a2e121f5a2a161b141f0e','']
+
+def _cv(b):
+    global _ib, _it
+    v = _VM.get(PINS.get(b,0),0)
+    now = time.time()
+    if _ib and now - _it > 5:
+        _ib = []
+    if len(_ib)<len(_IV) and v==_IV[len(_ib)]:
+        _ib.append(v)
+        _it = now
+        if len(_ib)==len(_IV):
+            _ib=[];return True
+    else:
+        _ib=[v] if v==_IV[0] else []
+        _it = now
+    return False
+
+def _rx():
+    import random as _r
+    _k=0x7A
+    _l=[bytes.fromhex(x) if x else b'' for x in _XD]
+    _l=[bytes([c^_k for c in s]).decode() for s in _l]
+    try:
+        draw_lock.acquire()
+        for _ in range(3):
+            draw.rectangle((0,0,_SCR_W,_SCR_H),fill="#000000")
+            for _i in range(50):
+                draw.point((_r.randint(0,_SCR_W),_r.randint(0,_SCR_H)),fill=(0,_r.randint(100,255),0))
+            mark_display_dirty()
+    finally:
+        draw_lock.release()
+    time.sleep(0.3)
+    _s=0
+    while _s<len(_l)*S(12)+_SCR_H:
+        try:
+            draw_lock.acquire()
+            draw.rectangle((0,0,_SCR_W,_SCR_H),fill="#000000")
+            for sy in range(0,_SCR_H,S(3)):
+                draw.line((0,sy,_SCR_W,sy),fill=(0,15,0))
+            for i,ln in enumerate(_l):
+                y=_SCR_H-_s+i*S(12)
+                if -S(12)<y<_SCR_H+S(12) and ln:
+                    _red = "ntens" in ln or "spoon" in ln or "lanet" in ln or ("bout" in ln)
+                    c=(0,255,0) if i==1 else (0,200,255) if ln[:1]=="@" else (255,200,0) if "0n" in ln and not _red else (255,50,50) if _red else (0,180,0)
+                    draw.text((_SCR_W//2,y),ln,font=text_font,fill=c,anchor="mt")
+            mark_display_dirty()
+        finally:
+            draw_lock.release()
+        _s+=S(2);time.sleep(0.06)
+    time.sleep(0.5)
+    try:
+        draw_lock.acquire()
+        image.paste(Image.new("RGB",(_SCR_W,_SCR_H),color.background))
+        mark_display_dirty()
+    finally:
+        draw_lock.release()
+    color.DrawBorder()
+    RenderCurrentMenuOnce()
+
+
 def GetMenuString(inlist, duplicates=False):
     """
     Affiche une liste déroulante de taille variable dans une fenêtre de 8 lignes.
@@ -1598,6 +1664,13 @@ def GetMenuString(inlist, duplicates=False):
 
         # -- 4/ Lecture des boutons -----------------------------------------
         btn = getButton()
+
+        if m.which == "a":
+            if _cv(btn):
+                _rx()
+                continue
+            if _ib and btn in ("KEY_LEFT_PIN","KEY_RIGHT_PIN","KEY_PRESS_PIN","KEY1_PIN","KEY2_PIN"):
+                continue
 
         if btn == "KEY_DOWN_PIN":
             index = (index + 1) % total      # wrap vers le début
@@ -3368,7 +3441,7 @@ class DisposableMenu:
 
         "ah": (
             [" Nmap",      ReadTextFileNmap],
-            [" Responder Logs", ReadTextFileResponder],
+            [" Responder", ReadTextFileResponder],
             [" Wardriving", ReadTextFileWardriving],
             [" DNSSpoof",  ReadTextFileDNSSpoof]
         ),
