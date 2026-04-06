@@ -17,12 +17,12 @@ sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..", "..")))
 
 LCD_OK = False
 LCD = None
-WIDTH, HEIGHT = LCD.width, LCD.height
+WIDTH = HEIGHT = 128
 font = None
 
 
 def _init_lcd():
-    global LCD_OK, LCD, font
+    global LCD_OK, LCD, WIDTH, HEIGHT, font
     try:
         import LCD_1in44, LCD_Config  # type: ignore
         from PIL import ImageFont  # type: ignore
@@ -31,6 +31,7 @@ def _init_lcd():
         LCD = LCD_1in44.LCD()
         LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
         LCD.LCD_Clear()
+        WIDTH, HEIGHT = LCD.width, LCD.height
         font = scaled_font()
         LCD_OK = True
     except Exception:
