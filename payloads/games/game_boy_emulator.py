@@ -32,7 +32,7 @@ import LCD_1in44
 import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
-from payloads._input_helper import get_button
+from payloads._input_helper import get_button, flush_input
 
 try:
     from pyboy import PyBoy
@@ -181,23 +181,15 @@ def _draw_loading(rom_name):
 
 
 def _read_buttons_noblock():
-    """Non-blocking button read. Returns dict of pressed buttons."""
+    """Non-blocking button read. Returns dict of pressed buttons (GPIO + WebUI held)."""
     pressed = {}
     for name, pin in PINS.items():
         if GPIO.input(pin) == 0:
             pressed[name] = True
-    # Also check virtual buttons (WebUI)
-    try:
-        from payloads._input_helper import _vbuf
-        vb = None
-        try:
-            vb = _vbuf.get_nowait() if hasattr(_vbuf, 'get_nowait') else None
-        except Exception:
-            pass
-        if vb:
-            pressed[vb] = True
-    except Exception:
-        pass
+    # WebUI held buttons (continuous input)
+    from payloads._input_helper import get_held_buttons
+    for btn in get_held_buttons():
+        pressed[btn] = True
     return pressed
 
 
@@ -228,7 +220,6 @@ def _run_emulator(rom_path):
                 return
         return
 
-    key3_down_since = None
     frame_count = 0
     RENDER_EVERY = 4  # render 1 frame out of N to LCD (~15 FPS display, 60 FPS emulation)
 
@@ -262,19 +253,9 @@ def _run_emulator(rom_path):
             # Read physical buttons (non-blocking)
             pressed = _read_buttons_noblock()
 
-            # Handle KEY3: tap=Select, hold=Exit
+            # KEY3 = exit, KEY2 = start + select combo
             if "KEY3" in pressed:
-                if key3_down_since is None:
-                    key3_down_since = time.time()
-                elif time.time() - key3_down_since >= KEY3_HOLD_EXIT:
-                    # Long press = exit
-                    break
-            else:
-                if key3_down_since is not None:
-                    # Released - was it a tap?
-                    if time.time() - key3_down_since < KEY3_HOLD_EXIT:
-                        pyboy.button("select")
-                    key3_down_since = None
+                break
 
             # Send mapped buttons to PyBoy
             for rj_btn, gb_btn in GB_MAP.items():
@@ -301,6 +282,10 @@ def _run_emulator(rom_path):
             pyboy.stop(save=True)
         except Exception:
             pass
+        # Flush all input state to prevent KEY3 from propagating to browser
+        flush_input()
+        time.sleep(0.5)
+        flush_input()
 
 
 # ═══════════════════════════════════════════════════════════════

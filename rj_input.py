@@ -33,6 +33,8 @@ _BTN_MAP = {
 }
 
 _q: "queue.Queue[str]" = queue.Queue()
+_held: set = set()  # currently held buttons (for continuous input like games)
+_held_lock = threading.Lock()
 _sock: Optional[socket.socket] = None
 _listener_thread: Optional[threading.Thread] = None
 
@@ -83,14 +85,19 @@ def _listen():
             continue
         button = str(msg.get("button", ""))
         state = str(msg.get("state", ""))
-        if state != "press":
-            continue
         mapped = _BTN_MAP.get(button)
-        if mapped:
+        if not mapped:
+            continue
+        if state == "press":
             try:
                 _q.put_nowait(mapped)
             except Exception:
                 pass
+            with _held_lock:
+                _held.add(mapped)
+        elif state == "release":
+            with _held_lock:
+                _held.discard(mapped)
 
 
 def get_virtual_button() -> Optional[str]:
@@ -99,6 +106,23 @@ def get_virtual_button() -> Optional[str]:
         return _q.get_nowait()
     except queue.Empty:
         return None
+
+
+def get_held_buttons() -> set:
+    """Return set of currently held button names (for continuous input)."""
+    with _held_lock:
+        return set(_held)
+
+
+def flush():
+    """Clear all queued and held button state."""
+    with _held_lock:
+        _held.clear()
+    try:
+        while not _q.empty():
+            _q.get_nowait()
+    except Exception:
+        pass
 
 
 def _ensure_started():

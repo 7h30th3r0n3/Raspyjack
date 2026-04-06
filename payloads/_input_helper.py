@@ -45,3 +45,23 @@ def get_button(pins, gpio):
         if gpio.input(pin) == 0:
             return btn
     return None
+
+
+def get_held_buttons():
+    """Return set of currently held WebUI button names (for continuous input like games)."""
+    if rj_input is None:
+        return set()
+    try:
+        held = rj_input.get_held_buttons()
+    except Exception:
+        return set()
+    return {_VIRTUAL_TO_BTN.get(b, b) for b in held if b in _VIRTUAL_TO_BTN}
+
+
+def flush_input():
+    """Clear all queued and held button state."""
+    if rj_input is not None:
+        try:
+            rj_input.flush()
+        except Exception:
+            pass

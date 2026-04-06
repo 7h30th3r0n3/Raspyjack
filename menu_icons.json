@@ -199,6 +199,7 @@
         " ldap_dumper": "",
         " bloodhound_collector": "",
         " persistence_planter": "",
-        " game_boy_emulator": ""
+        " game_boy_emulator": "",
+        " WigleStats": ""
     }
 }

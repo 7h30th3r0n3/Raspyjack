@@ -78,7 +78,6 @@ mkdir -p /root/Raspyjack/loot/wordlists
 
 # ───── 2 ▸ install / upgrade required APT packages ───────────
 PACKAGES=(
-  build-essential pkg-config \
   python3 python3-pip python3-dev \
   python3-scapy python3-netifaces python3-pyudev python3-serial \
   python3-smbus python3-rpi.gpio python3-spidev python3-pil python3-qrcode python3-numpy \
@@ -108,10 +107,6 @@ sudo pip3 install --break-system-packages smbus2 2>/dev/null \
   || sudo pip3 install smbus2 2>/dev/null \
   || warn "smbus2 pip install failed – i2c_scanner payload may not work"
 
-step "Preparing Doom integration directories …"
-mkdir -p /root/Raspyjack/payloads/games/doom/build
-mkdir -p /root/Raspyjack/payloads/games/doom/vendor
-mkdir -p /root/Raspyjack/payloads/games/doom/wads
 
 # Disable hostapd/dnsmasq auto-start (only used on-demand by payloads)
 sudo systemctl disable --now hostapd 2>/dev/null || true
