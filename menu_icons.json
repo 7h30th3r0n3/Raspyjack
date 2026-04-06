@@ -52,6 +52,7 @@
         " smb_probe": "",
         " sniff_creds_live": "",
         " spycam_detector": "",
+        " livecam_detector": "",
         " subnet_mapper": "",
         " wall_of_flippers": "",
         " wardriving": "",
