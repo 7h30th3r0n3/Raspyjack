@@ -138,7 +138,7 @@ def main():
                     d = ScaledDraw(img)
                     d.text((64, 40), "Display changed!", font=font_big, fill="#00FF00", anchor="mm")
                     d.text((64, 58), f"-> {selected_type}", font=font, fill="#FFFFFF", anchor="mm")
-                    d.text((64, 80), "Reboot required", font=font, fill="#FF8800", anchor="mm")
+                    d.text((64, 80), "restart UI required", font=font, fill="#FF8800", anchor="mm")
                     d.text((64, 100), "OK=Reboot  K3=Later", font=font, fill="#555555", anchor="mm")
                     LCD.LCD_ShowImage(img, 0, 0)
 
@@ -147,10 +147,10 @@ def main():
                         if btn2 == "OK":
                             img = Image.new("RGB", (WIDTH, HEIGHT), "black")
                             d = ScaledDraw(img)
-                            d.text((64, 64), "Rebooting...", font=font_big, fill="#FF0000", anchor="mm")
+                            d.text((64, 64), "Restart UI...", font=font_big, fill="#FF0000", anchor="mm")
                             LCD.LCD_ShowImage(img, 0, 0)
                             time.sleep(1)
-                            os.system("sudo reboot")
+                            os.system("sudo systemctl restart raspyjack")
                             return 0
                         elif btn2 == "KEY3":
                             break
