@@ -46,7 +46,9 @@ class WiFiLCDInterface:
         self.LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
         self.canvas = Image.new("RGB", (self.LCD.width, self.LCD.height), "black")
         self.draw = ImageDraw.Draw(self.canvas)
-        self.font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 8)
+        _s = LCD_1in44.LCD_SCALE if hasattr(LCD_1in44, 'LCD_SCALE') else 1.0
+        self.font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", int(8 * _s))
+        self.icon_font = ImageFont.truetype("/usr/share/fonts/truetype/fontawesome/fa-solid-900.ttf", int(10 * _s))
         
         # GPIO setup
         GPIO.setmode(GPIO.BCM)
@@ -105,16 +107,16 @@ class WiFiLCDInterface:
         """Draw menu header."""
         self.canvas.paste(Image.new("RGB", (self.LCD.width, self.LCD.height), "black"))
         self.draw.text((2, 0), title[:18], fill="yellow", font=self.font)
-        self.draw.line([(0, 12), (128, 12)], fill="blue", width=1)
+        self.draw.line([(0, 12), (self.LCD.width, 12)], fill="blue", width=1)
     
     def draw_status_bar(self):
         """Draw connection status at bottom."""
         status = self.wifi_manager.get_connection_status()
         if status["status"] == "connected":
-            status_text = f"📶 {status['ssid'][:12]}"
+            status_text = f"~ {status['ssid'][:12]}"
             color = "green"
         else:
-            status_text = "📶 Disconnected"
+            status_text = "~ Disconnected"
             color = "red"
         
         self.draw.text((2, 115), status_text, fill=color, font=self.font)
@@ -123,28 +125,30 @@ class WiFiLCDInterface:
         """Draw main WiFi menu."""
         self.draw_header("WiFi Manager")
         
-        menu_items = [
-            "📡 Scan Networks",
-            "💾 Saved Profiles", 
-            "🔗 Quick Connect",
-            "⚙️  Interface Config",
-            "📊 Status & Info",
-            "🚪 Exit"
+        menu_icons = ["\uf002", "\uf0c7", "\uf0e8", "\uf085", "\uf05a", "\uf2f5"]
+        menu_labels = [
+            "Scan Networks",
+            "Saved Profiles",
+            "Quick Connect",
+            "Interface Config",
+            "Status & Info",
+            "Exit"
         ]
-        
+
         y_pos = 18
-        for i, item in enumerate(menu_items):
+        for i, label in enumerate(menu_labels):
             if i == self.menu_index:
-                self.draw.rectangle([(0, y_pos-2), (128, y_pos+10)], fill="blue")
+                self.draw.rectangle([(0, y_pos-2), (self.LCD.width, y_pos+10)], fill="blue")
                 color = "white"
             else:
                 color = "white"
             
-            self.draw.text((4, y_pos), item[:16], fill=color, font=self.font)
+            self.draw.text((4, y_pos), menu_icons[i], fill=color, font=self.icon_font)
+            self.draw.text((18, y_pos), label[:14], fill=color, font=self.font)
             y_pos += 12
-        
+
         # Button hints
-        self.draw.text((2, 100), "↕️ Navigate  ⭕ Select", fill="cyan", font=self.font)
+        self.draw.text((2, 100), "U/D Nav  OK Select", fill="cyan", font=self.font)
         self.draw_status_bar()
     
     def draw_network_scan(self):
@@ -164,17 +168,17 @@ class WiFiLCDInterface:
                 ssid = network.get('ssid', 'Unknown')[:12]
                 
                 if i == self.menu_index:
-                    self.draw.rectangle([(0, y_pos-2), (128, y_pos+10)], fill="blue")
+                    self.draw.rectangle([(0, y_pos-2), (self.LCD.width, y_pos+10)], fill="blue")
                     color = "white"
                 else:
                     color = "white"
                 
                 # Show encryption status
-                encrypted = "🔒" if network.get('encrypted', False) else "🔓"
+                encrypted = "[L]" if network.get('encrypted', False) else "[O]"
                 self.draw.text((4, y_pos), f"{encrypted} {ssid}", fill=color, font=self.font)
                 y_pos += 12
         
-        self.draw.text((2, 100), "⭕ Connect  KEY3: Back", fill="cyan", font=self.font)
+        self.draw.text((2, 100), "OK Connect  KEY3: Back", fill="cyan", font=self.font)
         self.draw_status_bar()
     
     def draw_saved_profiles(self):
@@ -197,7 +201,7 @@ class WiFiLCDInterface:
                 priority = profile.get('priority', 1)
                 
                 if i == self.menu_index:
-                    self.draw.rectangle([(0, y_pos-2), (128, y_pos+10)], fill="blue")
+                    self.draw.rectangle([(0, y_pos-2), (self.LCD.width, y_pos+10)], fill="blue")
                     color = "white"
                 else:
                     color = "white"
@@ -205,7 +209,7 @@ class WiFiLCDInterface:
                 self.draw.text((4, y_pos), f"📁 {ssid} ({priority})", fill=color, font=self.font)
                 y_pos += 12
         
-        self.draw.text((2, 100), "⭕ Con  K2: Del  K3: Back", fill="cyan", font=self.font)
+        self.draw.text((2, 100), "OK Con  K2: Del  K3: Back", fill="cyan", font=self.font)
         self.draw_status_bar()
     
     def draw_interface_config(self):
@@ -221,7 +225,7 @@ class WiFiLCDInterface:
         
         for i, interface in enumerate(interfaces):
             if i == self.menu_index:
-                self.draw.rectangle([(0, y_pos-2), (128, y_pos+10)], fill="blue")
+                self.draw.rectangle([(0, y_pos-2), (self.LCD.width, y_pos+10)], fill="blue")
                 color = "white"
             else:
                 color = "white"
@@ -231,7 +235,7 @@ class WiFiLCDInterface:
             self.draw.text((4, y_pos), f"{marker} {interface}", fill=color, font=self.font)
             y_pos += 12
         
-        self.draw.text((2, 100), "⭕ Select  KEY3: Back", fill="cyan", font=self.font)
+        self.draw.text((2, 100), "OK Select  KEY3: Back", fill="cyan", font=self.font)
         self.draw_status_bar()
     
     def draw_status_info(self):

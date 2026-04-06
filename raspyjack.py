@@ -2968,7 +2968,7 @@ def launch_wifi_manager():
         return
 
     Dialog_info("Loading FAST WiFi\nSwitcher...", wait=True)
-    exec_payload("general/fast_wifi_switcher.py")
+    exec_payload("utilities/fast_wifi_switcher.py")
 
 def show_interface_info():
     """Show detailed interface information."""
@@ -3160,7 +3160,7 @@ def launch_interface_switcher():
 def launch_webui():
     """Launch the WebUI controller payload (start/stop Web UI)."""
     Dialog_info("Loading WebUI...", wait=True)
-    exec_payload("general/webui.py")
+    exec_payload("utilities/webui.py")
 
 def quick_wifi_toggle():
     """FAST toggle between wlan0 and wlan1 - immediate switching."""
@@ -3463,7 +3463,7 @@ class DisposableMenu:
         ),
 
         "aw": (
-            [" Full WiFi Manager", partial(exec_payload, "general/wifi_manager_payload")],
+            [" Full WiFi Manager", partial(exec_payload, "utilities/wifi_manager_payload")],
             [" FAST WiFi Switcher", launch_wifi_manager],
             [" INSTANT Toggle 0↔1", quick_wifi_toggle],
             [" Switch Interface", switch_interface_menu],
