@@ -34,6 +34,7 @@ import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 
 from payloads._input_helper import get_button
+from payloads._display_helper import ScaledDraw, scaled_font
 
 API_BASE = "https://api.wigle.net/api/v2"
 CREDENTIALS_PATH = ROOT_DIR / ".wigle_credentials.json"
@@ -59,7 +60,7 @@ for pin in PINS.values():
 
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-WIDTH, HEIGHT = 128, 128
+WIDTH, HEIGHT = LCD.width, LCD.height
 
 
 def _load_font(candidates: List[Tuple[str, int]], fallback: Optional[ImageFont.ImageFont] = None):
@@ -68,10 +69,10 @@ def _load_font(candidates: List[Tuple[str, int]], fallback: Optional[ImageFont.I
             return ImageFont.truetype(path, size)
         except Exception:
             continue
-    return fallback or ImageFont.load_default()
+    return fallback or scaled_font()
 
 
-FONT = ImageFont.load_default()
+FONT = scaled_font()
 FONT_BIG = _load_font(
     [
         ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 9),
@@ -894,7 +895,7 @@ def _render(
         loading = bool(state.get("loading"))
 
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    draw = ImageDraw.Draw(img)
+    draw = ScaledDraw(img)
 
     draw.rectangle((0, 0, WIDTH - 1, HEIGHT - 1), outline="white")
     _draw_header(draw, page_index)
