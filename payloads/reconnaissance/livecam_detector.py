@@ -9,8 +9,6 @@ Features:
 - Camera detection via OUI/SSID patterns (same as cam_finder)
 - Passive monitoring of camera traffic for live viewing
 - TLS fingerprinting (JA3) and encrypted‑traffic detection
-- DNS query analysis for cloud service domains
-- External IP connection detection
 - mDNS/UPnP local camera discovery
 - Real‑time alerts on LCD and console
 
@@ -29,7 +27,6 @@ import time
 import subprocess
 import hashlib
 from datetime import datetime
-import time
 
 # Add root directory to path
 sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..", "..")))
@@ -49,11 +46,11 @@ except ImportError as e:
 
 # Try to import scapy
 try:
-    from scapy.all import Dot11, Dot11Beacon, Dot11Elt, Dot11ProbeReq, Dot11ProbeResp, IP, UDP, DNS, DNSQR, TCP, Raw, sniff
+    from scapy.all import Dot11, Dot11Beacon, Dot11Elt, Dot11ProbeReq, Dot11ProbeResp, IP, UDP, TCP, Raw, sniff
     SCAPY_AVAILABLE = True
 except ImportError:
     SCAPY_AVAILABLE = False
-    print("Scapy not available - cloud detection features will be limited")
+    print("Scapy not available - live monitoring features will be limited")
 
 # ---------------------------------------------------------------------------
 # Camera OUI prefixes (copied from cam_finder.py)
@@ -187,59 +184,6 @@ CAMERA_SSID_PATTERNS = [
     ("pistream", "Raspberry Pi"), ("rpi-cam", "Raspberry Pi"), ("rpi_cam", "Raspberry Pi"),
 ]
 
-# Cloud service domain patterns (case‑insensitive substring matches)
-CLOUD_DOMAINS = [
-    # Vendor‑specific cloud domains
-    "ring.com", "ring.ne", "ring.",            # Ring
-    "nest.com", "nest.",                       # Nest / Google
-    "wyze.com", "wyze.",                       # Wyze
-    "arlo.com", "arlo.",                       # Arlo
-    "eufy.com", "eufylife.com", "eufy.",       # Eufy
-    "hikvision.com", "hik-",                   # Hikvision
-    "dahua.com", "dahua.",                     # Dahua
-    "reolink.com", "reolink.",                 # Reolink
-    "amcrest.com", "amcrest.",                 # Amcrest
-    "simplisafe.com", "simplisafe.",           # SimpliSafe
-    "tplink", "tp‑link",                       # TP‑Link
-    "unifi",                                   # UniFi
-    "axis.com", "axis.",                       # Axis
-    "samsung.com", "samsung.",                 # Samsung
-    "flir.com", "flir.",                       # FLIR
-    "vivotek.com", "vivotek.",                 # Vivotek
-    "swann.com", "swann.",                     # Swann
-    "lorex.com", "lorex.",                     # Lorex
-    "logitech.com", "logitech.",               # Logitech
-    "foscam.com", "foscam.",                   # Foscam
-    # Generic cloud / IoT patterns
-    "cloud", ".cloud.", "iot.", ".iot",
-    "aws.", "amazonaws.com", "cloudfront.net",
-    "googleapis.com", "google.com",
-    "azure.", "microsoft.com",
-    "stream", "upload", "api",
-    # Common camera cloud subdomains
-    "camera.", ".camera", "cam.", ".cam",
-    "video.", ".video", "live.", ".live",
-    # Amazon/Ring/Blink specific
-    "amazon.com", "amazon.",
-    "blinkforhome.com", "blink.",
-    "immedia-semi.com", "immedia.",
-    "alexa.amazon.com",
-    # AWS regions
-    ".amazonaws.com",  # more specific than amazonaws.com
-    "us-east-1.amazonaws.com", "us-west-2.amazonaws.com",
-    "eu-west-1.amazonaws.com",
-    # Ring/Blink CDN
-    "ring-cloud.com", "blink-cloud.com",
-]
-
-# Private IP ranges (RFC 1918 + link‑local)
-PRIVATE_NETS = [
-    "10.0.0.0/8",
-    "172.16.0.0/12",
-    "192.168.0.0/16",
-    "169.254.0.0/16",
-]
-
 # mDNS (port 5353) and SSDP/UPnP (port 1900) camera service patterns
 MDNS_CAMERA_SERVICES = [
     "_ring._tcp.local",
@@ -287,20 +231,11 @@ def _is_camera_ssid(ssid):
     return None
 
 
-def _is_cloud_domain(domain):
-    """Return True if domain matches any cloud pattern."""
-    domain_lower = domain.lower()
-    for pattern in CLOUD_DOMAINS:
-        if pattern.lower() in domain_lower:
-            return True
-    return False
-
-
 class LiveCamDetector(WardrivingScanner):
     """
     Standalone camera + live‑view monitor.
-    Inherits scanning engine from WardrivingScanner, adds camera detection
-    and live‑view activity alerts with custom display.
+    Inherits scanning engine from WardrivingScanner and adds camera detection
+    plus live‑view activity alerts.
     """
 
     def __init__(self):
@@ -316,42 +251,28 @@ class LiveCamDetector(WardrivingScanner):
         self.log_file = os.path.join(self.loot_dir, "livecam_detector.log")
 
         # Recreate DB with extra tables
-        self._init_cloud_db()
+        self._init_livecam_db()
 
         # State for camera and live‑view detection
         self.camera_macs = set()                # MACs identified as cameras
         self.camera_vendors = {}                # MAC → vendor mapping
         self.alerts = []                        # List of alert dicts
-        self.cloud_queries = {}                 # Camera MAC → set of cloud domains queried
-        self.external_connections = {}          # Camera MAC → count of external IP connections
         self.live_viewing = {}                  # MAC → last live viewing timestamp
         self.rtp_detected = set()               # MACs with RTP traffic
         self.rtsp_detected = set()              # MACs with RTSP traffic
+        self.quic_detected = set()              # MACs with QUIC/WebRTC-like traffic
+        self.dtls_detected = set()              # MACs with DTLS traffic
+        self.stun_detected = set()              # MACs with STUN traffic
         self.packet_counts = {}                 # MAC → total packet count
         self.packet_timestamps = {}             # MAC → list of timestamps (sliding window)
         self.packet_sizes = {}                  # MAC → list of packet sizes (sliding window)
         self.packet_intervals = {}              # MAC → list of inter-arrival times
         self.debug = False                      # Disable verbose logging (user complained about spam)
-        # Cloud IP ranges (AWS, Google Cloud, Azure, Ring/Blink cloud)
-        self.cloud_ip_ranges = [
-            "3.0.0.0/9", "3.128.0.0/10", "3.192.0.0/11",  # AWS us-east-1
-            "52.0.0.0/10", "52.64.0.0/12", "52.80.0.0/13",  # AWS us-east-2
-            "54.0.0.0/10", "54.64.0.0/12", "54.80.0.0/13",  # AWS us-west-1
-            "35.0.0.0/9", "35.128.0.0/10", "35.192.0.0/11",  # Google Cloud
-            "34.0.0.0/9", "34.128.0.0/10", "34.192.0.0/11",  # Google Cloud
-            "13.0.0.0/9", "13.128.0.0/10", "13.192.0.0/11",  # Azure
-            "20.0.0.0/9", "20.128.0.0/10", "20.192.0.0/11",  # Azure
-            "52.94.212.0/22", "52.94.216.0/22",  # Ring/Blink (Amazon AWS)
-            "52.94.220.0/22", "52.94.224.0/19",
-            "99.82.0.0/15", "99.84.0.0/16",  # Ring/Blink
-        ]
-        self.cloud_ips_seen = {}  # MAC → set of cloud IPs already alerted
-        self.tcp_connections_seen = {}  # MAC → set of (dst_ip, dst_port) already alerted
 
         self.log("LiveCam Detector active (wardriving engine)")
 
-    def _init_cloud_db(self):
-        """Create DB tables for cameras and alerts."""
+    def _init_livecam_db(self):
+        """Create DB tables for cameras and live-view alerts."""
         import sqlite3
         try:
             conn = sqlite3.connect(self.db_path)
@@ -369,8 +290,8 @@ class LiveCamDetector(WardrivingScanner):
                 gps_lat REAL,
                 gps_lon REAL
             )''')
-            # Cloud activity alerts
-            c.execute('''CREATE TABLE IF NOT EXISTS cloud_alerts (
+            # Live-view alerts
+            c.execute('''CREATE TABLE IF NOT EXISTS live_alerts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 camera_mac TEXT,
                 alert_type TEXT,
@@ -378,17 +299,8 @@ class LiveCamDetector(WardrivingScanner):
                 timestamp TIMESTAMP,
                 FOREIGN KEY (camera_mac) REFERENCES cameras (mac)
             )''')
-            # DNS queries
-            c.execute('''CREATE TABLE IF NOT EXISTS dns_queries (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                camera_mac TEXT,
-                query TEXT,
-                qtype TEXT,
-                timestamp TIMESTAMP,
-                FOREIGN KEY (camera_mac) REFERENCES cameras (mac)
-            )''')
             c.execute("CREATE INDEX IF NOT EXISTS idx_cameras_mac ON cameras(mac)")
-            c.execute("CREATE INDEX IF NOT EXISTS idx_alerts_mac ON cloud_alerts(camera_mac)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_live_alerts_mac ON live_alerts(camera_mac)")
             conn.commit()
             conn.close()
             self.log("LiveCam DB initialized")
@@ -420,7 +332,7 @@ class LiveCamDetector(WardrivingScanner):
         try:
             conn = sqlite3.connect(self.db_path)
             c = conn.cursor()
-            c.execute('''INSERT INTO cloud_alerts
+            c.execute('''INSERT INTO live_alerts
                 (camera_mac, alert_type, detail, timestamp)
                 VALUES (?, ?, ?, ?)''',
                 (camera_mac, alert_type, detail, datetime.now().isoformat()))
@@ -436,49 +348,6 @@ class LiveCamDetector(WardrivingScanner):
             "time": datetime.now(),
         })
         self.log(f"ALERT: {camera_mac} - {alert_type} - {detail}")
-
-    def store_dns_query(self, camera_mac, query, qtype):
-        """Record DNS query."""
-        import sqlite3
-        try:
-            conn = sqlite3.connect(self.db_path)
-            c = conn.cursor()
-            c.execute('''INSERT INTO dns_queries
-                (camera_mac, query, qtype, timestamp)
-                VALUES (?, ?, ?, ?)''',
-                (camera_mac, query, qtype, datetime.now().isoformat()))
-            conn.commit()
-            conn.close()
-        except Exception as e:
-            self.log(f"Store DNS error: {e}")
-        # Update in‑memory set
-        if camera_mac not in self.cloud_queries:
-            self.cloud_queries[camera_mac] = set()
-        self.cloud_queries[camera_mac].add(query)
-
-    def _is_external_ip(self, ip):
-        """Return True if IP is not in private ranges."""
-        import ipaddress
-        try:
-            ipa = ipaddress.ip_address(ip)
-            for net in PRIVATE_NETS:
-                if ipa in ipaddress.ip_network(net):
-                    return False
-            return True
-        except Exception:
-            return False
-
-    def _is_cloud_ip(self, ip):
-        """Return True if IP belongs to known cloud service ranges."""
-        import ipaddress
-        try:
-            ipa = ipaddress.ip_address(ip)
-            for cidr in self.cloud_ip_ranges:
-                if ipa in ipaddress.ip_network(cidr):
-                    return True
-            return False
-        except Exception:
-            return False
 
     def _is_tls_client_hello(self, packet):
         """Return True if packet appears to be a TLS ClientHello."""
@@ -516,11 +385,17 @@ class LiveCamDetector(WardrivingScanner):
         
         # Start parsing after TLS record header (5 bytes)
         ptr = 5
+        # Handshake type must be ClientHello
+        if len(raw) < ptr + 1 or raw[ptr] != 0x01:
+            return None, None
+        ptr += 1
         # Handshake length (3 bytes)
         if len(raw) < ptr + 3:
             return None, None
         hs_len = (raw[ptr] << 16) | (raw[ptr+1] << 8) | raw[ptr+2]
         ptr += 3
+        if len(raw) < ptr + hs_len:
+            return None, None
         # Handshake version (2 bytes)
         if len(raw) < ptr + 2:
             return None, None
@@ -543,7 +418,7 @@ class LiveCamDetector(WardrivingScanner):
             return None, None
         cipher_len = (raw[ptr] << 8) | raw[ptr+1]
         ptr += 2
-        if len(raw) < ptr + cipher_len:
+        if cipher_len % 2 != 0 or len(raw) < ptr + cipher_len:
             return None, None
         cipher_suites = []
         for i in range(0, cipher_len, 2):
@@ -716,7 +591,7 @@ class LiveCamDetector(WardrivingScanner):
             print(f"CAMERA [{detection}]: {vendor} | {ssid or '(hidden)'} | {mac_upper} | Ch {self.current_channel}")
 
     def _process_ip_packet(self, packet):
-        """Analyze IP traffic from known camera MACs."""
+        """Analyze live-view protocol traffic from known camera MACs."""
         if not SCAPY_AVAILABLE:
             return
 
@@ -752,46 +627,6 @@ class LiveCamDetector(WardrivingScanner):
                 self.log(f"DEBUG: {mac_upper} -> {dst_ip}:{dport} UDP (pkt#{count}, rate={packet_rate})")
             else:
                 self.log(f"DEBUG: {mac_upper} -> {dst_ip} proto {proto} (pkt#{count}, rate={packet_rate})")
-
-        # Check for external destination (cloud)
-        if self._is_external_ip(dst_ip):
-            # Increment external connection count
-            self.external_connections[mac_upper] = self.external_connections.get(mac_upper, 0) + 1
-            # Alert on first external connection
-            if self.external_connections[mac_upper] == 1:
-                self.store_alert(mac_upper, "EXTERNAL_CONN",
-                                 f"External IP {dst_ip} (proto {packet[IP].proto})")
-            # Check if external IP belongs to known cloud ranges
-            if self._is_cloud_ip(dst_ip):
-                # Only alert once per MAC per cloud IP
-                if mac_upper not in self.cloud_ips_seen:
-                    self.cloud_ips_seen[mac_upper] = set()
-                if dst_ip not in self.cloud_ips_seen[mac_upper]:
-                    self.cloud_ips_seen[mac_upper].add(dst_ip)
-                    self.store_alert(mac_upper, "CLOUD_IP",
-                                     f"Cloud service IP {dst_ip} (proto {packet[IP].proto})")
-
-        # DNS query detection
-        if packet.haslayer(UDP) and packet.dport == 53 and packet.haslayer(DNS):
-            dns = packet[DNS]
-            if dns.qr == 0:   # Query
-                for q in dns[DNSQR]:
-                    query = q.qname.decode("utf-8", errors="ignore").rstrip(".")
-                    qtype = q.qtype
-                    # Debug log all DNS queries
-                    if self.debug:
-                        self.log(f"DEBUG_DNS: {mac_upper} query {query} type {qtype}")
-                    # Check if query matches cloud patterns (deduplicate)
-                    if _is_cloud_domain(query):
-                        # Only alert once per MAC per cloud domain
-                        if mac_upper not in self.cloud_queries:
-                            self.cloud_queries[mac_upper] = set()
-                        if query not in self.cloud_queries[mac_upper]:
-                            self.cloud_queries[mac_upper].add(query)
-                            self.store_alert(mac_upper, "CLOUD_DNS",
-                                             f"DNS query: {query} (type {qtype})")
-                    # Store all DNS queries for later analysis
-                    self.store_dns_query(mac_upper, query, qtype)
         # mDNS (port 5353) camera service discovery
         if packet.haslayer(UDP) and packet.dport == 5353:
             if packet.haslayer(Raw):
@@ -813,43 +648,6 @@ class LiveCamDetector(WardrivingScanner):
                             self.store_alert(mac_upper, 'UPNP_CAMERA',
                                              f'UPnP device: {device}')
                             break
-
-        # TCP connection to cloud ports (e.g., 443, 8883)
-        if packet.haslayer(TCP):
-            dst_port = packet[TCP].dport
-            if dst_port in (443, 8883, 8080, 8443):
-                # Deduplicate alerts per MAC per destination IP:port
-                if mac_upper not in self.tcp_connections_seen:
-                    self.tcp_connections_seen[mac_upper] = set()
-                conn_key = (dst_ip, dst_port)
-                if conn_key not in self.tcp_connections_seen[mac_upper]:
-                    self.tcp_connections_seen[mac_upper].add(conn_key)
-                    # Check for TLS ClientHello (encrypted live stream)
-                    if dst_port == 443:
-                        ja3_string, ja3_hash = self._extract_tls_fingerprint(packet)
-                        if ja3_hash is not None:
-                            # Known fingerprint?
-                            vendor_info = KNOWN_JA3_HASHES.get(ja3_hash, None)
-                            if vendor_info:
-                                self.store_alert(mac_upper, "TLS_FINGERPRINT",
-                                                 f"TLS fingerprint {ja3_hash} matches {vendor_info}")
-                            else:
-                                self.store_alert(mac_upper, "CLOUD_TLS",
-                                                 f"TLS handshake to {dst_ip}:{dst_port} (JA3:{ja3_hash})")
-                            # Also store fingerprint for later analysis
-                            if not hasattr(self, 'tls_fingerprints'):
-                                self.tls_fingerprints = {}
-                            if mac_upper not in self.tls_fingerprints:
-                                self.tls_fingerprints[mac_upper] = set()
-                            self.tls_fingerprints[mac_upper].add(ja3_hash)
-                        else:
-                            # Non-TLS TCP on 443 (maybe other encryption)
-                            self.store_alert(mac_upper, "CLOUD_TCP",
-                                             f"TCP to {dst_ip}:{dst_port}")
-                    else:
-                        # Could be live stream (non‑TLS or unknown)
-                        self.store_alert(mac_upper, "CLOUD_TCP",
-                                         f"TCP to {dst_ip}:{dst_port}")
 
         # Live viewing detection
         # RTSP (port 554)
@@ -876,6 +674,7 @@ class LiveCamDetector(WardrivingScanner):
             if packet.haslayer(Raw) and len(packet[Raw].load) >= 20:
                 # STUN magic cookie 0x2112A442
                 if packet[Raw].load[4:8] == b'\x21\x12\xA4\x42':
+                    self.stun_detected.add(mac_upper)
                     self.live_viewing[mac_upper] = time.time()
                     self.store_alert(mac_upper, 'LIVE_STUN', f'STUN traffic to {dst_ip}:{packet.dport}')
 
@@ -885,6 +684,7 @@ class LiveCamDetector(WardrivingScanner):
                 first_byte = packet[Raw].load[0]
                 # QUIC long header: first two bits = 0b11
                 if (first_byte & 0xC0) == 0xC0:
+                    self.quic_detected.add(mac_upper)
                     self.live_viewing[mac_upper] = time.time()
                     self.store_alert(mac_upper, 'LIVE_QUIC', f'QUIC traffic to {dst_ip}:{packet.dport}')
 
@@ -898,8 +698,25 @@ class LiveCamDetector(WardrivingScanner):
                     second_byte = packet[Raw].load[1]
                     third_byte = packet[Raw].load[2]
                     if second_byte == 0xFE and third_byte in (0xFD, 0xFE, 0xFF):
+                        self.dtls_detected.add(mac_upper)
                         self.live_viewing[mac_upper] = time.time()
                         self.store_alert(mac_upper, 'LIVE_DTLS', f'DTLS traffic to {dst_ip}:{packet.dport}')
+
+        # Optional TLS fingerprinting for visible 443 handshakes. This stays as a
+        # live-stream hint only.
+        if packet.haslayer(TCP) and (packet[TCP].dport == 443 or packet[TCP].sport == 443):
+            _ja3_string, ja3_hash = self._extract_tls_fingerprint(packet)
+            if ja3_hash is not None:
+                if not hasattr(self, 'tls_fingerprints'):
+                    self.tls_fingerprints = {}
+                if mac_upper not in self.tls_fingerprints:
+                    self.tls_fingerprints[mac_upper] = set()
+                if ja3_hash not in self.tls_fingerprints[mac_upper]:
+                    self.tls_fingerprints[mac_upper].add(ja3_hash)
+                    vendor_info = KNOWN_JA3_HASHES.get(ja3_hash)
+                    if vendor_info:
+                        self.store_alert(mac_upper, "TLS_FINGERPRINT",
+                                         f"TLS fingerprint {ja3_hash} matches {vendor_info}")
 
     def _is_camera_live(self, mac):
         """Return True if camera has shown live viewing activity in last 30 seconds."""
@@ -1012,6 +829,7 @@ class LiveCamDetector(WardrivingScanner):
             bssid = packet[Dot11].addr3
             if not bssid:
                 return
+            bssid_upper = bssid.upper()
 
             # Extract SSID
             ssid = ""
@@ -1032,13 +850,13 @@ class LiveCamDetector(WardrivingScanner):
             signal_strength = getattr(packet, "dBm_AntSignal", None)
             
             # Already seen?
-            if bssid in self.networks:
-                self.networks[bssid]["last_seen"] = datetime.now().isoformat()
+            if bssid_upper in self.networks:
+                self.networks[bssid_upper]["last_seen"] = datetime.now().isoformat()
                 if self.gps_data:
-                    self.networks[bssid]["gps_coordinates"] = self.gps_data.copy()
+                    self.networks[bssid_upper]["gps_coordinates"] = self.gps_data.copy()
                 # Update signal strength if we have it
                 if signal_strength is not None:
-                    self.networks[bssid]["signal_strength"] = signal_strength
+                    self.networks[bssid_upper]["signal_strength"] = signal_strength
             else:
                 # Add to networks (parent's storage)
                 channel = self.current_channel
@@ -1061,7 +879,7 @@ class LiveCamDetector(WardrivingScanner):
 
                 network_info = {
                     "ssid": ssid,
-                    "bssid": bssid,
+                    "bssid": bssid_upper,
                     "channel": channel,
                     "frequency": self.channel_to_frequency(channel),
                     "security": security,
@@ -1072,12 +890,11 @@ class LiveCamDetector(WardrivingScanner):
                     "gps_coordinates": self.gps_data.copy() if self.gps_data else None,
                 }
 
-                self.networks[bssid] = network_info
+                self.networks[bssid_upper] = network_info
                 self.total_networks += 1
                 self.store_network_in_db(network_info)
 
             # Add to our camera tracking
-            bssid_upper = bssid.upper()
             is_new_camera = bssid_upper not in self.camera_macs
             self.camera_macs.add(bssid_upper)
             self.camera_vendors[bssid_upper] = vendor
@@ -1219,10 +1036,7 @@ class LiveCamDetector(WardrivingScanner):
             
             # Live camera count
             live_count = sum(1 for mac in self.camera_macs if self._is_camera_live(mac))
-            if live_count > 0:
-                lines = ["LIVE CAM", f"Cameras: {len(self.camera_macs)} (Live: {live_count})"]
-            else:
-                lines = ["LIVE CAM", f"Cameras: {len(self.camera_macs)}"]
+            lines = ["LIVE CAM", f"Cameras: {len(self.camera_macs)}", f"Live: {live_count}"]
 
             # Recent alerts
             if self.alerts:
@@ -1233,12 +1047,11 @@ class LiveCamDetector(WardrivingScanner):
             else:
                 lines.append("No alerts")
 
-            # Top camera with external connections
-            if self.external_connections:
-                top = max(self.external_connections.items(), key=lambda kv: kv[1])
-                lines.append(f"{top[0][-6:]}:{top[1]} ext")
+            if self.packet_counts:
+                top_mac, top_count = max(self.packet_counts.items(), key=lambda kv: kv[1])
+                lines.append(f"Active {top_mac[-6:]}:{top_count} pkts")
             else:
-                lines.append("No external uploads")
+                lines.append("Traffic: waiting")
 
             if self.gps_data and "latitude" in self.gps_data:
                 lat = self.gps_data["latitude"]
@@ -1276,12 +1089,12 @@ class LiveCamDetector(WardrivingScanner):
             self.LCD.LCD_ShowImage(img, 0, 0)
             
             # Debug log
-            if hasattr(self, 'cloud_display_counter'):
-                self.cloud_display_counter += 1
-                if self.debug and self.cloud_display_counter % 10 == 0:
-                    self.log(f"LiveCam display update {self.cloud_display_counter}, cameras: {len(self.camera_macs)}")
+            if hasattr(self, 'display_counter'):
+                self.display_counter += 1
+                if self.debug and self.display_counter % 10 == 0:
+                    self.log(f"LiveCam display update {self.display_counter}, cameras: {len(self.camera_macs)}")
             else:
-                self.cloud_display_counter = 1
+                self.display_counter = 1
                 if self.debug:
                     self.log(f"LiveCam display first update, cameras: {len(self.camera_macs)}")
         except Exception as e:
