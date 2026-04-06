@@ -290,24 +290,6 @@ finally:
 
 ---
 
-## 🔥 Doom Integration
-
-RaspyJack now includes an initial scaffold for running real Doom as a native game payload.
-
-Current repo support:
-
-- a `game_doom` launcher under `payloads/games/`
-- a dedicated integration folder at `payloads/games/doom/`
-- WAD discovery for both user-supplied Doom data and Freedoom
-- installer support for native build prerequisites
-
-The native engine/backend is not complete yet. To continue the implementation:
-
-1. Vendor the selected upstream Doom engine into `payloads/games/doom/vendor/doomgeneric/`.
-2. Place `doom1.wad`, `doom.wad`, `freedoom1.wad`, or `freedoom2.wad` in `payloads/games/doom/wads/`.
-3. Build the native binary so the launcher can find `payloads/games/doom/build/doom_raspyjack`.
-
-The launcher will also accept a WAD path through `RJ_DOOM_WAD`.
 
 ### Adding an icon
 
