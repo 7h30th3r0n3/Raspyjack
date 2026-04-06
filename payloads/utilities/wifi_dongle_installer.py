@@ -407,7 +407,6 @@ PINS = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
     "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16,
 }
-WIDTH, HEIGHT = LCD.width, LCD.height
 LOG_FILE = "/root/Raspyjack/loot/network/wifi_installer.log"
 ONBOARD_DRIVERS = {"brcmfmac", "brcmsmac", "b43", "b43legacy"}
 
@@ -418,6 +417,7 @@ for _pin in PINS.values():
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
 LCD.LCD_Clear()
+WIDTH, HEIGHT = LCD.width, LCD.height
 
 try:
     FONT    = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", int(10 * LCD_1in44.LCD_SCALE))
