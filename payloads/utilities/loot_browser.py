@@ -7,7 +7,7 @@ Author: 7h30th3r0n3
 Browse /root/Raspyjack/loot/ on the LCD.
 
 Controls:
-  UP/DOWN  = navigate files/dirs
+  UP/DOWN  = navigate files/dirs or scroll preview
   OK       = enter directory or preview file
   LEFT     = go up one directory
   KEY1     = show stats (file count, total size)
@@ -46,7 +46,6 @@ DEBOUNCE = 0.25
 
 
 def _fmt_size(nbytes):
-    """Format byte count to human-readable."""
     for unit in ("B", "K", "M", "G"):
         if nbytes < 1024:
             return f"{nbytes}{unit}"
@@ -55,7 +54,6 @@ def _fmt_size(nbytes):
 
 
 def _list_dir(path):
-    """List directory, returning sorted entries as (name, is_dir, size)."""
     entries = []
     try:
         for name in sorted(os.listdir(path)):
@@ -72,7 +70,6 @@ def _list_dir(path):
 
 
 def _dir_stats(path):
-    """Compute total file count and size recursively."""
     total_files = 0
     total_size = 0
     try:
@@ -89,7 +86,6 @@ def _dir_stats(path):
 
 
 def _is_text_file(path):
-    """Heuristic check if file is text."""
     try:
         with open(path, "rb") as fh:
             chunk = fh.read(512)
@@ -100,22 +96,20 @@ def _is_text_file(path):
         return False
 
 
-def _preview_text(path, max_lines=8):
-    """Read first max_lines lines of a text file."""
+def _preview_text(path, max_lines=1000):
     lines = []
     try:
         with open(path, "r", errors="replace") as fh:
             for i, line in enumerate(fh):
                 if i >= max_lines:
                     break
-                lines.append(line.rstrip("\n")[:20])
+                lines.append(line.rstrip("\n"))
     except OSError:
         lines.append("(read error)")
     return lines
 
 
 def _file_type_label(path):
-    """Return a short file type label."""
     ext = os.path.splitext(path)[1].lower()
     type_map = {
         ".txt": "TEXT", ".log": "LOG", ".csv": "CSV",
@@ -127,7 +121,6 @@ def _file_type_label(path):
 
 
 def _draw_browser(lcd, cwd, entries, cursor, scroll_offset, status=""):
-    """Draw file browser UI."""
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
     d = ScaledDraw(img)
 
@@ -151,7 +144,6 @@ def _draw_browser(lcd, cwd, entries, cursor, scroll_offset, status=""):
             entry = entries[idx]
             is_cursor = idx == cursor
             prefix = ">" if is_cursor else " "
-
             if entry["is_dir"]:
                 label = f"{prefix}[{entry['name'][:13]}]"
                 color = "#00aaff" if is_cursor else "#5588bb"
@@ -161,7 +153,6 @@ def _draw_browser(lcd, cwd, entries, cursor, scroll_offset, status=""):
                 name_short = entry["name"][:name_max]
                 label = f"{prefix}{name_short} {size_str}"
                 color = "#00ff00" if is_cursor else "#aaaaaa"
-
             d.text((2, y), label[:20], font=font, fill=color)
             y += 13
 
@@ -178,14 +169,12 @@ def _draw_browser(lcd, cwd, entries, cursor, scroll_offset, status=""):
 
 
 def _draw_preview(lcd, path, lines):
-    """Draw a file preview screen."""
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
     d = ScaledDraw(img)
 
     name = os.path.basename(path)
     if len(name) > 18:
         name = name[:15] + "..."
-
     d.rectangle((0, 0, 127, 12), fill="#1a1a1a")
     d.text((2, 1), name, font=font, fill="#00ff00")
 
@@ -194,44 +183,36 @@ def _draw_preview(lcd, path, lines):
         d.text((2, y), line[:20], font=font, fill="#cccccc")
         y += 12
 
-    d.text((2, 116), "Any key=back", font=font, fill="#666666")
+    d.text((2, 116), "UP/DOWN=scroll", font=font, fill="#666666")
     lcd.LCD_ShowImage(img, 0, 0)
 
 
 def _draw_confirm(lcd, filename):
-    """Draw delete confirmation dialog."""
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
     d = ScaledDraw(img)
-
     d.text((10, 30), "Delete file?", font=font, fill="#ff4444")
     name = filename[:18]
     d.text((10, 48), name, font=font, fill="#aaaaaa")
     d.text((10, 70), "OK = Yes", font=font, fill="#00ff00")
     d.text((10, 85), "Any = Cancel", font=font, fill="#666666")
-
     lcd.LCD_ShowImage(img, 0, 0)
 
 
 def _draw_stats(lcd, path, file_count, total_size):
-    """Draw stats overlay."""
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
     d = ScaledDraw(img)
-
     d.text((10, 20), "Loot Stats", font=font, fill="#00ff00")
     d.text((10, 40), f"Files: {file_count}", font=font, fill="white")
     d.text((10, 55), f"Size:  {_fmt_size(total_size)}", font=font, fill="white")
-
     rel = path.replace(LOOT_ROOT, "loot")
     if len(rel) > 18:
         rel = "..." + rel[-15:]
     d.text((10, 75), rel, font=font, fill="#888888")
     d.text((10, 100), "Any key=back", font=font, fill="#666666")
-
     lcd.LCD_ShowImage(img, 0, 0)
 
 
 def main():
-    """Main entry point."""
     if not os.path.isdir(LOOT_ROOT):
         try:
             os.makedirs(LOOT_ROOT, exist_ok=True)
@@ -245,100 +226,99 @@ def main():
     status = ""
     last_press = 0.0
     visible = 7
-    mode = "browse"  # browse | preview | confirm | stats
 
     try:
         while True:
             btn = get_button(PINS, GPIO)
             now = time.time()
-
             if btn and (now - last_press) < DEBOUNCE:
                 btn = None
             if btn:
                 last_press = now
 
-            if mode == "preview" or mode == "stats":
-                if btn:
-                    mode = "browse"
-                    time.sleep(0.1)
-                    continue
-
-            elif mode == "confirm":
-                if btn == "OK":
-                    entry = entries[cursor]
-                    try:
-                        os.remove(entry["path"])
-                        status = "Deleted!"
-                    except OSError as exc:
-                        status = f"Err: {str(exc)[:14]}"
+            # Browse mode
+            if btn == "KEY3":
+                break
+            elif btn == "UP":
+                cursor = max(0, cursor - 1)
+                if cursor < scroll_offset:
+                    scroll_offset = cursor
+                status = ""
+            elif btn == "DOWN":
+                cursor = min(max(0, len(entries) - 1), cursor + 1)
+                if cursor >= scroll_offset + visible:
+                    scroll_offset = cursor - visible + 1
+                status = ""
+            elif btn == "LEFT":
+                if cwd != LOOT_ROOT:
+                    cwd = os.path.dirname(cwd)
                     entries = _list_dir(cwd)
-                    cursor = min(cursor, max(0, len(entries) - 1))
-                    mode = "browse"
-                elif btn:
-                    status = "Cancelled"
-                    mode = "browse"
-                _draw_browser(LCD, cwd, entries, cursor, scroll_offset, status)
-                time.sleep(0.08)
-                continue
+                    cursor = 0
+                    scroll_offset = 0
+                    status = ""
+            elif btn == "OK" and entries:
+                entry = entries[cursor]
+                if entry["is_dir"]:
+                    cwd = entry["path"]
+                    entries = _list_dir(cwd)
+                    cursor = 0
+                    scroll_offset = 0
+                    status = ""
+                else:
+                    # Scrollable preview
+                    if _is_text_file(entry["path"]):
+                        lines = _preview_text(entry["path"], max_lines=1000)
+                    else:
+                        ftype = _file_type_label(entry["path"])
+                        lines = [
+                            f"Type: {ftype}",
+                            f"Size: {_fmt_size(entry['size'])}",
+                            "",
+                            "(binary file)",
+                        ]
+                    scroll_offset_preview = 0
+                    max_display = 8
+                    while True:
+                        _draw_preview(LCD, entry["path"], lines[scroll_offset_preview:scroll_offset_preview+max_display])
+                        btn_preview = get_button(PINS, GPIO)
+                        if btn_preview == "UP":
+                            scroll_offset_preview = max(0, scroll_offset_preview - 1)
+                        elif btn_preview == "DOWN":
+                            scroll_offset_preview = min(len(lines)-max_display, scroll_offset_preview + 1)
+                        elif btn_preview: 
+                            break
+                        time.sleep(0.05)
 
-            elif mode == "browse":
-                if btn == "KEY3":
-                    break
-                elif btn == "UP":
-                    cursor = max(0, cursor - 1)
-                    if cursor < scroll_offset:
-                        scroll_offset = cursor
-                    status = ""
-                elif btn == "DOWN":
-                    cursor = min(max(0, len(entries) - 1), cursor + 1)
-                    if cursor >= scroll_offset + visible:
-                        scroll_offset = cursor - visible + 1
-                    status = ""
-                elif btn == "LEFT":
-                    if cwd != LOOT_ROOT:
-                        cwd = os.path.dirname(cwd)
-                        entries = _list_dir(cwd)
-                        cursor = 0
-                        scroll_offset = 0
-                        status = ""
-                elif btn == "OK" and entries:
-                    entry = entries[cursor]
-                    if entry["is_dir"]:
-                        cwd = entry["path"]
-                        entries = _list_dir(cwd)
-                        cursor = 0
-                        scroll_offset = 0
-                        status = ""
-                    else:
-                        if _is_text_file(entry["path"]):
-                            lines = _preview_text(entry["path"], max_lines=8)
-                        else:
-                            ftype = _file_type_label(entry["path"])
-                            lines = [
-                                f"Type: {ftype}",
-                                f"Size: {_fmt_size(entry['size'])}",
-                                "",
-                                "(binary file)",
-                            ]
-                        _draw_preview(LCD, entry["path"], lines)
-                        mode = "preview"
-                        time.sleep(0.08)
-                        continue
-                elif btn == "KEY1":
-                    fc, ts = _dir_stats(cwd)
-                    _draw_stats(LCD, cwd, fc, ts)
-                    mode = "stats"
-                    time.sleep(0.08)
-                    continue
-                elif btn == "KEY2" and entries:
-                    entry = entries[cursor]
-                    if not entry["is_dir"]:
-                        _draw_confirm(LCD, entry["name"])
-                        mode = "confirm"
-                        time.sleep(0.08)
-                        continue
-                    else:
-                        status = "Can't del dirs"
+            elif btn == "KEY1":
+                fc, ts = _dir_stats(cwd)
+                _draw_stats(LCD, cwd, fc, ts)
+                while True:
+                    btn_stats = get_button(PINS, GPIO)
+                    if btn_stats:
+                        break
+                    time.sleep(0.05)
+
+            elif btn == "KEY2" and entries:
+                entry = entries[cursor]
+                if not entry["is_dir"]:
+                    _draw_confirm(LCD, entry["name"])
+                    while True:
+                        btn_confirm = get_button(PINS, GPIO)
+                        if btn_confirm == "OK":
+                            try:
+                                os.remove(entry["path"])
+                                status = "Deleted!"
+                            except OSError as exc:
+                                status = f"Err: {str(exc)[:14]}"
+                            entries = _list_dir(cwd)
+                            cursor = min(cursor, max(0, len(entries) - 1))
+                            break
+                        elif btn_confirm:
+                            status = "Cancelled"
+                            break
+                        time.sleep(0.05)
+                else:
+                    status = "Can't del dirs"
 
             _draw_browser(LCD, cwd, entries, cursor, scroll_offset, status)
             time.sleep(0.08)
