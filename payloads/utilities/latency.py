@@ -29,7 +29,6 @@ from payloads._input_helper import get_button
 
 # --------------------------- Configuration ---------------------------------
 
-WIDTH, HEIGHT = LCD.width, LCD.height
 HISTORY_LEN = 64              # number of points to show in the sparkline
 PROBE_TIMEOUT_S = 1.0         # TCP connect timeout per probe
 JITTER_WINDOW = 10            # last N samples to compute jitter
@@ -189,6 +188,7 @@ for pin in PINS.values():
 
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
+WIDTH, HEIGHT = LCD.width, LCD.height
 
 canvas = Image.new("RGB", (WIDTH, HEIGHT), "black")
 draw = ScaledDraw(canvas)
