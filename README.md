@@ -164,7 +164,6 @@ From a fresh Raspberry Pi OS Lite install:
 sudo apt update
 sudo apt install -y git
 sudo -i
-cd /root
 git clone https://github.com/7h30th3r0n3/raspyjack.git Raspyjack
 cd Raspyjack
 chmod +x install_raspyjack.sh
@@ -183,6 +182,7 @@ sudo -i
 cd /root
 rm -rf Raspyjack
 git clone https://github.com/7h30th3r0n3/raspyjack.git Raspyjack
+cd Raspyjack
 chmod +x install_raspyjack.sh
 ./install_raspyjack.sh
 reboot
