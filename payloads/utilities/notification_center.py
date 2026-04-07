@@ -20,7 +20,8 @@ Controls
   UP / DOWN  -- Scroll notifications (newest first)
   OK         -- Mark selected notification as read
   KEY1       -- Clear all notifications
-  KEY2       -- Push unread notifications to Discord webhook
+  KEY2       -- Push unread notifications to all enabled channels
+  LEFT       -- Cycle channel config views
   KEY3       -- Exit
 """
 
@@ -57,6 +58,8 @@ font = scaled_font()
 LOOT_ROOT = "/root/Raspyjack/loot"
 NOTIF_FILE = os.path.join(LOOT_ROOT, ".notifications.jsonl")
 WEBHOOK_FILE = "/root/Raspyjack/discord_webhook.txt"
+CHANNELS_DIR = os.path.join(LOOT_ROOT, "Notifications")
+CHANNELS_FILE = os.path.join(CHANNELS_DIR, "channels.json")
 POLL_INTERVAL = 10
 DEBOUNCE = 0.22
 
@@ -201,6 +204,119 @@ def _push_discord(items):
 
 
 # ---------------------------------------------------------------------------
+# Multi-channel push
+# ---------------------------------------------------------------------------
+
+_DEFAULT_CHANNELS = {
+    "discord": {"enabled": False, "url": ""},
+    "slack": {"enabled": False, "url": ""},
+    "http_post": {"enabled": False, "url": ""},
+}
+CHANNEL_NAMES = ["discord", "slack", "http_post"]
+
+
+def _load_channels():
+    """Load channel configs from channels.json, merging with defaults."""
+    channels = dict(_DEFAULT_CHANNELS)
+    # Migrate legacy discord webhook if present
+    legacy_url = _load_webhook_url()
+    if legacy_url:
+        channels["discord"] = {"enabled": True, "url": legacy_url}
+    if os.path.isfile(CHANNELS_FILE):
+        try:
+            with open(CHANNELS_FILE, "r") as fh:
+                saved = json.loads(fh.read())
+            if isinstance(saved, dict):
+                for name in CHANNEL_NAMES:
+                    if name in saved and isinstance(saved[name], dict):
+                        channels[name] = {
+                            "enabled": saved[name].get("enabled", False),
+                            "url": saved[name].get("url", ""),
+                        }
+        except (json.JSONDecodeError, OSError):
+            pass
+    return channels
+
+
+def _save_channels(channels):
+    """Persist channel configs to channels.json."""
+    try:
+        os.makedirs(CHANNELS_DIR, exist_ok=True)
+        with open(CHANNELS_FILE, "w") as fh:
+            fh.write(json.dumps(channels, indent=2))
+    except OSError:
+        pass
+
+
+def _push_slack(items, url):
+    """Send notification summaries to a Slack webhook."""
+    lines = []
+    for item in items[:20]:
+        sev = item.get("severity", "info").upper()
+        src = item.get("source", "?")[:12]
+        msg = item.get("message", "")[:60]
+        lines.append(f"[{sev}] {src}: {msg}")
+    payload = json.dumps({
+        "text": f"*RaspyJack Notifications* ({len(items)} unread)\n```\n"
+                + "\n".join(lines) + "\n```"
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        url, data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10):
+            pass
+        return f"Slack: sent {len(items)}"
+    except (urllib.error.URLError, OSError) as exc:
+        return f"Slack err: {str(exc)[:16]}"
+
+
+def _push_http_post(items, url):
+    """Send notification summaries to a generic HTTP POST endpoint."""
+    payload = json.dumps({
+        "source": "raspyjack",
+        "count": len(items),
+        "notifications": [
+            {
+                "severity": item.get("severity", "info"),
+                "source": item.get("source", "?"),
+                "message": item.get("message", ""),
+                "timestamp": item.get("timestamp", ""),
+            }
+            for item in items[:20]
+        ],
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        url, data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10):
+            pass
+        return f"HTTP: sent {len(items)}"
+    except (urllib.error.URLError, OSError) as exc:
+        return f"HTTP err: {str(exc)[:16]}"
+
+
+def _push_all_channels(items):
+    """Push to all enabled channels. Returns combined status string."""
+    channels = _load_channels()
+    results = []
+    if channels["discord"].get("enabled") and channels["discord"].get("url"):
+        results.append(_push_discord(items))
+    if channels["slack"].get("enabled") and channels["slack"].get("url"):
+        results.append(_push_slack(items, channels["slack"]["url"]))
+    if channels["http_post"].get("enabled") and channels["http_post"].get("url"):
+        results.append(_push_http_post(items, channels["http_post"]["url"]))
+    if not results:
+        return "No channels enabled"
+    return "; ".join(results)
+
+
+# ---------------------------------------------------------------------------
 # Drawing
 # ---------------------------------------------------------------------------
 
@@ -253,7 +369,7 @@ def _draw_notifications(lcd, notifs, cursor, scroll, status=""):
         d.text((2, 94), status[:22], font=font, fill="#ffaa00")
 
     d.rectangle((0, 116, 127, 127), fill="#111")
-    d.text((2, 117), "OK:read K1:clr K2:push", font=font, fill="#666")
+    d.text((2, 117), "OK:rd K1:clr K2:push L:ch", font=font, fill="#666")
     lcd.LCD_ShowImage(img, 0, 0)
 
 
@@ -263,6 +379,39 @@ def _draw_confirm(lcd, message):
     d.text((10, 40), message, font=font, fill="#ff4444")
     d.text((10, 60), "OK = Yes", font=font, fill="#00ff00")
     d.text((10, 75), "Any = Cancel", font=font, fill="#666")
+    lcd.LCD_ShowImage(img, 0, 0)
+
+
+def _draw_channel_config(lcd, channel_idx):
+    """Draw config view for a specific channel."""
+    channels = _load_channels()
+    name = CHANNEL_NAMES[channel_idx % len(CHANNEL_NAMES)]
+    ch = channels.get(name, {})
+    enabled = ch.get("enabled", False)
+    url = ch.get("url", "")
+
+    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+    d = ScaledDraw(img)
+
+    d.rectangle((0, 0, 127, 12), fill="#111")
+    d.text((2, 1), f"CHANNEL {channel_idx + 1}/{len(CHANNEL_NAMES)}", font=font, fill="#ffaa00")
+
+    label = {"discord": "Discord", "slack": "Slack", "http_post": "HTTP POST"}.get(name, name)
+    d.text((4, 18), label, font=font, fill="#00ffff")
+    status_color = "#00ff00" if enabled else "#ff4444"
+    d.text((4, 32), f"Status: {'ON' if enabled else 'OFF'}", font=font, fill=status_color)
+
+    if url:
+        # Show truncated URL
+        d.text((4, 46), "URL:", font=font, fill="#888")
+        d.text((4, 58), url[:22], font=font, fill="#aaa")
+        if len(url) > 22:
+            d.text((4, 70), url[22:44], font=font, fill="#aaa")
+    else:
+        d.text((4, 46), "URL: not set", font=font, fill="#666")
+
+    d.rectangle((0, 116, 127, 127), fill="#111")
+    d.text((2, 117), "LEFT:next  KEY3:back", font=font, fill="#666")
     lcd.LCD_ShowImage(img, 0, 0)
 
 
@@ -285,7 +434,8 @@ def main():
     scroll = 0
     last_press = 0.0
     visible = 6
-    mode = "list"   # list | confirm_clear
+    mode = "list"   # list | confirm_clear | channel_config
+    channel_view_idx = 0
 
     try:
         while True:
@@ -319,8 +469,26 @@ def main():
                     time.sleep(0.08)
                     continue
 
+            if mode == "channel_config":
+                if btn == "LEFT":
+                    channel_view_idx = (channel_view_idx + 1) % len(CHANNEL_NAMES)
+                elif btn == "KEY3":
+                    mode = "list"
+                elif btn:
+                    mode = "list"
+                if mode == "channel_config":
+                    _draw_channel_config(LCD, channel_view_idx)
+                    time.sleep(0.08)
+                    continue
+
             if btn == "KEY3":
                 break
+            elif btn == "LEFT":
+                mode = "channel_config"
+                channel_view_idx = 0
+                _draw_channel_config(LCD, channel_view_idx)
+                time.sleep(0.08)
+                continue
             elif btn == "UP":
                 cursor = max(0, cursor - 1)
                 if cursor < scroll:
@@ -353,8 +521,8 @@ def main():
                 if unread:
                     status_msg = "Sending..."
                     _draw_notifications(LCD, notifications, cursor, scroll, status_msg)
-                    result = _push_discord(unread)
-                    status_msg = result
+                    result = _push_all_channels(unread)
+                    status_msg = result[:22]
                 else:
                     status_msg = "Nothing to push"
 

@@ -126,6 +126,83 @@ def _file_type_label(path):
     return type_map.get(ext, "BIN")
 
 
+def _read_all_lines(path):
+    """Read all lines of a text file."""
+    lines = []
+    try:
+        with open(path, "r", errors="replace") as fh:
+            for line in fh:
+                lines.append(line.rstrip("\n"))
+    except OSError:
+        lines.append("(read error)")
+    return lines
+
+
+def _is_log_or_txt(path):
+    """Check if file has .log or .txt extension."""
+    ext = os.path.splitext(path)[1].lower()
+    return ext in (".log", ".txt")
+
+
+# Character set for keyword filter input
+_FILTER_CHARS = list(
+    "abcdefghijklmnopqrstuvwxyz"
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    "0123456789._-:/ "
+)
+
+
+def _draw_log_viewer(lcd, path, all_lines, filtered_lines, keyword,
+                     scroll, editing_filter, char_idx):
+    """Draw log viewer with filtering."""
+    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+    d = ScaledDraw(img)
+
+    total = len(all_lines)
+    shown = len(filtered_lines)
+
+    # Header with line counts
+    d.rectangle((0, 0, 127, 12), fill="#1a1a1a")
+    name = os.path.basename(path)
+    if len(name) > 9:
+        name = name[:6] + ".."
+    d.text((2, 1), f"{name} {shown}/{total}", font=font, fill="#00ff00")
+
+    if editing_filter:
+        # Draw character picker overlay
+        d.rectangle((0, 100, 127, 127), fill="#222200")
+        ch = _FILTER_CHARS[char_idx] if _FILTER_CHARS else " "
+        d.text((2, 101), f"Char: <{ch}>", font=font, fill="#ffff00")
+        d.text((2, 114), ">=add <=del OK=done", font=font, fill="#888")
+    else:
+        # Show filter keyword if set
+        if keyword:
+            d.rectangle((0, 13, 127, 23), fill="#1a0a00")
+            kw_display = keyword if len(keyword) <= 16 else keyword[-16:]
+            d.text((2, 14), f"F:{kw_display}", font=font, fill="#ffaa00")
+
+    # Content area
+    content_top = 25 if keyword else 15
+    line_h = 11
+    max_visible = (100 - content_top) // line_h
+
+    if not filtered_lines:
+        d.text((4, 50), "(no matches)", font=font, fill="#666666")
+    else:
+        end = min(len(filtered_lines), scroll + max_visible)
+        y = content_top
+        for i in range(scroll, end):
+            line_text = filtered_lines[i][:20]
+            d.text((2, y), line_text, font=font, fill="#cccccc")
+            y += line_h
+
+    if not editing_filter:
+        d.rectangle((0, 116, 127, 127), fill="#111")
+        d.text((2, 117), "OK=filter K3=back", font=font, fill="#666666")
+
+    lcd.LCD_ShowImage(img, 0, 0)
+
+
 def _draw_browser(lcd, cwd, entries, cursor, scroll_offset, status=""):
     """Draw file browser UI."""
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
@@ -194,7 +271,10 @@ def _draw_preview(lcd, path, lines):
         d.text((2, y), line[:20], font=font, fill="#cccccc")
         y += 12
 
-    d.text((2, 116), "Any key=back", font=font, fill="#666666")
+    if _is_log_or_txt(path):
+        d.text((2, 116), "K1=logview Any=back", font=font, fill="#666666")
+    else:
+        d.text((2, 116), "Any key=back", font=font, fill="#666666")
     lcd.LCD_ShowImage(img, 0, 0)
 
 
@@ -245,7 +325,15 @@ def main():
     status = ""
     last_press = 0.0
     visible = 7
-    mode = "browse"  # browse | preview | confirm | stats
+    mode = "browse"  # browse | preview | confirm | stats | log_viewer
+    # Log viewer state
+    log_all_lines = []
+    log_filtered = []
+    log_keyword = ""
+    log_scroll = 0
+    log_editing = False
+    log_char_idx = 0
+    log_path = ""
 
     try:
         while True:
@@ -257,11 +345,75 @@ def main():
             if btn:
                 last_press = now
 
-            if mode == "preview" or mode == "stats":
+            if mode == "preview":
+                if btn == "KEY1" and entries and _is_log_or_txt(entries[cursor]["path"]):
+                    log_path = entries[cursor]["path"]
+                    log_all_lines = _read_all_lines(log_path)
+                    log_keyword = ""
+                    log_filtered = list(log_all_lines)
+                    log_scroll = 0
+                    log_editing = False
+                    log_char_idx = 0
+                    mode = "log_viewer"
+                    time.sleep(0.1)
+                    continue
+                elif btn:
+                    mode = "browse"
+                    time.sleep(0.1)
+                    continue
+
+            elif mode == "stats":
                 if btn:
                     mode = "browse"
                     time.sleep(0.1)
                     continue
+
+            elif mode == "log_viewer":
+                if btn == "KEY3":
+                    mode = "browse"
+                    time.sleep(0.1)
+                    continue
+                elif btn == "OK":
+                    log_editing = not log_editing
+                    if log_editing:
+                        log_char_idx = 0
+                elif log_editing:
+                    if btn == "UP":
+                        log_char_idx = (log_char_idx - 1) % len(_FILTER_CHARS)
+                    elif btn == "DOWN":
+                        log_char_idx = (log_char_idx + 1) % len(_FILTER_CHARS)
+                    elif btn == "RIGHT":
+                        log_keyword += _FILTER_CHARS[log_char_idx]
+                        log_filtered = [
+                            l for l in log_all_lines
+                            if log_keyword.lower() in l.lower()
+                        ]
+                        log_scroll = 0
+                    elif btn == "LEFT":
+                        if log_keyword:
+                            log_keyword = log_keyword[:-1]
+                            if log_keyword:
+                                log_filtered = [
+                                    l for l in log_all_lines
+                                    if log_keyword.lower() in l.lower()
+                                ]
+                            else:
+                                log_filtered = list(log_all_lines)
+                            log_scroll = 0
+                else:
+                    if btn == "UP":
+                        log_scroll = max(0, log_scroll - 1)
+                    elif btn == "DOWN":
+                        log_scroll = min(
+                            max(0, len(log_filtered) - 1), log_scroll + 1
+                        )
+
+                _draw_log_viewer(
+                    LCD, log_path, log_all_lines, log_filtered,
+                    log_keyword, log_scroll, log_editing, log_char_idx,
+                )
+                time.sleep(0.08)
+                continue
 
             elif mode == "confirm":
                 if btn == "OK":

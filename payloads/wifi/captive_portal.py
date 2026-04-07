@@ -213,6 +213,7 @@ selected_idx = 0
 status_msg = "Select template"
 view_mode = "templates"  # templates | ssid_edit | attack | creds
 attack_running = False
+_portal_running = False
 running = True
 credentials = []
 clients_connected = 0
@@ -423,8 +424,8 @@ def _count_clients():
 
 def _start_attack(template):
     """Start captive portal with selected template."""
-    global attack_running, status_msg, _hostapd_proc, _dnsmasq_proc
-    global _portal_server, active_template_name
+    global attack_running, _portal_running, status_msg, _hostapd_proc
+    global _dnsmasq_proc, _portal_server, active_template_name
 
     iface = _iface
     if not iface:
@@ -524,6 +525,7 @@ def _start_attack(template):
 
     with lock:
         attack_running = True
+        _portal_running = True
         status_msg = f"Portal: {ssid_str}"
         view_mode = "attack"
 
@@ -533,10 +535,11 @@ def _start_attack(template):
 
 def _stop_attack():
     """Stop all services and clean up."""
-    global attack_running, _hostapd_proc, _dnsmasq_proc, _portal_server
+    global attack_running, _portal_running, _hostapd_proc, _dnsmasq_proc, _portal_server
 
     with lock:
         attack_running = False
+        _portal_running = False
 
     if _portal_server:
         _portal_server.shutdown()
@@ -582,6 +585,27 @@ def _stop_attack():
 
 
 # ---------------------------------------------------------------------------
+# Restart helper
+# ---------------------------------------------------------------------------
+
+def _restart_portal():
+    """Restart portal services (stop then start with same template)."""
+    global _portal_running, status_msg
+    with lock:
+        atk = attack_running
+        si = selected_idx
+        tpls = list(templates)
+    if not atk or not (0 <= si < len(tpls)):
+        return
+    tpl = tpls[si]
+    with lock:
+        _portal_running = False
+        status_msg = "Restarting..."
+    _stop_attack()
+    _start_attack(tpl)
+
+
+# ---------------------------------------------------------------------------
 # Export
 # ---------------------------------------------------------------------------
 
@@ -618,8 +642,6 @@ def _draw_screen():
     img = Image.new("RGB", (WIDTH, HEIGHT), "BLACK")
     draw = ScaledDraw(img)
 
-    draw.text((2, 2), "Captive Portal", fill="CYAN", font=font)
-
     with lock:
         st = status_msg
         vm = view_mode
@@ -631,7 +653,13 @@ def _draw_screen():
         ssid_str = "".join(ssid)
         sc = ssid_cursor
         atk = attack_running
+        portal_up = _portal_running
         tpl_name = active_template_name
+
+    draw.text((2, 2), "Captive Portal", fill="CYAN", font=font)
+    portal_color = "GREEN" if portal_up else "RED"
+    portal_label = "RUN" if portal_up else "OFF"
+    draw.text((100, 2), portal_label, fill=portal_color, font=font)
 
     draw.text((2, 14), st[:22], fill="WHITE", font=font)
 

@@ -11,6 +11,7 @@ Controls:
     UP/DOWN     - Scroll uploads page / detail view
     OK          - Open selected upload details
   KEY1        - Refresh from WiGLE
+  KEY2        - Upload wardriving CSV to WiGLE
   KEY3        - Exit
 """
 
@@ -670,6 +671,105 @@ def _start_refresh() -> None:
     thread.start()
 
 
+# ---------------------------------------------------------------------------
+# WiGLE upload toolkit
+# ---------------------------------------------------------------------------
+
+WIGLE_UPLOAD_CONFIG = Path("/root/Raspyjack/loot/WiGLE/config.json")
+WARDRIVING_LOOT_DIR = Path("/root/Raspyjack/loot/wardriving")
+WIGLE_UPLOAD_URL = f"{API_BASE}/file/upload"
+
+upload_state_lock = threading.Lock()
+upload_state: Dict[str, Any] = {
+    "uploading": False,
+    "progress": "",
+    "result": "",
+    "done": False,
+}
+
+
+def _read_upload_credentials() -> Tuple[str, str]:
+    """Read WiGLE upload creds from config.json (username, API token)."""
+    try:
+        if WIGLE_UPLOAD_CONFIG.exists():
+            data = json.loads(WIGLE_UPLOAD_CONFIG.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return (
+                    str(data.get("username") or data.get("api_name") or "").strip(),
+                    str(data.get("api_token") or data.get("token") or "").strip(),
+                )
+    except Exception:
+        pass
+    # Fallback to main credentials
+    return _read_credentials()
+
+
+def _find_csv_files() -> List[Path]:
+    """Find .csv files in the wardriving loot directory."""
+    csv_files: List[Path] = []
+    for search_dir in [WARDRIVING_LOOT_DIR, Path("/root/Raspyjack/loot/WiGLE")]:
+        if search_dir.is_dir():
+            csv_files.extend(sorted(search_dir.glob("*.csv")))
+    return csv_files
+
+
+def _upload_to_wigle() -> None:
+    """Upload CSV files to WiGLE API in background."""
+    with upload_state_lock:
+        if upload_state["uploading"]:
+            return
+        upload_state["uploading"] = True
+        upload_state["progress"] = "Starting..."
+        upload_state["result"] = ""
+        upload_state["done"] = False
+
+    username, token = _read_upload_credentials()
+    if not username or not token:
+        with upload_state_lock:
+            upload_state["uploading"] = False
+            upload_state["result"] = "No creds in config"
+            upload_state["done"] = True
+        return
+
+    csv_files = _find_csv_files()
+    if not csv_files:
+        with upload_state_lock:
+            upload_state["uploading"] = False
+            upload_state["result"] = "No CSV files found"
+            upload_state["done"] = True
+        return
+
+    uploaded = 0
+    errors = 0
+    for i, csv_path in enumerate(csv_files):
+        with upload_state_lock:
+            upload_state["progress"] = f"{i+1}/{len(csv_files)} {csv_path.name[:12]}"
+        try:
+            with open(csv_path, "rb") as fh:
+                response = requests.post(
+                    WIGLE_UPLOAD_URL,
+                    auth=(username, token),
+                    files={"file": (csv_path.name, fh, "text/csv")},
+                    timeout=30,
+                )
+            if response.status_code == 200:
+                uploaded += 1
+            else:
+                errors += 1
+        except Exception:
+            errors += 1
+
+    with upload_state_lock:
+        upload_state["uploading"] = False
+        upload_state["result"] = f"OK:{uploaded} Err:{errors}"
+        upload_state["done"] = True
+
+
+def _start_upload() -> None:
+    thread = threading.Thread(target=_upload_to_wigle, daemon=True)
+    thread.start()
+
+
 def _signal_stop(_signum, _frame):
     global running
     running = False
@@ -687,13 +787,22 @@ def _draw_header(draw: ImageDraw.ImageDraw, page_index: int) -> None:
 
 def _draw_footer(draw: ImageDraw.ImageDraw, status: str, source: str) -> None:
     draw.line((0, 113, 127, 113), fill="white")
-    draw.text((2, 116), _fit_text(status, 80), font=FONT, fill="white")
-    draw.text((68, 116), "K1=Refresh", font=FONT, fill="white")
+    with upload_state_lock:
+        is_uploading = upload_state["uploading"]
+        upload_progress = upload_state["progress"]
+        upload_result = upload_state["result"]
+        upload_done = upload_state["done"]
+    if is_uploading:
+        draw.text((2, 116), _fit_text(f"UL:{upload_progress}", 124), font=FONT, fill="white")
+    elif upload_done and upload_result:
+        draw.text((2, 116), _fit_text(upload_result, 124), font=FONT, fill="white")
+    else:
+        draw.text((2, 116), _fit_text(status, 60), font=FONT, fill="white")
+        draw.text((62, 116), "K1:Ref K2:UL", font=FONT, fill="white")
 
 
-def _draw_centered(draw: ImageDraw.ImageDraw, y: int, text: str) -> None:
-    width = _text_width(FONT, text)
-    draw.text((max(0, (WIDTH - width) // 2), y), text, font=FONT, fill="white")
+def _draw_centered(draw, y: int, text: str) -> None:
+    draw.text((64, y), text, font=FONT, fill="white", anchor="mt")
 
 
 def _draw_error_state(draw: ImageDraw.ImageDraw, error_code: str) -> None:
@@ -897,7 +1006,7 @@ def _render(
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
     draw = ScaledDraw(img)
 
-    draw.rectangle((0, 0, WIDTH - 1, HEIGHT - 1), outline="white")
+    draw.rectangle((0, 0, 127, 127), outline="white")
     _draw_header(draw, page_index)
 
     if loading and not snapshot:
@@ -971,6 +1080,11 @@ def main() -> None:
                     detail_scroll = 0
             elif btn == "KEY1":
                 _start_refresh()
+            elif btn == "KEY2":
+                with upload_state_lock:
+                    is_uploading = upload_state["uploading"]
+                if not is_uploading:
+                    _start_upload()
             elif page_index == 2 and not upload_detail_open and btn == "OK":
                 if uploads:
                     upload_detail_open = True

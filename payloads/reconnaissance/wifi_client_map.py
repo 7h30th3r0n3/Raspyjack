@@ -61,6 +61,46 @@ os.makedirs(LOOT_DIR, exist_ok=True)
 ROWS_VISIBLE = 7
 ROW_H = 12
 BROADCAST = "ff:ff:ff:ff:ff:ff"
+EVENT_LOG = "/root/Raspyjack/loot/ClientMap/events.log"
+
+# Common OUI vendor prefixes
+OUI_VENDORS = {
+    "00:50:56": "VMware",
+    "00:0c:29": "VMware",
+    "08:00:27": "VBox",
+    "b8:27:eb": "RaspPi",
+    "dc:a6:32": "RaspPi",
+    "e4:5f:01": "RaspPi",
+    "ac:de:48": "Apple",
+    "00:1c:b3": "Apple",
+    "a4:83:e7": "Apple",
+    "f0:18:98": "Apple",
+    "34:02:86": "Apple",
+    "00:25:00": "Apple",
+    "fc:f1:36": "Samsung",
+    "a0:cc:2b": "Samsung",
+    "8c:f5:a3": "Samsung",
+    "78:02:f8": "Xiaomi",
+    "50:ec:50": "Xiaomi",
+    "3c:5a:b4": "Google",
+    "f4:f5:d8": "Google",
+    "00:1a:2b": "Cisco",
+    "00:1b:44": "Cisco",
+    "00:26:cb": "Cisco",
+    "00:24:d7": "Intel",
+    "a4:34:d9": "Intel",
+    "7c:5c:f8": "Intel",
+    "60:6c:66": "Intel",
+    "9c:b6:d0": "Huawei",
+    "48:46:fb": "Huawei",
+    "88:66:a5": "Huawei",
+    "c8:3a:35": "Tenda",
+    "74:da:38": "TP-Link",
+    "50:c7:bf": "TP-Link",
+}
+
+# Track all seen clients globally for event logging
+_seen_clients = set()
 
 # ---------------------------------------------------------------------------
 # Shared state
@@ -150,6 +190,30 @@ def _disable_monitor(iface):
                         capture_output=True, timeout=5)
         subprocess.run(["ip", "link", "set", iface, "up"],
                         capture_output=True, timeout=5)
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# OUI vendor lookup & event logging
+# ---------------------------------------------------------------------------
+
+def _oui_vendor(mac):
+    """Look up vendor from OUI prefix (lowercase MAC)."""
+    prefix = mac[:8]
+    return OUI_VENDORS.get(prefix, "")
+
+
+def _log_new_client(bssid, client_mac):
+    """Log a newly seen client to the event log file."""
+    try:
+        os.makedirs(os.path.dirname(EVENT_LOG), exist_ok=True)
+        vendor = _oui_vendor(client_mac)
+        vendor_tag = f" ({vendor})" if vendor else ""
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        line = f"[{ts}] NEW CLIENT {client_mac}{vendor_tag} -> AP {bssid}\n"
+        with open(EVENT_LOG, "a") as fh:
+            fh.write(line)
     except Exception:
         pass
 
@@ -246,7 +310,12 @@ def _sniffer_thread():
             pkt_count += 1
             if bssid not in ap_clients:
                 ap_clients[bssid] = set()
+            is_new = client not in _seen_clients
             ap_clients[bssid].add(client)
+            _seen_clients.add(client)
+
+        if is_new:
+            _log_new_client(bssid, client)
 
     try:
         scapy_sniff(
@@ -377,7 +446,13 @@ def draw_client_list(bssid, clients):
     visible = sorted_clients[cs:cs + ROWS_VISIBLE - 1]
     for i, mac in enumerate(visible):
         y = 28 + i * ROW_H
-        d.text((2, y), mac, font=font, fill="#CCCCCC")
+        vendor = _oui_vendor(mac)
+        if vendor:
+            # Show shortened MAC + vendor
+            d.text((2, y), mac[-8:], font=font, fill="#CCCCCC")
+            d.text((62, y), vendor[:8], font=font, fill="#FFAA00")
+        else:
+            d.text((2, y), mac, font=font, fill="#CCCCCC")
 
     _draw_footer(d, "LEFT:back UP/DN:scroll")
     LCD.LCD_ShowImage(img, 0, 0)
@@ -459,6 +534,7 @@ def main():
                     with lock:
                         ap_clients = {}
                         pkt_count = 0
+                        _seen_clients.clear()
                     start_sniffing()
                     scroll_pos = 0
                     time.sleep(0.3)

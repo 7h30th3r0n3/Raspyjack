@@ -17,12 +17,12 @@ sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..", "..")))
 
 LCD_OK = False
 LCD = None
-WIDTH = HEIGHT = 128
+WIDTH, HEIGHT = LCD.width, LCD.height
 font = None
 
 
 def _init_lcd():
-    global LCD_OK, LCD, WIDTH, HEIGHT, font
+    global LCD_OK, LCD, font
     try:
         import LCD_1in44, LCD_Config  # type: ignore
         from PIL import ImageFont  # type: ignore
@@ -31,7 +31,6 @@ def _init_lcd():
         LCD = LCD_1in44.LCD()
         LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
         LCD.LCD_Clear()
-        WIDTH, HEIGHT = LCD.width, LCD.height
         font = scaled_font()
         LCD_OK = True
     except Exception:
@@ -122,6 +121,54 @@ def _get_wifi_device():
     return None
 
 
+def _discover_hosts(iface, local_ip):
+    """Quick host discovery using arp-scan or nmap ping scan."""
+    # Determine subnet from local IP
+    try:
+        parts = local_ip.split(".")
+        subnet = f"{parts[0]}.{parts[1]}.{parts[2]}.0/24"
+    except Exception:
+        return []
+
+    found_ips = []
+
+    # Try arp-scan first (faster)
+    try:
+        res = _run(["sudo", "arp-scan", "-l", "-I", iface, "-q"])
+        if res.returncode == 0:
+            for line in res.stdout.strip().splitlines():
+                line = line.strip()
+                if not line or line.startswith("Interface") or line.startswith("Starting"):
+                    continue
+                ip_part = line.split("\t")[0].split()[0] if "\t" in line else line.split()[0]
+                # Validate it looks like an IP
+                if ip_part.count(".") == 3:
+                    found_ips.append(ip_part)
+            if found_ips:
+                return found_ips
+    except Exception:
+        pass
+
+    # Fallback to nmap ping scan
+    try:
+        res = _run(["nmap", "-sn", subnet, "-T4", "--max-retries", "1"])
+        if res.returncode == 0:
+            for line in res.stdout.splitlines():
+                line = line.strip()
+                if "Nmap scan report for" in line:
+                    # Extract IP: "Nmap scan report for 192.168.1.1" or "... for host (192.168.1.1)"
+                    if "(" in line:
+                        ip_part = line.split("(")[1].rstrip(")")
+                    else:
+                        ip_part = line.split()[-1]
+                    if ip_part.count(".") == 3:
+                        found_ips.append(ip_part)
+    except Exception:
+        pass
+
+    return found_ips
+
+
 def main():
     _init_lcd()
     _show(["Quick WiFi", "Scanning...", "", "Please wait"], progress=0.10)
@@ -164,8 +211,21 @@ def main():
                 ip = line.split()[1].split("/")[0]
                 break
 
-    _show(["Connected", best["ssid"][:16], f"IP: {ip[:15]}", ""], progress=1.0)
-    time.sleep(0.8)
+    _show(["Connected", best["ssid"][:16], f"IP: {ip[:15]}", "Scanning hosts..."], progress=0.90)
+
+    # Quick host discovery on the connected subnet
+    hosts_found = _discover_hosts(dev, ip)
+    if hosts_found:
+        lines = [f"Connected: {best['ssid'][:14]}", f"Hosts found: {len(hosts_found)}"]
+        for host_ip in hosts_found[:4]:
+            lines.append(f" {host_ip[:16]}")
+        if len(hosts_found) > 4:
+            lines.append(f" +{len(hosts_found)-4} more")
+        _show(lines, progress=1.0)
+    else:
+        _show(["Connected", best["ssid"][:16], f"IP: {ip[:15]}", "No hosts found"], progress=1.0)
+
+    time.sleep(1.5)
     return 0
 
 

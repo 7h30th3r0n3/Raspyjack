@@ -25,6 +25,7 @@ Steps:
 Controls:
   OK        -- Select AP / start attack
   UP / DOWN -- Scroll AP list
+  LEFT      -- Quick Clone (auto-start with cloned SSID + open auth)
   KEY1      -- Rescan APs
   KEY2      -- Show captured credentials
   KEY3      -- Exit + full cleanup
@@ -624,7 +625,7 @@ def draw_scan_view():
             line = f"{marker}{ap['ssid'][:14]} {sig}dBm"
             d.text((1, y), line[:22], font=font, fill=color)
 
-    _draw_footer(d, "OK:Sel K1:Scan K3:X")
+    _draw_footer(d, "OK:Sel L:Clone K1:Scan")
     LCD.LCD_ShowImage(img, 0, 0)
 
 
@@ -737,6 +738,16 @@ def main():
                     with lock:
                         if ap_list and scroll_pos < len(ap_list):
                             target = ap_list[scroll_pos]
+                    if ap_list:
+                        threading.Thread(
+                            target=_start_attack, args=(target,), daemon=True,
+                        ).start()
+                    time.sleep(0.3)
+                elif btn == "LEFT":
+                    with lock:
+                        if ap_list and scroll_pos < len(ap_list):
+                            target = ap_list[scroll_pos]
+                            status_msg = f"Quick Clone: {target['ssid'][:14]}"
                     if ap_list:
                         threading.Thread(
                             target=_start_attack, args=(target,), daemon=True,
