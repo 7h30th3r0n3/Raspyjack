@@ -2,7 +2,7 @@
 """
 RaspyJack Payload -- GPS Setup & Doctor
 ========================================
-Author: 7h30th3r0n3
+Author: 7h30th3r0n3 / custom
 
 Checks, installs and configures all GPS dependencies
 for gps_tracker and wardriving payloads.
@@ -440,68 +440,114 @@ def step8_patch_gps_tracker():
 def step9_test_gps(port):
     log_step(9, "live NMEA test")
 
-    # Try reading raw NMEA from serial port (10 s)
     try:
         import serial as _serial
     except ImportError:
         log_warn("pyserial missing, skip")
         return False
 
-    if not os.path.exists(port):
-        log_warn(f"{port} not present")
+    # ── 1. Add current user to dialout (permission fix) ──────────────────
+    run("usermod -aG dialout root 2>/dev/null")
+
+    # ── 2. Build candidate list (detected port first, then others) ────────
+    all_candidates = [
+        "/dev/ttyACM0", "/dev/ttyACM1",
+        "/dev/ttyUSB0", "/dev/ttyUSB1",
+    ]
+    # Put the detected port first
+    candidates = [port] + [p for p in all_candidates if p != port]
+
+    # Keep only ports that actually exist as device nodes
+    existing = [p for p in candidates if os.path.exists(p)]
+    if not existing:
+        log_err("no serial device found")
         log_info("plug dongle & rerun")
         return False
 
-    log_info(f"reading {port}@9600...")
-    try:
-        ser = _serial.Serial(port, 9600, timeout=2)
-    except Exception as e:
-        log_err(f"open failed: {str(e)[:28]}")
-        return False
+    # ── 3. Stop gpsd so it releases the port ─────────────────────────────
+    log_info("stopping gpsd...")
+    run("systemctl stop gpsd gpsd.socket 2>/dev/null")
+    run("pkill -x gpsd 2>/dev/null")
+    time.sleep(1.5)   # wait for port release
 
-    fix_found   = False
+    # ── 4. Baud rates to try ──────────────────────────────────────────────
+    BAUDS = [9600, 4800, 38400, 115200]
+
+    found_port  = None
+    found_baud  = None
     nmea_count  = 0
-    deadline    = time.time() + 10
+    fix_found   = False
 
-    while time.time() < deadline:
-        try:
-            raw = ser.readline().decode("ascii", errors="ignore").strip()
-        except Exception:
-            break
+    for try_port in existing:
+        log_info(f"trying {try_port}...")
+        for baud in BAUDS:
+            try:
+                ser = _serial.Serial(try_port, baud, timeout=2)
+            except Exception as e:
+                log_info(f"  open err @{baud}: {str(e)[:18]}")
+                continue
 
-        if not raw.startswith("$"):
-            continue
+            # Drain any garbage first
+            ser.reset_input_buffer()
+            got_nmea = 0
+            deadline = time.time() + 4   # 4 s per baud rate
 
-        nmea_count += 1
+            while time.time() < deadline:
+                try:
+                    raw = ser.readline().decode("ascii", errors="ignore").strip()
+                except Exception:
+                    break
+                if raw.startswith("$") and len(raw) > 5:
+                    got_nmea += 1
+                    nmea_count += 1
+                    if got_nmea == 1:
+                        log_info(f"  NMEA@{baud}: {raw[:18]}")
+                    if "GGA" in raw:
+                        parts = raw.split(",")
+                        if len(parts) > 6 and parts[6] not in ("", "0"):
+                            sats = parts[7] if len(parts) > 7 else "?"
+                            log_ok(f"GPS FIX! sats={sats}")
+                            fix_found = True
 
-        # Show the first NMEA sentence type seen
-        if nmea_count == 1:
-            log_info(f"NMEA: {raw[:20]}")
+            ser.close()
 
-        # Check for a valid GGA fix (field 6 > 0)
-        if "GGA" in raw:
-            parts = raw.split(",")
-            if len(parts) > 6 and parts[6] not in ("", "0"):
-                sats = parts[7] if len(parts) > 7 else "?"
-                log_ok(f"GPS FIX! sats={sats}")
-                fix_found = True
-                break
-            else:
-                log_info("GGA: no fix yet...")
+            if got_nmea > 0:
+                found_port = try_port
+                found_baud = baud
+                break   # correct baud found for this port
 
-    ser.close()
+        if found_port:
+            break   # correct port found
 
+    # ── 5. Restart gpsd (always, even on failure) ─────────────────────────
+    log_info("restarting gpsd...")
+    run("systemctl start gpsd 2>/dev/null || gpsd -n -b "
+        "$(grep ^DEVICES /etc/default/gpsd | cut -d'\"' -f2) 2>/dev/null &")
+    time.sleep(1)
+
+    # ── 6. Report results ─────────────────────────────────────────────────
     if nmea_count == 0:
-        log_err("no NMEA data received")
-        log_info("check dongle & sky view")
+        log_err("no NMEA data on any port")
+        log_err("check dongle connection")
+        # Extra diagnostics
+        _, dmesg = run("dmesg | tail -5 | grep -i 'tty\\|usb\\|serial' 2>/dev/null")
+        if dmesg:
+            log_info(dmesg[:38])
         return False
 
-    log_info(f"NMEA lines: {nmea_count}")
-    if not fix_found:
-        log_warn("no fix in 10s (normal)")
-        log_info("needs sky view outdoors")
+    log_ok(f"port={found_port} baud={found_baud}")
+    log_info(f"NMEA sentences: {nmea_count}")
 
-    return True   # data flowing = success
+    if not fix_found:
+        log_warn("no fix yet (normal)")
+        log_info("needs clear sky view")
+
+    # Auto-correct gpsd config if baud/port differ from what was written
+    if found_port and found_port != port:
+        log_info(f"updating config: {found_port}")
+        step6_configure_gpsd(found_port)
+
+    return True   # data is flowing = success
 
 
 # ── Summary screen ────────────────────────────────────────────────────────────
