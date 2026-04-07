@@ -45,7 +45,6 @@ GIT_BRANCH      = "main"
 INSTALL_SCRIPT  = "/root/Raspyjack/install_raspyjack.sh"
 
 PINS = {"KEY1": 21, "KEY3": 16}
-WIDTH, HEIGHT = LCD.width, LCD.height
 FONT = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", int(10 * LCD_1in44.LCD_SCALE))
 
 # ---------------------------------------------------------------------------
@@ -58,6 +57,7 @@ for p in PINS.values():
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
 LCD.LCD_Clear()
+WIDTH, HEIGHT = LCD.width, LCD.height
 
 # ---------------------------------------------------------------------------
 # 3) Helper to show centred text
