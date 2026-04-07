@@ -3441,7 +3441,7 @@ class DisposableMenu:
 
         "ah": (
             [" Nmap",      ReadTextFileNmap],
-            [" Responder", ReadTextFileResponder],
+            [" Responder logs", ReadTextFileResponder],
             [" Wardriving", ReadTextFileWardriving],
             [" DNSSpoof",  ReadTextFileDNSSpoof]
         ),
