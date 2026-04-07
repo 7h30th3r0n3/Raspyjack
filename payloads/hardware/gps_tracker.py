@@ -60,7 +60,7 @@ LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
 WIDTH, HEIGHT = LCD.width, LCD.height
 font = scaled_font()
 
-SERIAL_PORTS = ["/dev/ttyUSB0", "/dev/serial0", "/dev/ttyAMA0"]
+SERIAL_PORTS = ["/dev/ttyACM0", "/dev/ttyACM1", "/dev/ttyUSB0", "/dev/serial0", "/dev/ttyAMA0"]
 BAUD_RATE = 9600
 LOOT_DIR = "/root/Raspyjack/loot/GPS"
 DEBOUNCE = 0.22
