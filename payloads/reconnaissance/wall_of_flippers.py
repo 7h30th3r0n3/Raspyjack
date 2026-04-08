@@ -244,17 +244,7 @@ class ScannerWorker:
             self.thread.join(timeout=2.0)
 
     def _run(self) -> None:
-        if os.name == "posix" and BluepyScanner is not None:
-            with state_lock:
-                state.scanner_backend = "bluepy"
-                state.scanner_health = "running"
-            try:
-                self._run_bluepy()
-                return
-            except Exception as exc:
-                with state_lock:
-                    state.last_error = f"Bluepy failed: {exc}"
-                    state.scanner_health = "degraded"
+        # Prefer bleak (modern, maintained) over bluepy (abandoned, broken on BlueZ 5.80+)
         if BleakScanner is not None:
             with state_lock:
                 state.scanner_backend = "bleak"
@@ -266,6 +256,19 @@ class ScannerWorker:
                 with state_lock:
                     state.last_error = f"Bleak failed: {exc}"
                     state.scanner_health = "degraded"
+        # Fallback to bluepy if bleak unavailable
+        if os.name == "posix" and BluepyScanner is not None:
+            with state_lock:
+                state.scanner_backend = "bluepy"
+                state.scanner_health = "running"
+            try:
+                self._run_bluepy()
+                return
+            except Exception as exc:
+                with state_lock:
+                    state.last_error = f"Bluepy failed: {exc}"
+                    state.scanner_health = "degraded"
+        # Last resort: bluetoothctl
         with state_lock:
             state.scanner_backend = "bluetoothctl"
             state.scanner_health = "running"
@@ -295,8 +298,8 @@ class ScannerWorker:
                     pass
             self._consume_observation(
                 mac=str(device.address or "").lower(),
-                name=str(device.name or adv_data.local_name or "Unknown"),
-                rssi=int(getattr(device, "rssi", -100)),
+                name=str(device.name or getattr(adv_data, "local_name", None) or "Unknown"),
+                rssi=int(getattr(adv_data, "rssi", None) or getattr(device, "rssi", -100)),
                 packets=packets,
                 from_backend="bleak",
             )
