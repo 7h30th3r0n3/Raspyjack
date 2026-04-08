@@ -46,9 +46,13 @@ class WiFiLCDInterface:
         self.LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
         self.canvas = Image.new("RGB", (self.LCD.width, self.LCD.height), "black")
         self.draw = ImageDraw.Draw(self.canvas)
-        _s = LCD_1in44.LCD_SCALE if hasattr(LCD_1in44, 'LCD_SCALE') else 1.0
-        self.font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", int(8 * _s))
-        self.icon_font = ImageFont.truetype("/usr/share/fonts/truetype/fontawesome/fa-solid-900.ttf", int(10 * _s))
+        self._s = LCD_1in44.LCD_SCALE if hasattr(LCD_1in44, 'LCD_SCALE') else 1.0
+        self.font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", int(8 * self._s))
+        self.icon_font = ImageFont.truetype("/usr/share/fonts/truetype/fontawesome/fa-solid-900.ttf", int(10 * self._s))
+        self._row_h = int(12 * self._s)    # row height scaled
+        self._hdr_h = int(12 * self._s)    # header height
+        self._foot_y = int(100 * self._s)  # footer hint y
+        self._stat_y = int(115 * self._s)  # status bar y
         
         # GPIO setup
         GPIO.setmode(GPIO.BCM)
@@ -107,7 +111,7 @@ class WiFiLCDInterface:
         """Draw menu header."""
         self.canvas.paste(Image.new("RGB", (self.LCD.width, self.LCD.height), "black"))
         self.draw.text((2, 0), title[:18], fill="yellow", font=self.font)
-        self.draw.line([(0, 12), (self.LCD.width, 12)], fill="blue", width=1)
+        self.draw.line([(0, self._hdr_h), (self.LCD.width, self._hdr_h)], fill="blue", width=1)
     
     def draw_status_bar(self):
         """Draw connection status at bottom."""
@@ -119,7 +123,7 @@ class WiFiLCDInterface:
             status_text = "~ Disconnected"
             color = "red"
         
-        self.draw.text((2, 115), status_text, fill=color, font=self.font)
+        self.draw.text((2, self._stat_y), status_text, fill=color, font=self.font)
     
     def draw_main_menu(self):
         """Draw main WiFi menu."""
@@ -135,20 +139,20 @@ class WiFiLCDInterface:
             "Exit"
         ]
 
-        y_pos = 18
+        y_pos = int(18 * self._s)
         for i, label in enumerate(menu_labels):
             if i == self.menu_index:
-                self.draw.rectangle([(0, y_pos-2), (self.LCD.width, y_pos+10)], fill="blue")
+                self.draw.rectangle([(0, y_pos-2), (self.LCD.width, y_pos+self._row_h-2)], fill="blue")
                 color = "white"
             else:
                 color = "white"
             
             self.draw.text((4, y_pos), menu_icons[i], fill=color, font=self.icon_font)
             self.draw.text((18, y_pos), label[:14], fill=color, font=self.font)
-            y_pos += 12
+            y_pos += self._row_h
 
         # Button hints
-        self.draw.text((2, 100), "U/D Nav  OK Select", fill="cyan", font=self.font)
+        self.draw.text((2, self._foot_y), "U/D Nav  OK Select", fill="cyan", font=self.font)
         self.draw_status_bar()
     
     def draw_network_scan(self):
@@ -156,10 +160,10 @@ class WiFiLCDInterface:
         self.draw_header("Available Networks")
         
         if not self.scanned_networks:
-            self.draw.text((4, 25), "No networks found", fill="red", font=self.font)
-            self.draw.text((4, 40), "KEY2: Scan again", fill="cyan", font=self.font)
+            self.draw.text((4, int(25 * self._s)), "No networks found", fill="red", font=self.font)
+            self.draw.text((4, int(40 * self._s)), "KEY2: Scan again", fill="cyan", font=self.font)
         else:
-            y_pos = 18
+            y_pos = int(18 * self._s)
             display_count = min(6, len(self.scanned_networks))
             start_idx = max(0, self.menu_index - 2)
             
@@ -168,7 +172,7 @@ class WiFiLCDInterface:
                 ssid = network.get('ssid', 'Unknown')[:12]
                 
                 if i == self.menu_index:
-                    self.draw.rectangle([(0, y_pos-2), (self.LCD.width, y_pos+10)], fill="blue")
+                    self.draw.rectangle([(0, y_pos-2), (self.LCD.width, y_pos+self._row_h-2)], fill="blue")
                     color = "white"
                 else:
                     color = "white"
@@ -176,9 +180,9 @@ class WiFiLCDInterface:
                 # Show encryption status
                 encrypted = "[L]" if network.get('encrypted', False) else "[O]"
                 self.draw.text((4, y_pos), f"{encrypted} {ssid}", fill=color, font=self.font)
-                y_pos += 12
+                y_pos += self._row_h
         
-        self.draw.text((2, 100), "OK Connect  KEY3: Back", fill="cyan", font=self.font)
+        self.draw.text((2, self._foot_y), "OK Connect  KEY3: Back", fill="cyan", font=self.font)
         self.draw_status_bar()
     
     def draw_saved_profiles(self):
@@ -186,10 +190,10 @@ class WiFiLCDInterface:
         self.draw_header("Saved Profiles")
         
         if not self.saved_profiles:
-            self.draw.text((4, 25), "No saved profiles", fill="red", font=self.font)
-            self.draw.text((4, 40), "Scan & save networks", fill="cyan", font=self.font)
+            self.draw.text((4, int(25 * self._s)), "No saved profiles", fill="red", font=self.font)
+            self.draw.text((4, int(40 * self._s)), "Scan & save networks", fill="cyan", font=self.font)
         else:
-            y_pos = 18
+            y_pos = int(18 * self._s)
             display_count = min(6, len(self.saved_profiles))
             start_idx = max(0, min(self.menu_index, len(self.saved_profiles) - display_count))
             
@@ -201,15 +205,15 @@ class WiFiLCDInterface:
                 priority = profile.get('priority', 1)
                 
                 if i == self.menu_index:
-                    self.draw.rectangle([(0, y_pos-2), (self.LCD.width, y_pos+10)], fill="blue")
+                    self.draw.rectangle([(0, y_pos-2), (self.LCD.width, y_pos+self._row_h-2)], fill="blue")
                     color = "white"
                 else:
                     color = "white"
                 
                 self.draw.text((4, y_pos), f"📁 {ssid} ({priority})", fill=color, font=self.font)
-                y_pos += 12
+                y_pos += self._row_h
         
-        self.draw.text((2, 100), "OK Con  K2: Del  K3: Back", fill="cyan", font=self.font)
+        self.draw.text((2, self._foot_y), "OK Con  K2: Del  K3: Back", fill="cyan", font=self.font)
         self.draw_status_bar()
     
     def draw_interface_config(self):
@@ -219,13 +223,13 @@ class WiFiLCDInterface:
         interfaces = ["eth0"] + self.wifi_manager.wifi_interfaces
         current_interface = self.wifi_manager.get_interface_for_tool()
         
-        y_pos = 18
+        y_pos = int(18 * self._s)
         self.draw.text((4, y_pos), "Default Interface:", fill="yellow", font=self.font)
-        y_pos += 15
+        y_pos += int(15 * self._s)
         
         for i, interface in enumerate(interfaces):
             if i == self.menu_index:
-                self.draw.rectangle([(0, y_pos-2), (self.LCD.width, y_pos+10)], fill="blue")
+                self.draw.rectangle([(0, y_pos-2), (self.LCD.width, y_pos+self._row_h-2)], fill="blue")
                 color = "white"
             else:
                 color = "white"
@@ -233,9 +237,9 @@ class WiFiLCDInterface:
             # Show current selection
             marker = "●" if interface == current_interface else "○"
             self.draw.text((4, y_pos), f"{marker} {interface}", fill=color, font=self.font)
-            y_pos += 12
+            y_pos += self._row_h
         
-        self.draw.text((2, 100), "OK Select  KEY3: Back", fill="cyan", font=self.font)
+        self.draw.text((2, self._foot_y), "OK Select  KEY3: Back", fill="cyan", font=self.font)
         self.draw_status_bar()
     
     def draw_status_info(self):
@@ -244,31 +248,31 @@ class WiFiLCDInterface:
         
         status = self.wifi_manager.get_connection_status()
         
-        y_pos = 18
+        y_pos = int(18 * self._s)
         
         # WiFi Status
         if status["status"] == "connected":
             self.draw.text((4, y_pos), f"WiFi: {status['ssid']}", fill="green", font=self.font)
-            y_pos += 12
+            y_pos += self._row_h
             self.draw.text((4, y_pos), f"IP: {status['ip']}", fill="green", font=self.font)
-            y_pos += 12
+            y_pos += self._row_h
             self.draw.text((4, y_pos), f"IF: {status['interface']}", fill="green", font=self.font)
         else:
             self.draw.text((4, y_pos), "WiFi: Disconnected", fill="red", font=self.font)
-            y_pos += 12
+            y_pos += self._row_h
         
-        y_pos += 5
-        
+        y_pos += int(5 * self._s)
+
         # Interface info
         self.draw.text((4, y_pos), f"WiFi dongles: {len(self.wifi_manager.wifi_interfaces)}", fill="white", font=self.font)
-        y_pos += 12
-        
+        y_pos += self._row_h
+
         if self.wifi_manager.wifi_interfaces:
             for iface in self.wifi_manager.wifi_interfaces:
                 self.draw.text((4, y_pos), f"  {iface}", fill="cyan", font=self.font)
-                y_pos += 10
-        
-        self.draw.text((2, 115), "KEY3: Back", fill="cyan", font=self.font)
+                y_pos += self._row_h
+
+        self.draw.text((2, self._stat_y), "KEY3: Back", fill="cyan", font=self.font)
 
     def draw_keyboard(self):
         """Draw the on-screen keyboard for password entry."""
@@ -278,12 +282,12 @@ class WiFiLCDInterface:
         display_text = self.kb_text
         if len(display_text) > 18:
             display_text = "..." + display_text[-15:]
-        self.draw.text((4, 16), f"> {display_text}_", fill="green", font=self.font)
-        
+        self.draw.text((4, int(16 * self._s)), f"> {display_text}_", fill="green", font=self.font)
+
         # Draw grid
-        start_y = 30
-        cell_w = 10
-        cell_h = 10
+        start_y = int(30 * self._s)
+        cell_w = int(10 * self._s)
+        cell_h = int(10 * self._s)
         
         for r, row in enumerate(self.kb_layout):
             for c, char in enumerate(row):
@@ -291,7 +295,7 @@ class WiFiLCDInterface:
                 y = start_y + r * cell_h
                 
                 if r == self.kb_cursor_y and c == self.kb_cursor_x:
-                    self.draw.rectangle([(x-1, y-1), (x+8, y+9)], fill="blue")
+                    self.draw.rectangle([(x-1, y-1), (x+cell_w-2, y+cell_h-1)], fill="blue")
                     txt_color = "white"
                 else:
                     txt_color = "white"
@@ -475,7 +479,7 @@ class WiFiLCDInterface:
     def show_message(self, message, duration=2):
         """Show a temporary message."""
         self.canvas.paste(Image.new("RGB", (self.LCD.width, self.LCD.height), "black"))
-        self.draw.text((4, 50), message[:16], fill="yellow", font=self.font)
+        self.draw.text((4, int(50 * self._s)), message[:16], fill="yellow", font=self.font)
         self.LCD.LCD_ShowImage(self.canvas, 0, 0)
         time.sleep(duration)
     

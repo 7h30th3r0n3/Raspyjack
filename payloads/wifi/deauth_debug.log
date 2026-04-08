@@ -1,0 +1,6 @@
+=== WiFi Deauth Log Started 2026-03-29 18:23:28 ===
+Using interface: wlan1
+WiFi integration: True
+[18:23:30] Validating setup for deauth attacks
+[18:23:31] Checking if interface wlan1 exists
+[18:23:32] Interface wlan1 not found, trying alternatives
