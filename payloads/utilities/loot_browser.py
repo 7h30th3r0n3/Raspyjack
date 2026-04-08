@@ -120,6 +120,83 @@ def _file_type_label(path):
     return type_map.get(ext, "BIN")
 
 
+def _read_all_lines(path):
+    """Read all lines of a text file."""
+    lines = []
+    try:
+        with open(path, "r", errors="replace") as fh:
+            for line in fh:
+                lines.append(line.rstrip("\n"))
+    except OSError:
+        lines.append("(read error)")
+    return lines
+
+
+def _is_log_or_txt(path):
+    """Check if file has .log or .txt extension."""
+    ext = os.path.splitext(path)[1].lower()
+    return ext in (".log", ".txt")
+
+
+# Character set for keyword filter input
+_FILTER_CHARS = list(
+    "abcdefghijklmnopqrstuvwxyz"
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    "0123456789._-:/ "
+)
+
+
+def _draw_log_viewer(lcd, path, all_lines, filtered_lines, keyword,
+                     scroll, editing_filter, char_idx):
+    """Draw log viewer with filtering."""
+    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+    d = ScaledDraw(img)
+
+    total = len(all_lines)
+    shown = len(filtered_lines)
+
+    # Header with line counts
+    d.rectangle((0, 0, 127, 12), fill="#1a1a1a")
+    name = os.path.basename(path)
+    if len(name) > 9:
+        name = name[:6] + ".."
+    d.text((2, 1), f"{name} {shown}/{total}", font=font, fill="#00ff00")
+
+    if editing_filter:
+        # Draw character picker overlay
+        d.rectangle((0, 100, 127, 127), fill="#222200")
+        ch = _FILTER_CHARS[char_idx] if _FILTER_CHARS else " "
+        d.text((2, 101), f"Char: <{ch}>", font=font, fill="#ffff00")
+        d.text((2, 114), ">=add <=del OK=done", font=font, fill="#888")
+    else:
+        # Show filter keyword if set
+        if keyword:
+            d.rectangle((0, 13, 127, 23), fill="#1a0a00")
+            kw_display = keyword if len(keyword) <= 16 else keyword[-16:]
+            d.text((2, 14), f"F:{kw_display}", font=font, fill="#ffaa00")
+
+    # Content area
+    content_top = 25 if keyword else 15
+    line_h = 11
+    max_visible = (100 - content_top) // line_h
+
+    if not filtered_lines:
+        d.text((4, 50), "(no matches)", font=font, fill="#666666")
+    else:
+        end = min(len(filtered_lines), scroll + max_visible)
+        y = content_top
+        for i in range(scroll, end):
+            line_text = filtered_lines[i][:20]
+            d.text((2, y), line_text, font=font, fill="#cccccc")
+            y += line_h
+
+    if not editing_filter:
+        d.rectangle((0, 116, 127, 127), fill="#111")
+        d.text((2, 117), "OK=filter K3=back", font=font, fill="#666666")
+
+    lcd.LCD_ShowImage(img, 0, 0)
+
+
 def _draw_browser(lcd, cwd, entries, cursor, scroll_offset, status=""):
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
     d = ScaledDraw(img)

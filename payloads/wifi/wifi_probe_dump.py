@@ -13,7 +13,10 @@ Setup / Prerequisites
 - USB WiFi dongle with monitor mode support (e.g. Alfa AWUS036ACH)
 
 Controls:
-  UP / DOWN  -- Scroll device list
+  UP / DOWN  -- Scroll / move selection
+  LEFT       -- Back to device list
+  RIGHT      -- Device detail view
+  OK         -- Toggle top-SSIDs view
   KEY1       -- Start / Stop capture
   KEY2       -- Export to JSON loot
   KEY3       -- Exit
@@ -69,6 +72,9 @@ signal_map = {}      # {mac_upper: last_rssi}
 running = False
 scroll = 0
 mon_iface = None
+view_mode = "devices"   # "devices" | "top_ssids" | "detail"
+selected_idx = 0        # highlighted device index in device list
+detail_scroll = 0       # scroll offset inside detail view
 
 # ---------------------------------------------------------------------------
 # Onboard WiFi detection
@@ -293,47 +299,136 @@ def _export_loot():
 # Display
 # ---------------------------------------------------------------------------
 
-def _draw_frame(lcd, font):
-    """Render current state to the LCD."""
-    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ScaledDraw(img)
+def _build_device_list():
+    """Return sorted device list snapshot under lock."""
+    with lock:
+        return sorted(probes.items(), key=lambda kv: len(kv[1]), reverse=True)
 
-    # Header
+
+def _build_top_ssids():
+    """Return list of (ssid, device_count) sorted descending, under lock."""
+    with lock:
+        ssid_devices = {}
+        for mac, ssids in probes.items():
+            for ssid in ssids:
+                if ssid not in ssid_devices:
+                    ssid_devices[ssid] = set()
+                ssid_devices[ssid] = ssid_devices[ssid] | {mac}
+        return sorted(
+            [(s, len(macs)) for s, macs in ssid_devices.items()],
+            key=lambda x: x[1],
+            reverse=True,
+        )[:10]
+
+
+def _draw_header(d, font):
+    """Draw common header bar."""
     d.rectangle((0, 0, 127, 13), fill="#111")
     d.text((2, 1), "PROBE DUMP", font=font, fill="#00FF00")
     d.ellipse((118, 3, 122, 7), fill="#00FF00" if running else "#FF0000")
 
+
+def _draw_devices_view(d, font, device_list):
+    """Draw the main device list view."""
     with lock:
         total_devs = len(probes)
         all_ssids = set()
         for ssids in probes.values():
             all_ssids.update(ssids)
         total_ssids = len(all_ssids)
-        device_list = sorted(probes.items(), key=lambda kv: len(kv[1]), reverse=True)
 
-    # Summary line
     d.text((2, 16), f"Dev:{total_devs}  SSID:{total_ssids}", font=font, fill="#AAAAAA")
 
-    # Scrollable device list
     visible = device_list[scroll:scroll + ROWS_VISIBLE]
     for i, (mac, ssids) in enumerate(visible):
         y = 28 + i * ROW_H
         short_mac = mac[-8:]
         ssid_preview = ", ".join(sorted(ssids))[:12] if ssids else "<hidden>"
         line = f"{short_mac} {ssid_preview}"
-        d.text((2, y), line, font=font, fill="#CCCCCC")
+        is_selected = (scroll + i) == selected_idx
+        fill = "#00FF00" if is_selected else "#CCCCCC"
+        d.text((2, y), line, font=font, fill=fill)
 
-    # Scroll indicator
     total = len(device_list)
     if total > ROWS_VISIBLE:
         bar_h = max(4, int(ROWS_VISIBLE / total * 80))
         bar_y = 28 + int(scroll / total * 80)
         d.rectangle((126, bar_y, 127, bar_y + bar_h), fill="#444")
 
-    # Footer
     d.rectangle((0, 116, 127, 127), fill="#111")
     status = "K1:Stop" if running else "K1:Start"
-    d.text((2, 117), f"{status} K2:Exp K3:Quit", font=font, fill="#888")
+    d.text((2, 117), f"{status} OK:Top R:Det", font=font, fill="#888")
+
+
+def _draw_top_ssids_view(d, font, top_ssids):
+    """Draw the top-N SSIDs summary view."""
+    d.text((2, 16), "TOP PROBED SSIDs", font=font, fill="#FFAA00")
+
+    visible = top_ssids[scroll:scroll + ROWS_VISIBLE]
+    for i, (ssid, count) in enumerate(visible):
+        y = 28 + i * ROW_H
+        label = ssid if ssid else "<hidden>"
+        line = f"{label[:14]} ({count}dev)"
+        d.text((2, y), line, font=font, fill="#CCCCCC")
+
+    total = len(top_ssids)
+    if total > ROWS_VISIBLE:
+        bar_h = max(4, int(ROWS_VISIBLE / total * 80))
+        bar_y = 28 + int(scroll / total * 80)
+        d.rectangle((126, bar_y, 127, bar_y + bar_h), fill="#444")
+
+    d.rectangle((0, 116, 127, 127), fill="#111")
+    d.text((2, 117), "OK/L:Back  U/D:Scroll", font=font, fill="#888")
+
+
+def _draw_detail_view(d, font, device_list):
+    """Draw detail view for the selected device."""
+    if selected_idx >= len(device_list):
+        d.text((2, 40), "No device", font=font, fill="#FF0000")
+        return
+
+    mac, ssids = device_list[selected_idx]
+    with lock:
+        rssi = signal_map.get(mac)
+        ssid_list = sorted(ssids)
+
+    d.text((2, 16), mac, font=font, fill="#00CCFF")
+    rssi_str = f"RSSI: {rssi} dBm" if rssi is not None else "RSSI: n/a"
+    d.text((2, 28), rssi_str, font=font, fill="#AAAAAA")
+
+    detail_rows = 5
+    visible = ssid_list[detail_scroll:detail_scroll + detail_rows]
+    for i, ssid in enumerate(visible):
+        y = 42 + i * ROW_H
+        label = ssid if ssid else "<hidden>"
+        d.text((4, y), label[:20], font=font, fill="#CCCCCC")
+
+    total = len(ssid_list)
+    if total > detail_rows:
+        bar_h = max(4, int(detail_rows / total * 60))
+        bar_y = 42 + int(detail_scroll / total * 60)
+        d.rectangle((126, bar_y, 127, bar_y + bar_h), fill="#444")
+
+    d.rectangle((0, 116, 127, 127), fill="#111")
+    d.text((2, 117), "L:Back  U/D:Scroll", font=font, fill="#888")
+
+
+def _draw_frame(lcd, font):
+    """Render current state to the LCD."""
+    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+    d = ScaledDraw(img)
+
+    _draw_header(d, font)
+
+    device_list = _build_device_list()
+
+    if view_mode == "top_ssids":
+        top_ssids = _build_top_ssids()
+        _draw_top_ssids_view(d, font, top_ssids)
+    elif view_mode == "detail":
+        _draw_detail_view(d, font, device_list)
+    else:
+        _draw_devices_view(d, font, device_list)
 
     lcd.LCD_ShowImage(img, 0, 0)
 
@@ -342,7 +437,7 @@ def _draw_frame(lcd, font):
 # ---------------------------------------------------------------------------
 
 def main():
-    global running, scroll, mon_iface
+    global running, scroll, mon_iface, view_mode, selected_idx, detail_scroll
 
     GPIO.setmode(GPIO.BCM)
     for pin in PINS.values():
@@ -362,7 +457,8 @@ def main():
     d.text((4, 60), "KEY1  Start / Stop", font=font, fill="#666")
     d.text((4, 72), "KEY2  Export JSON", font=font, fill="#666")
     d.text((4, 84), "KEY3  Exit", font=font, fill="#666")
-    d.text((4, 96), "U/D   Scroll list", font=font, fill="#666")
+    d.text((4, 96), "U/D Scroll  OK:Top", font=font, fill="#666")
+    d.text((4, 108), "R:Detail  L:Back", font=font, fill="#666")
     lcd.LCD_ShowImage(img, 0, 0)
 
     try:
@@ -402,14 +498,55 @@ def main():
                 lcd.LCD_ShowImage(img2, 0, 0)
                 time.sleep(1.5)
 
+            elif btn == "OK":
+                if view_mode == "devices":
+                    view_mode = "top_ssids"
+                    scroll = 0
+                elif view_mode == "top_ssids":
+                    view_mode = "devices"
+                    scroll = 0
+                time.sleep(0.2)
+
+            elif btn == "RIGHT":
+                if view_mode == "devices":
+                    view_mode = "detail"
+                    detail_scroll = 0
+                time.sleep(0.2)
+
+            elif btn == "LEFT":
+                if view_mode in ("top_ssids", "detail"):
+                    view_mode = "devices"
+                    scroll = 0
+                time.sleep(0.2)
+
             elif btn == "UP":
-                scroll = max(0, scroll - 1)
+                if view_mode == "devices":
+                    selected_idx = max(0, selected_idx - 1)
+                    if selected_idx < scroll:
+                        scroll = selected_idx
+                elif view_mode == "top_ssids":
+                    scroll = max(0, scroll - 1)
+                elif view_mode == "detail":
+                    detail_scroll = max(0, detail_scroll - 1)
                 time.sleep(0.15)
 
             elif btn == "DOWN":
-                with lock:
-                    max_scroll = max(0, len(probes) - ROWS_VISIBLE)
-                scroll = min(scroll + 1, max_scroll)
+                if view_mode == "devices":
+                    with lock:
+                        max_idx = max(0, len(probes) - 1)
+                    selected_idx = min(selected_idx + 1, max_idx)
+                    if selected_idx >= scroll + ROWS_VISIBLE:
+                        scroll = selected_idx - ROWS_VISIBLE + 1
+                elif view_mode == "top_ssids":
+                    top_ssids = _build_top_ssids()
+                    max_scroll = max(0, len(top_ssids) - ROWS_VISIBLE)
+                    scroll = min(scroll + 1, max_scroll)
+                elif view_mode == "detail":
+                    device_list = _build_device_list()
+                    if selected_idx < len(device_list):
+                        _, ssids = device_list[selected_idx]
+                        max_ds = max(0, len(ssids) - 5)
+                        detail_scroll = min(detail_scroll + 1, max_ds)
                 time.sleep(0.15)
 
             _draw_frame(lcd, font)

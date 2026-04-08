@@ -14,7 +14,7 @@ Setup / Prerequisites
 
 Controls
 --------
-  LEFT / RIGHT  -- Switch view (Dashboard, CPU Graph, Network)
+  LEFT / RIGHT  -- Switch view (Dashboard, CPU Graph, Network, Net Info)
   UP / DOWN     -- Scroll within a view
   OK            -- Force refresh
   KEY3          -- Exit
@@ -49,7 +49,7 @@ LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
 WIDTH, HEIGHT = LCD.width, LCD.height
 font = scaled_font()
 
-VIEWS = ["Dashboard", "CPU Graph", "Network"]
+VIEWS = ["Dashboard", "CPU Graph", "Network", "Net Info"]
 REFRESH_INTERVAL = 2.0
 DEBOUNCE = 0.20
 SERVICES = ["raspyjack", "raspyjack-device", "raspyjack-webui", "caddy"]
@@ -130,15 +130,15 @@ def _read_temperature():
 
 
 def _read_disk():
-    """Return (used_gb, total_gb) for /."""
+    """Return (used_gb, free_gb, total_gb) for /."""
     try:
         st = os.statvfs("/")
         total = st.f_blocks * st.f_frsize
         free = st.f_bfree * st.f_frsize
         used = total - free
-        return (round(used / 1e9, 1), round(total / 1e9, 1))
+        return (round(used / 1e9, 1), round(free / 1e9, 1), round(total / 1e9, 1))
     except OSError:
-        return (0.0, 0.0)
+        return (0.0, 0.0, 0.0)
 
 
 def _read_uptime():
@@ -146,9 +146,10 @@ def _read_uptime():
     try:
         with open("/proc/uptime", "r") as fh:
             secs = int(float(fh.read().split()[0]))
-        h = secs // 3600
+        days = secs // 86400
+        h = (secs % 86400) // 3600
         m = (secs % 3600) // 60
-        return f"{h}h{m:02d}m"
+        return f"{days}d:{h:02d}h:{m:02d}m"
     except (OSError, ValueError):
         return "?"
 
@@ -192,6 +193,48 @@ def _read_net_bytes():
     return rates
 
 
+def _read_iface_ips():
+    """Return list of (iface, ip) for active interfaces."""
+    results = []
+    try:
+        out = subprocess.run(
+            ["ip", "-4", "addr", "show"],
+            capture_output=True, text=True, timeout=3,
+        )
+        iface = None
+        for line in out.stdout.splitlines():
+            stripped = line.strip()
+            if not line.startswith(" ") and ":" in stripped:
+                parts = stripped.split(":")
+                if len(parts) >= 2:
+                    iface = parts[1].strip()
+            elif stripped.startswith("inet ") and iface and iface != "lo":
+                addr = stripped.split()[1].split("/")[0]
+                results.append((iface, addr))
+    except Exception:
+        pass
+    return results
+
+
+def _read_wifi_signal():
+    """Return WiFi signal level string from iwconfig wlan0, or None."""
+    try:
+        out = subprocess.run(
+            ["iwconfig", "wlan0"],
+            capture_output=True, text=True, timeout=3,
+        )
+        for line in out.stdout.splitlines():
+            if "Signal level" in line:
+                idx = line.index("Signal level")
+                fragment = line[idx:]
+                # e.g. "Signal level=-52 dBm" or "Signal level:3/5"
+                val = fragment.split("=")[-1].split("  ")[0].strip()
+                return val
+        return None
+    except Exception:
+        return None
+
+
 def _service_status(name):
     """Check systemd service status."""
     try:
@@ -207,7 +250,8 @@ def _service_status(name):
 class SysState:
     __slots__ = (
         "cpu_pct", "load", "mem_used", "mem_total", "temp",
-        "disk_used", "disk_total", "uptime", "net_rates", "services",
+        "disk_used", "disk_free", "disk_total", "uptime",
+        "net_rates", "services", "iface_ips", "wifi_signal",
     )
 
     def __init__(self):
@@ -217,10 +261,13 @@ class SysState:
         self.mem_total = 0
         self.temp = 0.0
         self.disk_used = 0.0
+        self.disk_free = 0.0
         self.disk_total = 0.0
         self.uptime = "?"
         self.net_rates = {}
         self.services = {}
+        self.iface_ips = []
+        self.wifi_signal = None
 
 
 state = SysState()
@@ -234,9 +281,11 @@ def _refresh():
     s.load = _read_load_avg()
     s.mem_used, s.mem_total = _read_memory()
     s.temp = _read_temperature()
-    s.disk_used, s.disk_total = _read_disk()
+    s.disk_used, s.disk_free, s.disk_total = _read_disk()
     s.uptime = _read_uptime()
     s.net_rates = _read_net_bytes()
+    s.iface_ips = _read_iface_ips()
+    s.wifi_signal = _read_wifi_signal()
     s.services = {svc: _service_status(svc) for svc in SERVICES}
     with lock:
         state = s
@@ -300,8 +349,8 @@ def _draw_dashboard(lcd, snap):
     d.text((2, y), f"Temp {snap.temp:.1f}C", font=font, fill=tc)
     y += 13
 
-    # Disk
-    d.text((2, y), f"Disk {snap.disk_used}/{snap.disk_total}G", font=font, fill="#ccc")
+    # Disk (used/free/total)
+    d.text((2, y), f"Dsk {snap.disk_used}/{snap.disk_free}/{snap.disk_total}G", font=font, fill="#ccc")
     y += 13
 
     # Uptime & load
@@ -384,6 +433,39 @@ def _draw_network(lcd, snap, scroll):
     lcd.LCD_ShowImage(img, 0, 0)
 
 
+def _draw_net_info(lcd, snap, scroll):
+    """Draw network interfaces with IPs and WiFi signal."""
+    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+    d = ScaledDraw(img)
+    _draw_header(d, "Net Info")
+
+    y = 16
+    items = []
+    for iface, ip in snap.iface_ips:
+        items.append((iface, ip))
+
+    if snap.wifi_signal is not None:
+        items.append(("WiFi sig", snap.wifi_signal))
+
+    if not items:
+        d.text((4, 50), "No interfaces", font=font, fill="#666")
+    else:
+        visible = 7
+        end = min(len(items), scroll + visible)
+        for i in range(scroll, end):
+            label, value = items[i]
+            d.text((2, y), f"{label}:", font=font, fill="#00ccff")
+            y += 12
+            d.text((6, y), str(value)[:20], font=font, fill="#00ff00")
+            y += 13
+            if y > 108:
+                break
+
+    d.rectangle((0, 116, 127, 127), fill="#111")
+    d.text((2, 117), "</>:view ^v:scroll", font=font, fill="#666")
+    lcd.LCD_ShowImage(img, 0, 0)
+
+
 def main():
     global _running
 
@@ -430,6 +512,8 @@ def main():
                 _draw_cpu_graph(LCD, hist)
             elif view == "Network":
                 _draw_network(LCD, snap, scroll)
+            elif view == "Net Info":
+                _draw_net_info(LCD, snap, scroll)
 
             time.sleep(0.08)
 

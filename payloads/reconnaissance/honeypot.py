@@ -13,7 +13,7 @@ Features:
 - Optional Discord notifications (rate‑limited) using `discord_webhook.txt`
 - LCD status screen and button controls when Waveshare 1.44" HAT is present
   - KEY1: Toggle Discord alerts
-  - KEY2: Cycle display views (Stats / Recent / Config)
+  - KEY2: Cycle display views (Stats / Recent / Config / Rogue APs)
   - KEY3: Exit (stop honeypot)
 
 Usage examples:
@@ -38,12 +38,14 @@ import json
 import os
 import signal
 import socket
+import subprocess
 import sys
+import threading
 import time
 from email.utils import formatdate
 from collections import deque
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Callable
+from typing import Dict, List, Optional, Tuple, Callable, Set
 
 
 # ---------------------------------------------------------------------------
@@ -579,13 +581,144 @@ class Honeypot:
 
 
 # ---------------------------------------------------------------------------
+# Rogue AP scanner (runs in a background thread)
+# ---------------------------------------------------------------------------
+ROGUE_AP_LOG = LOOT_DIR / "rogue_aps.log"
+ROGUE_SCAN_INTERVAL = 30
+
+
+class RogueAPScanner:
+    """Periodically scans Wi-Fi and detects potential rogue access points."""
+
+    def __init__(self, interface: str = "wlan0", debug_fn: Optional[Callable] = None):
+        self.interface = interface
+        self._debug = debug_fn or (lambda _: None)
+        self._baseline: Optional[Dict[str, Set[str]]] = None  # SSID -> set of BSSIDs
+        self.rogue_aps: List[Dict[str, str]] = []  # detected rogues
+        self._lock = threading.Lock()
+        self._running = False
+
+    def _run_scan(self) -> List[Tuple[str, str]]:
+        """Run iw scan and return list of (BSSID, SSID) tuples."""
+        results: List[Tuple[str, str]] = []
+        try:
+            out = subprocess.run(
+                ["iw", "dev", self.interface, "scan"],
+                capture_output=True, text=True, timeout=20,
+            )
+            raw = out.stdout
+        except Exception as exc:
+            self._debug(f"RogueAP scan error: {exc}")
+            return results
+
+        current_bssid = ""
+        for line in raw.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("BSS "):
+                # e.g. "BSS aa:bb:cc:dd:ee:ff(on wlan0)"
+                parts = stripped.split()
+                if len(parts) >= 2:
+                    current_bssid = parts[1].split("(")[0]
+            elif stripped.startswith("SSID:") and current_bssid:
+                ssid = stripped[5:].strip()
+                if ssid:
+                    results.append((current_bssid, ssid))
+        return results
+
+    def _detect_rogues(self, scan: List[Tuple[str, str]]) -> List[Dict[str, str]]:
+        """Compare scan against baseline and flag potential rogues."""
+        current: Dict[str, Set[str]] = {}
+        for bssid, ssid in scan:
+            current.setdefault(ssid, set()).add(bssid)
+
+        if self._baseline is None:
+            self._baseline = current
+            self._debug(f"RogueAP baseline set: {len(current)} SSIDs")
+            return []
+
+        found: List[Dict[str, str]] = []
+        ts = iso_now()
+
+        # Check for duplicated SSIDs with new BSSIDs (possible evil twin)
+        for ssid, bssids in current.items():
+            baseline_bssids = self._baseline.get(ssid, set())
+            new_bssids = bssids - baseline_bssids
+            if baseline_bssids and new_bssids:
+                for bssid in new_bssids:
+                    found.append({
+                        "ts": ts,
+                        "type": "evil_twin",
+                        "ssid": ssid,
+                        "bssid": bssid,
+                        "reason": f"New BSSID for known SSID (baseline had {len(baseline_bssids)})",
+                    })
+
+        # Check for open networks with corporate-sounding names
+        corporate_keywords = ["corp", "office", "enterprise", "company", "internal", "secure", "vpn"]
+        for ssid, bssids in current.items():
+            if ssid not in self._baseline:
+                lower_ssid = ssid.lower()
+                if any(kw in lower_ssid for kw in corporate_keywords):
+                    for bssid in bssids:
+                        found.append({
+                            "ts": ts,
+                            "type": "suspect_corporate",
+                            "ssid": ssid,
+                            "bssid": bssid,
+                            "reason": "New network with corporate-sounding name",
+                        })
+
+        return found
+
+    def _log_rogues(self, rogues: List[Dict[str, str]]) -> None:
+        """Append detected rogues to the log file."""
+        if not rogues:
+            return
+        try:
+            ROGUE_AP_LOG.parent.mkdir(parents=True, exist_ok=True)
+            with ROGUE_AP_LOG.open("a", encoding="utf-8") as f:
+                for entry in rogues:
+                    f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        except Exception as exc:
+            self._debug(f"RogueAP log write error: {exc}")
+
+    def run(self) -> None:
+        """Background thread loop."""
+        self._running = True
+        self._debug("RogueAP scanner started")
+        while self._running:
+            scan = self._run_scan()
+            if scan:
+                new_rogues = self._detect_rogues(scan)
+                if new_rogues:
+                    self._log_rogues(new_rogues)
+                    with self._lock:
+                        self.rogue_aps = self.rogue_aps + new_rogues
+                    self._debug(f"RogueAP found {len(new_rogues)} suspects")
+
+            deadline = time.time() + ROGUE_SCAN_INTERVAL
+            while self._running and time.time() < deadline:
+                time.sleep(1)
+        self._debug("RogueAP scanner stopped")
+
+    def stop(self) -> None:
+        self._running = False
+
+    def get_rogues(self) -> List[Dict[str, str]]:
+        with self._lock:
+            return list(self.rogue_aps)
+
+
+# ---------------------------------------------------------------------------
 # Optional LCD interface (runs in a background thread)
 # ---------------------------------------------------------------------------
 class HoneypotLCD:
-    def __init__(self, hp: Honeypot):
+    def __init__(self, hp: Honeypot, rogue_scanner: Optional["RogueAPScanner"] = None):
         self.hp = hp
+        self.rogue_scanner = rogue_scanner
         self.running = False
-        self.mode = 0  # 0: Stats, 1: Recent, 2: Config
+        self.mode = 0  # 0: Stats, 1: Recent, 2: Config, 3: Rogue APs
+        self._mode_count = 4 if rogue_scanner else 3
         self.frame = 0  # heartbeat counter
         self._last_pressed: Dict[str, float] = {k: 0.0 for k in ["UP","DOWN","LEFT","RIGHT","OK","KEY1","KEY2","KEY3"]}
         self._debounce_s: float = 0.18
@@ -664,8 +797,26 @@ class HoneypotLCD:
         self._text(draw, 2, 56, f"Host: {self.hp.hostname}")
         self._text(draw, 2, 68, f"OS: {self.hp.fingerprints.get('label','Ubuntu')}")
 
+    def _render_rogue_aps(self, draw: "ImageDraw.ImageDraw"):
+        self._text(draw, 2, 4, "ROGUE APs", self.font_large, "#FF5555")
+        if not self.rogue_scanner:
+            self._text(draw, 2, 20, "Scanner disabled")
+            return
+        rogues = self.rogue_scanner.get_rogues()
+        if not rogues:
+            self._text(draw, 2, 20, "No rogues found", color="#00FF00")
+            self._text(draw, 2, 34, "Scanning...")
+            return
+        self._text(draw, 2, 20, f"Detected: {len(rogues)}", color="#FFFF00")
+        y = 34
+        for entry in rogues[-5:]:
+            ssid = entry.get("ssid", "?")[:10]
+            rtype = entry.get("type", "?")[:6]
+            self._text(draw, 2, y, f"{ssid} [{rtype}]", color="#FF8800")
+            y += 12
+
     def _draw_status_bar(self, draw: "ImageDraw.ImageDraw"):
-        labels = ["Stats", "Recent", "Config"]
+        labels = ["Stats", "Recent", "Config", "Rogue"]
         label = labels[self.mode]
         w = draw.textlength(label, font=self.font_small)
         self._text(draw, (self.W - int(w) - 2), self.H - 12, label, self.font_small, "#00FF00")
@@ -690,17 +841,17 @@ class HoneypotLCD:
             self.hp.discord_enabled = not self.hp.discord_enabled
             return True
         if self._pressed("KEY2"):
-            self.mode = (self.mode + 1) % 3
+            self.mode = (self.mode + 1) % self._mode_count
             return True
         if self._pressed("KEY3"):
             # Signal exit and request global stop
             self.running = False
             return True
         if self._pressed("UP"):
-            self.mode = (self.mode - 1) % 3
+            self.mode = (self.mode - 1) % self._mode_count
             return True
         if self._pressed("DOWN"):
-            self.mode = (self.mode + 1) % 3
+            self.mode = (self.mode + 1) % self._mode_count
             return True
         return False
 
@@ -733,8 +884,10 @@ class HoneypotLCD:
                         self._render_stats(draw)
                     elif self.mode == 1:
                         self._render_recent(draw)
-                    else:
+                    elif self.mode == 2:
                         self._render_config(draw)
+                    elif self.mode == 3:
+                        self._render_rogue_aps(draw)
                     self._draw_status_bar(draw)
                 except Exception:
                     pass
@@ -832,12 +985,17 @@ async def run_main(args: argparse.Namespace) -> None:
     if not hp.running:
         return
 
+    # Rogue AP scanner (background thread)
+    rogue_scanner = RogueAPScanner(debug_fn=hp.debug)
+    rogue_thread = threading.Thread(target=rogue_scanner.run, name="rogue-ap-scanner", daemon=True)
+    rogue_thread.start()
+    hp.debug("Rogue AP scanner thread started")
+
     # Optional LCD UI
     lcd_thread = None
     if HAS_LCD and not args.headless:
-        import threading
         try:
-            ui = HoneypotLCD(hp)
+            ui = HoneypotLCD(hp, rogue_scanner=rogue_scanner)
             lcd_thread = threading.Thread(target=ui.run, name="honeypot-lcd", daemon=True)
             lcd_thread.start()
             hp.debug("LCD thread started")
@@ -878,12 +1036,17 @@ async def run_main(args: argparse.Namespace) -> None:
                 break
             await asyncio.sleep(0.1)
     finally:
+        rogue_scanner.stop()
         await hp.stop()
         if lcd_thread is not None:
             try:
                 lcd_thread.join(timeout=1.0)
             except Exception:
                 pass
+        try:
+            rogue_thread.join(timeout=2.0)
+        except Exception:
+            pass
         hp.debug("Main loop exited")
 
 

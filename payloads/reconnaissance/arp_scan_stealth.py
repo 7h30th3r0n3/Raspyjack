@@ -14,6 +14,7 @@ Controls:
   UP / DOWN  -- Scroll results
   KEY1       -- Toggle MAC spoof on / off
   KEY2       -- Export results to loot
+  LEFT       -- Toggle ARP table view (ip neigh)
   KEY3       -- Exit
 
 Loot: /root/Raspyjack/loot/StealthScan/scan_YYYYMMDD_HHMMSS.json
@@ -102,6 +103,11 @@ scanned_hosts = 0
 
 # List of discovered hosts: [{ip, mac, vendor}]
 discovered = []
+
+# ARP table view state
+arp_view = False
+arp_scroll = 0
+arp_entries = []        # [{ip, mac, state}]
 
 # ---------------------------------------------------------------------------
 # Network detection
@@ -259,6 +265,78 @@ def _export_loot():
     return filename
 
 # ---------------------------------------------------------------------------
+# ARP table view
+# ---------------------------------------------------------------------------
+
+_ARP_STATE_COLORS = {
+    "REACHABLE": "#00FF00",
+    "STALE": "#FFAA00",
+    "DELAY": "#FF8800",
+    "PROBE": "#00AAFF",
+    "FAILED": "#FF0000",
+    "INCOMPLETE": "#FF4444",
+    "PERMANENT": "#00FFAA",
+    "NOARP": "#888888",
+}
+
+
+def _fetch_arp_table():
+    """Parse output of 'ip neigh show' into entries."""
+    try:
+        result = subprocess.run(
+            ["ip", "neigh", "show"],
+            capture_output=True, text=True, timeout=5,
+        )
+        entries = []
+        for line in result.stdout.strip().splitlines():
+            parts = line.split()
+            if len(parts) < 4:
+                continue
+            ip_addr = parts[0]
+            mac = ""
+            neigh_state = parts[-1].upper()
+            if "lladdr" in parts:
+                idx = parts.index("lladdr")
+                if idx + 1 < len(parts):
+                    mac = parts[idx + 1].upper()
+            entries.append({"ip": ip_addr, "mac": mac, "state": neigh_state})
+        return entries
+    except Exception:
+        return []
+
+
+def _draw_arp_table(lcd, font_obj):
+    """Render ARP neighbor table view on LCD."""
+    global arp_entries
+    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+    d = ScaledDraw(img)
+
+    d.rectangle((0, 0, 127, 13), fill="#111")
+    d.text((2, 1), "ARP TABLE", font=font_obj, fill="#FF9800")
+    d.text((80, 1), f"{len(arp_entries)} entries", font=font_obj, fill="#888")
+
+    visible = arp_entries[arp_scroll:arp_scroll + ROWS_VISIBLE]
+    for i, entry in enumerate(visible):
+        y = 18 + i * (ROW_H + 3)
+        ip_str = entry["ip"][:15]
+        mac_short = entry["mac"][-8:] if entry["mac"] else "????"
+        st = entry["state"][:5]
+        color = _ARP_STATE_COLORS.get(entry["state"], "#CCCCCC")
+        d.text((2, y), ip_str, font=font_obj, fill="#CCCCCC")
+        d.text((2, y + ROW_H), f" {mac_short} {st}", font=font_obj, fill=color)
+
+    if len(arp_entries) > ROWS_VISIBLE:
+        bar_area = 90
+        ind_h = max(4, int(ROWS_VISIBLE / len(arp_entries) * bar_area))
+        ind_y = 18 + int(arp_scroll / len(arp_entries) * bar_area)
+        d.rectangle((126, ind_y, 127, ind_y + ind_h), fill="#444")
+
+    d.rectangle((0, 116, 127, 127), fill="#111")
+    d.text((2, 117), "LEFT:Back UP/DN:Scroll", font=font_obj, fill="#888")
+    lcd.LCD_ShowImage(img, 0, 0)
+
+
+# ---------------------------------------------------------------------------
 # Display
 # ---------------------------------------------------------------------------
 
@@ -329,7 +407,7 @@ def _draw_frame(lcd, font):
 # ---------------------------------------------------------------------------
 
 def main():
-    global running, scanning, scroll, mac_spoof
+    global running, scanning, scroll, mac_spoof, arp_view, arp_scroll, arp_entries
 
     GPIO.setmode(GPIO.BCM)
     for pin in PINS.values():
@@ -360,9 +438,10 @@ def main():
     d.text((4, 36), "Slow randomized scan", font=font, fill="#888")
     d.text((4, 48), f"Iface: {iface or 'none'}", font=font, fill="#666")
     d.text((4, 60), f"Net: {cidr or 'none'}", font=font, fill="#666")
-    d.text((4, 76), "OK    Start scan", font=font, fill="#666")
-    d.text((4, 88), "KEY1  Toggle spoof", font=font, fill="#666")
-    d.text((4, 100), "KEY2  Export results", font=font, fill="#666")
+    d.text((4, 72), "OK    Start scan", font=font, fill="#666")
+    d.text((4, 82), "KEY1  Toggle spoof", font=font, fill="#666")
+    d.text((4, 92), "KEY2  Export results", font=font, fill="#666")
+    d.text((4, 102), "LEFT  ARP table view", font=font, fill="#666")
     d.text((4, 112), "KEY3  Exit", font=font, fill="#666")
     lcd.LCD_ShowImage(img, 0, 0)
     time.sleep(1.5)
@@ -375,6 +454,33 @@ def main():
 
             if btn == "KEY3":
                 break
+
+            # ARP table view mode
+            elif arp_view:
+                if btn == "LEFT":
+                    arp_view = False
+                    time.sleep(0.3)
+                elif btn == "UP":
+                    arp_scroll = max(0, arp_scroll - 1)
+                    time.sleep(0.15)
+                elif btn == "DOWN":
+                    arp_scroll = min(
+                        max(0, len(arp_entries) - ROWS_VISIBLE),
+                        arp_scroll + 1,
+                    )
+                    time.sleep(0.15)
+                _draw_arp_table(lcd, font)
+                time.sleep(0.05)
+                continue
+
+            elif btn == "LEFT":
+                arp_entries = _fetch_arp_table()
+                arp_scroll = 0
+                arp_view = True
+                time.sleep(0.3)
+                _draw_arp_table(lcd, font)
+                time.sleep(0.05)
+                continue
 
             elif btn == "OK" and not scanning:
                 if not iface or not cidr:

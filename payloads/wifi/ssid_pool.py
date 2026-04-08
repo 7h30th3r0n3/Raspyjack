@@ -18,7 +18,7 @@ Controls
   OK         -- Start / stop broadcast
   UP / DOWN  -- Scroll SSID list
   KEY1       -- Add custom SSID (character scroll)
-  KEY2       -- Remove selected SSID
+  KEY2       -- Toggle chaos mode (mdk3/mdk4 beacon flood)
   KEY3       -- Exit
 """
 
@@ -89,6 +89,65 @@ _running = True
 adding_ssid = False
 add_buffer = ""
 add_char_idx = 0
+
+# Chaos mode state
+chaos_mode = False
+chaos_proc = None
+
+CHAOS_SSID_FILE = "/tmp/rj_ssid_chaos.txt"
+CHAOS_SSIDS = [
+    "FBI Surveillance Van #7",
+    "NSA_PRISM_Node_42",
+    "Virus Detected Click Here",
+    "Loading...",
+    "TotallyNotAHacker",
+    "Pretty Fly for a WiFi",
+    "Wu-Tang LAN",
+    "Bill Wi the Science Fi",
+    "The LAN Before Time",
+    "Drop It Like Its Hotspot",
+    "LAN Solo",
+    "Abraham Linksys",
+    "Benjamin FrankLAN",
+    "John Wilkes Bluetooth",
+    "Martin Router King",
+    "Get Off My LAN",
+    "The Promised LAN",
+    "Never Gonna Give You WiFi",
+    "Hide Yo Kids Hide Yo WiFi",
+    "Silence of the LANs",
+    "Lord of the Pings",
+    "One Does Not Simply Connect",
+    "404 Network Unavailable",
+    "It Burns When IP",
+    "No More Mister WiFi",
+    "I Believe Wi Can Fi",
+    "Nacho WiFi",
+    "This LAN Is My LAN",
+    "Keep It On The Download",
+    "Bandwidth Together",
+    "Byte Me",
+    "Skynet Global Defense Network",
+    "Winternet Is Coming",
+    "The Internet Is Down",
+    "I Am The Intern-net",
+    "Click Here 4 Free Bitcoin",
+    "Connecting...",
+    "Error 418 I Am A Teapot",
+    "Your Music Is Too Loud",
+    "Stop Stealing My WiFi",
+    "Mom Use This One",
+    "VIRUS.EXE",
+    "Vladimir Routin",
+    "Routers of Rohan",
+    "Come To The Dark Side",
+    "Tell My WiFi Love Her",
+    "That One Free WiFi",
+    "Obi-WLAN Kenobi",
+    "New England Clam Router",
+    "Chance the Router",
+    "The WiFi Next Door",
+]
 
 
 # ── Onboard WiFi detection ──────────────────────────────────────────────────
@@ -296,6 +355,86 @@ def _remove_selected():
     _save_config()
 
 
+# ── Chaos mode ───────────────────────────────────────────────────────────────
+
+def _generate_chaos_file():
+    """Write 50 random funny SSIDs to the chaos file for mdk4."""
+    selected = random.sample(CHAOS_SSIDS, min(50, len(CHAOS_SSIDS)))
+    with open(CHAOS_SSID_FILE, "w") as fh:
+        for ssid in selected:
+            fh.write(ssid + "\n")
+
+
+def _start_chaos():
+    global chaos_mode, chaos_proc, status_msg
+    ext = _find_external_wifi()
+    if not ext:
+        with lock:
+            status_msg = "No USB WiFi"
+        return
+    # Check for mdk4 or mdk3
+    mdk_bin = None
+    for candidate in ["mdk4", "mdk3"]:
+        try:
+            subprocess.run(["which", candidate], capture_output=True,
+                           timeout=3, check=True)
+            mdk_bin = candidate
+            break
+        except Exception:
+            continue
+    if not mdk_bin:
+        with lock:
+            status_msg = "mdk3/mdk4 missing"
+        return
+
+    _generate_chaos_file()
+    # Put iface in monitor mode
+    mon = _enable_monitor(ext)
+    with lock:
+        mon_iface_val = mon
+
+    try:
+        proc = subprocess.Popen(
+            ["sudo", mdk_bin, mon, "b", "-f", CHAOS_SSID_FILE, "-s", "300"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        with lock:
+            chaos_proc = proc
+            chaos_mode = True
+            status_msg = f"CHAOS on {mon}"
+    except Exception as exc:
+        with lock:
+            status_msg = f"Chaos err: {str(exc)[:12]}"
+
+
+def _stop_chaos():
+    global chaos_mode, chaos_proc, status_msg
+    with lock:
+        proc = chaos_proc
+        chaos_proc = None
+        chaos_mode = False
+    if proc:
+        try:
+            proc.terminate()
+            proc.wait(timeout=3)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+    # Clean up monitor mode
+    iface = mon_iface
+    if iface:
+        _disable_monitor(iface)
+    with lock:
+        status_msg = "Chaos stopped"
+    try:
+        os.remove(CHAOS_SSID_FILE)
+    except Exception:
+        pass
+
+
 # ── Drawing ──────────────────────────────────────────────────────────────────
 
 def _draw_screen():
@@ -312,11 +451,14 @@ def _draw_screen():
         in_add = adding_ssid
         buf = add_buffer
         ci = add_char_idx
+        is_chaos = chaos_mode
 
     # Header
     d.rectangle((0, 0, 127, 13), fill="#111")
-    d.text((2, 1), "SSID POOL", font=font, fill="#FF9800")
-    color = "#00FF00" if active else "#FF0000"
+    title = "CHAOS MODE" if is_chaos else "SSID POOL"
+    title_color = "#FF0000" if is_chaos else "#FF9800"
+    d.text((2, 1), title, font=font, fill=title_color)
+    color = "#FF0000" if is_chaos else ("#00FF00" if active else "#FF0000")
     d.ellipse((118, 3, 126, 11), fill=color)
 
     y = 15
@@ -354,8 +496,11 @@ def _draw_screen():
     if in_add:
         d.text((2, 117), "K3=Cancel", font=font, fill="#AAA")
     else:
-        lbl = "OK:Stop" if active else "OK:Go"
-        d.text((2, 117), f"{lbl} K1:+ K2:- K3:X", font=font, fill="#AAA")
+        if is_chaos:
+            d.text((2, 117), "K2:StopChaos K3:X", font=font, fill="#AAA")
+        else:
+            lbl = "OK:Stop" if active else "OK:Go"
+            d.text((2, 117), f"{lbl} K1:+ K2:Chaos K3:X", font=font, fill="#AAA")
 
     LCD.LCD_ShowImage(img, 0, 0)
 
@@ -447,11 +592,18 @@ def main():
                     time.sleep(0.25)
 
                 elif btn == "KEY2":
-                    _remove_selected()
                     with lock:
-                        if selected_idx >= len(ssid_list):
-                            selected_idx = max(0, len(ssid_list) - 1)
-                        status_msg = "Removed"
+                        is_chaos = chaos_mode
+                    if is_chaos:
+                        _stop_chaos()
+                    else:
+                        # Stop normal broadcast first if running
+                        with lock:
+                            was_broadcasting = broadcasting
+                        if was_broadcasting:
+                            _stop_broadcast()
+                            time.sleep(0.3)
+                        _start_chaos()
                     time.sleep(0.3)
 
             _draw_screen()
@@ -459,6 +611,8 @@ def main():
 
     finally:
         _stop_broadcast()
+        if chaos_mode:
+            _stop_chaos()
         try:
             LCD.LCD_Clear()
         except Exception:
