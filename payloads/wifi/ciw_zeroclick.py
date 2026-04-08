@@ -404,10 +404,23 @@ def _start_broadcast(iface):
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
     )
 
+    # Wait and check if hostapd started OK
+    time.sleep(2)
+    if _hostapd_proc.poll() is not None:
+        # hostapd exited immediately - read error
+        err = ""
+        try:
+            err = _hostapd_proc.stdout.read().decode("utf-8", errors="replace")[-200:]
+        except Exception:
+            pass
+        with lock:
+            status_msg = f"hostapd FAILED: {err[:40]}"
+        _hostapd_proc = None
+        return
+
     # Start event monitor thread
     threading.Thread(target=_monitor_hostapd_events, daemon=True).start()
 
-    time.sleep(1)
     broadcasting = True
     with lock:
         status_msg = f"Broadcasting 1/{len(active_payloads)}"
@@ -605,10 +618,10 @@ def _draw_categories(lcd, font_obj, sel, cat_scroll):
 
     # Select/deselect all at bottom
     total = sum(1 for v in selected_cats.values() if v)
-    d.text((2, 102), f"{total}/{len(CAT_NAMES)} selected", font=font_obj, fill="#888")
+    d.text((2, 100), f"{total}/{len(CAT_NAMES)} selected", font=font_obj, fill="#888")
 
     d.rectangle((0, 116, 127, 127), fill="#111")
-    d.text((2, 117), "OK:Toggle K1:All K3:Back", font=font_obj, fill="#888")
+    d.text((2, 117), "OK:Tog K1:All K2:GO K3:Bk", font=font_obj, fill="#888")
     lcd.LCD_ShowImage(img, 0, 0)
 
 
@@ -772,8 +785,16 @@ def main():
                     all_on = all(selected_cats.values())
                     selected_cats = {c: not all_on for c in CAT_NAMES}
                     time.sleep(0.3)
+                elif btn == "KEY2":
+                    # Launch attack directly from categories
+                    if _iface and not broadcasting:
+                        threading.Thread(target=_start_broadcast, args=(_iface,), daemon=True).start()
+                        view = "broadcast"
+                        last_rotation = time.time()
+                    time.sleep(0.3)
 
-                _draw_categories(lcd, font_obj, cat_sel, cat_scroll)
+                if view == "categories":
+                    _draw_categories(lcd, font_obj, cat_sel, cat_scroll)
 
             # --- Broadcast view ---
             elif view == "broadcast":
