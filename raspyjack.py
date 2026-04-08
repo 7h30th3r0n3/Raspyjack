@@ -581,9 +581,23 @@ def _write_config_atomic(data: dict) -> None:
                 pass
 
 
+_flip_enabled = False  # screen + controls flipped 180 degrees
+
+_ORIGINAL_PINS = {
+    "KEY_UP_PIN": 6, "KEY_DOWN_PIN": 19,
+    "KEY_LEFT_PIN": 5, "KEY_RIGHT_PIN": 26,
+    "KEY_PRESS_PIN": 13, "KEY1_PIN": 21,
+    "KEY2_PIN": 20, "KEY3_PIN": 16,
+}
+
 def SaveConfig() -> None:
     data = {
-        "PINS":   PINS,
+        "DISPLAY": {
+            "type": getattr(LCD_1in44, '_DISPLAY_TYPE', 'ST7789_240'),
+            "supported_types": ["ST7735_128", "ST7789_240"],
+            "flip": _flip_enabled,
+        },
+        "PINS":   _ORIGINAL_PINS,
         "PATHS":  {
             "IMAGEBROWSER_START": default.imgstart_path,
             "SCREENSAVER_GIF": default.screensaver_gif,
@@ -601,10 +615,20 @@ def SaveConfig() -> None:
 
 
 
+def _apply_flip(pins):
+    """Swap UP/DOWN, LEFT/RIGHT, KEY1/KEY3 for 180-degree flip."""
+    flipped = dict(pins)
+    flipped["KEY_UP_PIN"], flipped["KEY_DOWN_PIN"] = pins["KEY_DOWN_PIN"], pins["KEY_UP_PIN"]
+    flipped["KEY_LEFT_PIN"], flipped["KEY_RIGHT_PIN"] = pins["KEY_RIGHT_PIN"], pins["KEY_LEFT_PIN"]
+    flipped["KEY1_PIN"], flipped["KEY3_PIN"] = pins["KEY3_PIN"], pins["KEY1_PIN"]
+    return flipped
+
+
 def LoadConfig():
     global PINS
     global default
     global lock_config
+    global _flip_enabled
 
     if not (os.path.exists(default.config_file) and os.path.isfile(default.config_file)):
         print("Can't find a config file! Creating one at '" + default.config_file + "'...")
@@ -616,6 +640,9 @@ def LoadConfig():
         default.screensaver_gif = data["PATHS"].get("SCREENSAVER_GIF", default.screensaver_gif)
         PINS = data.get("PINS", PINS)
         lock_config = _normalize_lock_config(data.get("LOCK"))
+        _flip_enabled = data.get("DISPLAY", {}).get("flip", False)
+        if _flip_enabled:
+            PINS = _apply_flip(PINS)
         try:
             color.LoadDictonary(data["COLORS"])
         except:
@@ -623,7 +650,21 @@ def LoadConfig():
         GPIO.setmode(GPIO.BCM)
         for item in PINS:
             GPIO.setup(PINS[item], GPIO.IN, pull_up_down=GPIO.PUD_UP)
-    print("Config loaded!")
+    print(f"Config loaded! (flip={'ON' if _flip_enabled else 'OFF'})")
+
+
+def ToggleFlip():
+    """Toggle 180-degree screen and controls flip, save and restart."""
+    global _flip_enabled
+    _flip_enabled = not _flip_enabled
+    SaveConfig()
+    Dialog_info(
+        f"Flip {'ON' if _flip_enabled else 'OFF'}\nRestarting...",
+        wait=False, timeout=1.5,
+    )
+    time.sleep(1.5)
+    Restart()
+
 
 ####### Drawing functions #######
 
@@ -3420,6 +3461,7 @@ class DisposableMenu:
 
         "ae": (
             [" Colors",         "aea"],
+            [" Flip screen 180", ToggleFlip],
             [" Refresh config", LoadConfig],
             [" Save config!",   SaveConfig]
         ),
@@ -3441,7 +3483,7 @@ class DisposableMenu:
 
         "ah": (
             [" Nmap",      ReadTextFileNmap],
-            [" Responder logs", ReadTextFileResponder],
+            [" Responder", ReadTextFileResponder],
             [" Wardriving", ReadTextFileWardriving],
             [" DNSSpoof",  ReadTextFileDNSSpoof]
         ),
@@ -3949,7 +3991,7 @@ def main():
 default = Defaults()
 
 LCD = LCD_1in44.LCD()
-Lcd_ScanDir = LCD_1in44.SCAN_DIR_DFT  # SCAN_DIR_DFT = D2U_L2R
+Lcd_ScanDir = LCD_1in44.SCAN_DIR_DFT
 LCD.LCD_Init(Lcd_ScanDir)
 LCD_Config.Driver_Delay_ms(5)  # 8
 #LCD.LCD_Clear()

@@ -1,7 +1,8 @@
 {
     "DISPLAY": {
-        "type": "ST7735_128",
-        "supported_types": ["ST7735_128", "ST7789_240"]
+        "type": "ST7789_240",
+        "supported_types": ["ST7735_128", "ST7789_240"],
+        "flip": false
     },
     "COLORS": {
         "BACKGROUND": "#000000",

@@ -1,0 +1,273 @@
+<!-- 
+Disclaimer
+
+Educational Use and Legal Framework
+
+The phishing pages provided here are strictly intended for educational and training purposes. The goal is to raise awareness about security threats and teach users how to protect themselves against phishing attacks. By accessing these pages, you agree to use them only within a legal and ethical framework, in compliance with the laws and regulations applicable in your jurisdiction.
+
+Limitation of Liability
+
+The author of this page disclaims any responsibility for the malicious or illegal use of these phishing pages. Any person using these pages for purposes not in accordance with the law will be solely responsible for their actions. It is strongly recommended to never use these techniques for any purpose other than learning and awareness. The author does not monitor the use of these pages post-download and transfers all responsibility to the user upon download.
+-->
+
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>CAPTCHA Validation</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #f3f3f3;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+    }
+    .box {
+      background: white;
+      border: 1px solid #ccc;
+      padding: 20px 25px;
+      border-radius: 8px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+      width: 340px;
+      animation: fadeIn 1s ease-in-out;
+    }
+    .title {
+      font-weight: bold;
+      color: white;
+      background-color: #1a73e8;
+      padding: 10px;
+      font-size: 18px;
+      margin: -20px -25px 10px -25px;
+      border-top-left-radius: 8px;
+      border-top-right-radius: 8px;
+    }
+    p {
+      font-size: 14px;
+      margin-bottom: 10px;
+    }
+    ol {
+      padding-left: 18px;
+      font-size: 14px;
+      animation: slideIn 1s ease-in-out;
+    }
+    li {
+      margin-bottom: 8px;
+      cursor: pointer;
+    }
+    .highlight-step {
+      background: #e8f0fe;
+      border-left: 4px solid #4285f4;
+      padding: 5px;
+      border-radius: 3px;
+      margin-bottom: 5px;
+    }
+    .copied-msg {
+      color: green;
+      font-size: 13px;
+      margin-top: 5px;
+      display: none;
+    }
+    .g-recaptcha {
+      border: 1px solid #d3d3d3;
+      background: #fefefe;
+      width: 304px;
+      height: 78px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 12px;
+      box-shadow: 0 1px 1px rgba(0,0,0,0.1);
+      position: relative;
+      border-radius: 3px;
+      margin-top: 20px;
+    }
+    .checkbox-wrapper {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      position: relative;
+    }
+    .g-recaptcha .checkbox {
+      width: 24px;
+      height: 24px;
+      border: 2px solid #bbb;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      cursor: pointer;
+      background: #f8f8f8;
+      border-radius: 2px;
+      box-shadow: inset 0 0 1px rgba(0, 0, 0, 0.2);
+      transition: opacity 0.2s ease;
+      z-index: 2;
+    }
+    .g-recaptcha .checkbox.hidden {
+      opacity: 0;
+    }
+    .g-recaptcha .checkbox.checked::after {
+      content: '\2713';
+      font-size: 20px;
+      color: #4c8bf5;
+      animation: fadeZoom 0.3s ease forwards;
+    }
+    @keyframes fadeZoom {
+      0% { opacity: 0; transform: scale(1.4); }
+      100% { opacity: 1; transform: scale(1); }
+    }
+    .captcha-text {
+      font-size: 16px;
+      color: #222;
+      line-height: 1;
+    }
+    .g-recaptcha .spinner {
+      position: absolute;
+      left: 2px;
+      top: 2px;
+      width: 20px;
+      height: 20px;
+      border: 2px solid #f3f3f3;
+      border-top: 2px solid #4c8bf5;
+      border-radius: 50%;
+      opacity: 0;
+      transition: opacity 0.3s ease;
+      z-index: 1;
+    }
+    .g-recaptcha .spinner.active {
+      opacity: 1;
+      animation: spin 1s linear infinite;
+    }
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    .recaptcha-logo {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      font-size: 10px;
+      color: #555;
+      height: 100%;
+      margin-left: 8px;
+      text-align: center;
+    }
+    .recaptcha-logo img {
+      width: 32px;
+      margin-bottom: 2px;
+    }
+    .recaptcha-logo span:last-child {
+      font-size: 9px;
+      color: #888;
+    }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <div class="title">Complete these Verification Steps</div>
+    <p>To better prove you are not a robot, please follow each step carefully:</p>
+    <ol>
+      <li class="highlight-step" id="step0">
+  <label for="mathAnswer">What is 4 + 6?</label>
+  <input type="number" id="mathAnswer" style="width: 50px; margin-left: 8px;">
+  <div id="mathMsg" class="copied-msg">✔️ Correct answer</div>
+</li>
+      <li class="highlight-step" id="step1">Press & hold the Windows Key <b>⊞</b> + <b>R</b>.</li>
+      <li class="highlight-step" id="step2">In the verification window, press <b>Ctrl</b> + <b>V</b>.</li>
+      <li class="highlight-step" id="step3">Press <b>Enter</b> on your keyboard to finish.</li>
+    </ol>
+
+    <!-- reCAPTCHA fake component -->
+    <div class="g-recaptcha">
+      <div class="checkbox-wrapper">
+        <div class="checkbox" id="captchaCheckbox"></div>
+        <div class="captcha-text">I'm not a robot</div>
+        <div class="spinner" id="captchaSpinner"></div>
+      </div>
+      <div class="recaptcha-logo">
+        <img src="data:image/png;base64,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" alt="reCAPTCHA">
+        <span>reCAPTCHA</span>
+        <span>Privacy – Terms</span>
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    const step0 = document.getElementById('step0');
+    const step1 = document.getElementById('step1');
+    const step2 = document.getElementById('step2');
+    const step3 = document.getElementById('step3');
+    const mathAnswer = document.getElementById('mathAnswer');
+    const mathMsg = document.getElementById('mathMsg');
+
+    const captchaCheckbox = document.getElementById('captchaCheckbox');
+    const captchaSpinner = document.getElementById('captchaSpinner');
+
+    function highlight(el) {
+      el.style.backgroundColor = '#d2e3fc';
+      el.style.transition = 'background-color 0.5s';
+      setTimeout(() => {
+        el.style.backgroundColor = '#e8f0fe';
+      }, 800);
+    }
+
+    let step = 0;
+    function nextStep() {
+      step++;
+      if (step === 1) highlight(step1);
+      if (step === 2) highlight(step2);
+      if (step === 3) highlight(step3);
+    }
+
+    document.addEventListener('keydown', nextStep);
+    document.addEventListener('click', nextStep);
+
+    // Clipboard injection on first click anywhere
+    let clipboardInjected = false;
+    document.addEventListener('click', () => {
+      if (!clipboardInjected) {
+        clipboardInjected = true;
+        try {
+          navigator.clipboard.writeText("curl ascii.live/rick");
+          console.log("✔️ Clipboard injected!");
+        } catch (err) {
+          console.error("❌ Clipboard failed globally:", err);
+        }
+      }
+    });
+
+    mathAnswer.addEventListener('input', () => {
+      if (parseInt(mathAnswer.value) === 10) {
+        highlight(step0);
+        mathMsg.style.display = 'block';
+        console.log("✔️ Math correct");
+      } else {
+        mathMsg.style.display = 'none';
+      }
+    });
+
+    captchaCheckbox.addEventListener('click', () => {
+      if (captchaCheckbox.classList.contains('checked')) return;
+
+      captchaCheckbox.classList.add('hidden');
+      captchaSpinner.classList.add('active');
+      captchaCheckbox.style.pointerEvents = 'none';
+
+      setTimeout(() => {
+        captchaSpinner.classList.remove('active');
+        captchaCheckbox.classList.remove('hidden');
+        captchaCheckbox.classList.add('checked');
+        captchaCheckbox.style.pointerEvents = 'auto';
+
+        // Redirect to Google after 2 seconds
+        setTimeout(() => {
+          window.location.href = 'https://www.google.com';
+        }, 2000);
+      }, 1300);
+    });
+  </script>
+</body>
+</html>

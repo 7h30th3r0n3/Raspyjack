@@ -48,9 +48,12 @@ for _p in _CONF_PATHS:
             with open(_p, "r") as _f:
                 _conf = json.load(_f)
             _DISPLAY_TYPE = _conf.get("DISPLAY", {}).get("type", _DISPLAY_TYPE)
+            _FLIP_180 = _conf.get("DISPLAY", {}).get("flip", False)
         except Exception:
-            pass
+            _FLIP_180 = False
         break
+else:
+    _FLIP_180 = False
 
 # ---------------------------------------------------------------------------
 # Resolution constants based on display type
@@ -483,6 +486,8 @@ class LCD:
     def LCD_ShowImage(self,Image,Xstart,Ystart):
         if (Image == None):
             return
+        if _FLIP_180:
+            Image = Image.rotate(180)
         imwidth, imheight = Image.size
         if imwidth != self.width or imheight != self.height:
             raise ValueError('Image must be same dimensions as display \

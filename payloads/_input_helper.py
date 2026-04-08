@@ -1,7 +1,11 @@
 """
 Shared input helper for RaspyJack payloads.
 Checks WebUI virtual input first, then falls back to GPIO.
+Reads flip setting from gui_conf.json to swap controls when flipped.
 """
+
+import os
+import json
 
 try:
     import rj_input
@@ -19,6 +23,47 @@ _VIRTUAL_TO_BTN = {
     "KEY3_PIN": "KEY3",
 }
 
+# ---------------------------------------------------------------------------
+# Flip detection: swap button meanings when device is flipped 180
+# ---------------------------------------------------------------------------
+_FLIP_MAP = {
+    "UP": "DOWN", "DOWN": "UP",
+    "LEFT": "RIGHT", "RIGHT": "LEFT",
+    "KEY1": "KEY3", "KEY3": "KEY1",
+    "OK": "OK", "KEY2": "KEY2",
+}
+
+_flip_enabled = None  # None = not yet loaded, lazy init on first use
+
+_CONF_PATHS = [
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "gui_conf.json"),
+    "/root/Raspyjack/gui_conf.json",
+]
+
+
+def _is_flip_enabled():
+    """Lazy-load flip setting on first call, cache result."""
+    global _flip_enabled
+    if _flip_enabled is not None:
+        return _flip_enabled
+    _flip_enabled = False
+    for p in _CONF_PATHS:
+        if os.path.isfile(p):
+            try:
+                with open(p, "r") as f:
+                    _flip_enabled = json.load(f).get("DISPLAY", {}).get("flip", False)
+            except Exception:
+                pass
+            break
+    return _flip_enabled
+
+
+def _flip(btn):
+    """Apply flip mapping if device is flipped 180."""
+    if _is_flip_enabled() and btn:
+        return _FLIP_MAP.get(btn, btn)
+    return btn
+
 
 def get_virtual_button():
     """Return a WebUI virtual button name or None."""
@@ -30,7 +75,7 @@ def get_virtual_button():
         return None
     if not name:
         return None
-    return _VIRTUAL_TO_BTN.get(name)
+    return _flip(_VIRTUAL_TO_BTN.get(name))
 
 
 def get_button(pins, gpio):
@@ -43,7 +88,7 @@ def get_button(pins, gpio):
         return mapped
     for btn, pin in pins.items():
         if gpio.input(pin) == 0:
-            return btn
+            return _flip(btn)
     return None
 
 
@@ -55,7 +100,10 @@ def get_held_buttons():
         held = rj_input.get_held_buttons()
     except Exception:
         return set()
-    return {_VIRTUAL_TO_BTN.get(b, b) for b in held if b in _VIRTUAL_TO_BTN}
+    mapped = {_VIRTUAL_TO_BTN.get(b, b) for b in held if b in _VIRTUAL_TO_BTN}
+    if _is_flip_enabled():
+        return {_FLIP_MAP.get(b, b) for b in mapped}
+    return mapped
 
 
 def flush_input():
