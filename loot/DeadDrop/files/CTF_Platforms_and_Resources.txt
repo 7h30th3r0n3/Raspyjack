@@ -1,0 +1,78 @@
+HACKING RESOURCES, CTF PLATFORMS & LEARNING
+=============================================
+
+CTF PLATFORMS (Capture The Flag)
+  HackTheBox          https://www.hackthebox.com
+  TryHackMe           https://tryhackme.com
+  PicoCTF             https://picoctf.org
+  OverTheWire         https://overthewire.org/wargames/
+  Root-Me             https://www.root-me.org
+  VulnHub             https://www.vulnhub.com
+  Hack The Box Academy https://academy.hackthebox.com
+  PentesterLab        https://pentesterlab.com
+  CryptoHack          https://cryptohack.org
+  pwn.college          https://pwn.college
+
+BUG BOUNTY
+  HackerOne           https://www.hackerone.com
+  Bugcrowd            https://www.bugcrowd.com
+  Intigriti           https://www.intigriti.com
+  YesWeHack           https://www.yeswehack.com
+
+FREE COURSES & TRAINING
+  Cybrary             https://www.cybrary.it
+  SANS Cyber Aces     https://www.cyberaces.org
+  Open Security Training https://opensecuritytraining.info
+  PortSwigger Academy https://portswigger.net/web-security
+  OWASP WebGoat       https://owasp.org/www-project-webgoat/
+  Hacker101           https://www.hacker101.com
+
+TOOLS REFERENCE
+  GTFOBins            https://gtfobins.github.io
+  LOLBAS (Windows)    https://lolbas-project.github.io
+  PayloadsAllTheThings https://github.com/swisskyrepo/PayloadsAllTheThings
+  HackTricks          https://book.hacktricks.xyz
+  CyberChef           https://gchq.github.io/CyberChef
+  ExploitDB           https://www.exploit-db.com
+  SecLists            https://github.com/danielmiessler/SecLists
+  Reverse Shell Gen   https://www.revshells.com
+
+PODCASTS
+  Darknet Diaries     https://darknetdiaries.com
+  Malicious Life      https://malicious.life
+  Security Now        https://twit.tv/shows/security-now
+  Risky Business      https://risky.biz
+  The Privacy, Security & OSINT Show (Michael Bazzell)
+
+YOUTUBE CHANNELS
+  John Hammond        https://youtube.com/@_JohnHammond
+  IppSec              https://youtube.com/@ippsec
+  LiveOverflow        https://youtube.com/@LiveOverflow
+  NetworkChuck        https://youtube.com/@NetworkChuck
+  The Cyber Mentor    https://youtube.com/@TCMSecurityAcademy
+  David Bombal        https://youtube.com/@DavidBombal
+  Nahamsec            https://youtube.com/@NaijaSec
+  HackerSploit        https://youtube.com/@HackerSploit
+  0xdf               https://youtube.com/@0xdf
+
+BOOKS (Essential Reading)
+  The Art of Exploitation (Jon Erickson)
+  Penetration Testing (Georgia Weidman)
+  The Web Application Hacker's Handbook
+  Metasploit: The Penetration Tester's Guide
+  Red Team Field Manual (RTFM)
+  Blue Team Field Manual (BTFM)
+  Black Hat Python (Justin Seitz)
+  Bug Bounty Bootcamp (Vickie Li)
+  Hacking APIs (Corey Ball)
+  The Tangled Web (Michal Zalewski)
+
+CERTIFICATIONS
+  CompTIA Security+
+  CEH (Certified Ethical Hacker)
+  OSCP (Offensive Security Certified Professional)
+  PNPT (Practical Network Penetration Tester)
+  eJPT (eLearnSecurity Junior Penetration Tester)
+  CRTP (Certified Red Team Professional)
+  OSWE (Offensive Security Web Expert)
+  OSCE3 (Offensive Security Certified Expert)

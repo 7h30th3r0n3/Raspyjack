@@ -6,27 +6,20 @@ Author: 7h30th3r0n3
 
 Secure anonymous file sharing via WiFi captive portal.
 Opens a WiFi AP with a web portal where anyone can upload and download
-files from a sandboxed directory.  The system is hardened to prevent
-any access beyond the dead drop folder.
+files from a sandboxed directory. Real-time dashboard on LCD.
 
-Security measures:
-  - Sandboxed directory with strict permissions (0700)
-  - Path traversal prevention (basename only, no ..)
-  - File size limit (configurable, default 50 MB)
-  - Filename sanitization (alphanum + .-_ only)
-  - Extension blacklist (.py, .sh, .exe, .elf, .bin, .so, .php, .pl, .rb)
-  - No internet forwarding (iptables DROP FORWARD)
-  - All traffic forced to portal (DNS + HTTP redirect)
-  - HTTP server runs as dedicated thread, not subprocess
-  - No shell access, no CGI, no directory listing outside sandbox
-  - Rate limiting on uploads (max 1 per 3 seconds per IP)
+Security:
+  Sandboxed directory (0700), path traversal prevention, filename
+  sanitization, extension blacklist, file size limit, no internet
+  forwarding, rate limiting, no CGI/shell.
 
 Controls:
-  UP / DOWN  -- Scroll file list / stats
-  OK         -- Start / Stop dead drop
-  KEY1       -- Change SSID
-  KEY2       -- Purge all files (with confirmation)
-  KEY3       -- Exit + full cleanup
+  UP / DOWN  Scroll file list
+  OK         Start / Stop dead drop
+  LEFT/RIGHT Switch dashboard view (stats / files / graph)
+  KEY1       Change SSID (when stopped)
+  KEY2       Purge all files (with confirmation)
+  KEY3       Exit + cleanup
 
 Loot: /root/Raspyjack/loot/DeadDrop/
 """
@@ -41,6 +34,7 @@ import subprocess
 import re
 import html
 import urllib.parse
+from collections import deque
 from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
@@ -64,7 +58,7 @@ PINS = {
 }
 WIDTH, HEIGHT = LCD_1in44.LCD_WIDTH, LCD_1in44.LCD_HEIGHT
 ROW_H = 12
-ROWS_VISIBLE = 6
+ROWS_VISIBLE = 5
 
 DROP_DIR = "/root/Raspyjack/loot/DeadDrop/files"
 LOG_DIR = "/root/Raspyjack/loot/DeadDrop"
@@ -78,9 +72,10 @@ DHCP_START = "10.0.77.10"
 DHCP_END = "10.0.77.250"
 PORTAL_PORT = 80
 
-MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
+MAX_FILE_SIZE = 50 * 1024 * 1024
 MAX_FILENAME_LEN = 100
-UPLOAD_COOLDOWN = 3  # seconds between uploads per IP
+UPLOAD_COOLDOWN = 3
+GRAPH_POINTS = 40
 
 BLOCKED_EXTENSIONS = {
     ".py", ".sh", ".bash", ".zsh", ".exe", ".elf", ".bin", ".so",
@@ -100,10 +95,20 @@ _running = True
 active = False
 status_msg = "Ready"
 scroll = 0
+dash_view = 0  # 0=stats, 1=files, 2=graph
 upload_count = 0
 download_count = 0
-connected_clients = 0
-_upload_timestamps = {}  # ip -> last upload time
+total_bytes_up = 0
+total_bytes_down = 0
+connected_ips = set()
+_upload_timestamps = {}
+
+# Transfer rate history for graph (bytes per sample)
+_rate_up_history = deque([0] * GRAPH_POINTS, maxlen=GRAPH_POINTS)
+_rate_down_history = deque([0] * GRAPH_POINTS, maxlen=GRAPH_POINTS)
+_last_bytes_up = 0
+_last_bytes_down = 0
+_last_event = ""  # last upload/download event text
 
 _hostapd_proc = None
 _dnsmasq_proc = None
@@ -111,6 +116,7 @@ _http_server = None
 
 ssid = "DeadDrop"
 confirm_purge = False
+iface = None
 
 
 def _cleanup_signal(*_):
@@ -120,6 +126,23 @@ def _cleanup_signal(*_):
 
 signal.signal(signal.SIGINT, _cleanup_signal)
 signal.signal(signal.SIGTERM, _cleanup_signal)
+
+# ---------------------------------------------------------------------------
+# Rate sampler thread
+# ---------------------------------------------------------------------------
+
+def _rate_sampler():
+    """Sample transfer rates every 2 seconds for the graph."""
+    global _last_bytes_up, _last_bytes_down
+    while _running:
+        time.sleep(2)
+        with lock:
+            delta_up = total_bytes_up - _last_bytes_up
+            delta_down = total_bytes_down - _last_bytes_down
+            _last_bytes_up = total_bytes_up
+            _last_bytes_down = total_bytes_down
+            _rate_up_history.append(delta_up)
+            _rate_down_history.append(delta_down)
 
 # ---------------------------------------------------------------------------
 # Config
@@ -149,7 +172,6 @@ _SAFE_RE = re.compile(r"[^a-zA-Z0-9._\-]")
 
 
 def _sanitize_filename(name):
-    """Sanitize filename: basename only, safe chars, block dangerous extensions."""
     name = os.path.basename(name)
     name = _SAFE_RE.sub("_", name)
     if not name or name.startswith("."):
@@ -163,177 +185,70 @@ def _sanitize_filename(name):
     return name
 
 # ---------------------------------------------------------------------------
-# WiFi interface detection + selection
-# ---------------------------------------------------------------------------
-
-def _get_iface_info(iface):
-    """Return dict with driver, is_onboard, supports_ap for a wlan interface."""
-    info = {"name": iface, "driver": "", "is_onboard": False, "supports_ap": False}
-    try:
-        devpath = os.path.realpath(f"/sys/class/net/{iface}/device")
-        if "mmc" in devpath:
-            info["is_onboard"] = True
-    except Exception:
-        pass
-    try:
-        drv = os.path.basename(os.path.realpath(f"/sys/class/net/{iface}/device/driver"))
-        info["driver"] = drv
-        if drv == "brcmfmac":
-            info["is_onboard"] = True
-    except Exception:
-        pass
-    # Check AP mode support via iw
-    try:
-        phy_link = os.path.realpath(f"/sys/class/net/{iface}/phy80211")
-        phy_name = os.path.basename(phy_link)
-        r = subprocess.run(["iw", "phy", phy_name, "info"],
-                           capture_output=True, text=True, timeout=5)
-        if "* AP" in r.stdout:
-            info["supports_ap"] = True
-    except Exception:
-        pass
-    return info
-
-
-def _list_wifi_interfaces():
-    """Return list of all wlan interface info dicts, sorted: USB first, then onboard."""
-    ifaces = []
-    try:
-        for name in sorted(os.listdir("/sys/class/net")):
-            if not name.startswith("wlan"):
-                continue
-            ifaces.append(_get_iface_info(name))
-    except Exception:
-        pass
-    # Sort: USB (non-onboard) first, then onboard
-    return sorted(ifaces, key=lambda x: (x["is_onboard"], x["name"]))
-
-
-def _select_interface(lcd, font_obj, ifaces):
-    """LCD interface selector. Returns selected iface name or None."""
-    if not ifaces:
-        return None
-    if len(ifaces) == 1:
-        return ifaces[0]["name"]
-
-    sel = 0
-    while True:
-        btn = get_button(PINS, GPIO)
-        if btn == "KEY3":
-            return None
-        elif btn == "OK":
-            return ifaces[sel]["name"]
-        elif btn == "UP":
-            sel = max(0, sel - 1)
-            time.sleep(0.15)
-        elif btn == "DOWN":
-            sel = min(len(ifaces) - 1, sel + 1)
-            time.sleep(0.15)
-
-        img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-        d = ScaledDraw(img)
-        d.rectangle((0, 0, 127, 13), fill="#111")
-        d.text((2, 1), "SELECT INTERFACE", font=font_obj, fill="#58a6ff")
-        d.text((2, 16), "Choose WiFi card:", font=font_obj, fill="#AAAAAA")
-
-        for i, ifc in enumerate(ifaces):
-            y = 30 + i * 14
-            prefix = ">" if i == sel else " "
-            tag = "onboard" if ifc["is_onboard"] else "USB"
-            ap_ok = "AP" if ifc["supports_ap"] else "no-AP"
-            drv = ifc["driver"][:10] if ifc["driver"] else "?"
-            color = "#00FF00" if i == sel else "#CCCCCC"
-            warn = "#FF4444" if not ifc["supports_ap"] else color
-            d.text((2, y), f"{prefix}{ifc['name']}", font=font_obj, fill=color)
-            d.text((60, y), f"{tag}/{ap_ok}", font=font_obj, fill=warn)
-
-        d.rectangle((0, 116, 127, 127), fill="#111")
-        d.text((2, 117), "OK:Select KEY3:Cancel", font=font_obj, fill="#888")
-        lcd.LCD_ShowImage(img, 0, 0)
-        time.sleep(0.05)
-
-# ---------------------------------------------------------------------------
 # Service management
 # ---------------------------------------------------------------------------
 
-def _start_services(iface):
+def _start_services(ifc):
     global _hostapd_proc, _dnsmasq_proc, _http_server, status_msg
 
-    # Kill existing
     for proc_name in ("hostapd", "dnsmasq"):
         subprocess.run(["sudo", "pkill", "-f", f"rj_deaddrop.*{proc_name}"],
                        capture_output=True, timeout=5)
 
-    # Set managed mode and configure IP
     for cmd in [
-        ["sudo", "ip", "link", "set", iface, "down"],
-        ["sudo", "iw", "dev", iface, "set", "type", "managed"],
-        ["sudo", "ip", "link", "set", iface, "up"],
-        ["sudo", "ip", "addr", "flush", "dev", iface],
-        ["sudo", "ip", "addr", "add", f"{GATEWAY_IP}/24", "dev", iface],
+        ["sudo", "ip", "link", "set", ifc, "down"],
+        ["sudo", "iw", "dev", ifc, "set", "type", "managed"],
+        ["sudo", "ip", "link", "set", ifc, "up"],
+        ["sudo", "ip", "addr", "flush", "dev", ifc],
+        ["sudo", "ip", "addr", "add", f"{GATEWAY_IP}/24", "dev", ifc],
     ]:
         subprocess.run(cmd, capture_output=True, timeout=5)
 
-    # hostapd config
     with open(HOSTAPD_CONF, "w") as f:
         f.write(
-            f"interface={iface}\n"
-            f"driver=nl80211\n"
-            f"ssid={ssid}\n"
-            f"hw_mode=g\n"
-            f"channel=6\n"
-            f"wmm_enabled=0\n"
-            f"auth_algs=1\n"
-            f"wpa=0\n"
-            f"ignore_broadcast_ssid=0\n"
+            f"interface={ifc}\ndriver=nl80211\nssid={ssid}\n"
+            f"hw_mode=g\nchannel=6\nwmm_enabled=0\n"
+            f"auth_algs=1\nwpa=0\nignore_broadcast_ssid=0\n"
         )
 
-    # dnsmasq config
     with open(DNSMASQ_CONF, "w") as f:
         f.write(
-            f"interface={iface}\n"
-            f"bind-interfaces\n"
+            f"interface={ifc}\nbind-interfaces\n"
             f"dhcp-range={DHCP_START},{DHCP_END},12h\n"
-            f"dhcp-option=6,{GATEWAY_IP}\n"
-            f"address=/#/{GATEWAY_IP}\n"
+            f"dhcp-option=6,{GATEWAY_IP}\naddress=/#/{GATEWAY_IP}\n"
             f"no-resolv\n"
-            f"log-queries\n"
         )
 
-    # iptables: block all forwarding, redirect HTTP/DNS to portal
     for cmd in [
         ["sudo", "iptables", "-t", "nat", "-F"],
         ["sudo", "iptables", "-F", "FORWARD"],
         ["sudo", "iptables", "-P", "FORWARD", "DROP"],
-        ["sudo", "iptables", "-t", "nat", "-A", "PREROUTING", "-i", iface,
+        ["sudo", "iptables", "-t", "nat", "-A", "PREROUTING", "-i", ifc,
          "-p", "tcp", "--dport", "80", "-j", "REDIRECT", "--to-port", str(PORTAL_PORT)],
-        ["sudo", "iptables", "-t", "nat", "-A", "PREROUTING", "-i", iface,
+        ["sudo", "iptables", "-t", "nat", "-A", "PREROUTING", "-i", ifc,
          "-p", "tcp", "--dport", "443", "-j", "REDIRECT", "--to-port", str(PORTAL_PORT)],
-        ["sudo", "iptables", "-t", "nat", "-A", "PREROUTING", "-i", iface,
+        ["sudo", "iptables", "-t", "nat", "-A", "PREROUTING", "-i", ifc,
          "-p", "udp", "--dport", "53", "-j", "DNAT", "--to", f"{GATEWAY_IP}:53"],
     ]:
         subprocess.run(cmd, capture_output=True, timeout=5)
 
-    # Start hostapd
     _hostapd_proc = subprocess.Popen(
         ["sudo", "hostapd", HOSTAPD_CONF],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
     time.sleep(2)
 
-    # Start dnsmasq
     _dnsmasq_proc = subprocess.Popen(
         ["sudo", "dnsmasq", "-C", DNSMASQ_CONF, "--no-daemon"],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
     time.sleep(1)
 
-    # Start HTTP server
     _http_server = _ThreadedHTTPServer((GATEWAY_IP, PORTAL_PORT), _DeadDropHandler)
     threading.Thread(target=_http_server.serve_forever, daemon=True).start()
 
     with lock:
-        status_msg = f"AP '{ssid}' active"
+        status_msg = f"AP '{ssid}' on {ifc}"
 
 
 def _stop_services():
@@ -354,7 +269,6 @@ def _stop_services():
     _hostapd_proc = None
     _dnsmasq_proc = None
 
-    # Clean iptables
     for cmd in [
         ["sudo", "iptables", "-t", "nat", "-F"],
         ["sudo", "iptables", "-F", "FORWARD"],
@@ -362,59 +276,130 @@ def _stop_services():
     ]:
         subprocess.run(cmd, capture_output=True, timeout=5)
 
-    # Kill leftovers
     subprocess.run(["sudo", "pkill", "-f", "rj_deaddrop"], capture_output=True, timeout=5)
-
     with lock:
         status_msg = "Stopped"
 
 
-# ---------------------------------------------------------------------------
-# HTML templates
-# ---------------------------------------------------------------------------
+def _count_clients():
+    """Count connected DHCP clients."""
+    try:
+        r = subprocess.run(["sudo", "cat", "/var/lib/misc/dnsmasq.leases"],
+                           capture_output=True, text=True, timeout=3)
+        if r.returncode == 0:
+            return len([l for l in r.stdout.strip().split("\n") if l.strip()])
+    except Exception:
+        pass
+    return len(connected_ips)
 
-_CSS = """
-body{font-family:'Segoe UI',Arial,sans-serif;background:#0d1117;color:#c9d1d9;
-margin:0;padding:20px;min-height:100vh}
-.container{max-width:600px;margin:0 auto}
-h1{color:#58a6ff;text-align:center;font-size:1.5em;margin-bottom:5px}
-.subtitle{text-align:center;color:#8b949e;margin-bottom:20px;font-size:0.85em}
-.card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:16px;margin:12px 0}
-.file-list{list-style:none;padding:0;margin:0}
-.file-list li{padding:8px 12px;border-bottom:1px solid #21262d;display:flex;
-justify-content:space-between;align-items:center}
-.file-list li:last-child{border-bottom:none}
-.file-list a{color:#58a6ff;text-decoration:none}
-.file-list a:hover{text-decoration:underline}
-.size{color:#8b949e;font-size:0.85em}
-.btn{background:#238636;color:#fff;border:none;padding:10px 20px;border-radius:6px;
-cursor:pointer;font-size:1em;width:100%}
-.btn:hover{background:#2ea043}
-input[type=file]{color:#c9d1d9;margin:10px 0;width:100%;box-sizing:border-box}
-.warn{color:#f85149;font-size:0.85em;text-align:center}
-.ok{color:#3fb950;font-size:0.85em;text-align:center}
-.stats{display:flex;justify-content:space-around;text-align:center;color:#8b949e;font-size:0.85em}
-.stats span{color:#58a6ff;font-weight:bold;display:block;font-size:1.2em}
-"""
-
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 def _human_size(size):
     for unit in ("B", "KB", "MB", "GB"):
         if size < 1024:
-            return f"{size:.1f} {unit}"
+            return f"{size:.1f} {unit}" if size != int(size) else f"{int(size)} {unit}"
         size /= 1024
     return f"{size:.1f} TB"
 
 
-def _build_page(message="", msg_class="ok"):
-    """Build the dead drop HTML page."""
+def _list_files():
     files = []
     if os.path.isdir(DROP_DIR):
         for fn in sorted(os.listdir(DROP_DIR)):
             fp = os.path.join(DROP_DIR, fn)
             if os.path.isfile(fp):
                 files.append((fn, os.path.getsize(fp)))
+    return files
 
+# ---------------------------------------------------------------------------
+# HTML portal (multi-file upload)
+# ---------------------------------------------------------------------------
+
+_CSS = """
+*{box-sizing:border-box}
+body{font-family:'Segoe UI',Arial,sans-serif;background:#0d1117;color:#c9d1d9;
+margin:0;padding:15px;min-height:100vh}
+.c{max-width:600px;margin:0 auto}
+h1{color:#58a6ff;text-align:center;font-size:1.4em;margin:8px 0 2px}
+.sub{text-align:center;color:#8b949e;margin-bottom:15px;font-size:0.8em}
+.card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:14px;margin:10px 0}
+.fl{list-style:none;padding:0;margin:0}
+.fl li{padding:7px 10px;border-bottom:1px solid #21262d;display:flex;
+justify-content:space-between;align-items:center;font-size:0.9em}
+.fl li:last-child{border-bottom:none}
+.fl a{color:#58a6ff;text-decoration:none}
+.fl a:hover{text-decoration:underline}
+.sz{color:#8b949e;font-size:0.8em}
+.btn{background:#238636;color:#fff;border:none;padding:10px 16px;border-radius:6px;
+cursor:pointer;font-size:0.95em;width:100%}
+.btn:hover{background:#2ea043}
+input[type=file]{color:#c9d1d9;margin:8px 0;width:100%}
+.w{color:#f85149;font-size:0.8em;text-align:center}
+.ok{color:#3fb950;font-size:0.8em;text-align:center}
+.st{display:flex;justify-content:space-around;text-align:center;color:#8b949e;font-size:0.8em}
+.st span{color:#58a6ff;font-weight:bold;display:block;font-size:1.1em}
+.prog{width:100%;background:#21262d;border-radius:4px;height:20px;margin:8px 0;overflow:hidden;display:none}
+.prog-bar{height:100%;background:#238636;transition:width 0.3s;width:0%}
+.prog-text{text-align:center;font-size:0.8em;color:#8b949e;display:none}
+"""
+
+_JS = """
+document.getElementById('upload-form').addEventListener('submit', function(e) {
+    e.preventDefault();
+    var files = document.getElementById('file-input').files;
+    if (files.length === 0) return;
+    var prog = document.getElementById('progress');
+    var pbar = document.getElementById('prog-bar');
+    var ptxt = document.getElementById('prog-text');
+    var results = document.getElementById('results');
+    prog.style.display = 'block';
+    ptxt.style.display = 'block';
+    results.innerHTML = '';
+    var done = 0;
+    var total = files.length;
+    function uploadNext(idx) {
+        if (idx >= total) {
+            ptxt.textContent = 'All done! Reloading...';
+            setTimeout(function(){ location.reload(); }, 1000);
+            return;
+        }
+        var fd = new FormData();
+        fd.append('file', files[idx]);
+        var xhr = new XMLHttpRequest();
+        xhr.open('POST', '/upload', true);
+        xhr.upload.onprogress = function(ev) {
+            if (ev.lengthComputable) {
+                var pct = ((done + ev.loaded/ev.total) / total * 100).toFixed(0);
+                pbar.style.width = pct + '%';
+            }
+        };
+        xhr.onload = function() {
+            done++;
+            var pct = (done / total * 100).toFixed(0);
+            pbar.style.width = pct + '%';
+            ptxt.textContent = done + '/' + total + ' uploaded';
+            var color = xhr.status < 300 ? '#3fb950' : '#f85149';
+            results.innerHTML += '<div style="color:'+color+';font-size:0.85em">' +
+                files[idx].name + ': ' + (xhr.status < 300 ? 'OK' : 'Error ' + xhr.status) + '</div>';
+            uploadNext(idx + 1);
+        };
+        xhr.onerror = function() {
+            done++;
+            results.innerHTML += '<div style="color:#f85149;font-size:0.85em">' +
+                files[idx].name + ': Network error</div>';
+            uploadNext(idx + 1);
+        };
+        xhr.send(fd);
+    }
+    uploadNext(0);
+});
+"""
+
+
+def _build_page(message="", msg_class="ok"):
+    files = _list_files()
     total_size = sum(s for _, s in files)
 
     file_rows = ""
@@ -424,7 +409,7 @@ def _build_page(message="", msg_class="ok"):
             encoded = urllib.parse.quote(fn)
             file_rows += (
                 f'<li><a href="/download/{encoded}">{safe_name}</a>'
-                f'<span class="size">{_human_size(sz)}</span></li>\n'
+                f'<span class="sz">{_human_size(sz)}</span></li>\n'
             )
     else:
         file_rows = '<li style="color:#8b949e;text-align:center">No files yet</li>'
@@ -436,39 +421,38 @@ def _build_page(message="", msg_class="ok"):
     return f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Dead Drop</title><style>{_CSS}</style></head><body>
-<div class="container">
+<div class="c">
 <h1>&#x1f4e6; Dead Drop</h1>
-<p class="subtitle">Anonymous file sharing &mdash; no logs, no tracking</p>
-
-<div class="card">
-<div class="stats">
+<p class="sub">Anonymous file sharing &bull; No logs &bull; No tracking</p>
+<div class="card"><div class="st">
 <div><span>{len(files)}</span>files</div>
 <div><span>{_human_size(total_size)}</span>total</div>
-<div><span>{_human_size(MAX_FILE_SIZE)}</span>max upload</div>
+<div><span>{_human_size(MAX_FILE_SIZE)}</span>max/file</div>
 </div></div>
-
 {msg_html}
-
 <div class="card">
-<h3 style="margin-top:0">&#x1f4e4; Upload</h3>
-<form method="POST" action="/upload" enctype="multipart/form-data">
-<input type="file" name="file" required>
-<button type="submit" class="btn">Upload File</button>
+<h3 style="margin-top:0">&#x1f4e4; Upload files</h3>
+<form id="upload-form" method="POST" action="/upload" enctype="multipart/form-data">
+<input type="file" id="file-input" name="file" multiple required>
+<div class="prog" id="progress"><div class="prog-bar" id="prog-bar"></div></div>
+<div class="prog-text" id="prog-text"></div>
+<div id="results"></div>
+<button type="submit" class="btn">Upload</button>
 </form>
-<p class="warn" style="margin-bottom:0">Blocked: {', '.join(sorted(BLOCKED_EXTENSIONS))}</p>
+<p class="w" style="margin-bottom:0">Blocked: {', '.join(sorted(BLOCKED_EXTENSIONS))}</p>
 </div>
-
 <div class="card">
 <h3 style="margin-top:0">&#x1f4c1; Files ({len(files)})</h3>
-<ul class="file-list">{file_rows}</ul>
+<ul class="fl">{file_rows}</ul>
 </div>
-
-<p class="subtitle" style="margin-top:20px">&#x1f512; Sandboxed &bull; No internet &bull; Files are local only</p>
-</div></body></html>"""
+<p class="sub" style="margin-top:15px">&#x1f512; Sandboxed &bull; No internet &bull; Local only</p>
+</div>
+<script>{_JS}</script>
+</body></html>"""
 
 
 # ---------------------------------------------------------------------------
-# HTTP handler (sandboxed)
+# HTTP handler
 # ---------------------------------------------------------------------------
 
 class _ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
@@ -477,10 +461,9 @@ class _ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
 
 
 class _DeadDropHandler(BaseHTTPRequestHandler):
-    """Minimal HTTP handler for the dead drop portal."""
 
     def log_message(self, fmt, *args):
-        pass  # Silence logs
+        pass
 
     def _send_html(self, code, body):
         data = body.encode("utf-8")
@@ -492,32 +475,35 @@ class _DeadDropHandler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_GET(self):
+        # Track connected client
+        with lock:
+            connected_ips.add(self.client_address[0])
         if self.path.startswith("/download/"):
             self._handle_download()
         else:
             self._send_html(200, _build_page())
 
     def do_POST(self):
+        with lock:
+            connected_ips.add(self.client_address[0])
         if self.path == "/upload":
             self._handle_upload()
         else:
-            self._send_html(404, _build_page("Not found", "warn"))
+            self._send_html(404, _build_page("Not found", "w"))
 
     def _handle_download(self):
-        global download_count
+        global download_count, total_bytes_down, _last_event
         raw_name = urllib.parse.unquote(self.path[len("/download/"):])
         safe_name = os.path.basename(raw_name)
 
-        # Path traversal prevention
         filepath = os.path.join(DROP_DIR, safe_name)
         real_drop = os.path.realpath(DROP_DIR)
         real_file = os.path.realpath(filepath)
         if not real_file.startswith(real_drop + os.sep):
-            self._send_html(403, _build_page("Access denied", "warn"))
+            self._send_html(403, _build_page("Access denied", "w"))
             return
-
         if not os.path.isfile(filepath):
-            self._send_html(404, _build_page("File not found", "warn"))
+            self._send_html(404, _build_page("File not found", "w"))
             return
 
         try:
@@ -535,29 +521,29 @@ class _DeadDropHandler(BaseHTTPRequestHandler):
                     self.wfile.write(chunk)
             with lock:
                 download_count += 1
+                total_bytes_down += size
+                _last_event = f"DL {safe_name[:14]}"
         except Exception:
-            self._send_html(500, _build_page("Download error", "warn"))
+            pass
 
     def _handle_upload(self):
-        global upload_count
+        global upload_count, total_bytes_up, _last_event
 
-        # Rate limiting
         client_ip = self.client_address[0]
         now = time.time()
         with lock:
             last = _upload_timestamps.get(client_ip, 0)
             if now - last < UPLOAD_COOLDOWN:
                 self._send_html(429, _build_page(
-                    f"Too fast! Wait {UPLOAD_COOLDOWN}s between uploads.", "warn"))
+                    f"Wait {UPLOAD_COOLDOWN}s between uploads", "w"))
                 return
             _upload_timestamps[client_ip] = now
 
         content_type = self.headers.get("Content-Type", "")
         if "multipart/form-data" not in content_type:
-            self._send_html(400, _build_page("Invalid request", "warn"))
+            self._send_html(400, _build_page("Invalid request", "w"))
             return
 
-        # Parse boundary
         boundary = None
         for part in content_type.split(";"):
             part = part.strip()
@@ -565,19 +551,16 @@ class _DeadDropHandler(BaseHTTPRequestHandler):
                 boundary = part[9:].strip('"')
                 break
         if not boundary:
-            self._send_html(400, _build_page("Missing boundary", "warn"))
+            self._send_html(400, _build_page("Missing boundary", "w"))
             return
 
-        # Read body with size limit
         content_length = int(self.headers.get("Content-Length", 0))
-        if content_length > MAX_FILE_SIZE + 4096:
+        if content_length > MAX_FILE_SIZE + 8192:
             self._send_html(413, _build_page(
-                f"File too large (max {_human_size(MAX_FILE_SIZE)})", "warn"))
+                f"Too large (max {_human_size(MAX_FILE_SIZE)})", "w"))
             return
 
         body = self.rfile.read(content_length)
-
-        # Extract filename and file data from multipart
         boundary_bytes = boundary.encode("utf-8")
         parts = body.split(b"--" + boundary_bytes)
 
@@ -592,37 +575,34 @@ class _DeadDropHandler(BaseHTTPRequestHandler):
             headers_raw = part[:header_end].decode("utf-8", errors="replace")
             if 'name="file"' not in headers_raw:
                 continue
-            # Extract filename
             fn_match = re.search(r'filename="([^"]*)"', headers_raw)
             if fn_match:
                 filename = fn_match.group(1)
             file_data = part[header_end + 4:]
-            # Remove trailing boundary markers
             if file_data.endswith(b"\r\n"):
                 file_data = file_data[:-2]
             break
 
         if not filename or not file_data:
-            self._send_html(400, _build_page("No file received", "warn"))
+            self._send_html(400, _build_page("No file received", "w"))
             return
 
         if len(file_data) > MAX_FILE_SIZE:
             self._send_html(413, _build_page(
-                f"File too large (max {_human_size(MAX_FILE_SIZE)})", "warn"))
+                f"Too large (max {_human_size(MAX_FILE_SIZE)})", "w"))
             return
 
         safe_name = _sanitize_filename(filename)
         if safe_name.endswith(".blocked"):
             self._send_html(403, _build_page(
-                f"Blocked file type: {os.path.splitext(filename)[1]}", "warn"))
+                f"Blocked: {os.path.splitext(filename)[1]}", "w"))
             return
 
-        # Deduplicate filename
         dest = os.path.join(DROP_DIR, safe_name)
         real_drop = os.path.realpath(DROP_DIR)
         real_dest = os.path.realpath(dest)
         if not real_dest.startswith(real_drop + os.sep):
-            self._send_html(403, _build_page("Invalid filename", "warn"))
+            self._send_html(403, _build_page("Invalid filename", "w"))
             return
 
         if os.path.exists(dest):
@@ -637,19 +617,22 @@ class _DeadDropHandler(BaseHTTPRequestHandler):
             with open(dest, "wb") as f:
                 f.write(file_data)
             os.chmod(dest, 0o644)
+            sz = len(file_data)
             with lock:
                 upload_count += 1
+                total_bytes_up += sz
+                _last_event = f"UP {safe_name[:14]}"
             self._send_html(200, _build_page(
-                f"Uploaded: {safe_name} ({_human_size(len(file_data))})", "ok"))
+                f"OK: {safe_name} ({_human_size(sz)})", "ok"))
         except Exception as exc:
-            self._send_html(500, _build_page(f"Write error: {exc}", "warn"))
+            self._send_html(500, _build_page(f"Error: {exc}", "w"))
 
 
 # ---------------------------------------------------------------------------
-# LCD Display
+# LCD Dashboard
 # ---------------------------------------------------------------------------
 
-def _draw_frame(lcd, font_obj):
+def _draw_frame(lcd, font_obj, ifc_name):
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
     d = ScaledDraw(img)
 
@@ -662,56 +645,135 @@ def _draw_frame(lcd, font_obj):
         msg = status_msg
         ul = upload_count
         dl = download_count
+        bup = total_bytes_up
+        bdn = total_bytes_down
+        clients = len(connected_ips)
+        evt = _last_event
+        rates_up = list(_rate_up_history)
+        rates_dn = list(_rate_down_history)
 
-    d.text((2, 16), msg[:24], font=font_obj, fill="#AAAAAA")
+    if not active:
+        # Idle screen
+        d.text((2, 20), f"SSID: {ssid[:16]}", font=font_obj, fill="#666")
+        d.text((2, 34), f"Iface: {ifc_name or '?'}", font=font_obj, fill="#666")
+        d.text((2, 50), "OK  Start", font=font_obj, fill="#666")
+        d.text((2, 62), "KEY1  Change SSID", font=font_obj, fill="#666")
+        d.text((2, 74), "KEY3  Exit", font=font_obj, fill="#666")
 
-    if active:
-        d.text((2, 30), f"SSID: {ssid[:16]}", font=font_obj, fill="#58a6ff")
-        d.text((2, 42), f"Up:{ul} Down:{dl}", font=font_obj, fill="#888")
+        d.rectangle((0, 116, 127, 127), fill="#111")
+        d.text((2, 117), "OK:Start K1:SSID K3:Exit", font=font_obj, fill="#888")
+        lcd.LCD_ShowImage(img, 0, 0)
+        return
 
-        # File list
-        files = []
-        if os.path.isdir(DROP_DIR):
-            for fn in sorted(os.listdir(DROP_DIR)):
-                fp = os.path.join(DROP_DIR, fn)
-                if os.path.isfile(fp):
-                    files.append((fn, os.path.getsize(fp)))
+    # Active dashboard
+    if dash_view == 0:
+        # Stats view
+        d.text((2, 16), f"SSID: {ssid[:14]}", font=font_obj, fill="#58a6ff")
 
-        d.text((2, 54), f"Files: {len(files)}", font=font_obj, fill="#888")
-        visible = files[scroll:scroll + ROWS_VISIBLE - 1]
+        d.text((2, 30), f"Clients: {clients}", font=font_obj, fill="#00FF00")
+        files = _list_files()
+        total_sz = sum(s for _, s in files)
+        d.text((68, 30), f"Files: {len(files)}", font=font_obj, fill="#FFAA00")
+
+        # Upload / Download counters with totals
+        d.text((2, 44), f"UP  {ul}", font=font_obj, fill="#3fb950")
+        d.text((40, 44), _human_size(bup), font=font_obj, fill="#3fb950")
+
+        d.text((2, 56), f"DN  {dl}", font=font_obj, fill="#58a6ff")
+        d.text((40, 56), _human_size(bdn), font=font_obj, fill="#58a6ff")
+
+        d.text((2, 70), f"Total: {_human_size(total_sz)}", font=font_obj, fill="#888")
+
+        # Last event
+        if evt:
+            d.text((2, 84), evt[:24], font=font_obj, fill="#FFAA00")
+
+        # Mini sparkline (last 20 points, bottom area)
+        graph_y = 96
+        graph_h = 16
+        pts = rates_up[-20:]
+        mx = max(max(pts), 1)
+        for i, v in enumerate(pts):
+            bh = max(1, int(v / mx * graph_h))
+            x = 2 + i * 6
+            d.rectangle((x, graph_y + graph_h - bh, x + 4, graph_y + graph_h), fill="#3fb950")
+
+    elif dash_view == 1:
+        # File list view
+        files = _list_files()
+        d.text((2, 16), f"Files: {len(files)}", font=font_obj, fill="#FFAA00")
+
+        visible = files[scroll:scroll + ROWS_VISIBLE]
         for i, (fn, sz) in enumerate(visible):
-            y = 66 + i * ROW_H
-            label = f"{fn[:14]} {_human_size(sz)}"
-            d.text((2, y), label[:24], font=font_obj, fill="#CCCCCC")
-    else:
-        d.text((2, 40), f"SSID: {ssid[:16]}", font=font_obj, fill="#666")
-        d.text((2, 52), f"Iface: {iface}", font=font_obj, fill="#666")
-        d.text((2, 66), "OK: Start", font=font_obj, fill="#666")
-        d.text((2, 78), "KEY1: SSID  KEY3: Exit", font=font_obj, fill="#666")
+            y = 28 + i * ROW_H
+            d.text((2, y), fn[:14], font=font_obj, fill="#CCCCCC")
+            d.text((90, y), _human_size(sz)[:8], font=font_obj, fill="#888")
 
+        if not files:
+            d.text((2, 40), "No files yet", font=font_obj, fill="#666")
+
+        d.text((2, 100), f"Clients: {clients}", font=font_obj, fill="#00FF00")
+
+    elif dash_view == 2:
+        # Transfer rate graph view
+        d.text((2, 16), "Transfer rate", font=font_obj, fill="#AAAAAA")
+
+        # Graph area: y=28 to y=95 (height=67), x=2 to x=125
+        graph_top = 28
+        graph_bot = 95
+        graph_h = graph_bot - graph_top
+        graph_w = 123
+
+        # Draw grid lines
+        for gy in range(graph_top, graph_bot + 1, 16):
+            d.line([(2, gy), (125, gy)], fill="#222")
+
+        # Upload bars (green)
+        mx_up = max(max(rates_up), 1)
+        bar_w = max(1, graph_w // GRAPH_POINTS)
+        for i, v in enumerate(rates_up):
+            bh = max(0, int(v / mx_up * graph_h * 0.45))
+            mid = graph_top + graph_h // 2
+            x = 2 + i * bar_w
+            if bh > 0:
+                d.rectangle((x, mid - bh, x + bar_w - 1, mid), fill="#3fb950")
+
+        # Download bars (blue, below midline)
+        mx_dn = max(max(rates_dn), 1)
+        for i, v in enumerate(rates_dn):
+            bh = max(0, int(v / mx_dn * graph_h * 0.45))
+            mid = graph_top + graph_h // 2
+            x = 2 + i * bar_w
+            if bh > 0:
+                d.rectangle((x, mid + 1, x + bar_w - 1, mid + bh), fill="#58a6ff")
+
+        # Legend
+        d.rectangle((2, 98, 8, 104), fill="#3fb950")
+        d.text((10, 98), f"UP {_human_size(bup)}", font=font_obj, fill="#3fb950")
+        d.rectangle((68, 98, 74, 104), fill="#58a6ff")
+        d.text((76, 98), f"DN {_human_size(bdn)}", font=font_obj, fill="#58a6ff")
+
+    # Purge confirmation overlay
     if confirm_purge:
-        d.rectangle((10, 40, 117, 85), fill="#1a1a2e", outline="#f85149")
+        d.rectangle((10, 40, 117, 80), fill="#1a1a2e", outline="#f85149")
         d.text((16, 45), "Purge all files?", font=font_obj, fill="#f85149")
         d.text((16, 60), "OK=Yes KEY2=No", font=font_obj, fill="#AAAAAA")
 
     # Footer
     d.rectangle((0, 116, 127, 127), fill="#111")
-    if active:
-        d.text((2, 117), "OK:Stop K2:Purge K3:Quit", font=font_obj, fill="#888")
-    else:
-        d.text((2, 117), "OK:Start K1:SSID K3:Quit", font=font_obj, fill="#888")
+    view_names = ["STATS", "FILES", "GRAPH"]
+    d.text((2, 117), f"{view_names[dash_view]} L/R:view K3:Quit", font=font_obj, fill="#888")
 
     lcd.LCD_ShowImage(img, 0, 0)
 
 
 # ---------------------------------------------------------------------------
-# SSID editor (simple character picker)
+# SSID editor
 # ---------------------------------------------------------------------------
 
 def _edit_ssid(lcd, font_obj):
     global ssid
     chars = list(ssid)
-    cursor = len(chars)
     char_idx = 0
 
     while _running:
@@ -722,33 +784,24 @@ def _edit_ssid(lcd, font_obj):
             _save_config()
             return
         elif btn == "OK":
-            if cursor < len(chars):
-                cursor += 1
             ssid = "".join(chars) or "DeadDrop"
             _save_config()
             return
         elif btn == "UP":
             char_idx = (char_idx + 1) % len(SSID_CHARS)
-            if cursor < len(chars):
-                chars[cursor] = SSID_CHARS[char_idx]
             time.sleep(0.12)
         elif btn == "DOWN":
             char_idx = (char_idx - 1) % len(SSID_CHARS)
-            if cursor < len(chars):
-                chars[cursor] = SSID_CHARS[char_idx]
             time.sleep(0.12)
         elif btn == "RIGHT":
             if len(chars) < 30:
                 chars.append(SSID_CHARS[char_idx])
-                cursor = len(chars) - 1
             time.sleep(0.15)
         elif btn == "LEFT":
             if chars:
                 chars.pop()
-                cursor = max(0, len(chars) - 1)
             time.sleep(0.15)
 
-        # Draw SSID editor
         img = Image.new("RGB", (WIDTH, HEIGHT), "black")
         d = ScaledDraw(img)
         d.rectangle((0, 0, 127, 13), fill="#111")
@@ -775,7 +828,7 @@ def _edit_ssid(lcd, font_obj):
 # ---------------------------------------------------------------------------
 
 def main():
-    global _running, active, status_msg, scroll, confirm_purge
+    global _running, active, status_msg, scroll, confirm_purge, dash_view, iface
 
     _load_config()
     os.makedirs(DROP_DIR, exist_ok=True)
@@ -791,7 +844,6 @@ def main():
     lcd.LCD_Clear()
     font_obj = scaled_font()
 
-    # Detect and select WiFi interface
     iface = select_interface(lcd, font_obj, PINS, GPIO, iface_type="wifi")
     if not iface:
         GPIO.cleanup()
@@ -799,6 +851,9 @@ def main():
 
     with lock:
         status_msg = f"Using {iface}"
+
+    # Start rate sampler
+    threading.Thread(target=_rate_sampler, daemon=True).start()
 
     try:
         while _running:
@@ -809,7 +864,6 @@ def main():
 
             elif confirm_purge:
                 if btn == "OK":
-                    # Purge confirmed
                     if os.path.isdir(DROP_DIR):
                         for fn in os.listdir(DROP_DIR):
                             fp = os.path.join(DROP_DIR, fn)
@@ -842,16 +896,26 @@ def main():
                 confirm_purge = True
                 time.sleep(0.3)
 
+            elif btn == "LEFT" and active:
+                dash_view = (dash_view - 1) % 3
+                scroll = 0
+                time.sleep(0.2)
+
+            elif btn == "RIGHT" and active:
+                dash_view = (dash_view + 1) % 3
+                scroll = 0
+                time.sleep(0.2)
+
             elif btn == "UP":
                 scroll = max(0, scroll - 1)
                 time.sleep(0.15)
 
             elif btn == "DOWN":
                 file_count = len(os.listdir(DROP_DIR)) if os.path.isdir(DROP_DIR) else 0
-                scroll = min(scroll + 1, max(0, file_count - ROWS_VISIBLE + 1))
+                scroll = min(scroll + 1, max(0, file_count - ROWS_VISIBLE))
                 time.sleep(0.15)
 
-            _draw_frame(lcd, font_obj)
+            _draw_frame(lcd, font_obj, iface)
             time.sleep(0.05)
 
     finally:

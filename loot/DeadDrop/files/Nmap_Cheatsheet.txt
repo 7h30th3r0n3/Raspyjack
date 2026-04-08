@@ -1,0 +1,63 @@
+NMAP CHEATSHEET
+===============
+
+TARGET SPECIFICATION
+  nmap 192.168.1.1          Single host
+  nmap 192.168.1.0/24       Subnet
+  nmap 192.168.1.1-254      Range
+  nmap -iL targets.txt      From file
+
+SCAN TYPES
+  -sS    TCP SYN (stealth, default root)
+  -sT    TCP Connect (default non-root)
+  -sU    UDP scan
+  -sV    Service version detection
+  -sA    ACK scan (firewall mapping)
+  -sN    NULL scan
+  -sF    FIN scan
+  -sX    Xmas scan
+  -sP    Ping scan (host discovery)
+
+PORT SPECIFICATION
+  -p 22              Single port
+  -p 22,80,443       Multiple ports
+  -p 1-1024          Range
+  -p-                All 65535 ports
+  -F                 Fast (top 100)
+  --top-ports 1000   Top N ports
+
+TIMING
+  -T0    Paranoid (IDS evasion)
+  -T1    Sneaky
+  -T2    Polite
+  -T3    Normal (default)
+  -T4    Aggressive
+  -T5    Insane
+
+OS & SERVICE DETECTION
+  -O              OS detection
+  -sV             Service versions
+  -A              Aggressive (OS + version + scripts + traceroute)
+  --script=vuln   Run vulnerability scripts
+
+OUTPUT
+  -oN file.txt     Normal output
+  -oX file.xml     XML output
+  -oG file.grep    Grepable output
+  -oA basename     All formats
+
+EVASION
+  -f                Fragment packets
+  -D decoy1,ME     Decoy scan
+  -S spoofed_ip    Spoof source IP
+  --data-length N  Append random data
+  --spoof-mac      Spoof MAC address
+  -Pn              Skip host discovery
+
+USEFUL COMBOS
+  nmap -sS -sV -O -T4 target              Full recon
+  nmap -sS -p- -T4 target                 All ports fast
+  nmap --script vuln target                Vuln scan
+  nmap -sU -sV --top-ports 100 target      UDP top 100
+  nmap -Pn -sS -sV -p 21,22,80,443 target Bypass ping block
+  nmap -sn 192.168.1.0/24                  Host discovery only

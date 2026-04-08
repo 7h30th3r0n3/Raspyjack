@@ -1,0 +1,68 @@
+WIRESHARK DISPLAY FILTERS CHEATSHEET
+======================================
+
+BASIC
+  ip.addr == 192.168.1.1           IP (src or dst)
+  ip.src == 10.0.0.1               Source IP
+  ip.dst == 10.0.0.1               Destination IP
+  tcp.port == 80                   TCP port
+  udp.port == 53                   UDP port
+  eth.addr == aa:bb:cc:dd:ee:ff    MAC address
+
+PROTOCOLS
+  http                             HTTP traffic
+  dns                              DNS queries/responses
+  tls                              TLS/SSL traffic
+  tcp                              All TCP
+  udp                              All UDP
+  icmp                             Ping/ICMP
+  arp                              ARP
+  dhcp                             DHCP
+  smb || smb2                      SMB traffic
+  ftp                              FTP
+  ssh                              SSH
+
+HTTP
+  http.request.method == "POST"    HTTP POST requests
+  http.request.method == "GET"     HTTP GET requests
+  http.response.code == 200        HTTP 200 OK
+  http.response.code >= 400        HTTP errors
+  http.host contains "example"     Host header filter
+  http.request.uri contains "login"  URI filter
+  http.cookie                      Packets with cookies
+  http.content_type contains "json"  JSON responses
+
+DNS
+  dns.qry.name contains "evil"    DNS query name
+  dns.a                            DNS A records
+  dns.resp.type == 1               DNS A responses
+  dns.flags.rcode != 0             DNS errors
+
+CREDENTIALS / SENSITIVE
+  http.authorization               HTTP auth headers
+  ftp.request.command == "PASS"    FTP passwords
+  smtp.req.command == "AUTH"       SMTP auth
+  imap.request contains "LOGIN"    IMAP login
+  pop.request.command == "PASS"    POP3 passwords
+  telnet                           Telnet (cleartext)
+  http.request.method == "POST" && http.content_type contains "form"
+
+TCP ANALYSIS
+  tcp.flags.syn == 1 && tcp.flags.ack == 0   SYN packets
+  tcp.flags.rst == 1               RST packets
+  tcp.analysis.retransmission      Retransmissions
+  tcp.analysis.zero_window         Zero window
+  tcp.stream eq 5                  Follow stream #5
+
+WIRELESS
+  wlan.fc.type_subtype == 0x08     Beacon frames
+  wlan.fc.type_subtype == 0x0c     Deauth frames
+  eapol                            4-way handshake
+  wlan.ssid == "MyNetwork"         Specific SSID
+
+COMBINATIONS
+  ip.addr == 10.0.0.1 && tcp.port == 443
+  http || dns
+  !(arp || dns || icmp)            Exclude noise
+  tcp.port == 80 && http.request   HTTP requests only
+  ip.src == 10.0.0.0/24 && !ip.dst == 10.0.0.0/24   Outbound
