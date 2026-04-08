@@ -48,6 +48,7 @@ import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._iface_helper import select_interface
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -680,9 +681,10 @@ def main():
     font_obj = scaled_font()
 
     # Auto-detect interface
-    ifaces = _list_wifi_interfaces()
-    if ifaces:
-        _iface = ifaces[0]["name"]
+    _iface = select_interface(lcd, font_obj, PINS, GPIO, iface_type="wifi")
+    if not _iface:
+        GPIO.cleanup()
+        return 1
 
     menu_sel = 0
     cat_sel = 0

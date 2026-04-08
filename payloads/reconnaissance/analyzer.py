@@ -39,6 +39,7 @@ import LCD_1in44, LCD_Config                      # type: ignore
 from PIL import Image, ImageDraw, ImageFont       # type: ignore
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._iface_helper import select_interface
 
 # Scapy (optional – WiFi capture won't work without it)
 try:
@@ -100,6 +101,7 @@ band_idx  = 0
 dwell     = 0.30       # current channel dwell time
 cur_ch    = 1          # channel the adapter is currently on
 mon_iface = None       # monitor-mode WiFi interface name
+_selected_iface = None # interface chosen via shared selector
 ble_ready = False      # True once HCI socket is open
 
 # WiFi per-channel accumulators
@@ -667,7 +669,7 @@ def start_all():
         return
     # WiFi monitor mode
     if not mon_iface:
-        iface = find_iface()
+        iface = _selected_iface or find_iface()
         if iface:
             mon_iface = monitor_up(iface)
     running = True
@@ -699,13 +701,18 @@ def reset_stats():
 # ===================================================================
 
 def main():
-    global band_idx, dwell
+    global band_idx, dwell, _selected_iface
 
     lcd = lcd_init()
     GPIO.setmode(GPIO.BCM)
     for pin in PINS.values():
         GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
     font = scaled_font()
+
+    _selected_iface = select_interface(lcd, font, PINS, GPIO, iface_type="wifi")
+    if not _selected_iface:
+        GPIO.cleanup()
+        return 1
 
     # Splash screen
     img = Image.new("RGB", (W, H), "black")

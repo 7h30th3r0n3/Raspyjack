@@ -49,6 +49,7 @@ import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._iface_helper import select_interface
 
 PINS = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
@@ -646,10 +647,10 @@ def draw_clients_view():
 def main():
     global _iface, scroll_pos, view_mode, status_msg
 
-    _iface = _find_usb_wifi()
+    _iface = select_interface(LCD, font, PINS, GPIO, iface_type="wifi")
     if not _iface:
-        with lock:
-            status_msg = "No USB WiFi dongle!"
+        GPIO.cleanup()
+        return 1
 
     # Splash
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")

@@ -29,10 +29,11 @@ sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..', '..')))
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
-from payloads._display_helper import ScaledDraw
+from payloads._display_helper import ScaledDraw, scaled_font
 
 # Shared input helper (WebUI virtual + GPIO)
 from payloads._input_helper import get_button
+from payloads._iface_helper import select_interface
 
 # WiFi Integration - Import dynamic interface support
 try:
@@ -44,9 +45,9 @@ try:
         set_raspyjack_interface
     )
     WIFI_INTEGRATION = True
-    print("✅ WiFi integration loaded - dynamic interface support enabled")
+    print("WiFi integration loaded - dynamic interface support enabled")
 except ImportError as e:
-    print(f"⚠️  WiFi integration not available: {e}")
+    print(f"WiFi integration not available: {e}")
     WIFI_INTEGRATION = False
 
 # Configuration
@@ -146,8 +147,8 @@ def get_wifi_interface():
             print("Using fallback interface: wlan1")
         return "wlan1"
 
-# Initialize WiFi interface
-WIFI_INTERFACE = get_wifi_interface()
+# WiFi interface -- resolved after LCD init via select_interface()
+WIFI_INTERFACE = None
 
 # Interface validation patterns
 INTERFACE_PATTERNS = ["wlan0", "wlan1", "wlan2", "wlan0mon", "wlan1mon", "wlan2mon"]
@@ -176,6 +177,11 @@ WIDTH, HEIGHT = LCD.width, LCD.height
 font_large = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", int(10 * LCD_1in44.LCD_SCALE))
 canvas = Image.new("RGB", (WIDTH, HEIGHT), "black")
 draw = ScaledDraw(canvas)
+
+# Select WiFi interface via shared helper
+WIFI_INTERFACE = select_interface(LCD, scaled_font(), PINS, GPIO, iface_type="wifi")
+if not WIFI_INTERFACE:
+    WIFI_INTERFACE = get_wifi_interface()  # fallback to legacy detection
 
 def show(lines):
     """Display text on LCD with word wrapping."""

@@ -2,9 +2,9 @@
 """
 WAN Speed Test – RaspyJack payload
 ==================================
-Measures internet (WAN) download/upload using speedtest-cli / Ookla CLI JSON.
-Works over whichever interface has the default route (Ethernet or Wi‑Fi).
-needed: sudo apt install speedtest-cli
+Measures internet (WAN) download/upload using Speedtest. Prefers the Python
+speedtest module; falls back to the Ookla CLI (JSON). Works over whichever
+interface has the default route (Ethernet or Wi‑Fi).
 
 Controls:
   OK     : Start test (Download then Upload)
@@ -28,42 +28,56 @@ from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
 
 
-SPINNER_FRAMES = ["|", "/", "-", "\\"]
-
-
 # --------------------------- Backends ---------------------------------------
+
+def run_speedtest_python(single: bool) -> dict | None:
+    """Run via python speedtest module (speedtest-cli). Returns normalized dict or None."""
+    try:
+        import speedtest
+    except Exception:
+        return None
+
+    try:
+        s = speedtest.Speedtest()
+        s.get_servers()            # find candidate servers
+        best = s.get_best_server() # pick best by latency
+        dl = s.download(threads=1 if single else None)
+        ul = s.upload(threads=1 if single else None)
+        res = s.results.dict()
+
+        server = res.get('server', {})
+        isp = res.get('client', {}).get('isp') or res.get('client', {}).get('isp_name')
+        server_name = server.get('name') or server.get('sponsor')
+        location = server.get('country') or server.get('host')
+
+        return {
+            'download_mbps': (res.get('download') or 0) / 1e6,
+            'upload_mbps'  : (res.get('upload') or 0) / 1e6,
+            'ping_ms'      : float(res.get('ping') or 0.0),
+            'jitter_ms'    : None,
+            'packet_loss_pct': None,
+            'server_name'  : server_name,
+            'server_location': location,
+            'isp'          : isp,
+        }
+    except Exception as e:
+        print(f"[speedtest_wan] python backend error: {e}")
+        return None
+
+
 def run_speedtest_ookla_cli(single: bool) -> dict | None:
     """Run via Ookla CLI. Returns normalized dict or None."""
     # Try modern flags first, then legacy
     cmds = [
-        (['speedtest', '--accept-license', '--accept-gdpr', '--format=json'], 'Ookla CLI'),
-        (['speedtest', '--accept-license', '--accept-gdpr', '-f', 'json'], 'Ookla CLI'),
-        (['speedtest-cli', '--json'], 'speedtest-cli'),
+        ['speedtest', '--accept-license', '--accept-gdpr', '--format=json'],
+        ['speedtest', '--accept-license', '--accept-gdpr', '-f', 'json'],
+        ['speedtest-cli', '--json']
     ]
     # single connection (where supported): speedtest doesn't have a simple flag; skip.
 
-    last_err = None
-    for cmd, backend_name in cmds:
+    for cmd in cmds:
         try:
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-            )
-            started = time.time()
-            frame_idx = 0
-
-            while proc.poll() is None:
-                show_test_progress(single, backend_name, int(time.time() - started), frame_idx)
-                frame_idx += 1
-                time.sleep(0.18)
-
-            out = proc.stdout.read() if proc.stdout else ""
-            if proc.returncode != 0:
-                raise subprocess.CalledProcessError(proc.returncode, cmd, output=out)
-
-            splash(["Parsing result…", backend_name[:18]], color="#88DDFF")
+            out = subprocess.check_output(cmd, text=True, stderr=subprocess.STDOUT)
             data = json.loads(out)
 
             # Ookla CLI JSON
@@ -105,6 +119,9 @@ def run_speedtest_ookla_cli(single: bool) -> dict | None:
 
 
 def run_speedtest(single: bool) -> dict | None:
+    res = run_speedtest_python(single)
+    if res:
+        return res
     return run_speedtest_ookla_cli(single)
 
 
@@ -137,6 +154,7 @@ def ensure_speedtest_cli_installed(show_progress) -> bool:
 
 # --------------------------- LCD + Buttons ----------------------------------
 
+WIDTH, HEIGHT = LCD.width, LCD.height
 PINS = {"UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26, "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16}
 
 GPIO.setmode(GPIO.BCM)
@@ -145,7 +163,6 @@ for pin in PINS.values():
 
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-WIDTH, HEIGHT = LCD.width, LCD.height
 
 canvas = Image.new("RGB", (WIDTH, HEIGHT), "black")
 draw = ScaledDraw(canvas)
@@ -182,18 +199,6 @@ def splash(lines: list[str], color: str = "#AACCFF") -> None:
     for ln in lines:
         draw.text((4, y), ln[:20], font=font_med, fill=color)
         y += 14
-    LCD.LCD_ShowImage(canvas, 0, 0)
-
-
-def show_test_progress(single: bool, backend_name: str, elapsed_s: int, frame_idx: int) -> None:
-    draw.rectangle((0, 0, WIDTH, HEIGHT), fill="black")
-    draw.text((4, 4), "WAN Speed Test", font=font_big, fill="#FFFFFF")
-    draw.text((4, 20), f"Mode: {'Single' if single else 'Multi'}", font=font_small, fill="#CCCCCC")
-    draw.text((4, 34), f"Backend: {backend_name[:12]}", font=font_small, fill="#CCCCCC")
-    draw.text((4, 54), "Running test", font=font_med, fill="#88DDFF")
-    draw.text((4, 70), f"Please wait {SPINNER_FRAMES[frame_idx % len(SPINNER_FRAMES)]}", font=font_med, fill="#FFEE66")
-    draw.text((4, 88), f"Elapsed: {elapsed_s}s", font=font_med, fill="#66FF99")
-    draw.text((4, 106), "Measuring WAN…", font=font_small, fill="#AAAAAA")
     LCD.LCD_ShowImage(canvas, 0, 0)
 
 
@@ -278,7 +283,8 @@ try:
             summary(single, last)
             wait_release(btn)
         elif btn == "OK":
-            # CLI-only backend; prefer apt-installed speedtest-cli.
+            # Ensure a CLI backend is present if Python backend isn't
+            # (We avoid pip; prefer apt-installed speedtest-cli)
             if not _cmd_exists('speedtest') and not _cmd_exists('speedtest-cli'):
                 ok = ensure_speedtest_cli_installed(installing_splash)
                 if not ok:
@@ -287,6 +293,7 @@ try:
                     wait_release(btn)
                     continue
 
+            splash(["Testing…", "Selecting server…"]) 
             res = run_speedtest(single)
             if not res:
                 splash(["Speedtest failed", "Check internet/CLI"]) 

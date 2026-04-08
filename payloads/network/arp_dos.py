@@ -33,6 +33,7 @@ import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._iface_helper import select_interface
 
 try:
     from scapy.all import Ether, ARP, sendp, conf
@@ -58,7 +59,7 @@ font = scaled_font()
 # ---------------------------------------------------------------------------
 SPEED_LEVELS = [10, 50, 100, 500, 1000]
 SPEED_NAMES = ["10/s", "50/s", "100/s", "500/s", "1000/s"]
-IFACE_CHOICES = ["eth0", "wlan0"]
+IFACE_CHOICES = ["eth0"]
 
 # Typical CAM table sizes: 2K-16K entries
 ESTIMATED_CAM_SIZES = {"small": 2048, "medium": 8192, "large": 16384}
@@ -260,10 +261,13 @@ def main():
             GPIO.cleanup()
             return 1
 
-        # Auto-select active interface
-        active = _get_active_iface()
-        if active in IFACE_CHOICES:
-            iface_idx = IFACE_CHOICES.index(active)
+        # Select interface via shared helper
+        selected = select_interface(LCD, font, PINS, GPIO, iface_type="eth")
+        if selected is None:
+            GPIO.cleanup()
+            return 0
+        IFACE_CHOICES[0] = selected
+        iface_idx = 0
 
         with lock:
             status_msg = f"Ready on {IFACE_CHOICES[iface_idx]}"

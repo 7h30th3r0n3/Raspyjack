@@ -35,6 +35,7 @@ import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._iface_helper import select_interface
 
 # ---------------------------------------------------------------------------
 # Pin / LCD setup
@@ -452,6 +453,12 @@ def main():
     d.text((4, 84), "K2:Export K3:Exit", font=font, fill="#666")
     lcd.LCD_ShowImage(img, 0, 0)
     time.sleep(1.5)
+
+    # Select interface via shared helper
+    selected = select_interface(lcd, font, PINS, GPIO, iface_type="eth")
+    if selected is None:
+        GPIO.cleanup()
+        return 0
 
     # Initial interface detection
     running = True

@@ -25,6 +25,7 @@ from payloads._display_helper import ScaledDraw, scaled_font
 
 # Shared input helper (WebUI virtual + GPIO)
 from payloads._input_helper import get_button
+from payloads._iface_helper import select_interface
 
 WIDTH, HEIGHT = LCD_1in44.LCD_WIDTH, LCD_1in44.LCD_HEIGHT
 KEY_UP = 6
@@ -243,8 +244,17 @@ def main():
             time.sleep(0.1)
         return 1
 
-    iface, cidr = select_interface_menu(lcd)
-    if not iface or not cidr:
+    selected = select_interface(lcd, scaled_font(), {"UP": KEY_UP, "DOWN": KEY_DOWN, "OK": KEY_PRESS, "KEY3": KEY3}, GPIO, iface_type="eth")
+    if selected is None:
+        draw_lines(lcd, ["Rogue DHCP", "Cancelled", "", "KEY3=Exit"])
+        while True:
+            if get_button({"KEY3": KEY3}, GPIO) == "KEY3":
+                break
+            time.sleep(0.1)
+        return 1
+    iface = selected
+    cidr = _iface_ip_cidr(iface)
+    if not cidr:
         draw_lines(lcd, ["Rogue DHCP", "No interface", "", "KEY3=Exit"])
         while True:
             if get_button({"KEY3": KEY3}, GPIO) == "KEY3":

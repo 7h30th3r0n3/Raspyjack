@@ -41,6 +41,7 @@ import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._iface_helper import select_interface
 
 try:
     from scapy.all import (
@@ -336,6 +337,11 @@ def main():
         return
 
     try:
+        selected = select_interface(LCD, font, PINS, GPIO, iface_type="eth")
+        if selected is None:
+            GPIO.cleanup()
+            return
+
         threading.Thread(target=_discovery_thread, daemon=True).start()
         _draw_screen()
         target_ip = ""

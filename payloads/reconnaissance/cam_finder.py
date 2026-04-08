@@ -26,6 +26,7 @@ sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..", "..")))
 
 # Import the working wardriving scanner — we inherit everything from it
 from payloads._display_helper import ScaledDraw, scaled_font
+from payloads._iface_helper import select_interface
 from payloads.reconnaissance.wardriving import (  # type: ignore
     WardrivingScanner,
     LCD_AVAILABLE,
@@ -321,7 +322,7 @@ class CamFinderScanner(WardrivingScanner):
             print(f"Reusing monitor interface: {self.monitor_interface}")
         else:
             print("Detecting monitor-capable WiFi interface...", flush=True)
-            iface = self._find_monitor_capable_interface()
+            iface = getattr(self, '_preselected_iface', None) or self._find_monitor_capable_interface()
             if not iface:
                 print("No WiFi interfaces found")
                 return
@@ -830,6 +831,13 @@ class CamFinderScanner(WardrivingScanner):
 def main():
     try:
         scanner = CamFinderScanner()
+        if hasattr(scanner, 'LCD') and hasattr(scanner, 'font'):
+            import RPi.GPIO as GPIO
+            pins = {"UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
+                    "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16}
+            iface = select_interface(scanner.LCD, scanner.font, pins, GPIO, iface_type="wifi")
+            if iface:
+                scanner._preselected_iface = iface
         scanner.run_interactive()
     except KeyboardInterrupt:
         print("\nExiting...")

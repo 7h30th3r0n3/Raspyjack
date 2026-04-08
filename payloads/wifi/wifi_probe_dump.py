@@ -40,6 +40,7 @@ import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._iface_helper import select_interface
 
 try:
     from scapy.all import Dot11, Dot11Elt, Dot11ProbeReq, sniff as scapy_sniff
@@ -474,19 +475,13 @@ def main():
                     time.sleep(0.5)
                 else:
                     if not mon_iface:
-                        raw = _find_usb_wifi()
+                        raw = select_interface(lcd, font, PINS, GPIO, iface_type="wifi")
                         if raw:
                             mon_iface = _monitor_up(raw)
                     if mon_iface:
                         running = True
                         threading.Thread(target=_hop_thread, daemon=True).start()
                         threading.Thread(target=_sniff_thread, daemon=True).start()
-                    else:
-                        img2 = Image.new("RGB", (WIDTH, HEIGHT), "black")
-                        d2 = ScaledDraw(img2)
-                        d2.text((4, 50), "No USB WiFi found!", font=font, fill="#FF0000")
-                        lcd.LCD_ShowImage(img2, 0, 0)
-                        time.sleep(1.5)
                 time.sleep(0.3)
 
             elif btn == "KEY2":

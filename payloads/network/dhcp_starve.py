@@ -32,6 +32,7 @@ import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._iface_helper import select_interface
 
 try:
     from scapy.all import (
@@ -245,10 +246,13 @@ def main():
         GPIO.cleanup()
         return 1
 
-    # Detect interface and subnet
-    target_iface = _detect_interface()
-    if target_iface:
-        target_subnet = _detect_subnet(target_iface)
+    # Select interface via shared helper
+    selected = select_interface(lcd, font, PINS, GPIO, iface_type="eth")
+    if selected is None:
+        GPIO.cleanup()
+        return 0
+    target_iface = selected
+    target_subnet = _detect_subnet(target_iface)
 
     # Splash
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")

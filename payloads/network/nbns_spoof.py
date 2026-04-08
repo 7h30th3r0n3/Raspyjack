@@ -45,6 +45,7 @@ import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._iface_helper import select_interface
 
 try:
     from scapy.all import (
@@ -345,6 +346,10 @@ def main():
         GPIO.cleanup()
         return
 
+    selected = select_interface(LCD, font, PINS, GPIO, iface_type="eth")
+    if selected is None:
+        GPIO.cleanup()
+        return
     my_ip = _get_my_ip()
 
     try:

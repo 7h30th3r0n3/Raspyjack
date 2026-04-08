@@ -38,6 +38,7 @@ import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._iface_helper import select_interface
 
 PINS = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
@@ -113,6 +114,7 @@ scroll_pos = 0
 client_scroll = 0
 pkt_count = 0
 mon_iface = None
+_selected_iface = None
 
 # {bssid: set(client_macs)}
 ap_clients = {}
@@ -250,7 +252,7 @@ def _sniffer_thread():
             sniffing = False
         return
 
-    iface = _find_monitor_iface()
+    iface = _selected_iface or _find_monitor_iface()
     if iface is None:
         with lock:
             status_msg = "No USB WiFi found"
@@ -473,7 +475,12 @@ def _show_message(line1, line2=""):
 # ---------------------------------------------------------------------------
 
 def main():
-    global scroll_pos, client_scroll, stop_flag, ap_clients, pkt_count
+    global scroll_pos, client_scroll, stop_flag, ap_clients, pkt_count, _selected_iface
+
+    _selected_iface = select_interface(LCD, font, PINS, GPIO, iface_type="wifi")
+    if not _selected_iface:
+        GPIO.cleanup()
+        return 1
 
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
     d = ScaledDraw(img)

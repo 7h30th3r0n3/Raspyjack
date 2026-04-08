@@ -27,6 +27,7 @@ from payloads._display_helper import ScaledDraw, scaled_font
 
 # Shared input helper (WebUI virtual + GPIO)
 from payloads._input_helper import get_button
+from payloads._iface_helper import select_interface
 
 KEY3_PIN = 16
 WIDTH, HEIGHT = LCD_1in44.LCD_WIDTH, LCD_1in44.LCD_HEIGHT
@@ -275,6 +276,13 @@ def main():
     lcd = lcd_init()
     GPIO.setmode(GPIO.BCM)
     GPIO.setup(KEY3_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+
+    _PINS = {"UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
+             "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16}
+    selected = select_interface(lcd, scaled_font(), _PINS, GPIO, iface_type="any")
+    if selected is None:
+        GPIO.cleanup()
+        return 0
 
     draw_lines(lcd, ["Stealth Bridge", "Detecting...", "", "Please wait"])
     ifaces = _sort_ifaces(_list_active_ifaces())

@@ -39,6 +39,7 @@ import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._iface_helper import select_interface
 
 try:
     from scapy.all import (
@@ -84,6 +85,7 @@ beacons_sent = 0
 probes_seen = 0
 status_msg = "Idle"
 _running = True
+_selected_iface = None
 
 # Add-SSID mode state
 adding_ssid = False
@@ -306,7 +308,7 @@ def _broadcast_loop():
 
 def _start_broadcast():
     global broadcasting, mon_iface, status_msg
-    ext = _find_external_wifi()
+    ext = _selected_iface
     if not ext:
         with lock:
             status_msg = "No USB WiFi"
@@ -367,7 +369,7 @@ def _generate_chaos_file():
 
 def _start_chaos():
     global chaos_mode, chaos_proc, status_msg
-    ext = _find_external_wifi()
+    ext = _selected_iface
     if not ext:
         with lock:
             status_msg = "No USB WiFi"
@@ -508,8 +510,13 @@ def _draw_screen():
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
-    global scroll_pos, selected_idx, status_msg
+    global scroll_pos, selected_idx, status_msg, _selected_iface
     global adding_ssid, add_buffer, add_char_idx
+
+    _selected_iface = select_interface(LCD, font, PINS, GPIO, iface_type="wifi")
+    if not _selected_iface:
+        GPIO.cleanup()
+        return 1
 
     _load_config()
 

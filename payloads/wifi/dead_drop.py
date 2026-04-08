@@ -53,6 +53,7 @@ import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._iface_helper import select_interface
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -791,26 +792,13 @@ def main():
     font_obj = scaled_font()
 
     # Detect and select WiFi interface
-    ifaces = _list_wifi_interfaces()
-    if not ifaces:
-        img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-        d = ScaledDraw(img)
-        d.text((4, 50), "No WiFi interface", font=font_obj, fill="#FF0000")
-        lcd.LCD_ShowImage(img, 0, 0)
-        time.sleep(3)
+    iface = select_interface(lcd, font_obj, PINS, GPIO, iface_type="wifi")
+    if not iface:
         GPIO.cleanup()
         return 1
 
-    iface = _select_interface(lcd, font_obj, ifaces)
-    if not iface:
-        GPIO.cleanup()
-        return 0
-
-    # Show selected interface
-    sel_info = next((i for i in ifaces if i["name"] == iface), None)
     with lock:
-        tag = "USB" if sel_info and not sel_info["is_onboard"] else "onboard"
-        status_msg = f"Using {iface} ({tag})"
+        status_msg = f"Using {iface}"
 
     try:
         while _running:

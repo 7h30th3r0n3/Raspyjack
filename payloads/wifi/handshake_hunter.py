@@ -40,6 +40,7 @@ import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._iface_helper import select_interface
 
 try:
     from scapy.all import (
@@ -589,13 +590,8 @@ def main():
         GPIO.cleanup()
         return 1
 
-    usb_iface = _find_usb_wifi()
+    usb_iface = select_interface(lcd, font, PINS, GPIO, iface_type="wifi")
     if not usb_iface:
-        img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-        d = ScaledDraw(img)
-        d.text((4, 50), "No USB WiFi dongle", font=font, fill="#FF0000")
-        lcd.LCD_ShowImage(img, 0, 0)
-        time.sleep(3)
         GPIO.cleanup()
         return 1
 

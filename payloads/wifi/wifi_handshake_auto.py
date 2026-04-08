@@ -42,6 +42,7 @@ import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._iface_helper import select_interface
 
 try:
     from scapy.all import (
@@ -83,6 +84,7 @@ deauth_enabled = True
 scroll_pos = 0
 status_msg = "Idle"
 _running = True
+_selected_iface = None
 
 # Per-BSSID tracking
 # bssid -> {ssid, channel, eapol_pkts: [], first_seen, deauthed, saved_path}
@@ -345,7 +347,7 @@ def _sniff_thread():
 
 def _start_capture():
     global capturing, mon_iface, status_msg
-    ext = _find_external_wifi()
+    ext = _selected_iface
     if not ext:
         with lock:
             status_msg = "No USB WiFi"
@@ -444,7 +446,12 @@ def _draw_screen():
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
-    global scroll_pos, deauth_enabled, status_msg
+    global scroll_pos, deauth_enabled, status_msg, _selected_iface
+
+    _selected_iface = select_interface(LCD, font, PINS, GPIO, iface_type="wifi")
+    if not _selected_iface:
+        GPIO.cleanup()
+        return 1
 
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
     d = ScaledDraw(img)

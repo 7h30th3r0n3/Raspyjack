@@ -43,6 +43,7 @@ import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._iface_helper import select_interface
 
 PINS = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
@@ -125,6 +126,7 @@ _state = {
     "alert_flash": False,
     "mon_iface": "",
 }
+_selected_iface = None
 
 
 def _get(key):
@@ -262,7 +264,7 @@ def _disable_monitor(iface):
 # ---------------------------------------------------------------------------
 def _scan_iwlist():
     """Scan visible SSIDs using iwlist (managed mode scan)."""
-    iface = _find_wifi_dongle()
+    iface = _selected_iface or _find_wifi_dongle()
     try:
         out = subprocess.run(
             ["iwlist", iface, "scan"],
@@ -361,7 +363,7 @@ def _do_scan():
     """Main scan loop."""
     _set(scanning=True, stop=False, status="Starting scan...")
 
-    iface = _find_wifi_dongle()
+    iface = _selected_iface or _find_wifi_dongle()
     _set(status=f"Using {iface}")
 
     # Try monitor mode first
@@ -492,6 +494,13 @@ def _show_msg(line1, line2=""):
 # Main
 # ---------------------------------------------------------------------------
 def main():
+    global _selected_iface
+
+    _selected_iface = select_interface(LCD, font, PINS, GPIO, iface_type="wifi")
+    if not _selected_iface:
+        GPIO.cleanup()
+        return 1
+
     # Splash
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
     d = ScaledDraw(img)

@@ -43,6 +43,7 @@ import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._iface_helper import select_interface
 
 PINS = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
@@ -352,9 +353,15 @@ def _draw_screen():
 
 def main():
     global app_running, capture_running, display_mode_idx, scroll_pos
-    global status_msg
+    global status_msg, IFACE_A
 
     try:
+        selected = select_interface(LCD, font, PINS, GPIO, iface_type="any")
+        if selected is None:
+            GPIO.cleanup()
+            return
+        IFACE_A = selected
+
         _setup_bridge()
         threading.Thread(target=_rate_calculator, daemon=True).start()
         _draw_screen()

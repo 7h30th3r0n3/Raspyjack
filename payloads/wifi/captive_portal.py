@@ -53,6 +53,7 @@ import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._iface_helper import select_interface
 
 PINS = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
@@ -727,19 +728,12 @@ def main():
     global running, scroll_pos, selected_idx, view_mode, _iface
     global ssid, ssid_cursor
 
-    _iface = _find_usb_wifi()
+    _iface = select_interface(LCD, font, PINS, GPIO, iface_type="wifi")
 
     try:
         if not _iface:
-            with lock:
-                global status_msg
-                status_msg = "No USB WiFi found!"
-            _draw_screen()
-            while True:
-                btn = get_button(PINS, GPIO)
-                if btn == "KEY3":
-                    return
-                time.sleep(0.15)
+            GPIO.cleanup()
+            return 1
 
         # Discover templates
         with lock:

@@ -39,6 +39,7 @@ import LCD_1in44, LCD_Config                      # type: ignore
 from PIL import Image, ImageDraw, ImageFont       # type: ignore
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._iface_helper import select_interface
 
 # Scapy (optional – WiFi capture won't work without it)
 try:
@@ -107,6 +108,7 @@ view_idx  = 0
 scroll    = 0              # list scroll offset
 cur_ch    = 1
 mon_iface = None
+_selected_iface = None
 ble_ready = False
 scan_start = 0.0           # epoch when scan started
 
@@ -748,7 +750,7 @@ def start_all():
     if running:
         return
     if not mon_iface:
-        iface = find_iface()
+        iface = _selected_iface or find_iface()
         if iface:
             mon_iface = monitor_up(iface)
     running = True
@@ -767,13 +769,18 @@ def stop_all():
 # ===================================================================
 
 def main():
-    global view_idx, scroll
+    global view_idx, scroll, _selected_iface
 
     lcd = lcd_init()
     GPIO.setmode(GPIO.BCM)
     for pin in PINS.values():
         GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
     font = scaled_font()
+
+    _selected_iface = select_interface(lcd, font, PINS, GPIO, iface_type="wifi")
+    if not _selected_iface:
+        GPIO.cleanup()
+        return 1
 
     # Splash screen
     img = Image.new("RGB", (W, H), "black")

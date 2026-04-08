@@ -43,6 +43,7 @@ import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._iface_helper import select_interface
 
 try:
     from scapy.all import (
@@ -94,6 +95,7 @@ scroll_pos = 0
 status_msg = "Idle"
 flash_until = 0.0
 _running = True
+_selected_iface = None
 
 
 # ── Onboard WiFi detection ──────────────────────────────────────────────────
@@ -338,7 +340,7 @@ def _disappearance_checker():
 def _start_monitoring():
     global monitoring, mon_iface, status_msg
 
-    ext = _find_external_wifi()
+    ext = _selected_iface
     if ext is None:
         with lock:
             status_msg = "No USB WiFi found"
@@ -462,7 +464,12 @@ def _draw_screen():
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
-    global scroll_pos, status_msg
+    global scroll_pos, status_msg, _selected_iface
+
+    _selected_iface = select_interface(LCD, font, PINS, GPIO, iface_type="wifi")
+    if not _selected_iface:
+        GPIO.cleanup()
+        return 1
 
     _load_config()
 

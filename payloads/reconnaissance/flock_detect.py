@@ -35,6 +35,7 @@ import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._iface_helper import select_interface
 
 # ---------------------------------------------------------------------------
 # Pin / LCD setup
@@ -46,7 +47,7 @@ PINS = {
 WIDTH, HEIGHT = LCD_1in44.LCD_WIDTH, LCD_1in44.LCD_HEIGHT
 
 LOOT_DIR = "/root/Raspyjack/loot/FlockDetect"
-IFACE = "wlan1mon"
+IFACE = None  # resolved at runtime via select_interface()
 CORRELATION_WINDOW = 30  # seconds
 ROW_H = 12
 ROWS_VISIBLE = 6
@@ -402,7 +403,7 @@ def _show_message(lcd, font, line1, line2=""):
 # ---------------------------------------------------------------------------
 def main():
     global running, scroll_pos, selected_idx, flocks
-    global mac_timestamps
+    global mac_timestamps, IFACE
 
     GPIO.setmode(GPIO.BCM)
     for pin in PINS.values():
@@ -413,6 +414,12 @@ def main():
     lcd.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
     lcd.LCD_Clear()
     font = scaled_font()
+
+    selected = select_interface(lcd, font, PINS, GPIO, iface_type="wifi")
+    if not selected:
+        GPIO.cleanup()
+        return 1
+    IFACE = selected
 
     # Splash screen
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
