@@ -3994,7 +3994,7 @@ def _load_menu_icons():
     try:
         with open(icon_path, "r") as f:
             data = json.load(f)
-        for section in ("main_menu", "categories", "payloads"):
+        for section in ("main_menu", "submenus", "categories", "payloads", "fallbacks"):
             if section in data:
                 icons.update(data[section])
     except Exception:
@@ -4005,7 +4005,8 @@ def _load_menu_icons():
 def _menu_icon_for_label(label: str, default_icon: str = "") -> str:
     if not label:
         return default_icon
-    for candidate in (label, label.strip()):
+    normalized = label.strip()
+    for candidate in (label, normalized):
         icon = MENU_ICONS.get(candidate, "")
         if icon:
             return icon
@@ -4015,6 +4016,14 @@ def _menu_icon_for_label(label: str, default_icon: str = "") -> str:
             icon = MENU_ICONS.get(candidate, "")
             if icon:
                 return icon
+    if normalized in SCANS:
+        icon = MENU_ICONS.get("__scan__", "")
+        if icon:
+            return icon
+    if normalized in SITES:
+        icon = MENU_ICONS.get("__site__", "")
+        if icon:
+            return icon
     return default_icon
 
 MENU_ICONS = _load_menu_icons()
