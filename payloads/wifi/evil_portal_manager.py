@@ -37,7 +37,7 @@ font = scaled_font()
 # ---------------------------------------------------------------------------
 # Paths & constants
 # ---------------------------------------------------------------------------
-PORTAL_DIR = "/root/Raspyjack/payloads/wifi/DNSSpoof"
+PORTAL_DIR = "/root/Raspyjack/DNSSpoof/sites"
 LOOT_DIR = "/root/Raspyjack/loot/Portal"
 CONFIG_PATH = os.path.join(LOOT_DIR, "portal_config.json")
 WHITELIST_PATH = os.path.join(LOOT_DIR, "whitelist.json")
@@ -108,21 +108,35 @@ def _save_state(state):
 # ---------------------------------------------------------------------------
 # Portal discovery & client count
 # ---------------------------------------------------------------------------
+_PORTAL_FILES = ("index.html", "login.html", "index.php")
+
 def _discover_portals():
-    """Scan PORTAL_DIR for subdirectories containing index.html."""
+    """Scan PORTAL_DIR for subdirectories containing a portal page."""
     portals = []
     if not os.path.isdir(PORTAL_DIR):
         return portals
     try:
         for entry in sorted(os.listdir(PORTAL_DIR)):
             entry_path = os.path.join(PORTAL_DIR, entry)
-            if os.path.isdir(entry_path) and os.path.isfile(
-                os.path.join(entry_path, "index.html")
-            ):
-                portals.append(entry)
+            if not os.path.isdir(entry_path):
+                continue
+            for pf in _PORTAL_FILES:
+                if os.path.isfile(os.path.join(entry_path, pf)):
+                    portals.append(entry)
+                    break
     except Exception:
         pass
     return portals
+
+
+def _find_portal_page(portal_name):
+    """Return the main HTML file path for a portal."""
+    portal_path = os.path.join(PORTAL_DIR, portal_name)
+    for pf in _PORTAL_FILES:
+        fp = os.path.join(portal_path, pf)
+        if os.path.isfile(fp):
+            return fp
+    return None
 
 def _count_clients():
     """Count DHCP leases from dnsmasq lease file."""
@@ -187,6 +201,22 @@ def _start_portal():
     if not os.path.isdir(portal_path):
         with lock: status_msg = "Portal dir missing"
         return
+
+    # If no index.html, create a redirect to login.html (or first HTML file)
+    idx_path = os.path.join(portal_path, "index.html")
+    if not os.path.isfile(idx_path):
+        target = None
+        for candidate in ("login.html", "index.php"):
+            if os.path.isfile(os.path.join(portal_path, candidate)):
+                target = candidate
+                break
+        if not target:
+            html_files = [f for f in os.listdir(portal_path) if f.endswith(".html")]
+            if html_files:
+                target = html_files[0]
+        if target:
+            with open(idx_path, "w") as fh:
+                fh.write(f'<meta http-equiv="refresh" content="0;url=/{target}">')
 
     iface = _find_portal_iface()
     with lock: status_msg = "Configuring..."
