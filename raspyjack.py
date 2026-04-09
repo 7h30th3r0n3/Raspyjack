@@ -1690,7 +1690,7 @@ def ShowLines(arr,bold=[]):
                                 (_SCR_W - 8, default.start_text[1] + default.text_gap * i + 10)], fill=color.select)
             # Draw icons on main menu when available
             if m.which == "a":
-                icon = MENU_ICONS.get(render_text, "")
+                icon = _menu_icon_for_label(render_text, "")
                 if icon:
                     draw.text(
                         (default.start_text[0] - 2, default.start_text[1] + default.text_gap * i),
@@ -1753,7 +1753,7 @@ def RenderMenuWindowOnce(inlist, selected_index=0):
                      row_y + default.text_gap - 2),
                     fill=color.select
                 )
-            icon = MENU_ICONS.get(txt, "")
+            icon = _menu_icon_for_label(txt, "")
             if icon:
                 draw.text(
                     (default.start_text[0],
@@ -1802,7 +1802,7 @@ def RenderMenuCarouselOnce(inlist, selected_index=0):
         main_x = _SCR_W // 2
         main_y = _SCR_H // 2
 
-        icon = MENU_ICONS.get(current_item, "\uf192")
+        icon = _menu_icon_for_label(current_item, "\uf192")
         huge_icon_font = ImageFont.truetype('/usr/share/fonts/truetype/fontawesome/fa-solid-900.ttf', S(48))
         draw.text((main_x, main_y - S(12)), icon, font=huge_icon_font, fill=color.selected_text, anchor="mm")
 
@@ -1850,7 +1850,7 @@ def RenderMenuGridOnce(inlist, selected_index=0):
             else:
                 fill_color = color.text
 
-            icon = MENU_ICONS.get(item, "")
+            icon = _menu_icon_for_label(item, "")
             if icon:
                 draw.text((x + 2, y), icon, font=icon_font, fill=fill_color)
                 short_text = item.strip()[:8]
@@ -1994,7 +1994,7 @@ def GetMenuString(inlist, duplicates=False):
                         fill=color.select
                     )
 
-                icon = MENU_ICONS.get(txt, "")
+                icon = _menu_icon_for_label(txt, "")
                 if icon:
                     draw.text(
                         (default.start_text[0],
@@ -4001,6 +4001,22 @@ def _load_menu_icons():
         pass
     return icons
 
+
+def _menu_icon_for_label(label: str, default_icon: str = "") -> str:
+    if not label:
+        return default_icon
+    for candidate in (label, label.strip()):
+        icon = MENU_ICONS.get(candidate, "")
+        if icon:
+            return icon
+    if ":" in label:
+        prefix = label.split(":", 1)[0]
+        for candidate in (prefix, prefix.rstrip(), prefix.strip()):
+            icon = MENU_ICONS.get(candidate, "")
+            if icon:
+                return icon
+    return default_icon
+
 MENU_ICONS = _load_menu_icons()
 
 ### Menu Descriptions for Carousel View ###
@@ -4052,7 +4068,7 @@ def GetMenuCarousel(inlist, duplicates=False):
             main_y = _SCR_H // 2
 
             # Draw huge icon in center
-            icon = MENU_ICONS.get(txt, "\uf192")  # Default to dot-circle icon
+            icon = _menu_icon_for_label(txt, "\uf192")  # Default to dot-circle icon
             # Large font for the icon
             huge_icon_font = ImageFont.truetype('/usr/share/fonts/truetype/fontawesome/fa-solid-900.ttf', S(48))
             draw.text((main_x, main_y - S(12)), icon, font=huge_icon_font, fill=color.selected_text, anchor="mm")
@@ -4160,7 +4176,7 @@ def GetMenuGrid(inlist, duplicates=False):
 
                 # Draw icon and text
                 txt = item if not duplicates else item.split('#', 1)[1]
-                icon = MENU_ICONS.get(txt, "")
+                icon = _menu_icon_for_label(txt, "")
 
                 if icon:
                     # Draw icon

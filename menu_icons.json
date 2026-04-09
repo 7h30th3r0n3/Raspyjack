@@ -12,7 +12,15 @@
         " Other features": "",
         " Read file": "",
         " Payload": "",
-        " Lock": ""
+        " Lock": "",
+        " Lock now": "",
+        " Activate lock": "",
+        " Deactivate lock": "",
+        " Lock type": "",
+        " Change PIN": "",
+        " Change Sequence": "",
+        " Auto-lock": "",
+        " Screensaver GIF": ""
     },
     "categories": {
         " Reconnaissance": "",
