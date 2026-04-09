@@ -6,15 +6,15 @@ import hmac
 import os
 import secrets
 import subprocess
-import netifaces
-from scapy.all import ARP, Ether, srp
+import netifaces  # type: ignore[reportMissingModuleSource]
+from scapy.all import ARP, Ether, srp  # type: ignore[reportMissingImports]
 from datetime import datetime
-import threading, smbus, time, pyudev, serial, struct, json
+import threading, smbus, time, pyudev, serial, struct, json  # type: ignore[reportMissingImports, reportMissingModuleSource]
 from subprocess import STDOUT, check_output
-from PIL import Image, ImageDraw, ImageFont, ImageColor, ImageSequence
+from PIL import Image, ImageDraw, ImageFont, ImageColor, ImageSequence  # type: ignore[reportMissingImports]
 import LCD_Config
 import LCD_1in44
-import RPi.GPIO as GPIO
+import RPi.GPIO as GPIO  # type: ignore[reportMissingModuleSource]
 import socket
 import ipaddress
 import signal
