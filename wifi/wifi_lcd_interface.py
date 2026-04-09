@@ -25,9 +25,9 @@ import threading
 sys.path.append('/root/Raspyjack/')
 
 try:
-    import LCD_1in44, LCD_Config
-    from PIL import Image, ImageDraw, ImageFont
-    import RPi.GPIO as GPIO
+    import LCD_1in54, LCD_Config  # type: ignore[reportMissingModuleSource]
+    from PIL import Image, ImageDraw, ImageFont  # type: ignore[reportMissingImports]
+    import RPi.GPIO as GPIO  # type: ignore[reportMissingModuleSource]
     from wifi_manager import WiFiManager
     LCD_AVAILABLE = True
 except Exception as e:
@@ -42,9 +42,9 @@ class WiFiLCDInterface:
         self.wifi_manager = WiFiManager()
         
         # LCD setup
-        self.LCD = LCD_1in44.LCD()
-        self.LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-        self.canvas = Image.new("RGB", (128, 128), "black")
+        self.LCD = LCD_1in54.LCD()  # type: ignore[reportMissingModuleSource]
+        self.LCD.LCD_Init(LCD_1in54.SCAN_DIR_DFT)  # type: ignore[reportMissingModuleSource]
+        self.canvas = Image.new("RGB", (self.LCD.width, self.LCD.height), "black")
         self.draw = ImageDraw.Draw(self.canvas)
         self.font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 8)
         
@@ -103,9 +103,9 @@ class WiFiLCDInterface:
     
     def draw_header(self, title):
         """Draw menu header."""
-        self.canvas.paste(Image.new("RGB", (128, 128), "black"))
+        self.canvas.paste(Image.new("RGB", (self.LCD.width, self.LCD.height), "black"))
         self.draw.text((2, 0), title[:18], fill="yellow", font=self.font)
-        self.draw.line([(0, 12), (128, 12)], fill="blue", width=1)
+        self.draw.line([(0, 12), (self.LCD.width, 12)], fill="blue", width=1)
     
     def draw_status_bar(self):
         """Draw connection status at bottom."""
@@ -135,7 +135,7 @@ class WiFiLCDInterface:
         y_pos = 18
         for i, item in enumerate(menu_items):
             if i == self.menu_index:
-                self.draw.rectangle([(0, y_pos-2), (128, y_pos+10)], fill="blue")
+                self.draw.rectangle([(0, y_pos-2), (self.LCD.width, y_pos+10)], fill="blue")
                 color = "white"
             else:
                 color = "white"
@@ -164,7 +164,7 @@ class WiFiLCDInterface:
                 ssid = network.get('ssid', 'Unknown')[:12]
                 
                 if i == self.menu_index:
-                    self.draw.rectangle([(0, y_pos-2), (128, y_pos+10)], fill="blue")
+                    self.draw.rectangle([(0, y_pos-2), (self.LCD.width, y_pos+10)], fill="blue")
                     color = "white"
                 else:
                     color = "white"
@@ -197,7 +197,7 @@ class WiFiLCDInterface:
                 priority = profile.get('priority', 1)
                 
                 if i == self.menu_index:
-                    self.draw.rectangle([(0, y_pos-2), (128, y_pos+10)], fill="blue")
+                    self.draw.rectangle([(0, y_pos-2), (self.LCD.width, y_pos+10)], fill="blue")
                     color = "white"
                 else:
                     color = "white"
@@ -221,7 +221,7 @@ class WiFiLCDInterface:
         
         for i, interface in enumerate(interfaces):
             if i == self.menu_index:
-                self.draw.rectangle([(0, y_pos-2), (128, y_pos+10)], fill="blue")
+                self.draw.rectangle([(0, y_pos-2), (self.LCD.width, y_pos+10)], fill="blue")
                 color = "white"
             else:
                 color = "white"
@@ -470,7 +470,7 @@ class WiFiLCDInterface:
     
     def show_message(self, message, duration=2):
         """Show a temporary message."""
-        self.canvas.paste(Image.new("RGB", (128, 128), "black"))
+        self.canvas.paste(Image.new("RGB", (self.LCD.width, self.LCD.height), "black"))
         self.draw.text((4, 50), message[:16], fill="yellow", font=self.font)
         self.LCD.LCD_ShowImage(self.canvas, 0, 0)
         time.sleep(duration)

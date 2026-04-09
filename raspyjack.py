@@ -166,11 +166,14 @@ def _display_loop():
             mirror_image = None
             try:
                 draw_lock.acquire()
-                LCD.LCD_ShowImage(image, 0, 0)
+                frame_to_show = image
+                if image.size != (LCD.width, LCD.height):
+                    frame_to_show = image.resize((LCD.width, LCD.height))
+                LCD.LCD_ShowImage(frame_to_show, 0, 0)
                 if FRAME_MIRROR_ENABLED:
                     now = time.monotonic()
                     if (now - last_frame_save) >= FRAME_MIRROR_INTERVAL:
-                        mirror_image = image.copy()
+                        mirror_image = frame_to_show.copy()
                         last_frame_save = now
             finally:
                 draw_lock.release()
@@ -2214,7 +2217,7 @@ def ImageExplorer() -> None:
             if YNDialog("Open?", "Yes", "No", output[:10]):
                 full_img = os.path.join(path, output)
                 with Image.open(full_img) as img:
-                    image.paste(img.resize((LCD.width, LCD.height)))
+                    image.paste(img.convert("RGB").resize((LCD.width, LCD.height)))
                 time.sleep(1)
                 getButton()
                 color.DrawBorder()
