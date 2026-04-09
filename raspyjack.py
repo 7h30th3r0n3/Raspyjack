@@ -867,16 +867,23 @@ def _draw_lock_screen(title: str, prompt: str, entered: list[str] | None = None,
         draw.text((S(8), S(16)), _truncate_to_width(title, _SCR_W - S(18), text_font), fill=color.selected_text, font=text_font)
         draw.text((S(8), S(28)), _truncate_to_width(prompt, _SCR_W - S(18), font), fill=color.text, font=font)
 
+        slot_w = S(18)
+        slot_gap = S(6)
+        total_w = (slot_w * 4) + (slot_gap * 3)
+        slot_x = max(S(10), (_SCR_W - total_w) // 2)
+        slot_y = S(42)
         for index in range(4):
-            x0 = S(10) + (index * S(28))
-            y0 = S(42)
-            x1 = x0 + S(20)
-            y1 = S(58)
+            x0 = slot_x + (index * (slot_w + slot_gap))
+            x1 = x0 + slot_w
+            y0 = slot_y
+            y1 = y0 + S(18)
             filled = index < len(entered)
-            box_fill = color.select if filled else color.background
-            box_text = "*" if filled else "-"
-            draw.rectangle((x0, y0, x1, y1), outline=color.border, fill=box_fill)
-            _draw_centered_text((x0, y0 + 1, x1, y1), box_text, fill=color.selected_text if filled else color.text, font=text_font)
+            box_fill = color.select if filled else "#07140b"
+            box_outline = color.selected_text if filled else color.border
+            box_text = "*" if filled else "•"
+            box_text_fill = color.selected_text if filled else "#446b52"
+            draw.rounded_rectangle((x0, y0, x1, y1), radius=S(3), outline=box_outline, fill=box_fill)
+            _draw_centered_text((x0, y0 + 1, x1, y1), box_text, fill=box_text_fill, font=text_font)
 
         start_x = S(10)
         start_y = S(66)
