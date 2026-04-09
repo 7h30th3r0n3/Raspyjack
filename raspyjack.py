@@ -871,7 +871,7 @@ def _draw_lock_screen(title: str, prompt: str, entered: list[str] | None = None,
         slot_gap = S(6)
         total_w = (slot_w * 4) + (slot_gap * 3)
         slot_x = max(S(10), (_SCR_W - total_w) // 2)
-        slot_y = S(42)
+        slot_y = S(40)
         for index in range(4):
             x0 = slot_x + (index * (slot_w + slot_gap))
             x1 = x0 + slot_w
@@ -885,24 +885,34 @@ def _draw_lock_screen(title: str, prompt: str, entered: list[str] | None = None,
             draw.rounded_rectangle((x0, y0, x1, y1), radius=S(3), outline=box_outline, fill=box_fill)
             _draw_centered_text((x0, y0 + 1, x1, y1), box_text, fill=box_text_fill, font=text_font)
 
-        start_x = S(10)
-        start_y = S(66)
-        cell_w = S(34)
-        cell_h = S(14)
-        cell_gap_x = S(36)
-        cell_gap_y = S(14)
+        cell_w = S(28)
+        cell_h = S(12)
+        cell_gap_x = S(6)
+        cell_gap_y = S(4)
+        total_keypad_w = (cell_w * 3) + (cell_gap_x * 2)
+        total_keypad_h = (cell_h * 4) + (cell_gap_y * 3)
+        start_x = max(S(8), (_SCR_W - total_keypad_w) // 2)
+        start_y = S(62)
         for row_index, row in enumerate(keypad):
             for col_index, key in enumerate(row):
-                x0 = start_x + (col_index * cell_gap_x)
-                y0 = start_y + (row_index * cell_gap_y)
+                x0 = start_x + (col_index * (cell_w + cell_gap_x))
+                y0 = start_y + (row_index * (cell_h + cell_gap_y))
                 x1 = x0 + cell_w
                 y1 = y0 + cell_h
                 is_selected = row_index == selected_row and col_index == selected_col
-                fill = color.select if is_selected else color.background
+                fill = color.select if is_selected else "#07140b"
+                outline = color.selected_text if is_selected else color.border
                 text_fill = color.selected_text if is_selected else color.text
-                draw.rectangle((x0, y0, x1, y1), outline=color.border, fill=fill)
+                draw.rounded_rectangle((x0, y0, x1, y1), radius=S(3), outline=outline, fill=fill)
                 key_font = text_font if len(key) == 1 else font
-                _draw_centered_text((x0, y0 + 1, x1, y1), key, fill=text_fill, font=key_font)
+                key_bbox = draw.textbbox((0, 0), key, font=key_font)
+                key_w = key_bbox[2] - key_bbox[0]
+                key_h = key_bbox[3] - key_bbox[1]
+                text_x = x0 + max(0, (cell_w - key_w) // 2) - key_bbox[0]
+                text_y = y0 + max(0, (cell_h - key_h) // 2) - key_bbox[1]
+                if len(key) == 1:
+                    text_y += S(1)
+                draw.text((text_x, text_y), key, fill=text_fill, font=key_font)
     finally:
         draw_lock.release()
 
