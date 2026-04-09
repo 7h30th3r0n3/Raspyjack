@@ -961,8 +961,6 @@ def _draw_sequence_screen(title: str, prompt: str, entered: list[str] | None = N
             _draw_centered_text((S(12), S(82), _SCR_W - S(12), S(96)), f"Last input: {latest}", fill="#88f0aa", font=font)
         elif entered:
             _draw_centered_text((S(12), S(82), _SCR_W - S(12), S(96)), "Sequence entered", fill="#88f0aa", font=font)
-        else:
-            _draw_centered_text((S(12), S(82), _SCR_W - S(12), S(96)), "Enter your sequence", fill="#6ea680", font=font)
 
         footer_text = _truncate_to_width(controls, _SCR_W - S(16), font)
         draw.text((S(8), _SCR_H - S(17)), footer_text, fill="#6ea680", font=font)
