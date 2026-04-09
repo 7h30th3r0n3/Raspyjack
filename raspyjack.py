@@ -12,17 +12,16 @@ from datetime import datetime
 import threading, smbus, time, pyudev, serial, struct, json  # type: ignore[reportMissingImports, reportMissingModuleSource]
 from subprocess import STDOUT, check_output
 from PIL import Image, ImageDraw, ImageFont, ImageColor, ImageSequence  # type: ignore[reportMissingImports]
-import LCD_Config
-import LCD_1in44
+import LCD_Config  # type: ignore[reportMissingModuleSource]
+import LCD_1in54  # type: ignore[reportMissingModuleSource]
 import RPi.GPIO as GPIO  # type: ignore[reportMissingModuleSource]
 import socket
 import ipaddress
 import signal
 from functools import partial
-import time
 import sys
 import requests  # For Discord webhook integration
-import rj_input  # Virtual input bridge (WebSocket → Unix socket)
+import rj_input  # type: ignore[reportMissingModuleSource]
 
 # WiFi Integration - Add dual interface support
 try:
@@ -226,14 +225,14 @@ class template():
 
     # Render the border
     def DrawBorder(self):
-        draw.line([(127, 12), (127, 127)], fill=self.border, width=5)
-        draw.line([(127, 127), (0, 127)], fill=self.border, width=5)
-        draw.line([(0, 127), (0, 12)], fill=self.border, width=5)
-        draw.line([(0, 12), (128, 12)], fill=self.border, width=5)
+        draw.line([(LCD.width - 1, 12), (LCD.width - 1, LCD.height - 1)], fill=self.border, width=5)
+        draw.line([(LCD.width - 1, LCD.height - 1), (0, LCD.height - 1)], fill=self.border, width=5)
+        draw.line([(0, LCD.height - 1), (0, 12)], fill=self.border, width=5)
+        draw.line([(0, 12), (LCD.width, 12)], fill=self.border, width=5)
 
     # Render inside of the border
     def DrawMenuBackground(self):
-        draw.rectangle((3, 14, 124, 124), fill=self.background)
+        draw.rectangle((3, 14, LCD.width - 4, LCD.height - 4), fill=self.background)
 
     # I don't know how to python pass 'class.variable' as reference properly
     def Set(self, index, color):
@@ -608,7 +607,7 @@ def LoadConfig():
 
 def _draw_toolbar():
     try:
-        draw.line([(0, 4), (128, 4)], fill="#222", width=10)
+        draw.line([(0, 4), (LCD.width, 4)], fill="#222", width=10)
         draw.text((0, 0), f"{_temp_c:.0f} °C ", fill="WHITE", font=font)
         if _status_text:
             draw.text((30, 0), _status_text, fill="WHITE", font=font)
@@ -710,7 +709,7 @@ def _draw_lock_screen(title: str, prompt: str, entered: list[str] | None = None,
     selected_row, selected_col = selection
     try:
         draw_lock.acquire()
-        draw.rectangle((0, 0, 127, 127), fill=color.background)
+        draw.rectangle((0, 0, LCD.width - 1, LCD.height - 1), fill=color.background)
         _draw_toolbar()
         color.DrawBorder()
         draw.text((8, 16), _truncate_to_width(title, 110, text_font), fill=color.selected_text, font=text_font)
@@ -750,12 +749,12 @@ def _draw_lock_screen(title: str, prompt: str, entered: list[str] | None = None,
 def _show_lock_wake_screen(reason: str = "Locked") -> None:
     try:
         draw_lock.acquire()
-        draw.rectangle((0, 0, 127, 127), fill=color.background)
+        draw.rectangle((0, 0, LCD.width - 1, LCD.height - 1), fill=color.background)
         _draw_toolbar()
         color.DrawBorder()
         lock_icon = MENU_ICONS.get(" Lock", "\uf023")
         lock_icon_font = ImageFont.truetype('/usr/share/fonts/truetype/fontawesome/fa-solid-900.ttf', 28)
-        draw.text((64, 34), lock_icon, font=lock_icon_font, fill=color.selected_text, anchor="mm")
+        draw.text((LCD.width // 2, 34), lock_icon, font=lock_icon_font, fill=color.selected_text, anchor="mm")
         _draw_centered_text((8, 46, 120, 78), reason, fill=color.selected_text, font=text_font)
         _draw_centered_text((8, 82, 120, 110), "Press a key", fill=color.text, font=text_font)
     finally:
@@ -2215,7 +2214,7 @@ def ImageExplorer() -> None:
             if YNDialog("Open?", "Yes", "No", output[:10]):
                 full_img = os.path.join(path, output)
                 with Image.open(full_img) as img:
-                    image.paste(img.resize((128, 128)))
+                    image.paste(img.resize((LCD.width, LCD.height)))
                 time.sleep(1)
                 getButton()
                 color.DrawBorder()
@@ -3111,8 +3110,8 @@ def _setup_gpio() -> None:
 
     # --- LCD --------------------------------------------------------------
     global LCD, image, draw                      # replace the old objects
-    LCD = LCD_1in44.LCD()
-    LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
+    LCD = LCD_1in54.LCD()
+    LCD.LCD_Init(LCD_1in54.SCAN_DIR_DFT)
     image = Image.new("RGB", (LCD.width, LCD.height), "BLACK")
     draw  = ImageDraw.Draw(image)
 
@@ -3514,8 +3513,8 @@ def GetMenuCarousel(inlist, duplicates=False):
             txt = current_item if not duplicates else current_item.split('#', 1)[1]
 
             # Main item display area (center)
-            main_x = 64  # Center of 128px screen
-            main_y = 64  # Center vertically
+            main_x = LCD.width // 2  # Center of screen
+            main_y = LCD.height // 2  # Center vertically
 
             # Draw huge icon in center
             icon = MENU_ICONS.get(txt, "\uf192")  # Default to dot-circle icon
@@ -3784,13 +3783,19 @@ def main():
 ### Default values + LCD init ###
 default = Defaults()
 
-LCD = LCD_1in44.LCD()
-Lcd_ScanDir = LCD_1in44.SCAN_DIR_DFT  # SCAN_DIR_DFT = D2U_L2R
+LCD = LCD_1in54.LCD()
+Lcd_ScanDir = LCD_1in54.SCAN_DIR_DFT  # SCAN_DIR_DFT = D2U_L2R
 LCD.LCD_Init(Lcd_ScanDir)
 LCD_Config.Driver_Delay_ms(5)  # 8
 #LCD.LCD_Clear()
 
-image = Image.open(default.install_path + 'img/logo.bmp')
+logo_path = default.install_path + 'img/logo.bmp'
+try:
+    image = Image.open(logo_path).convert("RGB")
+    if image.size != (LCD.width, LCD.height):
+        image = image.resize((LCD.width, LCD.height))
+except Exception:
+    image = Image.new("RGB", (LCD.width, LCD.height), "BLACK")
 LCD.LCD_ShowImage(image, 0, 0)
 
 # Create draw objects BEFORE main() so color functions can use them
