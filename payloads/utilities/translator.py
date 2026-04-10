@@ -41,6 +41,7 @@ import LCD_Config
 from PIL import Image
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._keyboard_helper import lcd_keyboard
 
 PINS = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
@@ -62,11 +63,6 @@ LANGUAGES = [
     ("RU", "Russian"),
     ("AR", "Arabic"),
 ]
-
-CHARSET = list(
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
-    "0123456789 .,!?'-"
-)
 
 API_URL = "https://api.mymemory.translated.net/get"
 
@@ -127,48 +123,6 @@ def _translate(text, src_lang, tgt_lang):
 # ---------------------------------------------------------------------------
 # Drawing
 # ---------------------------------------------------------------------------
-
-def _draw_input(lcd, fnt, text_chars, char_idx, src_idx, tgt_idx, status):
-    """Draw text input screen."""
-    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ScaledDraw(img)
-
-    # Header
-    d.rectangle((0, 0, 127, 13), fill="#111")
-    src = LANGUAGES[src_idx][0]
-    tgt = LANGUAGES[tgt_idx][0]
-    d.text((2, 1), "TRANSLATE " + src + "->" + tgt, font=fnt, fill="#00CCFF")
-
-    # Text input
-    d.text((2, 18), "Text:", font=fnt, fill="#AAA")
-    text_str = "".join(text_chars)
-    if len(text_str) > 18:
-        text_str = text_str[-18:]
-    d.text((2, 30), text_str + "_", font=fnt, fill="#FFFFFF")
-
-    # Character picker
-    current = CHARSET[char_idx]
-    d.text((2, 48), "Char: [ " + current + " ]", font=fnt, fill="#00FF00")
-
-    prev_idx = (char_idx - 1) % len(CHARSET)
-    next_idx = (char_idx + 1) % len(CHARSET)
-    d.text((2, 60), "  UP:" + CHARSET[prev_idx] + "  DN:" + CHARSET[next_idx],
-           font=fnt, fill="#555")
-
-    # Instructions
-    d.text((2, 78), "OK:add RIGHT:go", font=fnt, fill="#666")
-    d.text((2, 90), "LEFT:bksp K2:swap", font=fnt, fill="#666")
-    d.text((2, 102), "K1:clear", font=fnt, fill="#666")
-
-    # Footer
-    d.rectangle((0, 116, 127, 127), fill="#111")
-    if status:
-        d.text((2, 117), status[:22], font=fnt, fill="#FFFF00")
-    else:
-        d.text((2, 117), "KEY3: exit", font=fnt, fill="#AAA")
-
-    lcd.LCD_ShowImage(img, 0, 0)
-
 
 def _draw_result(lcd, fnt, source, result, src_lang, tgt_lang, translating):
     """Draw translation result screen."""
@@ -260,11 +214,8 @@ def main():
     lcd.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
     fnt = scaled_font()
 
-    text_chars = []
-    char_idx = 0
     src_idx = 0   # EN
     tgt_idx = 1   # FR
-    status = ""
     last_press = 0.0
     view = "input"  # input | result | pick_src | pick_tgt
     source_text = ""
@@ -314,11 +265,9 @@ def main():
                     time.sleep(0.1)
                     continue
                 elif btn == "KEY1" and not busy:
-                    text_chars = []
                     with _translate_lock:
                         _result_text = ""
                     view = "input"
-                    status = ""
                     time.sleep(0.1)
                     continue
 
@@ -328,48 +277,24 @@ def main():
                 time.sleep(0.12)
                 continue
 
-            # Input view
-            if btn == "KEY3":
+            # Input view -- use lcd_keyboard for text entry
+            src = LANGUAGES[src_idx][0]
+            tgt = LANGUAGES[tgt_idx][0]
+            text = lcd_keyboard(lcd, fnt, PINS, GPIO,
+                                title=src + "->" + tgt,
+                                charset="full")
+            if text is None:
                 break
-            elif btn == "UP":
-                char_idx = (char_idx - 1) % len(CHARSET)
-            elif btn == "DOWN":
-                char_idx = (char_idx + 1) % len(CHARSET)
-            elif btn == "OK":
-                text_chars = text_chars + [CHARSET[char_idx]]
-                status = ""
-            elif btn == "LEFT":
-                if text_chars:
-                    text_chars = text_chars[:-1]
-                status = ""
-            elif btn == "RIGHT":
-                text = "".join(text_chars).strip()
-                if not text:
-                    status = "Enter text first"
-                else:
-                    source_text = text
-                    src_code = LANGUAGES[src_idx][0].lower()
-                    tgt_code = LANGUAGES[tgt_idx][0].lower()
-                    view = "result"
-                    threading.Thread(
-                        target=_translate,
-                        args=(text, src_code, tgt_code),
-                        daemon=True,
-                    ).start()
-                    time.sleep(0.1)
-                    continue
-            elif btn == "KEY1":
-                text_chars = []
-                status = "Cleared"
-            elif btn == "KEY2":
-                # Swap source and target
-                src_idx, tgt_idx = tgt_idx, src_idx
-                src_name = LANGUAGES[src_idx][1]
-                tgt_name = LANGUAGES[tgt_idx][1]
-                status = src_name[:3] + "->" + tgt_name[:3]
-
-            _draw_input(lcd, fnt, text_chars, char_idx, src_idx, tgt_idx, status)
-            time.sleep(0.08)
+            source_text = text
+            src_code = LANGUAGES[src_idx][0].lower()
+            tgt_code = LANGUAGES[tgt_idx][0].lower()
+            view = "result"
+            threading.Thread(
+                target=_translate,
+                args=(text, src_code, tgt_code),
+                daemon=True,
+            ).start()
+            time.sleep(0.1)
 
     finally:
         try:

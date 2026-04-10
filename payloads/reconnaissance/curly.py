@@ -38,6 +38,7 @@ import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._keyboard_helper import lcd_keyboard
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -393,22 +394,14 @@ def main():
 
             # ------ URL input ------
             elif mode == "url":
-                if btn == "UP":
-                    char_idx = (char_idx - 1) % len(CHARSET)
-                    time.sleep(DEBOUNCE)
-                elif btn == "DOWN":
-                    char_idx = (char_idx + 1) % len(CHARSET)
-                    time.sleep(DEBOUNCE)
-                elif btn == "RIGHT":
-                    if len(url_chars) < 256:
-                        url_chars = list(url_chars) + [CHARSET[char_idx]]
-                    time.sleep(DEBOUNCE)
-                elif btn == "LEFT":
-                    if url_chars:
-                        url_chars = list(url_chars[:-1])
-                    time.sleep(DEBOUNCE)
-                elif btn == "OK":
-                    chosen_url = "".join(url_chars).strip()
+                result = lcd_keyboard(lcd, font_obj, PINS, GPIO, title="ENTER URL",
+                                      default="".join(url_chars), charset="url")
+                if result is None:
+                    mode = "method"
+                    time.sleep(0.3)
+                else:
+                    chosen_url = result.strip()
+                    url_chars = list(chosen_url)
                     if chosen_url:
                         mode = "response"
                         scroll = 0
@@ -420,8 +413,6 @@ def main():
                             daemon=True,
                         ).start()
                         time.sleep(0.3)
-
-                _draw_url_input(lcd, font_obj, url_chars, char_idx)
 
             # ------ Response display ------
             elif mode == "response":

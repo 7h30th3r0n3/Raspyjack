@@ -36,6 +36,7 @@ import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._keyboard_helper import lcd_keyboard
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -49,12 +50,6 @@ ROW_H = 12
 CONFIG_DIR = "/root/Raspyjack/loot/IRC"
 CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
 MAX_MESSAGES = 100
-CHARSET = list(
-    "abcdefghijklmnopqrstuvwxyz"
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-    "0123456789 .-_/:@?!#&=+,"
-)
-
 DEFAULT_CONFIG = {
     "server": "irc.libera.chat",
     "port": 6667,
@@ -81,9 +76,7 @@ messages = {}
 users = {}
 
 scroll_offset = 0
-view_mode = "chat"  # "chat", "input", "users"
-input_chars = []
-input_char_idx = 0
+view_mode = "chat"  # "chat", "users"
 connected = False
 status_msg = "Connecting..."
 
@@ -348,37 +341,6 @@ def draw_chat(lcd, font):
     lcd.LCD_ShowImage(img, 0, 0)
 
 
-def draw_input(lcd, font):
-    """Render the message input character picker."""
-    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ScaledDraw(img)
-
-    # Header
-    d.rectangle((0, 0, 127, 13), fill="#111")
-    d.text((2, 1), "TYPE MESSAGE", font=font, fill="#FFAA00")
-
-    # Current message
-    msg_str = "".join(input_chars)
-    d.text((2, 18), f">{msg_str[-18:]}", font=font, fill="#FFFFFF")
-
-    # Character selector
-    current_char = CHARSET[input_char_idx]
-    d.text((2, 36), f"Char: [{current_char}]", font=font, fill="#00FF00")
-    d.text((2, 48), f"Len: {len(input_chars)}", font=font, fill="#888")
-
-    # Instructions
-    d.text((2, 66), "UP/DN: change char", font=font, fill="#555")
-    d.text((2, 78), "OK: add char", font=font, fill="#555")
-    d.text((2, 90), "LEFT: backspace", font=font, fill="#555")
-    d.text((2, 102), "KEY1: send", font=font, fill="#555")
-
-    # Footer
-    d.rectangle((0, 116, 127, 127), fill="#111")
-    d.text((2, 117), "KEY3: cancel", font=font, fill="#AAA")
-
-    lcd.LCD_ShowImage(img, 0, 0)
-
-
 def draw_users(lcd, font):
     """Render the user list view."""
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
@@ -476,7 +438,7 @@ def disconnect_irc():
 
 def main():
     global running, channel_idx, scroll_offset, view_mode
-    global input_chars, input_char_idx, status_msg
+    global status_msg
 
     GPIO.setmode(GPIO.BCM)
     for pin in PINS.values():
@@ -517,42 +479,6 @@ def main():
         while running:
             btn = get_button(PINS, GPIO)
 
-            # Input mode
-            if view_mode == "input":
-                if btn == "UP":
-                    input_char_idx = (input_char_idx + 1) % len(CHARSET)
-                    time.sleep(0.1)
-                elif btn == "DOWN":
-                    input_char_idx = (input_char_idx - 1) % len(CHARSET)
-                    time.sleep(0.1)
-                elif btn == "OK":
-                    input_chars = input_chars + [CHARSET[input_char_idx]]
-                    time.sleep(0.12)
-                elif btn == "LEFT":
-                    if input_chars:
-                        input_chars = input_chars[:-1]
-                    time.sleep(0.12)
-                elif btn == "KEY1":
-                    msg_text = "".join(input_chars).strip()
-                    if msg_text and connected:
-                        chan = current_channel()
-                        irc_send(f"PRIVMSG {chan} :{msg_text}")
-                        add_message(chan, nick, msg_text)
-                        input_chars = []
-                    view_mode = "chat"
-                    scroll_offset = 0
-                    time.sleep(0.2)
-                    continue
-                elif btn == "KEY3":
-                    input_chars = []
-                    view_mode = "chat"
-                    time.sleep(0.2)
-                    continue
-
-                draw_input(lcd, font)
-                time.sleep(0.05)
-                continue
-
             # User list mode
             if view_mode == "users":
                 if btn in ("KEY2", "KEY3"):
@@ -588,9 +514,14 @@ def main():
                 irc_send(f"NAMES {current_channel()}")
                 time.sleep(0.25)
             elif btn == "OK":
-                view_mode = "input"
-                input_chars = []
-                input_char_idx = 0
+                msg_text = lcd_keyboard(lcd, font, PINS, GPIO,
+                                        title="MESSAGE",
+                                        charset="full")
+                if msg_text is not None and connected:
+                    chan = current_channel()
+                    irc_send(f"PRIVMSG {chan} :{msg_text}")
+                    add_message(chan, nick, msg_text)
+                scroll_offset = 0
                 time.sleep(0.2)
                 continue
             elif btn == "KEY2":

@@ -30,6 +30,7 @@ import LCD_Config
 from PIL import Image
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._keyboard_helper import lcd_keyboard
 
 PINS = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
@@ -48,11 +49,6 @@ PAYLOAD_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 DEBOUNCE = 0.18
 ROW_H = 12
 VISIBLE_ROWS = 7
-CHARSET = list(
-    "abcdefghijklmnopqrstuvwxyz"
-    "0123456789_- "
-)
-
 _running = True
 
 
@@ -119,31 +115,6 @@ def _draw_footer(d, text):
     d.text((2, 117), text[:26], font=font, fill="#666")
 
 
-def _draw_char_picker(query, char_idx):
-    """Character picker for keyword input."""
-    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ScaledDraw(img)
-    _draw_header(d, "PAYLOAD SEARCH")
-
-    d.text((2, 18), "Keyword:", font=font, fill="#aaa")
-    d.text((2, 30), "".join(query)[:20] + "_", font=font, fill="#ffffff")
-
-    current_char = CHARSET[char_idx]
-    d.text((2, 50), f"Char: [ {current_char} ]", font=font, fill="#00ff00")
-
-    # Show nearby characters
-    prev_idx = (char_idx - 1) % len(CHARSET)
-    next_idx = (char_idx + 1) % len(CHARSET)
-    d.text((2, 62), f"  UP: {CHARSET[prev_idx]}  DN: {CHARSET[next_idx]}", font=font, fill="#555")
-
-    d.text((2, 80), "OK: add char", font=font, fill="#666")
-    d.text((2, 92), "KEY1: backspace", font=font, fill="#666")
-    d.text((2, 104), "KEY2: search", font=font, fill="#666")
-
-    _draw_footer(d, "Type keyword to search")
-    LCD.LCD_ShowImage(img, 0, 0)
-
-
 def _draw_results(matches, cursor, scroll):
     """Display search results list."""
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
@@ -201,8 +172,6 @@ def main():
 
     all_payloads = _scan_payloads()
     state = "input"  # input | results | docstring
-    query = []
-    char_idx = 0
     matches = []
     cursor = 0
     scroll = 0
@@ -213,6 +182,18 @@ def main():
 
     try:
         while _running:
+            if state == "input":
+                keyword = lcd_keyboard(LCD, font, PINS, GPIO,
+                                       title="PAYLOAD SEARCH",
+                                       charset="full")
+                if keyword is None:
+                    break
+                matches = _search(all_payloads, keyword)
+                cursor = 0
+                scroll = 0
+                state = "results"
+                continue
+
             btn = get_button(PINS, GPIO)
             now = time.time()
             if btn and (now - last_press) < DEBOUNCE:
@@ -230,25 +211,7 @@ def main():
                 else:
                     break
 
-            if state == "input":
-                if btn == "UP":
-                    char_idx = (char_idx - 1) % len(CHARSET)
-                elif btn == "DOWN":
-                    char_idx = (char_idx + 1) % len(CHARSET)
-                elif btn == "OK":
-                    query = query + [CHARSET[char_idx]]
-                elif btn == "KEY1":
-                    if query:
-                        query = query[:-1]
-                elif btn == "KEY2":
-                    keyword = "".join(query)
-                    matches = _search(all_payloads, keyword)
-                    cursor = 0
-                    scroll = 0
-                    state = "results"
-                _draw_char_picker(query, char_idx)
-
-            elif state == "results":
+            if state == "results":
                 if btn == "DOWN" and matches:
                     cursor = min(cursor + 1, len(matches) - 1)
                     if cursor >= scroll + VISIBLE_ROWS:
@@ -264,8 +227,6 @@ def main():
                     doc_scroll = 0
                     state = "docstring"
                 elif btn == "KEY1":
-                    query = []
-                    char_idx = 0
                     state = "input"
                 _draw_results(matches, cursor, scroll)
 

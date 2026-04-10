@@ -31,6 +31,7 @@ import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._keyboard_helper import lcd_keyboard
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -43,12 +44,6 @@ WIDTH, HEIGHT = LCD_1in44.LCD_WIDTH, LCD_1in44.LCD_HEIGHT
 ROW_H = 12
 CONFIG_DIR = "/root/Raspyjack/loot/Weather"
 CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
-CHARSET = list(
-    "abcdefghijklmnopqrstuvwxyz"
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-    "0123456789 -_."
-)
-
 # ---------------------------------------------------------------------------
 # State
 # ---------------------------------------------------------------------------
@@ -153,36 +148,6 @@ def draw_main(lcd, font):
     lcd.LCD_ShowImage(img, 0, 0)
 
 
-def draw_city_picker(lcd, font, chars, char_idx):
-    """Render the city name character picker."""
-    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ScaledDraw(img)
-
-    # Header
-    d.rectangle((0, 0, 127, 13), fill="#111")
-    d.text((2, 1), "SET CITY", font=font, fill="#FFAA00")
-
-    # Current city name
-    city_str = "".join(chars)
-    d.text((2, 18), f"City: {city_str[:16]}", font=font, fill="#FFFFFF")
-
-    # Character selector
-    current_char = CHARSET[char_idx]
-    d.text((2, 40), f"Char: [{current_char}]", font=font, fill="#00FF00")
-    d.text((2, 54), f"Len: {len(chars)}", font=font, fill="#888")
-
-    # Instructions
-    d.text((2, 72), "UP/DN: char", font=font, fill="#666")
-    d.text((2, 84), "OK: add  KEY1: del", font=font, fill="#666")
-    d.text((2, 96), "KEY2: confirm", font=font, fill="#666")
-
-    # Footer
-    d.rectangle((0, 116, 127, 127), fill="#111")
-    d.text((2, 117), "KEY3: cancel", font=font, fill="#AAA")
-
-    lcd.LCD_ShowImage(img, 0, 0)
-
-
 def draw_fetching(lcd, font):
     """Show a loading screen."""
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
@@ -216,47 +181,9 @@ def main():
     weather_lines = fetch_weather(city)
     scroll_offset = 0
 
-    in_picker = False
-    picker_chars = []
-    picker_char_idx = 0
-
     try:
         while running:
             btn = get_button(PINS, GPIO)
-
-            if in_picker:
-                if btn == "UP":
-                    picker_char_idx = (picker_char_idx + 1) % len(CHARSET)
-                    time.sleep(0.12)
-                elif btn == "DOWN":
-                    picker_char_idx = (picker_char_idx - 1) % len(CHARSET)
-                    time.sleep(0.12)
-                elif btn == "OK":
-                    picker_chars = picker_chars + [CHARSET[picker_char_idx]]
-                    time.sleep(0.15)
-                elif btn == "KEY1":
-                    if picker_chars:
-                        picker_chars = picker_chars[:-1]
-                    time.sleep(0.15)
-                elif btn == "KEY2":
-                    new_city = "".join(picker_chars).strip()
-                    if new_city:
-                        city = new_city
-                        save_config()
-                        draw_fetching(lcd, font)
-                        weather_lines = fetch_weather(city)
-                        scroll_offset = 0
-                    in_picker = False
-                    time.sleep(0.2)
-                    continue
-                elif btn == "KEY3":
-                    in_picker = False
-                    time.sleep(0.2)
-                    continue
-
-                draw_city_picker(lcd, font, picker_chars, picker_char_idx)
-                time.sleep(0.05)
-                continue
 
             # Main view controls
             if btn == "UP":
@@ -274,9 +201,15 @@ def main():
                 scroll_offset = 0
                 time.sleep(0.3)
             elif btn == "KEY2":
-                picker_chars = list(city)
-                picker_char_idx = 0
-                in_picker = True
+                new_city = lcd_keyboard(lcd, font, PINS, GPIO,
+                                        title="SET CITY", default=city,
+                                        charset="full")
+                if new_city is not None:
+                    city = new_city
+                    save_config()
+                    draw_fetching(lcd, font)
+                    weather_lines = fetch_weather(city)
+                    scroll_offset = 0
                 time.sleep(0.2)
                 continue
             elif btn == "KEY3":

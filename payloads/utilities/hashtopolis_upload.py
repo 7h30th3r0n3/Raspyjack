@@ -38,6 +38,7 @@ import LCD_Config
 from PIL import Image
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._keyboard_helper import lcd_keyboard
 
 PINS = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
@@ -63,13 +64,6 @@ HASH_EXTS = (".hc22000", ".hccapx")
 ROW_H = 12
 DEBOUNCE = 0.20
 VISIBLE_ROWS = 7
-CHAR_SET = list(
-    "abcdefghijklmnopqrstuvwxyz"
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-    "0123456789"
-    ":/.-_@?=&"
-)
-
 # ---------------------------------------------------------------------------
 # Shared state
 # ---------------------------------------------------------------------------
@@ -78,18 +72,13 @@ app_running = True
 hash_files = []
 selected_idx = 0
 scroll_pos = 0
-view_mode = "list"          # list | uploading | result | config
+view_mode = "list"          # list | uploading | result
 status_msg = "Loading..."
 upload_result = {}
 batch_progress = 0
 batch_total = 0
 server_url = ""
 api_key = ""
-
-# Config editor state
-config_field = 0            # 0 = server_url, 1 = api_key
-config_chars = []           # list of chars being edited
-config_cursor = 0
 
 
 # ---------------------------------------------------------------------------
@@ -353,9 +342,6 @@ def _draw_screen():
         bp = batch_progress
         bt = batch_total
         url = server_url
-        cf = config_field
-        cc = config_cursor
-        chars = list(config_chars)
 
     if vm == "list":
         configured = bool(url)
@@ -427,41 +413,6 @@ def _draw_screen():
         d.rectangle((0, 116, 127, 127), fill="#111")
         d.text((2, 117), "OK:back K3:exit", font=font, fill="#666")
 
-    elif vm == "config":
-        field_label = "Server URL" if cf == 0 else "API Key"
-        d.text((2, 16), field_label, font=font, fill="#ffaa00")
-
-        # Show current value
-        display = "".join(chars)
-        if len(display) > 20:
-            start = max(0, cc - 10)
-            display = display[start:start + 20]
-
-        d.text((2, 30), display[:20], font=font, fill="#00ff00")
-
-        # Cursor marker
-        visible_cursor = min(cc, 19)
-        cursor_x = 2 + visible_cursor * 6
-        d.text((cursor_x, 42), "^", font=font, fill="#ff4444")
-
-        # Current char
-        if chars and cc < len(chars):
-            ch = chars[cc]
-            idx = CHAR_SET.index(ch) if ch in CHAR_SET else 0
-            d.text((2, 56), f"Char: '{ch}' [{idx}]",
-                   font=font, fill="#cccccc")
-
-        d.text((2, 72), "UP/DN=char L/R=move", font=font, fill="#888")
-        d.text((2, 84), "OK=next/save", font=font, fill="#888")
-
-        if cf == 0:
-            d.text((2, 96), "Editing URL", font=font, fill="#666")
-        else:
-            d.text((2, 96), "Editing API Key", font=font, fill="#666")
-
-        d.rectangle((0, 116, 127, 127), fill="#111")
-        d.text((2, 117), "K3:cancel", font=font, fill="#666")
-
     LCD.LCD_ShowImage(img, 0, 0)
 
 
@@ -471,7 +422,6 @@ def _draw_screen():
 def main():
     global app_running, selected_idx, scroll_pos, view_mode
     global hash_files, status_msg, server_url, api_key
-    global config_field, config_chars, config_cursor
 
     server_url, api_key = _load_config()
     hash_files = _find_hash_files()
@@ -497,62 +447,10 @@ def main():
                     if view_mode == "result":
                         view_mode = "list"
                         btn = None
-                    elif view_mode == "config":
-                        view_mode = "list"
-                        btn = None
                     else:
                         break
 
-            if view_mode == "config":
-                if btn == "UP":
-                    with lock:
-                        if config_chars and config_cursor < len(config_chars):
-                            ch = config_chars[config_cursor]
-                            idx = CHAR_SET.index(ch) if ch in CHAR_SET else 0
-                            new_idx = (idx + 1) % len(CHAR_SET)
-                            new_chars = list(config_chars)
-                            new_chars[config_cursor] = CHAR_SET[new_idx]
-                            config_chars = new_chars
-
-                elif btn == "DOWN":
-                    with lock:
-                        if config_chars and config_cursor < len(config_chars):
-                            ch = config_chars[config_cursor]
-                            idx = CHAR_SET.index(ch) if ch in CHAR_SET else 0
-                            new_idx = (idx - 1) % len(CHAR_SET)
-                            new_chars = list(config_chars)
-                            new_chars[config_cursor] = CHAR_SET[new_idx]
-                            config_chars = new_chars
-
-                elif btn == "LEFT":
-                    with lock:
-                        if config_cursor > 0:
-                            config_cursor -= 1
-
-                elif btn == "RIGHT":
-                    with lock:
-                        if config_cursor < len(config_chars) - 1:
-                            config_cursor += 1
-                        elif len(config_chars) < 128:
-                            config_chars = list(config_chars) + ["a"]
-                            config_cursor += 1
-
-                elif btn == "OK":
-                    with lock:
-                        value = "".join(config_chars)
-                        if config_field == 0:
-                            server_url = value
-                            config_field = 1
-                            config_chars = list(api_key) if api_key else ["a"]
-                            config_cursor = 0
-                        else:
-                            api_key = value
-                            _save_config(server_url, api_key)
-                            view_mode = "list"
-                            status_msg = "Config saved"
-                            config_field = 0
-
-            elif view_mode == "list":
+            if view_mode == "list":
                 if btn == "UP":
                     with lock:
                         selected_idx = max(0, selected_idx - 1)
@@ -585,13 +483,21 @@ def main():
                         ).start()
 
                 elif btn == "KEY2":
-                    with lock:
-                        view_mode = "config"
-                        config_field = 0
-                        config_chars = (
-                            list(server_url) if server_url else ["h"]
-                        )
-                        config_cursor = 0
+                    new_url = lcd_keyboard(LCD, font, PINS, GPIO,
+                                           title="Server URL",
+                                           default=server_url or "https://",
+                                           charset="url")
+                    if new_url is not None:
+                        server_url = new_url
+                        new_key = lcd_keyboard(LCD, font, PINS, GPIO,
+                                               title="API Key",
+                                               default=api_key,
+                                               charset="full")
+                        if new_key is not None:
+                            api_key = new_key
+                        _save_config(server_url, api_key)
+                        with lock:
+                            status_msg = "Config saved"
 
             elif view_mode == "result":
                 if btn == "OK":

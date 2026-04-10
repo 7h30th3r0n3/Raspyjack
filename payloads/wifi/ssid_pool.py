@@ -39,6 +39,7 @@ import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._keyboard_helper import lcd_keyboard
 from payloads._iface_helper import select_interface
 
 try:
@@ -539,32 +540,14 @@ def main():
             btn = get_button(PINS, GPIO)
 
             if adding_ssid:
-                # Character input mode
-                if btn == "KEY3":
-                    adding_ssid = False
-                    add_buffer = ""
-                    time.sleep(0.25)
-                elif btn == "UP":
-                    add_char_idx = (add_char_idx + 1) % len(CHARSET)
-                    time.sleep(0.15)
-                elif btn == "DOWN":
-                    add_char_idx = (add_char_idx - 1) % len(CHARSET)
-                    time.sleep(0.15)
-                elif btn == "OK":
-                    add_buffer = add_buffer + CHARSET[add_char_idx]
-                    time.sleep(0.2)
-                elif btn == "LEFT":
-                    if add_buffer:
-                        add_buffer = add_buffer[:-1]
-                    time.sleep(0.2)
-                elif btn == "RIGHT":
-                    if add_buffer.strip():
-                        _add_ssid(add_buffer)
-                        with lock:
-                            status_msg = f"Added: {add_buffer[:10]}"
-                    adding_ssid = False
-                    add_buffer = ""
-                    time.sleep(0.25)
+                new_ssid = lcd_keyboard(LCD, font, PINS, GPIO, title="Add SSID")
+                if new_ssid and new_ssid.strip():
+                    _add_ssid(new_ssid)
+                    with lock:
+                        status_msg = f"Added: {new_ssid[:10]}"
+                adding_ssid = False
+                add_buffer = ""
+                time.sleep(0.25)
             else:
                 if btn == "KEY3":
                     break

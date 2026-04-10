@@ -37,6 +37,7 @@ import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button, get_held_buttons
+from payloads._keyboard_helper import lcd_keyboard
 
 PINS = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
@@ -241,25 +242,16 @@ def main():
                 _draw_list(combos, cursor, scroll, _monitoring, trigger)
 
             elif view == "edit":
-                if btn == "UP":
-                    char_idx = (char_idx - 1) % len(CHARSET)
-                elif btn == "DOWN":
-                    char_idx = (char_idx + 1) % len(CHARSET)
-                elif btn == "OK":
-                    cmd_chars = cmd_chars + [CHARSET[char_idx]]
-                elif btn == "KEY1":
-                    if cmd_chars:
-                        cmd_chars = cmd_chars[:-1]
-                elif btn == "KEY2":
-                    new_action = "".join(cmd_chars).strip()
+                result = lcd_keyboard(LCD, font, PINS, GPIO,
+                                      title=f"EDIT: {combos[cursor]['combo']}",
+                                      default="".join(cmd_chars))
+                if result is not None:
+                    new_action = result.strip()
                     updated = [dict(c) for c in combos]
                     updated[cursor] = {**updated[cursor], "action": new_action}
                     combos = updated
                     _save_config(combos)
-                    view = "list"
-
-                if view == "edit":
-                    _draw_edit(combos[cursor]["combo"], cmd_chars, char_idx)
+                view = "list"
 
             time.sleep(0.08)
 

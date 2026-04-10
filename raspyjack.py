@@ -1456,6 +1456,7 @@ def toggle_lock_enabled() -> None:
 
 
 def lock_device(reason: str = "Locked") -> bool:
+    _apply_random_screensaver()
     if not _lock_has_secret():
         return False
     if lock_runtime["locked"]:
@@ -1507,8 +1508,34 @@ def lock_device(reason: str = "Locked") -> bool:
         lock_runtime["suspend_auto_lock"] = previous_suspend
 
 
+_random_screensaver = False  # when True, pick random GIF on each lock
+
+
+def _toggle_random_screensaver():
+    global _random_screensaver
+    _random_screensaver = not _random_screensaver
+    state = "ON" if _random_screensaver else "OFF"
+    Dialog_info(f"Random screensaver\n{state}", wait=False, timeout=1.2)
+
+
+def _apply_random_screensaver():
+    """If random mode is on, pick a random GIF before showing lock screen."""
+    if not _random_screensaver:
+        return
+    screensaver_dir = os.path.join(default.install_path, "img", "screensaver")
+    try:
+        gifs = [f for f in os.listdir(screensaver_dir) if f.lower().endswith(".gif")]
+        if gifs:
+            import random as _rnd
+            chosen = _rnd.choice(gifs)
+            default.screensaver_gif = os.path.join(screensaver_dir, chosen)
+    except Exception:
+        pass
+
+
 def OpenLockMenu() -> None:
     while True:
+        rand_label = "ON" if _random_screensaver else "OFF"
         options = [
             " Lock now",
             f" {'Deactivate' if lock_config.get('enabled') else 'Activate'} lock",
@@ -1516,11 +1543,13 @@ def OpenLockMenu() -> None:
             f" Change {_lock_mode_label()}",
             f" Auto-lock: {_lock_timeout_label()}",
             " Screensaver GIF",
+            f" Random screensaver: {rand_label}",
         ]
         idx, _value = GetMenuString(options, duplicates=True)
         if idx == -1:
             return
         if idx == 0:
+            _apply_random_screensaver()
             if not _lock_has_secret() and not _set_active_lock_secret_flow(require_current=False):
                 continue
             lock_device("Locked")
@@ -1534,6 +1563,8 @@ def OpenLockMenu() -> None:
             configure_auto_lock_timeout()
         elif idx == 5:
             select_lock_screensaver_gif()
+        elif idx == 6:
+            _toggle_random_screensaver()
 
 ### Simple message box ###
 # (Text, Wait for confirmation)  #

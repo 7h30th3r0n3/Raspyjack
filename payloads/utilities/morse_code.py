@@ -39,6 +39,7 @@ import LCD_Config
 from PIL import Image
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._keyboard_helper import lcd_keyboard
 
 PINS = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
@@ -79,12 +80,6 @@ MORSE_TABLE = {
 
 # Reverse lookup: morse -> character
 MORSE_REVERSE = {v: k for k, v in MORSE_TABLE.items() if v != "/"}
-
-CHARSET = list(
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-    "0123456789"
-    " .,-?!"
-)
 
 _running = True
 
@@ -130,28 +125,6 @@ def _draw_header(d, title):
 def _draw_footer(d, text):
     d.rectangle((0, 116, 127, 127), fill="#111")
     d.text((2, 117), text[:26], font=font, fill="#666")
-
-
-def _draw_encode_input(text_chars, char_idx):
-    """Draw the encode mode character input screen."""
-    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ScaledDraw(img)
-    _draw_header(d, "MORSE: ENCODE")
-
-    d.text((2, 18), "Text:", font=font, fill="#aaa")
-    text_str = "".join(text_chars)
-    d.text((2, 30), text_str[-20:] + "_", font=font, fill="#fff")
-
-    current = CHARSET[char_idx]
-    morse = MORSE_TABLE.get(current.upper(), "")
-    d.text((2, 48), f"Char: [ {current} ]", font=font, fill="#00ff00")
-    d.text((2, 60), f"Morse: {morse}", font=font, fill="#ffaa00")
-
-    d.text((2, 78), "OK:add  KEY1:del", font=font, fill="#666")
-    d.text((2, 90), "KEY2:encode", font=font, fill="#666")
-
-    _draw_footer(d, "UP/DN:char K2:encode")
-    LCD.LCD_ShowImage(img, 0, 0)
 
 
 def _draw_morse_output(text_str, morse_str, scroll):
@@ -244,9 +217,8 @@ def main():
 
     mode = "encode"  # encode | encode_output | decode
     # Encode state
-    enc_chars = []
-    enc_char_idx = 0
     enc_morse = ""
+    enc_text = ""
     enc_scroll = 0
     # Decode state
     dec_symbol = ""
@@ -277,22 +249,16 @@ def main():
 
             # --- Encode input mode ---
             if mode == "encode":
-                if btn == "UP":
-                    enc_char_idx = (enc_char_idx - 1) % len(CHARSET)
-                elif btn == "DOWN":
-                    enc_char_idx = (enc_char_idx + 1) % len(CHARSET)
-                elif btn == "OK":
-                    enc_chars = enc_chars + [CHARSET[enc_char_idx]]
-                elif btn == "KEY1":
-                    if enc_chars:
-                        enc_chars = enc_chars[:-1]
-                elif btn == "KEY2":
-                    text = "".join(enc_chars)
-                    enc_morse = _encode_text(text)
-                    enc_scroll = 0
-                    mode = "encode_output"
-
-                _draw_encode_input(enc_chars, enc_char_idx)
+                text = lcd_keyboard(LCD, font, PINS, GPIO,
+                                    title="MORSE: ENCODE",
+                                    charset="full")
+                if text is None:
+                    break
+                enc_text = text
+                enc_morse = _encode_text(text)
+                enc_scroll = 0
+                mode = "encode_output"
+                continue
 
             # --- Encode output mode ---
             elif mode == "encode_output":
@@ -303,12 +269,11 @@ def main():
                         max(0, len(enc_morse) - 20), enc_scroll + 5
                     )
                 elif btn == "KEY1":
-                    enc_chars = []
+                    enc_text = ""
                     enc_morse = ""
                     mode = "encode"
 
-                text = "".join(enc_chars)
-                _draw_morse_output(text, enc_morse, enc_scroll)
+                _draw_morse_output(enc_text, enc_morse, enc_scroll)
 
             # --- Decode mode ---
             elif mode == "decode":

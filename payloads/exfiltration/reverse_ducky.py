@@ -32,6 +32,7 @@ import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._keyboard_helper import lcd_keyboard
 
 PINS = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
@@ -326,79 +327,10 @@ def _draw_message(title, lines, color="#00ff88"):
 # -------------------------------------------------------------------
 
 def _run_char_picker(label, initial, char_set):
-    """Run the character picker UI. Returns the entered string."""
-    value = list(initial)
-    char_pos = 0
-    last_press = 0.0
-
-    while running:
-        # Ensure value has at least one position
-        if not value:
-            value = [char_set[0]]
-
-        if char_pos >= len(value):
-            char_pos = len(value) - 1
-        if char_pos < 0:
-            char_pos = 0
-
-        _draw_char_picker(label, "".join(value), char_pos, char_set)
-
-        btn = get_button(PINS, GPIO)
-        now = time.time()
-        if btn and (now - last_press) < DEBOUNCE:
-            btn = None
-        if btn:
-            last_press = now
-
-        if btn == "KEY3":
-            # Delete character at cursor
-            if len(value) > 1:
-                new_value = list(value)
-                del new_value[char_pos]
-                value = new_value
-                if char_pos >= len(value):
-                    char_pos = len(value) - 1
-
-        elif btn == "KEY1":
-            # Done
-            return "".join(value)
-
-        elif btn == "LEFT":
-            if char_pos > 0:
-                char_pos -= 1
-
-        elif btn == "RIGHT":
-            if char_pos < len(value) - 1:
-                char_pos += 1
-
-        elif btn == "OK":
-            # Add new character after cursor
-            new_value = list(value)
-            new_value.insert(char_pos + 1, char_set[0])
-            value = new_value
-            char_pos += 1
-
-        elif btn == "UP":
-            if char_pos < len(value):
-                current = value[char_pos]
-                ci = char_set.index(current) if current in char_set else 0
-                ci = (ci + 1) % len(char_set)
-                new_value = list(value)
-                new_value[char_pos] = char_set[ci]
-                value = new_value
-
-        elif btn == "DOWN":
-            if char_pos < len(value):
-                current = value[char_pos]
-                ci = char_set.index(current) if current in char_set else 0
-                ci = (ci - 1) % len(char_set)
-                new_value = list(value)
-                new_value[char_pos] = char_set[ci]
-                value = new_value
-
-        time.sleep(0.08)
-
-    return "".join(value)
+    """Run the keyboard UI. Returns the entered string."""
+    charset = "ip" if char_set == IP_CHARS else ("digits" if char_set == PORT_CHARS else "full")
+    result = lcd_keyboard(LCD, font, PINS, GPIO, title=label, default=initial, charset=charset)
+    return result if result is not None else initial
 
 
 # -------------------------------------------------------------------

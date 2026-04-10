@@ -27,6 +27,7 @@ import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._keyboard_helper import lcd_keyboard
 
 PINS = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
@@ -144,16 +145,7 @@ def _is_log_or_txt(path):
     return ext in (".log", ".txt")
 
 
-# Character set for keyword filter input
-_FILTER_CHARS = list(
-    "abcdefghijklmnopqrstuvwxyz"
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-    "0123456789._-:/ "
-)
-
-
-def _draw_log_viewer(lcd, path, all_lines, filtered_lines, keyword,
-                     scroll, editing_filter, char_idx):
+def _draw_log_viewer(lcd, path, all_lines, filtered_lines, keyword, scroll):
     """Draw log viewer with filtering."""
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
     d = ScaledDraw(img)
@@ -168,18 +160,11 @@ def _draw_log_viewer(lcd, path, all_lines, filtered_lines, keyword,
         name = name[:6] + ".."
     d.text((2, 1), f"{name} {shown}/{total}", font=font, fill="#00ff00")
 
-    if editing_filter:
-        # Draw character picker overlay
-        d.rectangle((0, 100, 127, 127), fill="#222200")
-        ch = _FILTER_CHARS[char_idx] if _FILTER_CHARS else " "
-        d.text((2, 101), f"Char: <{ch}>", font=font, fill="#ffff00")
-        d.text((2, 114), ">=add <=del OK=done", font=font, fill="#888")
-    else:
-        # Show filter keyword if set
-        if keyword:
-            d.rectangle((0, 13, 127, 23), fill="#1a0a00")
-            kw_display = keyword if len(keyword) <= 16 else keyword[-16:]
-            d.text((2, 14), f"F:{kw_display}", font=font, fill="#ffaa00")
+    # Show filter keyword if set
+    if keyword:
+        d.rectangle((0, 13, 127, 23), fill="#1a0a00")
+        kw_display = keyword if len(keyword) <= 16 else keyword[-16:]
+        d.text((2, 14), f"F:{kw_display}", font=font, fill="#ffaa00")
 
     # Content area
     content_top = 25 if keyword else 15
@@ -196,9 +181,8 @@ def _draw_log_viewer(lcd, path, all_lines, filtered_lines, keyword,
             d.text((2, y), line_text, font=font, fill="#cccccc")
             y += line_h
 
-    if not editing_filter:
-        d.rectangle((0, 116, 127, 127), fill="#111")
-        d.text((2, 117), "OK=filter K3=back", font=font, fill="#666666")
+    d.rectangle((0, 116, 127, 127), fill="#111")
+    d.text((2, 117), "OK=filter K3=back", font=font, fill="#666666")
 
     lcd.LCD_ShowImage(img, 0, 0)
 
@@ -331,8 +315,6 @@ def main():
     log_filtered = []
     log_keyword = ""
     log_scroll = 0
-    log_editing = False
-    log_char_idx = 0
     log_path = ""
 
     try:
@@ -352,8 +334,6 @@ def main():
                     log_keyword = ""
                     log_filtered = list(log_all_lines)
                     log_scroll = 0
-                    log_editing = False
-                    log_char_idx = 0
                     mode = "log_viewer"
                     time.sleep(0.1)
                     continue
@@ -374,43 +354,32 @@ def main():
                     time.sleep(0.1)
                     continue
                 elif btn == "OK":
-                    log_editing = not log_editing
-                    if log_editing:
-                        log_char_idx = 0
-                elif log_editing:
-                    if btn == "UP":
-                        log_char_idx = (log_char_idx - 1) % len(_FILTER_CHARS)
-                    elif btn == "DOWN":
-                        log_char_idx = (log_char_idx + 1) % len(_FILTER_CHARS)
-                    elif btn == "RIGHT":
-                        log_keyword += _FILTER_CHARS[log_char_idx]
+                    new_kw = lcd_keyboard(LCD, font, PINS, GPIO,
+                                          title="Filter",
+                                          default=log_keyword,
+                                          charset="full")
+                    if new_kw is not None:
+                        log_keyword = new_kw
+                    else:
+                        log_keyword = ""
+                    if log_keyword:
                         log_filtered = [
                             l for l in log_all_lines
                             if log_keyword.lower() in l.lower()
                         ]
-                        log_scroll = 0
-                    elif btn == "LEFT":
-                        if log_keyword:
-                            log_keyword = log_keyword[:-1]
-                            if log_keyword:
-                                log_filtered = [
-                                    l for l in log_all_lines
-                                    if log_keyword.lower() in l.lower()
-                                ]
-                            else:
-                                log_filtered = list(log_all_lines)
-                            log_scroll = 0
-                else:
-                    if btn == "UP":
-                        log_scroll = max(0, log_scroll - 1)
-                    elif btn == "DOWN":
-                        log_scroll = min(
-                            max(0, len(log_filtered) - 1), log_scroll + 1
-                        )
+                    else:
+                        log_filtered = list(log_all_lines)
+                    log_scroll = 0
+                elif btn == "UP":
+                    log_scroll = max(0, log_scroll - 1)
+                elif btn == "DOWN":
+                    log_scroll = min(
+                        max(0, len(log_filtered) - 1), log_scroll + 1
+                    )
 
                 _draw_log_viewer(
                     LCD, log_path, log_all_lines, log_filtered,
-                    log_keyword, log_scroll, log_editing, log_char_idx,
+                    log_keyword, log_scroll,
                 )
                 time.sleep(0.08)
                 continue

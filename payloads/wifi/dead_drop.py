@@ -47,6 +47,7 @@ import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._keyboard_helper import lcd_keyboard
 from payloads._iface_helper import select_interface
 
 # ---------------------------------------------------------------------------
@@ -773,54 +774,10 @@ def _draw_frame(lcd, font_obj, ifc_name):
 
 def _edit_ssid(lcd, font_obj):
     global ssid
-    chars = list(ssid)
-    char_idx = 0
-
-    while _running:
-        btn = get_button(PINS, GPIO)
-
-        if btn == "KEY3" or btn == "KEY1":
-            ssid = "".join(chars) or "DeadDrop"
-            _save_config()
-            return
-        elif btn == "OK":
-            ssid = "".join(chars) or "DeadDrop"
-            _save_config()
-            return
-        elif btn == "UP":
-            char_idx = (char_idx + 1) % len(SSID_CHARS)
-            time.sleep(0.12)
-        elif btn == "DOWN":
-            char_idx = (char_idx - 1) % len(SSID_CHARS)
-            time.sleep(0.12)
-        elif btn == "RIGHT":
-            if len(chars) < 30:
-                chars.append(SSID_CHARS[char_idx])
-            time.sleep(0.15)
-        elif btn == "LEFT":
-            if chars:
-                chars.pop()
-            time.sleep(0.15)
-
-        img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-        d = ScaledDraw(img)
-        d.rectangle((0, 0, 127, 13), fill="#111")
-        d.text((2, 1), "EDIT SSID", font=font_obj, fill="#58a6ff")
-
-        display = "".join(chars)
-        d.text((4, 30), display[:20], font=font_obj, fill="#FFFFFF")
-        if len(display) > 20:
-            d.text((4, 42), display[20:], font=font_obj, fill="#FFFFFF")
-
-        d.text((4, 60), f"Char: {SSID_CHARS[char_idx]}", font=font_obj, fill="#58a6ff")
-        d.text((4, 75), "U/D:char R:add L:del", font=font_obj, fill="#666")
-        d.text((4, 87), "OK/K1:confirm", font=font_obj, fill="#666")
-
-        d.rectangle((0, 116, 127, 127), fill="#111")
-        d.text((2, 117), f"Len: {len(chars)}/30", font=font_obj, fill="#888")
-
-        lcd.LCD_ShowImage(img, 0, 0)
-        time.sleep(0.05)
+    result = lcd_keyboard(lcd, font_obj, PINS, GPIO, title="EDIT SSID", default=ssid)
+    if result is not None:
+        ssid = result or "DeadDrop"
+        _save_config()
 
 
 # ---------------------------------------------------------------------------

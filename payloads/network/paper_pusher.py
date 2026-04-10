@@ -40,6 +40,7 @@ import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._keyboard_helper import lcd_keyboard
 from payloads._iface_helper import select_interface
 
 PINS = {
@@ -308,27 +309,17 @@ def main():
                 _draw_printers(cursor, scroll, st, jobs, sc)
 
             elif view == "text_input":
-                if btn == "UP":
-                    char_idx = (char_idx - 1) % len(CHARSET)
-                elif btn == "DOWN":
-                    char_idx = (char_idx + 1) % len(CHARSET)
-                elif btn == "OK":
-                    text_chars = text_chars + [CHARSET[char_idx]]
-                elif btn == "KEY1":
-                    if text_chars:
-                        text_chars = text_chars[:-1]
-                elif btn == "KEY2":
-                    msg = "".join(text_chars).strip()
+                result = lcd_keyboard(LCD, font, PINS, GPIO, title=f"MSG->{selected_printer['ip'][:12]}",
+                                      default="".join(text_chars))
+                if result is not None:
+                    msg = result.strip()
                     if msg and selected_printer:
                         threading.Thread(
                             target=_send_text,
                             args=(selected_printer["ip"], selected_printer["port"], msg),
                             daemon=True,
                         ).start()
-                    view = "list"
-
-                if view == "text_input":
-                    _draw_text_input(text_chars, char_idx, selected_printer["ip"])
+                view = "list"
 
             time.sleep(0.08)
 

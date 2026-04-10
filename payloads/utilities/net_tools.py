@@ -24,6 +24,7 @@ import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._keyboard_helper import lcd_keyboard
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -35,9 +36,6 @@ PINS = {
 WIDTH, HEIGHT = LCD_1in44.LCD_WIDTH, LCD_1in44.LCD_HEIGHT
 ROW_H = 12
 VISIBLE_ROWS = 7
-
-# Character set for text input picker
-CHAR_SET = list("abcdefghijklmnopqrstuvwxyz0123456789./-:")
 
 # Tool definitions: (label, requires_input, default_value, command_builder)
 TOOLS = [
@@ -192,121 +190,6 @@ def _handle_menu(lcd, font_obj):
 
 
 # ---------------------------------------------------------------------------
-# Screen: Text input
-# ---------------------------------------------------------------------------
-def _draw_input(lcd, font_obj, tool_name, chars, cursor):
-    """Render the text input screen."""
-    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ScaledDraw(img)
-
-    _draw_header(d, font_obj, tool_name)
-
-    d.text((2, 18), "Target:", font=font_obj, fill="#AAAAAA")
-
-    # Show the input string with cursor highlight
-    input_str = "".join(chars)
-    # Display up to 20 chars, scroll if needed
-    disp_start = max(0, cursor - 18)
-    disp_text = input_str[disp_start:disp_start + 20]
-    cursor_in_view = cursor - disp_start
-
-    d.text((2, 32), disp_text, font=font_obj, fill="#FFFFFF")
-
-    # Draw cursor underline
-    if 0 <= cursor_in_view < 20:
-        cx = 2 + cursor_in_view * 6
-        d.line((cx, 42, cx + 5, 42), fill="#FFAA00", width=1)
-
-    # Show current character options
-    if cursor < len(chars):
-        cur_char = chars[cursor]
-        ci = CHAR_SET.index(cur_char) if cur_char in CHAR_SET else 0
-        prev_c = CHAR_SET[(ci - 1) % len(CHAR_SET)]
-        next_c = CHAR_SET[(ci + 1) % len(CHAR_SET)]
-        d.text((2, 52), f"UP:[{prev_c}]  DN:[{next_c}]", font=font_obj, fill="#666")
-
-    d.text((2, 70), "UP/DN: char  L/R: move", font=font_obj, fill="#555")
-    d.text((2, 82), "OK: confirm input", font=font_obj, fill="#555")
-
-    _draw_footer(d, font_obj, "KEY1:Back  KEY3:Exit")
-    lcd.LCD_ShowImage(img, 0, 0)
-
-
-def _handle_input(lcd, font_obj, tool_name, default):
-    """Run text input. Returns (target_string, True) or (None, False).
-
-    KEY1 returns to menu, KEY3 exits entirely.
-    """
-    chars = list(default)
-    if not chars:
-        chars = list("a")
-    cursor = len(chars) - 1
-
-    _draw_input(lcd, font_obj, tool_name, chars, cursor)
-
-    while running:
-        btn = get_button(PINS, GPIO)
-
-        if btn == "KEY3":
-            return None, False
-
-        if btn == "KEY1":
-            time.sleep(0.2)
-            return None, True  # back to menu
-
-        if btn == "OK":
-            target = "".join(chars).strip()
-            if target:
-                time.sleep(0.2)
-                return target, True
-            time.sleep(0.1)
-
-        elif btn == "UP":
-            if cursor < len(chars):
-                cur = chars[cursor]
-                ci = CHAR_SET.index(cur) if cur in CHAR_SET else 0
-                chars[cursor] = CHAR_SET[(ci - 1) % len(CHAR_SET)]
-            _draw_input(lcd, font_obj, tool_name, chars, cursor)
-            time.sleep(0.15)
-
-        elif btn == "DOWN":
-            if cursor < len(chars):
-                cur = chars[cursor]
-                ci = CHAR_SET.index(cur) if cur in CHAR_SET else 0
-                chars[cursor] = CHAR_SET[(ci + 1) % len(CHAR_SET)]
-            _draw_input(lcd, font_obj, tool_name, chars, cursor)
-            time.sleep(0.15)
-
-        elif btn == "RIGHT":
-            if cursor < len(chars) - 1:
-                cursor += 1
-            else:
-                # Extend input with a new character
-                chars.append(".")
-                cursor = len(chars) - 1
-            _draw_input(lcd, font_obj, tool_name, chars, cursor)
-            time.sleep(0.15)
-
-        elif btn == "LEFT":
-            if cursor > 0:
-                cursor -= 1
-            _draw_input(lcd, font_obj, tool_name, chars, cursor)
-            time.sleep(0.15)
-
-        elif btn == "KEY2":
-            # Delete character at cursor
-            if len(chars) > 1:
-                chars.pop(cursor)
-                cursor = min(cursor, len(chars) - 1)
-            _draw_input(lcd, font_obj, tool_name, chars, cursor)
-            time.sleep(0.15)
-
-        time.sleep(0.05)
-
-    return None, False
-
-
-# ---------------------------------------------------------------------------
 # Screen: Results viewer (scrollable)
 # ---------------------------------------------------------------------------
 SPINNER = ["|", "/", "-", "\\"]
@@ -419,11 +302,11 @@ def main():
 
             # --- Text input (if required) ---
             if needs_input:
-                target, proceed = _handle_input(lcd, font_obj, tool_name, default_val)
-                if not proceed:
-                    break  # KEY3 pressed
+                target = lcd_keyboard(lcd, font_obj, PINS, GPIO,
+                                      title=tool_name, default=default_val,
+                                      charset="url")
                 if target is None:
-                    continue  # KEY1 pressed, back to menu
+                    continue  # cancelled, back to menu
                 cmd_args = cmd_builder(target)
             else:
                 cmd_args = cmd_builder("")

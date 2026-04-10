@@ -33,6 +33,7 @@ import LCD_Config
 from PIL import Image
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._keyboard_helper import lcd_keyboard
 
 PINS = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
@@ -41,11 +42,6 @@ PINS = {
 WIDTH, HEIGHT = LCD_1in44.LCD_WIDTH, LCD_1in44.LCD_HEIGHT
 ROW_H = 12
 DEBOUNCE = 0.22
-CHARSET = list(
-    "abcdefghijklmnopqrstuvwxyz"
-    "0123456789-_.+"
-)
-
 _running = True
 _install_lock = threading.Lock()
 _install_output = []
@@ -130,47 +126,6 @@ def _install_package(pkg_name, pkg_mode):
 # Drawing
 # ---------------------------------------------------------------------------
 
-def _draw_input(lcd, fnt, pkg_chars, char_idx, pkg_mode, status):
-    """Draw the package name input screen."""
-    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ScaledDraw(img)
-
-    # Header
-    d.rectangle((0, 0, 127, 13), fill="#111")
-    mode_label = "APT" if pkg_mode == "apt" else "PIP"
-    d.text((2, 1), "PKG INSTALL [" + mode_label + "]", font=fnt, fill="#00CCFF")
-
-    # Package name
-    d.text((2, 18), "Package:", font=fnt, fill="#AAA")
-    name_str = "".join(pkg_chars)
-    if len(name_str) > 18:
-        name_str = name_str[-18:]
-    d.text((2, 30), name_str + "_", font=fnt, fill="#FFFFFF")
-
-    # Character picker
-    current = CHARSET[char_idx]
-    d.text((2, 48), "Char: [ " + current + " ]", font=fnt, fill="#00FF00")
-
-    prev_idx = (char_idx - 1) % len(CHARSET)
-    next_idx = (char_idx + 1) % len(CHARSET)
-    d.text((2, 60), "  UP:" + CHARSET[prev_idx] + "  DN:" + CHARSET[next_idx],
-           font=fnt, fill="#555")
-
-    # Instructions
-    d.text((2, 78), "OK:add RIGHT:install", font=fnt, fill="#666")
-    d.text((2, 90), "LEFT:backspace", font=fnt, fill="#666")
-    d.text((2, 102), "K2:apt/pip K1:count", font=fnt, fill="#666")
-
-    # Footer
-    d.rectangle((0, 116, 127, 127), fill="#111")
-    if status:
-        d.text((2, 117), status[:22], font=fnt, fill="#FFFF00")
-    else:
-        d.text((2, 117), "KEY3: exit", font=fnt, fill="#AAA")
-
-    lcd.LCD_ShowImage(img, 0, 0)
-
-
 def _draw_output(lcd, fnt, lines, scroll, installing, pkg_mode):
     """Draw the install output screen."""
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
@@ -244,16 +199,30 @@ def main():
     lcd.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
     fnt = scaled_font()
 
-    pkg_chars = []
-    char_idx = 0
     pkg_mode = "apt"  # "apt" or "pip"
-    status = ""
     last_press = 0.0
     scroll = 0
     view = "input"  # input | output | count
 
     try:
         while _running:
+            if view == "input":
+                mode_label = "APT" if pkg_mode == "apt" else "PIP"
+                pkg_name = lcd_keyboard(lcd, fnt, PINS, GPIO,
+                                        title="PKG [" + mode_label + "]",
+                                        charset="full")
+                if pkg_name is None:
+                    break
+                scroll = 0
+                view = "output"
+                threading.Thread(
+                    target=_install_package,
+                    args=(pkg_name, pkg_mode),
+                    daemon=True,
+                ).start()
+                time.sleep(0.1)
+                continue
+
             btn = get_button(PINS, GPIO)
             now = time.time()
             if btn and (now - last_press) < DEBOUNCE:
@@ -276,7 +245,6 @@ def main():
 
                 if btn == "KEY3" and not busy:
                     view = "input"
-                    status = ""
                     time.sleep(0.1)
                     continue
                 elif btn == "UP":
@@ -284,6 +252,12 @@ def main():
                 elif btn == "DOWN":
                     max_scroll = max(0, len(lines) - 8)
                     scroll = min(scroll + 1, max_scroll)
+                elif btn == "KEY1" and not busy:
+                    count = _count_installed(pkg_mode)
+                    _draw_count(lcd, fnt, count, pkg_mode)
+                    view = "count"
+                    time.sleep(0.1)
+                    continue
 
                 # Auto-scroll while installing
                 if busy:
@@ -292,49 +266,6 @@ def main():
                 _draw_output(lcd, fnt, lines, scroll, busy, pkg_mode)
                 time.sleep(0.12)
                 continue
-
-            # Input view
-            if btn == "KEY3":
-                break
-            elif btn == "UP":
-                char_idx = (char_idx - 1) % len(CHARSET)
-            elif btn == "DOWN":
-                char_idx = (char_idx + 1) % len(CHARSET)
-            elif btn == "OK":
-                pkg_chars = pkg_chars + [CHARSET[char_idx]]
-                status = ""
-            elif btn == "LEFT":
-                if pkg_chars:
-                    pkg_chars = pkg_chars[:-1]
-                status = ""
-            elif btn == "RIGHT":
-                pkg_name = "".join(pkg_chars).strip()
-                if not pkg_name:
-                    status = "Enter a name first"
-                else:
-                    scroll = 0
-                    view = "output"
-                    threading.Thread(
-                        target=_install_package,
-                        args=(pkg_name, pkg_mode),
-                        daemon=True,
-                    ).start()
-                    time.sleep(0.1)
-                    continue
-            elif btn == "KEY2":
-                pkg_mode = "pip" if pkg_mode == "apt" else "apt"
-                status = "Mode: " + pkg_mode
-            elif btn == "KEY1":
-                status = "Counting..."
-                _draw_input(lcd, fnt, pkg_chars, char_idx, pkg_mode, status)
-                count = _count_installed(pkg_mode)
-                _draw_count(lcd, fnt, count, pkg_mode)
-                view = "count"
-                time.sleep(0.1)
-                continue
-
-            _draw_input(lcd, fnt, pkg_chars, char_idx, pkg_mode, status)
-            time.sleep(0.08)
 
     finally:
         try:

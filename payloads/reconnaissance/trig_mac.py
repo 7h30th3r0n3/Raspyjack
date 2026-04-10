@@ -38,6 +38,7 @@ import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._keyboard_helper import lcd_keyboard
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -311,37 +312,25 @@ def main():
                 break
 
             if mode == "input":
-                if btn == "UP":
-                    char_idx = (char_idx - 1) % len(MAC_CHARSET)
-                    time.sleep(DEBOUNCE)
-                elif btn == "DOWN":
-                    char_idx = (char_idx + 1) % len(MAC_CHARSET)
-                    time.sleep(DEBOUNCE)
-                elif btn == "RIGHT":
-                    if len(mac_chars) < 17:
-                        mac_chars = list(mac_chars) + [MAC_CHARSET[char_idx]]
-                    time.sleep(DEBOUNCE)
-                elif btn == "LEFT":
-                    if mac_chars:
-                        mac_chars = list(mac_chars[:-1])
-                    time.sleep(DEBOUNCE)
-                elif btn == "OK":
-                    candidate = "".join(mac_chars).strip()
-                    if _validate_mac(candidate):
-                        with lock:
-                            target_mac = candidate.upper()
-                            detection_count = 0
-                            last_seen_time = ""
-                            last_seen_ip = ""
-                            status_msg = "Ready - K1 to start"
-                        mode = "monitor"
-                        time.sleep(0.3)
-                    else:
-                        with lock:
-                            status_msg = "Invalid MAC format"
-                        time.sleep(0.3)
-
-                _draw_input_screen(lcd, font_obj, mac_chars, char_idx)
+                result = lcd_keyboard(lcd, font_obj, PINS, GPIO, title="MAC TRIGGER",
+                                      charset="mac")
+                if result is None:
+                    break
+                candidate = result.strip()
+                if _validate_mac(candidate):
+                    mac_chars = list(candidate)
+                    with lock:
+                        target_mac = candidate.upper()
+                        detection_count = 0
+                        last_seen_time = ""
+                        last_seen_ip = ""
+                        status_msg = "Ready - K1 to start"
+                    mode = "monitor"
+                    time.sleep(0.3)
+                else:
+                    with lock:
+                        status_msg = "Invalid MAC format"
+                    time.sleep(0.3)
 
             elif mode == "monitor":
                 if btn == "KEY1":

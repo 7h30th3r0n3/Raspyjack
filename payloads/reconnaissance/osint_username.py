@@ -39,6 +39,7 @@ import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._keyboard_helper import lcd_keyboard
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -317,42 +318,23 @@ def main():
                 break
 
             if mode == "input":
-                charset = CHARSET_UPPER if uppercase else CHARSET_LOWER
-
-                if btn == "UP":
-                    char_idx = (char_idx - 1) % len(charset)
-                    time.sleep(DEBOUNCE)
-                elif btn == "DOWN":
-                    char_idx = (char_idx + 1) % len(charset)
-                    time.sleep(DEBOUNCE)
-                elif btn == "RIGHT":
-                    if len(username_chars) < 32:
-                        username_chars = list(username_chars) + [charset[char_idx]]
-                    time.sleep(DEBOUNCE)
-                elif btn == "LEFT":
-                    if username_chars:
-                        username_chars = list(username_chars[:-1])
-                    time.sleep(DEBOUNCE)
-                elif btn == "KEY1":
-                    uppercase = not uppercase
-                    char_idx = min(char_idx, len(charset) - 1)
+                result = lcd_keyboard(lcd, font_obj, PINS, GPIO, title="OSINT USERNAME")
+                if result is None:
+                    break
+                uname = result.strip()
+                if uname:
+                    username_chars = list(uname)
+                    with lock:
+                        results = []
+                        status_msg = "Starting..."
+                    mode = "results"
+                    scroll = 0
+                    threading.Thread(
+                        target=_check_all_thread,
+                        args=(uname,),
+                        daemon=True,
+                    ).start()
                     time.sleep(0.3)
-                elif btn == "OK":
-                    uname = "".join(username_chars).strip()
-                    if uname:
-                        with lock:
-                            results = []
-                            status_msg = "Starting..."
-                        mode = "results"
-                        scroll = 0
-                        threading.Thread(
-                            target=_check_all_thread,
-                            args=(uname,),
-                            daemon=True,
-                        ).start()
-                        time.sleep(0.3)
-
-                _draw_input_screen(lcd, font_obj, username_chars, char_idx, uppercase)
 
             elif mode == "results":
                 if btn == "UP":

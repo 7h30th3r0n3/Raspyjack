@@ -34,6 +34,7 @@ import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._keyboard_helper import lcd_keyboard
 
 try:
     import qrcode
@@ -62,14 +63,6 @@ QR_OFFSET_X = 4
 QR_OFFSET_Y = 2
 LABEL_Y = HEIGHT - 10
 
-# Characters for custom text input
-CHARSET = list(
-    "abcdefghijklmnopqrstuvwxyz"
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-    "0123456789"
-    " .-_/:@?&=#%+!"
-)
-
 # ---------------------------------------------------------------------------
 # Shared state
 # ---------------------------------------------------------------------------
@@ -81,8 +74,6 @@ qr_image = None         # current PIL Image of QR code (LCD)
 
 # Custom text state
 custom_text = []         # list of characters
-custom_cursor = 0
-char_idx = 0             # index into CHARSET for current position
 
 # WiFi config (editable)
 wifi_ssid = "RaspyJack"
@@ -245,50 +236,13 @@ def _draw_mode_select():
     LCD.LCD_ShowImage(img, 0, 0)
 
 
-def _draw_custom_editor():
-    """Show the custom text character editor."""
-    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ScaledDraw(img)
-
-    d.rectangle((0, 0, 127, 13), fill="#111")
-    d.text((2, 1), "CUSTOM TEXT", font=font, fill="#FFAA00")
-
-    with lock:
-        text = list(custom_text)
-        cur = custom_cursor
-        ci = char_idx
-
-    # Show current text
-    text_str = "".join(text)
-    d.text((2, 18), f"Text: {text_str[:18]}", font=font, fill="#FFFFFF")
-
-    # Show cursor position
-    if len(text_str) > 18:
-        d.text((2, 30), f"      {text_str[18:36]}", font=font, fill="#FFFFFF")
-
-    # Current character selector
-    current_char = CHARSET[ci] if CHARSET else "?"
-    d.text((2, 48), f"Char: [{current_char}]", font=font, fill="#00FF00")
-    d.text((2, 60), f"Pos: {cur}/{len(text)}", font=font, fill="#888")
-
-    # Instructions
-    d.text((2, 78), "UP/DN: change char", font=font, fill="#666")
-    d.text((2, 90), "OK: add char", font=font, fill="#666")
-    d.text((2, 102), "KEY1: backspace", font=font, fill="#666")
-
-    d.rectangle((0, 116, 127, 127), fill="#111")
-    d.text((2, 117), "KEY2:Gen QR K3:Back", font=font, fill="#AAA")
-
-    LCD.LCD_ShowImage(img, 0, 0)
-
-
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
 def main():
     global mode_idx, inverted, qr_image
-    global custom_text, custom_cursor, char_idx
+    global custom_text
 
     if qrcode is None:
         img = Image.new("RGB", (WIDTH, HEIGHT), "black")
@@ -311,55 +265,12 @@ def main():
     LCD.LCD_ShowImage(img, 0, 0)
     time.sleep(0.5)
 
-    in_custom_edit = False
-
     try:
         while True:
             btn = get_button(PINS, GPIO)
 
             if btn == "KEY3":
-                if in_custom_edit:
-                    in_custom_edit = False
-                    time.sleep(0.2)
-                    continue
                 break
-
-            # --- Custom text editor ---
-            if in_custom_edit:
-                if btn == "UP":
-                    with lock:
-                        char_idx = (char_idx + 1) % len(CHARSET)
-                    time.sleep(0.12)
-
-                elif btn == "DOWN":
-                    with lock:
-                        char_idx = (char_idx - 1) % len(CHARSET)
-                    time.sleep(0.12)
-
-                elif btn == "OK":
-                    with lock:
-                        ch = CHARSET[char_idx]
-                        custom_text = custom_text + [ch]
-                        custom_cursor = len(custom_text)
-                    time.sleep(0.15)
-
-                elif btn == "KEY1":
-                    # Backspace
-                    with lock:
-                        if custom_text:
-                            custom_text = custom_text[:-1]
-                            custom_cursor = len(custom_text)
-                    time.sleep(0.15)
-
-                elif btn == "KEY2":
-                    _refresh_qr()
-                    in_custom_edit = False
-                    time.sleep(0.2)
-                    continue
-
-                _draw_custom_editor()
-                time.sleep(0.05)
-                continue
 
             # --- Main QR view ---
             if btn == "LEFT":
@@ -378,7 +289,15 @@ def main():
                 with lock:
                     mode = MODES[mode_idx]
                 if mode == "Custom":
-                    in_custom_edit = True
+                    default = "".join(custom_text)
+                    text = lcd_keyboard(LCD, font, PINS, GPIO,
+                                        title="CUSTOM TEXT",
+                                        default=default,
+                                        charset="url")
+                    if text is not None:
+                        with lock:
+                            custom_text = list(text)
+                    _refresh_qr()
                     time.sleep(0.2)
                     continue
                 _refresh_qr()

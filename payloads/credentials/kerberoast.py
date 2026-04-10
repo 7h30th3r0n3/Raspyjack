@@ -16,6 +16,7 @@ import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._keyboard_helper import lcd_keyboard
 
 PINS = {"UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
         "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16}
@@ -407,47 +408,8 @@ LCD_KB_CHARS = (
 
 def _lcd_input(prompt, max_len=40, is_password=False):
     """Collect text input from the user via LCD + buttons."""
-    buf = []
-    char_idx = 0
-
-    while True:
-        img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-        d = ScaledDraw(img)
-        d.rectangle((0, 0, 127, 13), fill="#111")
-        d.text((2, 1), prompt[:20], font=font, fill="#CC44FF")
-
-        display_val = "*" * len(buf) if is_password else "".join(buf)
-        d.text((2, 20), display_val[-20:], font=font, fill="white")
-
-        current_char = LCD_KB_CHARS[char_idx % len(LCD_KB_CHARS)]
-        d.text((2, 38), f"Char: {current_char}", font=font, fill="#FFAA00")
-        d.rectangle((0, 54, 127, 55), fill="#333")
-        d.text((2, 60), "U/D:char OK:add", font=font, fill="#888")
-        d.text((2, 74), "RIGHT:done LEFT:del", font=font, fill="#888")
-        d.text((2, 90), f"Len: {len(buf)}/{max_len}", font=font, fill="#666")
-
-        LCD.LCD_ShowImage(img, 0, 0)
-
-        btn = get_button(PINS, GPIO)
-        if btn == "UP":
-            char_idx = (char_idx - 1) % len(LCD_KB_CHARS)
-            time.sleep(0.15)
-        elif btn == "DOWN":
-            char_idx = (char_idx + 1) % len(LCD_KB_CHARS)
-            time.sleep(0.15)
-        elif btn == "OK":
-            if len(buf) < max_len:
-                buf.append(LCD_KB_CHARS[char_idx % len(LCD_KB_CHARS)])
-            time.sleep(0.2)
-        elif btn == "LEFT":
-            if buf:
-                buf.pop()
-            time.sleep(0.2)
-        elif btn == "RIGHT":
-            return "".join(buf)
-        elif btn == "KEY3":
-            return ""
-        time.sleep(0.05)
+    result = lcd_keyboard(LCD, font, PINS, GPIO, title=prompt[:20])
+    return result if result is not None else ""
 
 
 def _prompt_credentials():

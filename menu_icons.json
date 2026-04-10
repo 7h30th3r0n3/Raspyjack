@@ -87,7 +87,9 @@
         " yandex": "",
         " icloud": "",
         " wifi": "",
-        " shopping": ""
+        " shopping": "",
+        " Random screensaver: ON": "",
+        " Random screensaver: OFF": ""
     },
     "categories": {
         " Reconnaissance": "",
@@ -304,7 +306,6 @@
         " jelly_sentinel": "",
         " ethernet_recon": "",
         " norse_recon": "",
-        " evil_portal_manager": "",
         " event_triggers": "",
         " dropbox_upload": "",
         " pagecord": "",

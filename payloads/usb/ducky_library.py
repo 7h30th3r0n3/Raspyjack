@@ -36,6 +36,7 @@ import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._keyboard_helper import lcd_keyboard
 
 PINS = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
@@ -405,59 +406,15 @@ def main():
 
             # --- IP edit mode ---
             if view_mode == "ip_edit":
-                if btn == "UP":
+                result = lcd_keyboard(LCD, font, PINS, GPIO, title="EDIT IP",
+                                      default=attacker_ip, charset="ip")
+                if result is not None:
                     with lock:
-                        if ip_edit_buf and ip_cursor < len(ip_edit_buf):
-                            ch = ip_edit_buf[ip_cursor]
-                            idx = IP_CHARS.index(ch) if ch in IP_CHARS else 0
-                            new_idx = (idx + 1) % len(IP_CHARS)
-                            ip_edit_buf = (
-                                ip_edit_buf[:ip_cursor]
-                                + [IP_CHARS[new_idx]]
-                                + ip_edit_buf[ip_cursor + 1:]
-                            )
-                    time.sleep(0.15)
-
-                elif btn == "DOWN":
-                    with lock:
-                        if ip_edit_buf and ip_cursor < len(ip_edit_buf):
-                            ch = ip_edit_buf[ip_cursor]
-                            idx = IP_CHARS.index(ch) if ch in IP_CHARS else 0
-                            new_idx = (idx - 1) % len(IP_CHARS)
-                            ip_edit_buf = (
-                                ip_edit_buf[:ip_cursor]
-                                + [IP_CHARS[new_idx]]
-                                + ip_edit_buf[ip_cursor + 1:]
-                            )
-                    time.sleep(0.15)
-
-                elif btn == "LEFT":
-                    with lock:
-                        ip_cursor = max(0, ip_cursor - 1)
-                    time.sleep(0.15)
-
-                elif btn == "RIGHT":
-                    with lock:
-                        ip_cursor = min(len(ip_edit_buf) - 1, ip_cursor + 1)
-                    time.sleep(0.15)
-
-                elif btn == "KEY1":
-                    # Add a digit
-                    with lock:
-                        if len(ip_edit_buf) < 15:
-                            ip_edit_buf = ip_edit_buf + ["0"]
-                            ip_cursor = len(ip_edit_buf) - 1
-                    time.sleep(0.2)
-
-                elif btn == "OK":
-                    with lock:
-                        attacker_ip = "".join(ip_edit_buf)
+                        attacker_ip = result
                         status_msg = f"IP: {attacker_ip}"
-                        view_mode = "list"
-                    time.sleep(0.3)
-
-                _draw_ip_edit_view()
-                time.sleep(0.05)
+                with lock:
+                    view_mode = "list"
+                time.sleep(0.2)
                 continue
 
             # --- Preview mode ---

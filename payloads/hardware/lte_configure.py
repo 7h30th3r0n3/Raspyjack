@@ -39,6 +39,7 @@ import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._keyboard_helper import lcd_keyboard
 
 PINS = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
@@ -307,24 +308,14 @@ def main():
                 time.sleep(1.0)
 
             elif view == "apn_input":
-                if btn == "UP":
-                    char_idx = (char_idx - 1) % len(CHARSET)
-                elif btn == "DOWN":
-                    char_idx = (char_idx + 1) % len(CHARSET)
-                elif btn == "OK":
-                    apn_chars = apn_chars + [CHARSET[char_idx]]
-                elif btn == "KEY1":
-                    if apn_chars:
-                        apn_chars = apn_chars[:-1]
-                elif btn == "KEY2":
-                    new_apn = "".join(apn_chars).strip()
+                result = lcd_keyboard(LCD, font, PINS, GPIO, title="SET APN",
+                                      default="".join(apn_chars))
+                if result is not None:
+                    new_apn = result.strip()
                     cfg = {**cfg, "apn": new_apn}
                     _save_config(cfg)
                     status_msg = f"APN: {new_apn[:14]}"
-                    view = "menu"
-
-                if view == "apn_input":
-                    _draw_apn_input(apn_chars, char_idx)
+                view = "menu"
 
             time.sleep(0.08)
 
