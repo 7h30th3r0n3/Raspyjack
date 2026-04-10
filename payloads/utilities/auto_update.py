@@ -19,10 +19,17 @@ After update runs install_raspyjack.sh then reboots.
 import os
 import sys
 import time
+import re
 import signal
 import subprocess
 import shutil
 from datetime import datetime
+
+_ANSI_RE = re.compile(r'\x1b\[[0-9;]*[a-zA-Z]')
+
+def _strip_ansi(text):
+    """Remove ANSI escape codes from text."""
+    return _ANSI_RE.sub('', text)
 
 sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..", "..")))
 
@@ -341,14 +348,15 @@ def run_install_script():
             line = proc.stdout.readline()
             if not line and proc.poll() is not None:
                 break
-            if line.strip():
+            clean = _strip_ansi(line.strip())
+            if clean:
                 line_count += 1
-                last_line = line.strip()[:20]
+                last_line = clean[:22]
                 show_progress("Installing...", last_line, min(95, line_count * 2))
 
         rc = proc.wait(timeout=300)
         if rc != 0:
-            return False, f"exit code {rc}"
+            return False, f"rc={rc} {last_line}"
         return True, "OK"
     except Exception as e:
         return False, str(e)[:40]
