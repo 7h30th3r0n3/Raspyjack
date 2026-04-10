@@ -477,7 +477,7 @@ class LCD:
         self.LCD_WriteReg(0x2C)
 
     def LCD_Clear(self):
-        _buffer = [0xff]*(self.width * self.height * 2)
+        _buffer = [0x00]*(self.width * self.height * 2)
         self.LCD_SetWindows(0, 0, self.width, self.height)
         GPIO.output(LCD_Config.LCD_DC_PIN, GPIO.HIGH)
         for i in range(0,len(_buffer),4096):

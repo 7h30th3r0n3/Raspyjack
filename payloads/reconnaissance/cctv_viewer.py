@@ -109,7 +109,7 @@ for d in (CONFIG_DIR, SCREENSHOT_DIR, RECORDING_DIR):
 DEBOUNCE = 0.20
 CHUNK_SIZE = 32768          # 32 KB -- 8x V1
 MAX_BUF = 512000            # ~500 KB safety cap
-RECONNECT_DELAYS = (1, 2, 4, 8, 15)  # exponential back-off seconds
+RECONNECT_DELAYS = (2, 5, 10, 20, 30)  # exponential back-off seconds
 ZOOM_LEVELS = (1, 2, 4, 8)
 OVERLAY_MODES = ("full", "minimal", "off")
 LCD_REFRESH = 0.025         # ~40 Hz target refresh
@@ -867,6 +867,14 @@ def _draw_lcd():
     else:
         img = Image.new("RGB", (WIDTH, HEIGHT), "black")
         d = ScaledDraw(img)
+        # Keep header/footer bars even when no frame
+        if cameras:
+            name = cameras[cam_idx][0] if cam_idx < len(cameras) else "?"
+            d.rectangle((0, 0, 127, 12), fill="#000000")
+            d.text((2, 1), name[:14], font=font, fill="#00FF00")
+            d.rectangle((0, 116, 127, 127), fill="#000000")
+            idx_str = f"{cam_idx + 1}/{len(cameras)}"
+            d.text((2, 117), f"> {idx_str}", font=font, fill="#AAA")
         d.text((10, 55), status[:20], font=font, fill="#888")
         LCD.LCD_ShowImage(img, 0, 0)
         return
@@ -891,9 +899,6 @@ def _draw_lcd():
             d.rectangle((0, 116, 127, 127), fill="#000000")
             idx_str = f"{cam_idx + 1}/{len(cameras)}"
             d.text((2, 117), f"> {idx_str}", font=font, fill="#AAA")
-            if cam_idx < len(cameras):
-                url = cameras[cam_idx][1]
-                d.text((50, 117), url[-12:], font=font, fill="#666")
 
     LCD.LCD_ShowImage(img, 0, 0)
 
@@ -1119,13 +1124,14 @@ def main():
 
             elif btn == "LEFT":
                 if _get("zoom") > 0:
-                    _set(pan_x=max(0.0, _get("pan_x") - 0.15))
+                    _set(pan_x=max(0.0, _get("pan_x") - 0.05))
                 else:
                     cameras = _get("cameras")
                     idx = _get("cam_idx")
                     new_idx = (idx - 1) % len(cameras)
-                    _set(cam_idx=new_idx, zoom=0, pan_x=0.5, pan_y=0.5)
                     _stop_stream()
+                    time.sleep(0.3)
+                    _set(cam_idx=new_idx, zoom=0, pan_x=0.5, pan_y=0.5, reconnects=0)
                     cam = cameras[new_idx]
                     url, auth = _parse_auth(
                         cam[1], cam[2] if len(cam) > 2 else None
@@ -1134,13 +1140,14 @@ def main():
 
             elif btn == "RIGHT":
                 if _get("zoom") > 0:
-                    _set(pan_x=min(1.0, _get("pan_x") + 0.15))
+                    _set(pan_x=min(1.0, _get("pan_x") + 0.05))
                 else:
                     cameras = _get("cameras")
                     idx = _get("cam_idx")
                     new_idx = (idx + 1) % len(cameras)
-                    _set(cam_idx=new_idx, zoom=0, pan_x=0.5, pan_y=0.5)
                     _stop_stream()
+                    time.sleep(0.3)
+                    _set(cam_idx=new_idx, zoom=0, pan_x=0.5, pan_y=0.5, reconnects=0)
                     cam = cameras[new_idx]
                     url, auth = _parse_auth(
                         cam[1], cam[2] if len(cam) > 2 else None
@@ -1149,14 +1156,14 @@ def main():
 
             elif btn == "UP":
                 if _get("zoom") > 0:
-                    _set(pan_y=max(0.0, _get("pan_y") - 0.15))
+                    _set(pan_y=max(0.0, _get("pan_y") - 0.05))
                 else:
                     # Enter zoom 2x
                     _set(zoom=1, pan_x=0.5, pan_y=0.5)
 
             elif btn == "DOWN":
                 if _get("zoom") > 0:
-                    _set(pan_y=min(1.0, _get("pan_y") + 0.15))
+                    _set(pan_y=min(1.0, _get("pan_y") + 0.05))
                 else:
                     # Enter grid 2x2
                     _stop_stream()

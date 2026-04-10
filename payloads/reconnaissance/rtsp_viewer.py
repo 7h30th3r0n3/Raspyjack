@@ -689,6 +689,13 @@ def _draw_lcd():
     else:
         img = Image.new("RGB", (WIDTH, HEIGHT), "black")
         d = ScaledDraw(img)
+        if cameras:
+            name = cameras[cam_idx][0] if cam_idx < len(cameras) else "?"
+            d.rectangle((0, 0, 127, 12), fill="#000000")
+            d.text((2, 1), name[:14], font=font, fill="#00FF00")
+            d.rectangle((0, 116, 127, 127), fill="#000000")
+            idx_str = f"{cam_idx + 1}/{len(cameras)}"
+            d.text((2, 117), f"> {idx_str}", font=font, fill="#AAA")
         d.text((10, 55), status[:20], font=font, fill="#888")
         LCD.LCD_ShowImage(img, 0, 0)
         return
@@ -710,9 +717,6 @@ def _draw_lcd():
             d.rectangle((0, 116, 127, 127), fill="#000000")
             idx_str = f"{cam_idx + 1}/{len(cameras)}"
             d.text((2, 117), f"> {idx_str}", font=font, fill="#AAA")
-            if cam_idx < len(cameras):
-                url = cameras[cam_idx][1]
-                d.text((50, 117), url[-12:], font=font, fill="#666")
 
     LCD.LCD_ShowImage(img, 0, 0)
 
@@ -961,7 +965,7 @@ def main():
 
             elif btn == "LEFT":
                 if _get("zoom") > 0:
-                    _set(pan_x=max(0.0, _get("pan_x") - 0.15))
+                    _set(pan_x=max(0.0, _get("pan_x") - 0.05))
                 else:
                     cameras = _get("cameras")
                     idx = _get("cam_idx")
@@ -975,7 +979,7 @@ def main():
 
             elif btn == "RIGHT":
                 if _get("zoom") > 0:
-                    _set(pan_x=min(1.0, _get("pan_x") + 0.15))
+                    _set(pan_x=min(1.0, _get("pan_x") + 0.05))
                 else:
                     cameras = _get("cameras")
                     idx = _get("cam_idx")
@@ -989,13 +993,13 @@ def main():
 
             elif btn == "UP":
                 if _get("zoom") > 0:
-                    _set(pan_y=max(0.0, _get("pan_y") - 0.15))
+                    _set(pan_y=max(0.0, _get("pan_y") - 0.05))
                 else:
                     _set(zoom=1, pan_x=0.5, pan_y=0.5)
 
             elif btn == "DOWN":
                 if _get("zoom") > 0:
-                    _set(pan_y=min(1.0, _get("pan_y") + 0.15))
+                    _set(pan_y=min(1.0, _get("pan_y") + 0.05))
                 else:
                     _stop_stream()
                     _set(grid_mode=True, stop=False)
