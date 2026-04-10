@@ -50,7 +50,7 @@ case "$DISPLAY_CHOICE" in
 esac
 info "Selected display: $DISPLAY_TYPE"
 
-# Write DISPLAY section into gui_conf.json (preserve existing settings)
+# Write DISPLAY type into gui_conf.json (preserve ALL existing settings: flip, colors, pins, etc.)
 GUI_CONF="/root/Raspyjack/gui_conf.json"
 if [ -f "$GUI_CONF" ]; then
   python3 - "$DISPLAY_TYPE" <<'PY'
@@ -58,10 +58,17 @@ import json, sys
 dtype = sys.argv[1]
 with open("/root/Raspyjack/gui_conf.json") as f:
     data = json.load(f)
-data["DISPLAY"] = {"type": dtype, "supported_types": ["ST7735_128", "ST7789_240"]}
+# Preserve existing DISPLAY settings (flip, etc.), only update type
+if "DISPLAY" not in data:
+    data["DISPLAY"] = {}
+data["DISPLAY"]["type"] = dtype
+data["DISPLAY"]["supported_types"] = ["ST7735_128", "ST7789_240"]
+# Preserve flip if it exists
+# (flip key is NOT overwritten, it stays as-is)
 with open("/root/Raspyjack/gui_conf.json", "w") as f:
     json.dump(data, f, indent=4)
-print(f"[OK] gui_conf.json updated with DISPLAY type: {dtype}")
+flip_status = data["DISPLAY"].get("flip", False)
+print(f"[OK] gui_conf.json: type={dtype}, flip={flip_status}")
 PY
 else
   info "gui_conf.json not found yet — will be created on first run."
@@ -91,8 +98,22 @@ PACKAGES=(
   git i2c-tools
 )
 
-step "Updating APT and installing dependencies …"
-sudo apt-get update -qq
+# Fix missing GPG keys before apt update
+step "Checking APT repository keys …"
+if ! sudo apt-get update -qq 2>&1 | grep -q "^E:"; then
+  info "APT repositories OK"
+else
+  warn "APT key issue detected, attempting fix..."
+  # Fix Kali key if present
+  if [ -f /etc/apt/sources.list.d/kali-rolling.list ]; then
+    sudo wget -q -O /etc/apt/trusted.gpg.d/kali-archive-keyring.asc https://archive.kali.org/archive-key.asc 2>/dev/null \
+      && info "Kali GPG key installed" \
+      || warn "Could not fetch Kali GPG key"
+  fi
+  sudo apt-get update -qq || warn "APT update had errors, continuing..."
+fi
+
+step "Installing dependencies …"
 to_install=($(sudo apt-get -qq --just-print install "${PACKAGES[@]}" | awk '/^Inst/ {print $2}'))
 if ((${#to_install[@]})); then
   info "Will install/upgrade: ${to_install[*]}"
@@ -112,19 +133,58 @@ sudo pip3 install --break-system-packages smbus2 2>/dev/null \
 sudo systemctl disable --now hostapd 2>/dev/null || true
 sudo systemctl disable --now dnsmasq 2>/dev/null || true
 
-# ───── 2‑b ▸ Wall-of-Flippers: bluepy (clone + setup.py install) ─
-# WoF uses bluepy.btle (BLE). Install from source; no bleak.
-step "Installing bluepy for WoF (clone + setup.py) …"
+# ───── 2‑b ▸ Wall-of-Flippers: bluepy + bleak ──────────────────
+step "Checking BLE libraries (bluepy + bleak) …"
 
-BLUEPY_BUILD=$(mktemp -d)
-trap "rm -rf '$BLUEPY_BUILD'" EXIT
-git clone --depth 1 https://github.com/IanHarvey/bluepy.git "$BLUEPY_BUILD"
-(cd "$BLUEPY_BUILD" && python3 setup.py build && sudo python3 setup.py install)
-info "Installed bluepy from source"
+# Check if bluepy is already installed and working
+BLUEPY_OK=0
+python3 -c "import bluepy; print('bluepy OK')" 2>/dev/null && BLUEPY_OK=1
 
-python3 - <<'PY' || fail "bluepy import failed; WoF threat detection will not be ready."
-import bluepy
-print("[OK] bluepy available")
+if [ "$BLUEPY_OK" -eq 0 ]; then
+  info "bluepy not found, building from source..."
+  BLUEPY_BUILD=$(mktemp -d)
+  trap "rm -rf '$BLUEPY_BUILD'" EXIT
+  if git clone --depth 1 https://github.com/IanHarvey/bluepy.git "$BLUEPY_BUILD" 2>/dev/null; then
+    (cd "$BLUEPY_BUILD" && python3 setup.py build && sudo python3 setup.py install) 2>/dev/null \
+      && info "Installed bluepy from source" \
+      || warn "bluepy build failed"
+  else
+    warn "Could not clone bluepy repo"
+  fi
+else
+  info "bluepy already installed, skipping build"
+fi
+
+# Set capabilities on bluepy-helper (needed for non-root BLE)
+HELPER=$(find /usr -name "bluepy-helper" 2>/dev/null | head -1)
+if [ -n "$HELPER" ]; then
+  sudo setcap 'cap_net_raw,cap_net_admin+eip' "$HELPER" 2>/dev/null \
+    && info "bluepy-helper capabilities set" \
+    || warn "Could not set bluepy-helper capabilities"
+fi
+
+# Install bleak as modern fallback (preferred by wall_of_flippers)
+if ! python3 -c "import bleak" 2>/dev/null; then
+  sudo pip3 install --break-system-packages bleak 2>/dev/null \
+    || sudo pip3 install bleak 2>/dev/null \
+    || warn "bleak install failed"
+  info "bleak installed"
+else
+  info "bleak already installed"
+fi
+
+# Verify at least one BLE library works
+python3 - <<'PY' || warn "No BLE library available; WoF/BLE payloads may not work."
+try:
+    import bluepy
+    print("[OK] bluepy available")
+except ImportError:
+    try:
+        import bleak
+        print("[OK] bleak available (bluepy missing)")
+    except ImportError:
+        print("[FAIL] No BLE library")
+        import sys; sys.exit(1)
 PY
 
 # ───── 2‑c ▸ Navarro (vendored in repo) ─────────────────────────
@@ -136,9 +196,16 @@ else
   warn "Navarro not found at $NAVARRO_PATH – add Navarro/ to your Raspyjack repo for OSINT payload"
 fi
 
-mkdir -p /usr/share/fonts/truetype/fontawesome
-cd /usr/share/fonts/truetype/fontawesome
-wget https://use.fontawesome.com/releases/v6.5.1/webfonts/fa-solid-900.ttf
+# FontAwesome font (skip if already present)
+if [ ! -f /usr/share/fonts/truetype/fontawesome/fa-solid-900.ttf ]; then
+  mkdir -p /usr/share/fonts/truetype/fontawesome
+  wget -q -O /usr/share/fonts/truetype/fontawesome/fa-solid-900.ttf \
+    https://use.fontawesome.com/releases/v6.5.1/webfonts/fa-solid-900.ttf \
+    && info "FontAwesome font installed" \
+    || warn "Could not download FontAwesome font"
+else
+  info "FontAwesome font already present"
+fi
 
 # ───── 3 ▸ enable I²C / SPI & kernel modules ────────────────
 step "Enabling I²C & SPI …"
@@ -537,13 +604,24 @@ fi
 # 6‑d python imports
 python3 - <<'PY' || fail "Python dependency test failed"
 import importlib, sys
-for mod in ("scapy", "netifaces", "pyudev", "serial", "smbus2", "RPi.GPIO", "spidev", "PIL", "qrcode", "requests", "bluepy"):
+required = ("scapy", "netifaces", "pyudev", "serial", "smbus2", "RPi.GPIO", "spidev", "PIL", "qrcode", "requests")
+optional = ("bluepy", "bleak")
+ok = True
+for mod in required:
     try:
         importlib.import_module(mod.split('.')[0])
     except Exception as e:
         print("[FAIL]", mod, e)
-        sys.exit(1)
-print("[OK] All Python modules import correctly")
+        ok = False
+for mod in optional:
+    try:
+        importlib.import_module(mod)
+        print("[OK]", mod)
+    except ImportError:
+        print("[SKIP]", mod, "(optional)")
+if not ok:
+    sys.exit(1)
+print("[OK] All required Python modules available")
 PY
 
 # 6‑e WiFi integration test
