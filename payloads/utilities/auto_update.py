@@ -206,13 +206,13 @@ def show_progress(title, detail="", progress_pct=None):
             d.text((4, y), line, font=FONT_SM, fill="#888888")
             y += 11
 
-    # Progress bar always at bottom, above footer
+    # Progress bar + percentage below
     if progress_pct is not None:
         bar_w = int(1.15 * min(100, max(0, progress_pct)))
-        d.rectangle((4, 104, 123, 112), outline="#444")
+        d.rectangle((4, 98, 123, 105), outline="#444")
         if bar_w > 0:
-            d.rectangle((4, 104, 4 + bar_w, 112), fill="#00FF00")
-        d.text((60, 104), f"{int(progress_pct)}%", font=FONT_SM, fill="#888", anchor="mm")
+            d.rectangle((4, 98, 4 + bar_w, 105), fill="#00FF00")
+        d.text((4, 107), f"{int(progress_pct)}%", font=FONT_SM, fill="#888")
 
     LCD.LCD_ShowImage(img, 0, 0)
 
