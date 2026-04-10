@@ -111,23 +111,90 @@ def show(lines, invert=False, spacing=2):
     LCD.LCD_ShowImage(img, 0, 0)
 
 
+def show_error(title, detail):
+    """Show error screen with word-wrapped detail text, footer at bottom."""
+    img = Image.new("RGB", (WIDTH, HEIGHT), "#1a0000")
+    d = ScaledDraw(img)
+
+    # Header
+    d.rectangle((0, 0, 127, 13), fill="#440000")
+    d.text((2, 1), title[:22], font=FONT, fill="#FF4444")
+
+    # Word-wrap detail into lines of max 22 chars
+    words = detail.split()
+    lines = []
+    current = ""
+    for w in words:
+        if len(current) + len(w) + 1 > 22:
+            lines.append(current)
+            current = w
+        else:
+            current = f"{current} {w}" if current else w
+    if current:
+        lines.append(current)
+
+    # Draw lines, stop before footer (y < 112)
+    y = 18
+    for line in lines:
+        if y > 100:
+            break
+        d.text((4, y), line, font=FONT_SM, fill="#FFFFFF")
+        y += 12
+
+    # Footer
+    d.rectangle((0, 116, 127, 127), fill="#111")
+    d.text((2, 117), "Any key to continue", font=FONT_SM, fill="#888")
+
+    LCD.LCD_ShowImage(img, 0, 0)
+
+    # Wait for any button
+    while _running:
+        btn = get_button(PINS, GPIO)
+        if btn:
+            break
+        time.sleep(0.1)
+
+
 def show_progress(title, detail="", progress_pct=None):
-    """Show a progress screen with optional percentage bar."""
+    """Show progress screen with word-wrapped detail and bar at bottom."""
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
     d = ScaledDraw(img)
+
+    # Header
     d.rectangle((0, 0, 127, 13), fill="#111")
     d.text((2, 1), "AUTO-UPDATE", font=FONT, fill="#00FF00")
 
-    d.text((4, 24), title[:22], font=FONT, fill="#FFFFFF")
-    if detail:
-        d.text((4, 40), detail[:22], font=FONT_SM, fill="#888888")
+    # Title
+    d.text((4, 18), title[:22], font=FONT, fill="#FFFFFF")
 
+    # Word-wrap detail text
+    if detail:
+        words = detail.split()
+        lines = []
+        current = ""
+        for w in words:
+            if len(current) + len(w) + 1 > 24:
+                lines.append(current)
+                current = w
+            else:
+                current = f"{current} {w}" if current else w
+        if current:
+            lines.append(current)
+
+        y = 32
+        for line in lines:
+            if y > 90:
+                break
+            d.text((4, y), line, font=FONT_SM, fill="#888888")
+            y += 11
+
+    # Progress bar always at bottom, above footer
     if progress_pct is not None:
-        bar_w = int(1.2 * min(100, max(0, progress_pct)))
-        d.rectangle((4, 56, 123, 64), outline="#444")
+        bar_w = int(1.15 * min(100, max(0, progress_pct)))
+        d.rectangle((4, 104, 123, 112), outline="#444")
         if bar_w > 0:
-            d.rectangle((4, 56, 4 + bar_w, 64), fill="#00FF00")
-        d.text((4, 68), f"{int(progress_pct)}%", font=FONT_SM, fill="#888")
+            d.rectangle((4, 104, 4 + bar_w, 112), fill="#00FF00")
+        d.text((60, 104), f"{int(progress_pct)}%", font=FONT_SM, fill="#888", anchor="mm")
 
     LCD.LCD_ShowImage(img, 0, 0)
 
@@ -356,7 +423,7 @@ def run_install_script():
 
         rc = proc.wait(timeout=300)
         if rc != 0:
-            return False, f"rc={rc} {last_line}"
+            return False, f"Exit code {rc}: {last_line}"
         return True, "OK"
     except Exception as e:
         return False, str(e)[:40]
@@ -508,16 +575,14 @@ def main():
                     show_progress("Backing up...", "Configs & custom")
                     ok, backup_path = smart_backup()
                     if not ok:
-                        show(["Backup failed", backup_path[:20]], invert=True)
-                        time.sleep(4)
+                        show_error("BACKUP FAILED", backup_path)
                         continue
 
                     # 3. Check disk space
                     try:
                         usage = shutil.disk_usage(RASPYJACK_DIR)
                         if usage.free < 100 * 1024 * 1024:
-                            show(["Low disk space!", f"{usage.free//(1024*1024)}MB free"], invert=True)
-                            time.sleep(4)
+                            show_error("LOW DISK SPACE", f"Only {usage.free//(1024*1024)}MB free, need 100MB minimum")
                             continue
                     except Exception:
                         pass
@@ -527,8 +592,7 @@ def main():
                     show_progress("Updating...", "git reset --hard")
                     ok, info = git_update()
                     if not ok:
-                        show(["Update failed", info], invert=True)
-                        time.sleep(4)
+                        show_error("UPDATE FAILED", info)
                         continue
 
                     # 5. Restore configs
@@ -548,8 +612,7 @@ def main():
                         show_progress("Installing...", "Please wait")
                         ok, info = run_install_script()
                         if not ok:
-                            show(["Install failed", info], invert=True)
-                            time.sleep(5)
+                            show_error("INSTALL FAILED", info)
                             continue
 
                         show(["Update done!", "Rebooting..."])
@@ -579,8 +642,7 @@ def main():
                     show_progress("Installing...", "Please wait")
                     ok, info = run_install_script()
                     if not ok:
-                        show(["Install failed", info], invert=True)
-                        time.sleep(5)
+                        show_error("INSTALL FAILED", info)
                         view = "home"
                         version, date, full_hash = get_current_version()
                         backup_count = _count_backups()
@@ -621,8 +683,7 @@ def main():
                         time.sleep(1)
                         break
                     else:
-                        show(["Restore failed", info[:20]], invert=True)
-                        time.sleep(3)
+                        show_error("RESTORE FAILED", info)
 
                 draw_rollback(backups, rollback_sel)
 
