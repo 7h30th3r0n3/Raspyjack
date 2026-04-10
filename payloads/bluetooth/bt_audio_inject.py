@@ -39,6 +39,7 @@ import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._iface_helper import select_bt_interface
 
 # ── Pin / LCD setup ──────────────────────────────────────────────────────────
 PINS = {
@@ -55,7 +56,7 @@ WIDTH, HEIGHT = LCD.width, LCD.height
 font = scaled_font()
 
 # ── Constants ────────────────────────────────────────────────────────────────
-HCI_DEV = "hci0"
+HCI_DEV = None  # set in main() via select_bt_interface
 AUDIO_FILE = "/root/Raspyjack/config/bt_audio/payload.wav"
 ROWS_VISIBLE = 6
 ROW_H = 12
@@ -81,10 +82,10 @@ def _hci_up():
                    capture_output=True, timeout=5)
 
 
-# ── Scan for BT Classic devices ─────────────────────────────────────────────
+# ── Scan for BT Classic devices (bluetoothctl) ────────────────────────────────
 
 def _scan_devices():
-    """Run hcitool scan and filter for A2DP capable devices."""
+    """Scan for BT Classic devices using bluetoothctl."""
     global status_msg, _scan_active
 
     with lock:
@@ -95,28 +96,57 @@ def _scan_devices():
     found = []
 
     try:
-        result = subprocess.run(
-            ["sudo", "hcitool", "-i", HCI_DEV, "scan", "--flush"],
-            capture_output=True, text=True, timeout=20,
+        # Start bluetoothctl scan for classic devices
+        proc = subprocess.Popen(
+            ["sudo", "bluetoothctl"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
         )
-        for line in result.stdout.strip().split("\n"):
-            line = line.strip()
-            if not line:
-                continue
-            parts = line.split(None, 1)
-            if not parts:
-                continue
-            addr = parts[0].upper()
-            if not re.match(r"^[0-9A-F]{2}(:[0-9A-F]{2}){5}$", addr):
-                continue
-            name = parts[1] if len(parts) > 1 else "(unknown)"
-            found.append({"addr": addr, "name": name, "a2dp": False})
-    except subprocess.TimeoutExpired:
-        with lock:
-            status_msg = "Scan timeout"
+        proc.communicate(
+            input="power on\nscan on\n",
+            timeout=12,
+        )
+    except (subprocess.TimeoutExpired, Exception):
+        try:
+            proc.kill()
+        except Exception:
+            pass
+
+    time.sleep(0.5)
+
+    # Collect discovered devices
+    try:
+        result = subprocess.run(
+            ["bluetoothctl", "devices"],
+            capture_output=True, text=True, timeout=5,
+        )
+        for line in result.stdout.splitlines():
+            match = re.match(r"Device\s+([0-9A-Fa-f:]{17})\s+(.*)", line)
+            if match:
+                addr = match.group(1).upper()
+                name = match.group(2).strip() or "(unknown)"
+                found.append({"addr": addr, "name": name, "a2dp": False})
     except Exception as exc:
         with lock:
             status_msg = str(exc)[:20]
+
+    # Stop scanning
+    try:
+        proc = subprocess.Popen(
+            ["sudo", "bluetoothctl"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        proc.communicate(input="scan off\nquit\n", timeout=5)
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
 
     # Check each device for A2DP service
     for dev in found:
@@ -362,7 +392,12 @@ def _draw_screen():
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
-    global scroll_pos, selected_idx, status_msg
+    global scroll_pos, selected_idx, status_msg, HCI_DEV
+
+    HCI_DEV = select_bt_interface(LCD, font, PINS, GPIO)
+    if not HCI_DEV:
+        GPIO.cleanup()
+        return 1
 
     os.makedirs(os.path.dirname(AUDIO_FILE), exist_ok=True)
 

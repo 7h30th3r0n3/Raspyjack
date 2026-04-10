@@ -32,6 +32,7 @@ import sys
 import time
 import json
 import re
+import asyncio
 import threading
 import subprocess
 from datetime import datetime
@@ -44,6 +45,7 @@ import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._iface_helper import select_bt_interface
 
 # ── Pin / LCD setup ──────────────────────────────────────────────────────────
 PINS = {
@@ -60,7 +62,7 @@ WIDTH, HEIGHT = LCD.width, LCD.height
 font = scaled_font()
 
 # ── Constants ────────────────────────────────────────────────────────────────
-HCI_DEV = "hci0"
+HCI_DEV = None  # set in main() via select_bt_interface
 LOOT_DIR = "/root/Raspyjack/loot/BLE_MITM"
 ROWS_VISIBLE = 6
 ROW_H = 12
@@ -95,10 +97,20 @@ def _hci_reset():
                    capture_output=True, timeout=5)
 
 
-# ── BLE scan ─────────────────────────────────────────────────────────────────
+# ── BLE scan (bleak) ─────────────────────────────────────────────────────────
+
+async def _bleak_scan(timeout=8):
+    """Discover BLE devices using bleak (async)."""
+    from bleak import BleakScanner
+    found = await BleakScanner.discover(timeout=timeout)
+    return [
+        (d.address.upper(), d.name or "", getattr(d, "rssi", -99))
+        for d in found
+    ]
+
 
 def _scan_ble():
-    """Scan for BLE devices using hcitool lescan."""
+    """Scan for BLE devices using bleak."""
     global status_msg, _scan_active
 
     with lock:
@@ -106,49 +118,25 @@ def _scan_ble():
         status_msg = "Scanning BLE..."
 
     _hci_up()
-    found = {}
 
     try:
-        proc = subprocess.Popen(
-            ["sudo", "hcitool", "-i", HCI_DEV, "lescan"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        deadline = time.time() + 8
-        for line in proc.stdout:
-            if time.time() > deadline:
-                break
-            line = line.strip()
-            parts = line.split(None, 1)
-            if not parts:
-                continue
-            addr = parts[0].upper()
-            if not re.match(r"^[0-9A-F]{2}(:[0-9A-F]{2}){5}$", addr):
-                continue
-            name = parts[1] if len(parts) > 1 else ""
-            if name == "(unknown)":
-                name = ""
+        results = asyncio.run(_bleak_scan(8))
+        found = {}
+        for addr, name, _rssi in results:
             if addr not in found or (name and not found[addr]):
                 found[addr] = name
 
-        proc.terminate()
-        proc.wait(timeout=3)
+        result = [{"addr": a, "name": n or a[-8:]} for a, n in found.items()]
+        with lock:
+            devices.clear()
+            devices.extend(result)
+            status_msg = f"Found {len(result)} BLE devs"
     except Exception as exc:
         with lock:
             status_msg = str(exc)[:20]
     finally:
-        try:
-            proc.kill()
-        except Exception:
-            pass
-
-    result = [{"addr": a, "name": n or a[-8:]} for a, n in found.items()]
-    with lock:
-        devices.clear()
-        devices.extend(result)
-        status_msg = f"Found {len(result)} BLE devs"
-        _scan_active = False
+        with lock:
+            _scan_active = False
 
 
 # ── GATT enumeration ────────────────────────────────────────────────────────
@@ -447,7 +435,12 @@ def _draw_screen():
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
-    global scroll_pos, selected_idx, status_msg, view
+    global scroll_pos, selected_idx, status_msg, view, HCI_DEV
+
+    HCI_DEV = select_bt_interface(LCD, font, PINS, GPIO)
+    if not HCI_DEV:
+        GPIO.cleanup()
+        return 1
 
     # Splash
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")

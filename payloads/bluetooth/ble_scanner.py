@@ -31,6 +31,7 @@ import sys
 import time
 import json
 import re
+import asyncio
 import threading
 import subprocess
 from datetime import datetime
@@ -43,6 +44,7 @@ import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._iface_helper import select_bt_interface
 
 # ── Pin / LCD setup ──────────────────────────────────────────────────────────
 PINS = {
@@ -59,7 +61,7 @@ WIDTH, HEIGHT = LCD.width, LCD.height
 font = scaled_font()
 
 # ── Constants ────────────────────────────────────────────────────────────────
-HCI_DEV = "hci0"
+HCI_DEV = None  # set in main() via select_bt_interface
 LOOT_DIR = "/root/Raspyjack/loot/BLEScan"
 ROWS_VISIBLE = 7
 ROW_H = 12
@@ -70,7 +72,6 @@ VIEWS = ["list", "detail"]
 lock = threading.Lock()
 devices = {}          # addr -> {addr, name, rssi, first_seen, last_seen, count}
 scanning = False
-scan_proc = None
 scroll_pos = 0
 selected_idx = 0
 sort_idx = 0
@@ -93,27 +94,22 @@ def _hci_reset():
                    capture_output=True, timeout=5)
 
 
-# ── RSSI helper ──────────────────────────────────────────────────────────────
+# ── Bleak BLE scan ──────────────────────────────────────────────────────────
 
-def _get_rssi(addr):
-    """Attempt to read RSSI for a BLE device via hcitool."""
-    try:
-        result = subprocess.run(
-            ["sudo", "hcitool", "-i", HCI_DEV, "rssi", addr],
-            capture_output=True, text=True, timeout=3,
-        )
-        match = re.search(r"RSSI return value:\s*(-?\d+)", result.stdout)
-        if match:
-            return int(match.group(1))
-    except Exception:
-        pass
-    return -100
+async def _bleak_scan(timeout=5):
+    """Discover BLE devices using bleak (async)."""
+    from bleak import BleakScanner
+    found = await BleakScanner.discover(timeout=timeout)
+    return [
+        (d.address, d.name or "", getattr(d, "rssi", -99))
+        for d in found
+    ]
 
 
 # ── Scan thread ──────────────────────────────────────────────────────────────
 
 def _scan_loop():
-    """Run hcitool lescan in a loop, parse output."""
+    """Run bleak BLE scan in a loop, update device list."""
     global scan_proc, status_msg
 
     _hci_up()
@@ -125,44 +121,21 @@ def _scan_loop():
                 break
 
         try:
-            proc = subprocess.Popen(
-                ["sudo", "hcitool", "-i", HCI_DEV, "lescan", "--duplicates"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-            with lock:
-                scan_proc = proc
+            results = asyncio.run(_bleak_scan(5))
+            now_str = datetime.now().strftime("%H:%M:%S")
 
-            for line in proc.stdout:
+            for addr, name, rssi in results:
                 with lock:
                     if not scanning:
                         break
-
-                line = line.strip()
-                if not line:
-                    continue
-
-                # Format: AA:BB:CC:DD:EE:FF DeviceName
-                # or:     AA:BB:CC:DD:EE:FF (unknown)
-                parts = line.split(None, 1)
-                if not parts:
-                    continue
-                addr = parts[0].upper()
-                if not re.match(r"^[0-9A-F]{2}(:[0-9A-F]{2}){5}$", addr):
-                    continue
-                name = parts[1] if len(parts) > 1 else "(unknown)"
-                if name == "(unknown)":
-                    name = ""
-
-                now_str = datetime.now().strftime("%H:%M:%S")
-
+                addr = addr.upper()
                 with lock:
                     if addr in devices:
                         prev = devices[addr]
                         devices[addr] = {
                             **prev,
                             "name": name or prev["name"],
+                            "rssi": rssi,
                             "last_seen": now_str,
                             "count": prev["count"] + 1,
                         }
@@ -170,55 +143,16 @@ def _scan_loop():
                         devices[addr] = {
                             "addr": addr,
                             "name": name,
-                            "rssi": -100,
+                            "rssi": rssi,
                             "first_seen": now_str,
                             "last_seen": now_str,
                             "count": 1,
                         }
 
-            proc.wait(timeout=2)
-
         except Exception as exc:
             with lock:
                 status_msg = str(exc)[:20]
             time.sleep(1)
-
-    # Cleanup process
-    with lock:
-        p = scan_proc
-        scan_proc = None
-    if p:
-        try:
-            p.terminate()
-            p.wait(timeout=3)
-        except Exception:
-            try:
-                p.kill()
-            except Exception:
-                pass
-
-
-# ── RSSI updater thread ─────────────────────────────────────────────────────
-
-def _rssi_updater():
-    """Periodically update RSSI for known devices."""
-    while True:
-        with lock:
-            if not scanning:
-                break
-            addrs = list(devices.keys())[:10]  # limit to avoid slowdown
-
-        for addr in addrs:
-            with lock:
-                if not scanning:
-                    return
-            rssi = _get_rssi(addr)
-            if rssi != -100:
-                with lock:
-                    if addr in devices:
-                        devices[addr] = {**devices[addr], "rssi": rssi}
-
-        time.sleep(5)
 
 
 # ── Service enumeration ─────────────────────────────────────────────────────
@@ -256,24 +190,13 @@ def _start_scan():
         scanning = True
         status_msg = "Scanning..."
     threading.Thread(target=_scan_loop, daemon=True).start()
-    threading.Thread(target=_rssi_updater, daemon=True).start()
 
 
 def _stop_scan():
     global scanning, status_msg
     with lock:
         scanning = False
-        p = scan_proc
         status_msg = "Stopped"
-    if p:
-        try:
-            p.terminate()
-            p.wait(timeout=3)
-        except Exception:
-            try:
-                p.kill()
-            except Exception:
-                pass
     time.sleep(0.3)
     _hci_reset()
 
@@ -373,7 +296,12 @@ def _draw_screen():
 
 def main():
     global scroll_pos, selected_idx, sort_idx, status_msg
-    global view, detail_lines, detail_scroll
+    global view, detail_lines, detail_scroll, HCI_DEV
+
+    HCI_DEV = select_bt_interface(LCD, font, PINS, GPIO)
+    if not HCI_DEV:
+        GPIO.cleanup()
+        return 1
 
     # Splash
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")

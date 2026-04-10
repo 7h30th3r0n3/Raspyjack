@@ -37,6 +37,7 @@ import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._iface_helper import select_bt_interface
 
 PINS = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
@@ -54,7 +55,7 @@ font = scaled_font()
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-HCI_DEV = "hci0"
+HCI_DEV = None  # set in main() via select_bt_interface
 MODES = ["iBeacon", "Eddystone", "Both"]
 
 LOOT_DIR = "/root/Raspyjack/loot/BLEBeacon"
@@ -127,17 +128,27 @@ _set_params(*_randomise_params())
 # ---------------------------------------------------------------------------
 
 def _hci_reset_adv():
-    """Disable advertising on the HCI device."""
+    """Disable advertising via HCI command (BlueZ 5.80+ compatible)."""
     subprocess.run(
-        ["sudo", "hciconfig", HCI_DEV, "noleadv"],
+        ["sudo", "hcitool", "-i", HCI_DEV, "cmd", "0x08", "0x000A", "00"],
+        capture_output=True, timeout=5,
+    )
+
+
+def _hci_set_adv_params():
+    """Set advertising parameters: fast interval, non-connectable undirected."""
+    subprocess.run(
+        ["sudo", "hcitool", "-i", HCI_DEV, "cmd", "0x08", "0x0006",
+         "20", "00", "20", "00", "03", "00", "00", "00", "00", "00",
+         "00", "00", "00", "07", "00"],
         capture_output=True, timeout=5,
     )
 
 
 def _hci_enable_adv():
-    """Enable LE advertising on the HCI device."""
+    """Enable LE advertising via HCI command (BlueZ 5.80+ compatible)."""
     subprocess.run(
-        ["sudo", "hciconfig", HCI_DEV, "leadv", "3"],
+        ["sudo", "hcitool", "-i", HCI_DEV, "cmd", "0x08", "0x000A", "01"],
         capture_output=True, timeout=5,
     )
 
@@ -221,13 +232,27 @@ def _send_beacon(cmd):
     """Send one beacon advertisement via hcitool, returns True on success."""
     global last_error
     try:
+        _hci_up()
         _hci_reset_adv()
+        _hci_set_adv_params()
         time.sleep(0.02)
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
         if result.returncode != 0:
-            with lock:
-                last_error = result.stderr.strip()[:40] if result.stderr else "hcitool error"
-            return False
+            err_msg = (result.stderr or "").strip()
+            # If hcitool cmd fails, try resetting and retrying once
+            if err_msg:
+                subprocess.run(
+                    ["sudo", "hciconfig", HCI_DEV, "reset"],
+                    capture_output=True, timeout=5,
+                )
+                time.sleep(0.1)
+                _hci_up()
+                time.sleep(0.1)
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+                if result.returncode != 0:
+                    with lock:
+                        last_error = err_msg[:40] or "hcitool cmd error"
+                    return False
         _hci_enable_adv()
         time.sleep(0.05)
         return True
@@ -372,7 +397,12 @@ def draw_screen():
 # ---------------------------------------------------------------------------
 
 def main():
-    global mode_idx
+    global mode_idx, HCI_DEV
+
+    HCI_DEV = select_bt_interface(LCD, font, PINS, GPIO)
+    if not HCI_DEV:
+        GPIO.cleanup()
+        return 1
 
     # Splash
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")

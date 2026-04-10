@@ -257,7 +257,7 @@ def _get_sorted_ssids():
 # AP launch
 # ---------------------------------------------------------------------------
 
-PORTAL_HTML = """<!DOCTYPE html>
+PORTAL_HTML_DEFAULT = """<!DOCTYPE html>
 <html><head><title>WiFi Login</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
@@ -279,6 +279,97 @@ border-radius:4px;cursor:pointer;font-size:15px}
 <button type="submit">Connect</button>
 </form></div></body></html>"""
 
+PORTAL_SITES_DIR = "/root/Raspyjack/DNSSpoof/sites"
+selected_portal_path = None  # None = use built-in default
+
+
+def _list_portal_pages():
+    """Return list of available portal page directory names."""
+    if not os.path.isdir(PORTAL_SITES_DIR):
+        return []
+    entries = []
+    try:
+        for name in sorted(os.listdir(PORTAL_SITES_DIR)):
+            full = os.path.join(PORTAL_SITES_DIR, name)
+            if os.path.isdir(full):
+                entries.append(name)
+    except Exception:
+        pass
+    return entries
+
+
+def _load_portal_html(page_name):
+    """Load index.html from a portal page directory. Returns HTML string or None."""
+    if not page_name:
+        return None
+    for candidate in ("index.html", "index.htm"):
+        path = os.path.join(PORTAL_SITES_DIR, page_name, candidate)
+        if os.path.isfile(path):
+            try:
+                with open(path, "r", errors="replace") as fh:
+                    return fh.read()
+            except Exception:
+                pass
+    return None
+
+
+def _select_portal_page():
+    """Interactive portal page selector on LCD. Returns page name or None."""
+    pages = _list_portal_pages()
+    if not pages:
+        return None
+
+    options = ["[Default]"] + pages
+    sel = 0
+    sc = 0
+    rows = 7
+
+    while True:
+        img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+        d = ScaledDraw(img)
+        d.rectangle((0, 0, 127, 13), fill="#111")
+        d.text((2, 1), "SELECT PORTAL", font=font, fill="#FF6600")
+
+        visible = options[sc:sc + rows]
+        for i, name in enumerate(visible):
+            y = 16 + i * 12
+            real_i = sc + i
+            prefix = ">" if real_i == sel else " "
+            color = "#00FF00" if real_i == sel else "#CCCCCC"
+            d.text((2, y), f"{prefix}{name[:20]}", font=font, fill=color)
+
+        d.rectangle((0, 116, 127, 127), fill="#111")
+        d.text((2, 117), "OK:Select K3:Default", font=font, fill="#AAA")
+        LCD.LCD_ShowImage(img, 0, 0)
+
+        btn = get_button(PINS, GPIO)
+        if btn == "OK":
+            if sel == 0:
+                return None  # default
+            return pages[sel - 1]
+        elif btn == "KEY3":
+            return None
+        elif btn == "UP":
+            sel = max(0, sel - 1)
+            if sel < sc:
+                sc = sel
+            time.sleep(0.15)
+        elif btn == "DOWN":
+            sel = min(len(options) - 1, sel + 1)
+            if sel >= sc + rows:
+                sc = sel - rows + 1
+            time.sleep(0.15)
+        time.sleep(0.05)
+
+
+def _get_portal_html():
+    """Return the HTML to serve based on selected portal page."""
+    if selected_portal_path:
+        html = _load_portal_html(selected_portal_path)
+        if html:
+            return html
+    return PORTAL_HTML_DEFAULT
+
 
 class _PortalHandler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
@@ -288,7 +379,7 @@ class _PortalHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "text/html")
         self.end_headers()
-        self.wfile.write(PORTAL_HTML.encode())
+        self.wfile.write(_get_portal_html().encode())
 
     def do_POST(self):
         clen = int(self.headers.get("Content-Length", 0))
@@ -702,6 +793,8 @@ def main():
                         with lock:
                             idx = min(scroll_pos, len(ssids) - 1)
                         target_ssid = ssids[idx][0]
+                        global selected_portal_path
+                        selected_portal_path = _select_portal_page()
                         threading.Thread(
                             target=_start_ap, args=(target_ssid,), daemon=True,
                         ).start()

@@ -44,6 +44,7 @@ except Exception:
 
 from payloads._input_helper import get_button
 from payloads._display_helper import ScaledDraw, scaled_font
+from payloads._iface_helper import select_bt_interface
 
 try:
     from bleak import BleakScanner
@@ -1134,6 +1135,21 @@ def main() -> None:
     signal.signal(signal.SIGTERM, _signal_handler)
     load_history()
     _setup_gpio()
+
+    # Let user select BT adapter
+    if LCD_AVAILABLE and LCD_1in44:
+        import LCD_Config as _LC
+        _LC.GPIO_Init()
+        _lcd = LCD_1in44.LCD()
+        _lcd.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
+        _font = scaled_font()
+        chosen = select_bt_interface(_lcd, _font, PINS, GPIO)
+        if chosen:
+            try:
+                settings.hci_adapter = int(chosen.replace("hci", ""))
+            except ValueError:
+                pass
+
     ui = Ui()
     scanner = ScannerWorker()
     scanner.start()

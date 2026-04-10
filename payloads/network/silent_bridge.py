@@ -32,6 +32,9 @@ from payloads._iface_helper import select_interface
 KEY3_PIN = 16
 WIDTH, HEIGHT = LCD_1in44.LCD_WIDTH, LCD_1in44.LCD_HEIGHT
 BRIDGE = "br0"
+
+GPIO.setmode(GPIO.BCM)
+GPIO.setup(KEY3_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 REFRESH_SEC = 1.0
 
 # Live counters (tshark)

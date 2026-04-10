@@ -128,12 +128,15 @@ class Ghost:
         if self.pen:
             if time.time() >= self.release_time:
                 self.pen = False
-                self.x, self.y = 7, 6
+                # Release to a valid path cell above the pen
+                self.x, self.y = 7, 4
+                self.dx, self.dy = -1, 0
             return
         tx, ty = self.target(pac_x, pac_y, pac_dx, pac_dy, blinky_x, blinky_y)
         best_dir = (self.dx, self.dy)
         best_dist = 9999
         opp = OPPOSITE.get((self.dx, self.dy), (0, 0))
+        found_valid = False
         for ddx, ddy in [(0, -1), (0, 1), (-1, 0), (1, 0)]:
             if (ddx, ddy) == opp:
                 continue
@@ -143,6 +146,10 @@ class Ghost:
                 if d < best_dist:
                     best_dist = d
                     best_dir = (ddx, ddy)
+                    found_valid = True
+        # Dead-end: allow reversing direction as fallback
+        if not found_valid and _can_move(maze, self.x, self.y, opp[0], opp[1]):
+            best_dir = opp
         self.dx, self.dy = best_dir
         if _can_move(maze, self.x, self.y, self.dx, self.dy):
             self.x, self.y = _clamp(self.x + self.dx, self.y + self.dy)

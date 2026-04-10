@@ -255,6 +255,120 @@ def select_interface(lcd, font, pins, gpio, iface_type="any", title=None):
         time.sleep(0.05)
 
 
+# ---------------------------------------------------------------------------
+# Bluetooth interface detection + selection
+# ---------------------------------------------------------------------------
+
+def list_bt_interfaces():
+    """Return list of Bluetooth HCI interfaces with info."""
+    result = []
+    bt_path = "/sys/class/bluetooth"
+    if not os.path.isdir(bt_path):
+        return result
+    for name in sorted(os.listdir(bt_path)):
+        if not name.startswith("hci"):
+            continue
+        info = {"name": name, "bus": "", "mac": "", "is_up": False, "bt_version": ""}
+        # Bus type
+        try:
+            devpath = os.path.realpath(os.path.join(bt_path, name, "device"))
+            if "usb" in devpath:
+                info["bus"] = "USB"
+            elif "uart" in devpath or "serial" in devpath:
+                info["bus"] = "onboard"
+            else:
+                info["bus"] = "other"
+        except Exception:
+            pass
+        # MAC + state from hciconfig
+        try:
+            r = subprocess.run(["hciconfig", name], capture_output=True, text=True, timeout=5)
+            out = r.stdout
+            if "UP RUNNING" in out:
+                info["is_up"] = True
+            for line in out.split("\n"):
+                if "BD Address:" in line:
+                    info["mac"] = line.split("BD Address:")[1].strip().split()[0]
+                if "HCI Version:" in line:
+                    info["bt_version"] = line.split("HCI Version:")[1].strip().split("(")[0].strip()
+        except Exception:
+            pass
+        result.append(info)
+    # Sort: USB first, then onboard
+    return sorted(result, key=lambda x: (0 if x["bus"] == "USB" else 1, x["name"]))
+
+
+def select_bt_interface(lcd, font, pins, gpio, title="SELECT BLUETOOTH"):
+    """
+    Detect BT interfaces and let the user pick one on LCD.
+    Returns hci name (e.g. 'hci0') or None.
+    Auto-selects if only one found.
+    """
+    ifaces = list_bt_interfaces()
+
+    if not ifaces:
+        _show_message(lcd, font, "No BT adapter found!", "#FF4444")
+        return None
+
+    if len(ifaces) == 1:
+        # Auto-ensure it's UP
+        if not ifaces[0]["is_up"]:
+            subprocess.run(["sudo", "hciconfig", ifaces[0]["name"], "up"],
+                           capture_output=True, timeout=5)
+        return ifaces[0]["name"]
+
+    sel = 0
+    WIDTH, HEIGHT = lcd.width, lcd.height
+
+    while True:
+        btn = get_button(pins, gpio)
+        if btn == "KEY3":
+            return None
+        elif btn == "OK":
+            chosen = ifaces[sel]
+            if not chosen["is_up"]:
+                subprocess.run(["sudo", "hciconfig", chosen["name"], "up"],
+                               capture_output=True, timeout=5)
+            return chosen["name"]
+        elif btn == "UP":
+            sel = max(0, sel - 1)
+            time.sleep(0.15)
+        elif btn == "DOWN":
+            sel = min(len(ifaces) - 1, sel + 1)
+            time.sleep(0.15)
+
+        if Image is None or ScaledDraw is None:
+            time.sleep(0.05)
+            continue
+
+        img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+        d = ScaledDraw(img)
+
+        d.rectangle((0, 0, 127, 13), fill="#111")
+        d.text((2, 1), title, font=font, fill="#0088FF")
+
+        for i, ifc in enumerate(ifaces):
+            y = 18 + i * 18
+            prefix = ">" if i == sel else " "
+            name = ifc["name"]
+            bus = ifc["bus"] or "?"
+            mac_short = ifc["mac"][-8:] if ifc["mac"] else "?"
+            up_str = "UP" if ifc["is_up"] else "DOWN"
+
+            color = "#00FF00" if i == sel else "#CCCCCC"
+            state_color = "#00FF00" if ifc["is_up"] else "#FF4444"
+
+            d.text((2, y), f"{prefix}{name}", font=font, fill=color)
+            d.text((50, y), bus[:6], font=font, fill="#FFAA00" if i == sel else "#888")
+            d.text((2, y + 10), f"  {mac_short} {up_str}", font=font, fill=state_color)
+
+        d.rectangle((0, 116, 127, 127), fill="#111")
+        d.text((2, 117), "OK:Select KEY3:Cancel", font=font, fill="#888")
+
+        lcd.LCD_ShowImage(img, 0, 0)
+        time.sleep(0.05)
+
+
 def _show_message(lcd, font, text, color="#FF4444"):
     """Show a brief error/info message on LCD."""
     if Image is None or ScaledDraw is None:

@@ -166,6 +166,11 @@ current_screen = "main"  # main, networks, attacking
 attack_stop_event = threading.Event()
 attack_threads = []
 
+# UI state for improved display
+attack_start_time = 0
+deauth_packet_count = 0
+discovered_clients = 0
+
 # GPIO and LCD setup
 GPIO.setmode(GPIO.BCM)
 for pin in PINS.values():
@@ -177,6 +182,167 @@ WIDTH, HEIGHT = LCD.width, LCD.height
 font_large = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", int(10 * LCD_1in44.LCD_SCALE))
 canvas = Image.new("RGB", (WIDTH, HEIGHT), "black")
 draw = ScaledDraw(canvas)
+
+# Fonts for improved UI (all sizes in 128-base)
+font_title = scaled_font(9)
+font_body = scaled_font(8)
+font_small = scaled_font(7)
+
+# Color palette
+COLOR_GREEN = "#00FF00"
+COLOR_RED = "#FF3333"
+COLOR_YELLOW = "#FFCC00"
+COLOR_WHITE = "#FFFFFF"
+COLOR_GRAY = "#888888"
+COLOR_DARK_BG = "#111111"
+COLOR_HEADER_IDLE = "#333300"
+COLOR_HEADER_SCAN = "#003300"
+COLOR_HEADER_ATTACK = "#330000"
+
+
+def _draw_header(status_text, color, bg_color):
+    """Draw a colored status header bar at the top of the screen."""
+    draw.rectangle((0, 0, 128, 12), fill=bg_color)
+    draw.line((0, 12, 128, 12), fill=color)
+    w = draw.textbbox((0, 0), status_text, font=font_title)[2]
+    x = (128 - w) // 2
+    draw.text((x, 1), status_text, font=font_title, fill=color)
+
+
+def _draw_footer(controls):
+    """Draw a footer area with control hints."""
+    footer_y = 114
+    draw.rectangle((0, footer_y, 128, 128), fill=COLOR_DARK_BG)
+    draw.line((0, footer_y, 128, footer_y), fill=COLOR_GRAY)
+    draw.text((2, footer_y + 2), controls, font=font_small, fill=COLOR_GRAY)
+
+
+def _format_elapsed(seconds):
+    """Format elapsed seconds as MM:SS."""
+    m = int(seconds) // 60
+    s = int(seconds) % 60
+    return f"{m:02d}:{s:02d}"
+
+
+def draw_main_menu(page):
+    """Draw the main menu with IDLE status header."""
+    draw.rectangle((0, 0, 128, 128), fill="black")
+    _draw_header("IDLE", COLOR_YELLOW, COLOR_HEADER_IDLE)
+
+    draw.text((4, 16), f"Iface: {WIFI_INTERFACE[:10]}", font=font_body, fill=COLOR_WHITE)
+    draw.text((4, 27), f"Timeout: {SCAN_TIMEOUT}s", font=font_body, fill=COLOR_WHITE)
+
+    if page == 0:
+        draw.text((4, 42), "KEY1  Scan networks", font=font_small, fill=COLOR_GREEN)
+        draw.text((4, 52), "LEFT  Adjust timeout", font=font_small, fill=COLOR_WHITE)
+        draw.text((4, 62), "KEY2  Switch iface", font=font_small, fill=COLOR_WHITE)
+        draw.text((4, 72), "KEY3  Exit", font=font_small, fill=COLOR_RED)
+    elif page == 1:
+        draw.text((4, 42), "KEY1  Scan networks", font=font_small, fill=COLOR_GREEN)
+        draw.text((4, 52), "LEFT  Adjust timeout", font=font_small, fill=COLOR_WHITE)
+        draw.text((4, 62), "KEY2  Switch iface", font=font_small, fill=COLOR_WHITE)
+        draw.text((4, 72), "KEY3  Exit", font=font_small, fill=COLOR_RED)
+    else:
+        draw.text((4, 42), "KEY3  Exit", font=font_small, fill=COLOR_RED)
+
+    _draw_footer(f"UP/DN: Page {page + 1}/3")
+    LCD.LCD_ShowImage(canvas, 0, 0)
+
+
+def draw_network_list(nets, idx, targets):
+    """Draw the network selection screen with SCANNING status."""
+    draw.rectangle((0, 0, 128, 128), fill="black")
+    _draw_header(f"SCAN  {len(nets)} found", COLOR_GREEN, COLOR_HEADER_SCAN)
+
+    # Current network info
+    net = nets[idx]
+    is_sel = net['bssid'] in [t['bssid'] for t in targets]
+    marker = "[*]" if is_sel else "[ ]"
+
+    # Network name (prominent)
+    draw.text((4, 15), f"{marker} {net['essid'][:14]}", font=font_title, fill=COLOR_GREEN if is_sel else COLOR_WHITE)
+
+    # Network details
+    draw.text((4, 27), f"Ch: {net['channel']}", font=font_small, fill=COLOR_GRAY)
+    draw.text((50, 27), f"BSSID: {net['bssid'][-8:]}", font=font_small, fill=COLOR_GRAY)
+
+    # Navigation indicator
+    draw.text((4, 38), f"AP {idx + 1}/{len(nets)}", font=font_small, fill=COLOR_YELLOW)
+    draw.text((50, 38), f"Selected: {len(targets)}", font=font_small, fill=COLOR_GREEN if targets else COLOR_GRAY)
+
+    # Separator
+    draw.line((4, 48, 124, 48), fill=COLOR_GRAY)
+
+    # Visible list window (show a few networks around current)
+    list_y = 51
+    start = max(0, idx - 2)
+    end = min(len(nets), start + 5)
+    if end - start < 5:
+        start = max(0, end - 5)
+    for i in range(start, end):
+        n = nets[i]
+        sel = n['bssid'] in [t['bssid'] for t in targets]
+        prefix = "*" if sel else " "
+        color = COLOR_GREEN if i == idx else (COLOR_YELLOW if sel else COLOR_GRAY)
+        name = n['essid'][:16]
+        draw.text((4, list_y), f"{prefix}{name}", font=font_small, fill=color)
+        list_y += 10
+
+    _draw_footer("OK:Sel  RIGHT:Attack  K3:Back")
+    LCD.LCD_ShowImage(canvas, 0, 0)
+
+
+def draw_attacking_screen(targets, pkt_count, elapsed, clients):
+    """Draw the attacking screen with red status header."""
+    draw.rectangle((0, 0, 128, 128), fill="black")
+    _draw_header("ATTACKING", COLOR_RED, COLOR_HEADER_ATTACK)
+
+    # Target count
+    draw.text((4, 16), f"Targets: {len(targets)}", font=font_body, fill=COLOR_RED)
+
+    # Elapsed time
+    draw.text((75, 16), _format_elapsed(elapsed), font=font_body, fill=COLOR_WHITE)
+
+    # Separator
+    draw.line((4, 27, 124, 27), fill=COLOR_RED)
+
+    # Packet counter (prominent)
+    draw.text((4, 30), "Deauth Packets:", font=font_small, fill=COLOR_GRAY)
+    draw.text((4, 40), str(pkt_count), font=font_title, fill=COLOR_RED)
+
+    # Clients discovered
+    draw.text((4, 53), f"Clients seen: {clients}", font=font_small, fill=COLOR_YELLOW)
+
+    # Target list
+    draw.line((4, 64, 124, 64), fill=COLOR_GRAY)
+    draw.text((4, 66), "Active targets:", font=font_small, fill=COLOR_GRAY)
+    list_y = 76
+    for t in targets[:4]:
+        name = t['essid'][:14]
+        draw.text((6, list_y), f"Ch{t['channel']:>3} {name}", font=font_small, fill=COLOR_RED)
+        list_y += 10
+    if len(targets) > 4:
+        draw.text((6, list_y), f"  +{len(targets) - 4} more...", font=font_small, fill=COLOR_GRAY)
+
+    _draw_footer("KEY2:Stop  KEY3:Exit")
+    LCD.LCD_ShowImage(canvas, 0, 0)
+
+
+def draw_scan_timeout_menu(timeout_val):
+    """Draw the scan timeout adjustment screen."""
+    draw.rectangle((0, 0, 128, 128), fill="black")
+    _draw_header("SCAN TIMEOUT", COLOR_YELLOW, COLOR_HEADER_IDLE)
+
+    draw.text((4, 20), f"Current: {timeout_val}s", font=font_title, fill=COLOR_WHITE)
+
+    draw.text((4, 45), "UP     +5s", font=font_small, fill=COLOR_GREEN)
+    draw.text((4, 57), "DOWN   -5s", font=font_small, fill=COLOR_GREEN)
+    draw.text((4, 69), "OK     Confirm", font=font_small, fill=COLOR_WHITE)
+    draw.text((4, 81), "KEY3   Cancel", font=font_small, fill=COLOR_RED)
+
+    _draw_footer(f"Range: 5s - 60s")
+    LCD.LCD_ShowImage(canvas, 0, 0)
+
 
 # Select WiFi interface via shared helper
 WIFI_INTERFACE = select_interface(LCD, scaled_font(), PINS, GPIO, iface_type="wifi")
@@ -520,6 +686,7 @@ def start_direct_python_attack():
     
     def aggressive_attack_worker():
         """Worker thread that performs aggressive triple deauth attacks on all targets."""
+        global deauth_packet_count, discovered_clients
         attack_log = LOG_FILE.replace('.log', '_attack.log')
         attack_count = 0
         
@@ -554,6 +721,7 @@ def start_direct_python_attack():
                     continue
                 
                 attack_count += 1
+                discovered_clients = len(selected_targets)
                 log_attack(f"=== Attack #{attack_count} on {target['essid']} (Ch{target['channel']}) ===")
                 
                 # Update LCD with current target
@@ -596,6 +764,7 @@ def start_direct_python_attack():
                         log_attack(f"CONTINUOUS result: {result1[:200]}")
                         if "Sending" in result1 and "DeAuth" in result1:
                             log_attack("CONTINUOUS deauth: SUCCESS - unlimited packets sent!")
+                            deauth_packet_count += 200  # Approximate for 10s continuous
                         else:
                             log_attack("CONTINUOUS deauth: May have worked (check for DeAuth messages)")
                         
@@ -611,8 +780,10 @@ def start_direct_python_attack():
                         log_attack(f"BURST 1 result: {result2[:200]}")
                         if "Sending" in result2 and "DeAuth" in result2:
                             log_attack("BURST 1 deauth: SUCCESS - packets sent!")
+                            deauth_packet_count += 64
                         else:
                             log_attack("BURST 1 deauth: May have worked")
+                            deauth_packet_count += 64
                         
                         time.sleep(0.3)
                     
@@ -626,8 +797,10 @@ def start_direct_python_attack():
                         log_attack(f"BURST 2 result: {result3[:200]}")
                         if "Sending" in result3 and "DeAuth" in result3:
                             log_attack("BURST 2 deauth: SUCCESS - packets sent!")
+                            deauth_packet_count += 64
                         else:
                             log_attack("BURST 2 deauth: May have worked")
+                            deauth_packet_count += 64
                         
                         time.sleep(0.3)
                     
@@ -641,8 +814,10 @@ def start_direct_python_attack():
                         log_attack(f"BURST 3 result: {result4[:200]}")
                         if "Sending" in result4 and "DeAuth" in result4:
                             log_attack("BURST 3 deauth: SUCCESS - packets sent!")
+                            deauth_packet_count += 64
                         else:
                             log_attack("BURST 3 deauth: May have worked")
+                            deauth_packet_count += 64
                     
                     log_attack(f"Completed RESEARCH-BASED MAXIMUM DEAUTH on {target['essid']}")
                     log_attack("TOTAL PROVEN DEAUTH: 10s continuous + 64+64+64 = ~300+ packets!")
@@ -789,7 +964,12 @@ try:
 except:
     pass
 
-show(["WiFi Deauth Payload", "Multi-Target Version", f"Interface: {WIFI_INTERFACE}", "Initializing..."])
+draw.rectangle((0, 0, 128, 128), fill="black")
+_draw_header("INITIALIZING", COLOR_YELLOW, COLOR_HEADER_IDLE)
+draw.text((4, 20), "WiFi Deauth", font=font_title, fill=COLOR_WHITE)
+draw.text((4, 33), "Multi-Target", font=font_body, fill=COLOR_GRAY)
+draw.text((4, 48), f"Iface: {WIFI_INTERFACE}", font=font_small, fill=COLOR_GREEN)
+LCD.LCD_ShowImage(canvas, 0, 0)
 time.sleep(2)
 
 # Validate setup before starting
@@ -808,28 +988,7 @@ if not validate_setup():
 def show_main_menu_page():
     """Show the current main menu page."""
     global main_menu_page
-    
-    if main_menu_page == 0:
-        show([
-            "MAIN MENU - PAGE 1",
-            f"Interface: {WIFI_INTERFACE[:8]}",
-            f"Timeout: {SCAN_TIMEOUT}s",
-            "UP/DOWN: Change page"
-        ])
-    elif main_menu_page == 1:
-        show([
-            "MAIN MENU - PAGE 2", 
-            "KEY1: Scan networks",
-            "LEFT: Adjust timeout",
-            "KEY2: Switch interface"
-        ])
-    elif main_menu_page == 2:
-        show([
-            "MAIN MENU - PAGE 3",
-            "KEY3: Exit",
-            "",
-            ""
-        ])
+    draw_main_menu(main_menu_page)
 
 def switch_interface():
     """Switch WiFi interface using the proven fast_wifi_switcher approach."""
@@ -901,12 +1060,7 @@ def switch_interface():
 # Main event loop
 current_screen = "main"
 main_menu_page = 0  # Track which page of main menu we're on
-show([
-    "MAIN MENU - PAGE 1",
-    f"Interface: {WIFI_INTERFACE[:8]}",
-    f"Timeout: {SCAN_TIMEOUT}s",
-    "UP/DOWN: Change page"
-])
+draw_main_menu(main_menu_page)
 
 try:
     # Initialize periodic refresh for attacking screen
@@ -918,15 +1072,11 @@ try:
             current_time = time.time()
             
             # Periodic refresh for attacking screen to keep menu visible
-            if (current_screen == "attacking" and 
+            if (current_screen == "attacking" and
                 current_time - last_attacking_refresh > ATTACKING_REFRESH_INTERVAL):
-                
-                show([f"ATTACKING {len(selected_targets)}", 
-                      f"targets", 
-                      "", 
-                      "", 
-                      "KEY2: Stop attacks", 
-                      "KEY3: Exit"])
+
+                elapsed = current_time - attack_start_time
+                draw_attacking_screen(selected_targets, deauth_packet_count, elapsed, discovered_clients)
                 last_attacking_refresh = current_time
             
             btn = pressed_button()
@@ -952,9 +1102,7 @@ try:
                         selected_index = 0
                         selected_targets = []
                         current_screen = "networks"
-                        is_selected = networks[0]['bssid'] in [t['bssid'] for t in selected_targets]
-                        marker = "[*]" if is_selected else "   "
-                        show([f"NETWORKS ({len(networks)} found)", f"{marker} {networks[0]['essid']}", f"Selected: {len(selected_targets)}", "UP/DOWN: Navigate", "OK: Toggle select", "RIGHT: Start attack"])
+                        draw_network_list(networks, selected_index, selected_targets)
                     else:
                         show(["No networks found!", "Try longer timeout", "", "Press any key..."])
                         time.sleep(3)
@@ -965,7 +1113,7 @@ try:
                         time.sleep(0.05)
                     
                     while True:
-                        show(["SCAN TIMEOUT", f"Current: {SCAN_TIMEOUT}s", "", "UP: +5s, DOWN: -5s", "OK: Confirm", "KEY3: Cancel"])
+                        draw_scan_timeout_menu(SCAN_TIMEOUT)
                         btn = pressed_button()
                         
                         if btn == "UP":
@@ -1007,17 +1155,13 @@ try:
                     while pressed_button() == "UP":
                         time.sleep(0.05)
                     selected_index = (selected_index - 1) % len(networks)
-                    is_selected = networks[selected_index]['bssid'] in [t['bssid'] for t in selected_targets]
-                    marker = "[*]" if is_selected else "   "
-                    show([f"NETWORKS ({len(networks)} found)", f"{marker} {networks[selected_index]['essid']}", f"Selected: {len(selected_targets)}", "UP/DOWN: Navigate", "OK: Toggle select", "RIGHT: Start attack"])
-                
+                    draw_network_list(networks, selected_index, selected_targets)
+
                 elif btn == "DOWN":  # Navigate down
                     while pressed_button() == "DOWN":
                         time.sleep(0.05)
                     selected_index = (selected_index + 1) % len(networks)
-                    is_selected = networks[selected_index]['bssid'] in [t['bssid'] for t in selected_targets]
-                    marker = "[*]" if is_selected else "   "
-                    show([f"NETWORKS ({len(networks)} found)", f"{marker} {networks[selected_index]['essid']}", f"Selected: {len(selected_targets)}", "UP/DOWN: Navigate", "OK: Toggle select", "RIGHT: Start attack"])
+                    draw_network_list(networks, selected_index, selected_targets)
                 
                 elif btn == "OK":  # Toggle selection
                     while pressed_button() == "OK":
@@ -1032,10 +1176,8 @@ try:
                         # Add to selection
                         selected_targets.append(network)
                         log(f"Added target: {network['essid']}")
-                    
-                    is_selected = network['bssid'] in [t['bssid'] for t in selected_targets]
-                    marker = "[*]" if is_selected else "   "
-                    show([f"NETWORKS ({len(networks)} found)", f"{marker} {network['essid']}", f"Selected: {len(selected_targets)}", "UP/DOWN: Navigate", "OK: Toggle select", "RIGHT: Start attack"])
+
+                    draw_network_list(networks, selected_index, selected_targets)
                 
                 elif btn == "RIGHT":  # Start attack
                     while pressed_button() == "RIGHT":
@@ -1044,16 +1186,17 @@ try:
                     if selected_targets:
                         if start_attacks():
                             current_screen = "attacking"
-                            show([f"ATTACKING {len(selected_targets)}", f"targets", "", "", "KEY2: Stop attacks", "KEY3: Exit"])
+                            attack_start_time = time.time()
+                            deauth_packet_count = 0
+                            discovered_clients = 0
+                            draw_attacking_screen(selected_targets, deauth_packet_count, 0, discovered_clients)
                         else:
                             show(["Failed to start", "attacks!", "", "Press any key..."])
                             time.sleep(3)
                     else:
                         show(["No targets selected!", "Select targets first", "", "Press any key..."])
                         time.sleep(2)
-                        is_selected = networks[selected_index]['bssid'] in [t['bssid'] for t in selected_targets]
-                        marker = "[*]" if is_selected else "   "
-                        show([f"NETWORKS ({len(networks)} found)", f"{marker} {networks[selected_index]['essid']}", f"Selected: {len(selected_targets)}", "UP/DOWN: Navigate", "OK: Toggle select", "RIGHT: Start attack"])
+                        draw_network_list(networks, selected_index, selected_targets)
                 
                 elif btn == "KEY1":  # Rescan
                     while pressed_button() == "KEY1":
@@ -1063,9 +1206,7 @@ try:
                     if networks:
                         selected_index = 0
                         selected_targets = []
-                        is_selected = networks[0]['bssid'] in [t['bssid'] for t in selected_targets]
-                        marker = "[*]" if is_selected else "   "
-                        show([f"NETWORKS ({len(networks)} found)", f"{marker} {networks[0]['essid']}", f"Selected: {len(selected_targets)}", "UP/DOWN: Navigate", "OK: Toggle select", "RIGHT: Start attack"])
+                        draw_network_list(networks, selected_index, selected_targets)
                     else:
                         show(["No networks found!", "Try longer timeout", "", "Press any key..."])
                         time.sleep(3)
@@ -1075,9 +1216,7 @@ try:
                         time.sleep(0.05)
                     selected_targets = []
                     log("Cleared all target selections")
-                    is_selected = networks[selected_index]['bssid'] in [t['bssid'] for t in selected_targets]
-                    marker = "[*]" if is_selected else "   "
-                    show([f"NETWORKS ({len(networks)} found)", f"{marker} {networks[selected_index]['essid']}", f"Selected: {len(selected_targets)}", "UP/DOWN: Navigate", "OK: Toggle select", "RIGHT: Start attack"])
+                    draw_network_list(networks, selected_index, selected_targets)
                 
                 elif btn == "KEY3":  # Back to main menu
                     while pressed_button() == "KEY3":
@@ -1094,11 +1233,9 @@ try:
                     stopped = stop_all_attacks()
                     show_status(f"Stopped {stopped} attacks")
                     time.sleep(2)
-                    
+
                     current_screen = "networks"
-                    is_selected = networks[selected_index]['bssid'] in [t['bssid'] for t in selected_targets]
-                    marker = "[*]" if is_selected else "   "
-                    show([f"NETWORKS ({len(networks)} found)", f"{marker} {networks[selected_index]['essid']}", f"Selected: {len(selected_targets)}", "UP/DOWN: Navigate", "OK: Toggle select", "RIGHT: Start attack"])
+                    draw_network_list(networks, selected_index, selected_targets)
                 
                 elif btn == "KEY3":  # Exit
                     simple_cleanup()

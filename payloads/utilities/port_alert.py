@@ -351,10 +351,15 @@ def main():
                 last_press = now
 
             if mode == "detail":
-                if btn:
-                    mode = "list"
-                    time.sleep(0.1)
-                    continue
+                # Wait for an explicit button press before returning
+                while _running:
+                    detail_btn = get_button(PINS, GPIO)
+                    if detail_btn:
+                        break
+                    time.sleep(0.05)
+                mode = "list"
+                time.sleep(0.1)
+                continue
 
             if btn == "KEY3":
                 break

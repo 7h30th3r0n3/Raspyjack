@@ -361,7 +361,6 @@ def main():
                     _update_custom_pattern()
                 else:
                     cursor = max(0, cursor - 1)
-                    editing_custom = cursor == len(PATTERNS) - 1
 
             elif btn == "DOWN":
                 if editing_custom:
@@ -369,24 +368,29 @@ def main():
                     _update_custom_pattern()
                 else:
                     cursor = min(len(PATTERNS) - 1, cursor + 1)
-                    editing_custom = cursor == len(PATTERNS) - 1
 
-            elif btn == "LEFT" and editing_custom:
+            elif btn == "LEFT" and editing_custom and cursor == len(PATTERNS) - 1:
                 custom_on_time = max(0.05, custom_on_time - 0.1)
                 _update_custom_pattern()
 
-            elif btn == "RIGHT" and editing_custom:
+            elif btn == "RIGHT" and editing_custom and cursor == len(PATTERNS) - 1:
                 custom_on_time = min(5.0, custom_on_time + 0.1)
                 _update_custom_pattern()
 
             elif btn == "OK":
-                with lock:
-                    active_pattern_idx = cursor
-                    act_manual = None
-                    pwr_manual = None
-                if cursor == len(PATTERNS) - 1:
-                    _update_custom_pattern()
-                _start_pattern()
+                if cursor == len(PATTERNS) - 1 and not editing_custom:
+                    # Enter custom editing mode
+                    editing_custom = True
+                else:
+                    # Apply selected pattern (or confirm custom edit)
+                    editing_custom = False
+                    with lock:
+                        active_pattern_idx = cursor
+                        act_manual = None
+                        pwr_manual = None
+                    if cursor == len(PATTERNS) - 1:
+                        _update_custom_pattern()
+                    _start_pattern()
 
             elif btn == "KEY1":
                 # Toggle ACT LED manually

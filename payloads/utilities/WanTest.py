@@ -16,7 +16,7 @@ Logging:
                            download_mbps, upload_mbps, packet_loss_pct, single
 """
 
-import os, sys, time, signal, json, subprocess, shutil
+import os, sys, time, signal, json, subprocess, shutil, socket
 
 # Ensure local imports when launched from payloads/
 sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..', '..')))
@@ -75,9 +75,10 @@ def run_speedtest_ookla_cli(single: bool) -> dict | None:
     ]
     # single connection (where supported): speedtest doesn't have a simple flag; skip.
 
+    last_err = None
     for cmd in cmds:
         try:
-            out = subprocess.check_output(cmd, text=True, stderr=subprocess.STDOUT)
+            out = subprocess.check_output(cmd, text=True, stderr=subprocess.STDOUT, timeout=120)
             data = json.loads(out)
 
             # Ookla CLI JSON
@@ -118,7 +119,22 @@ def run_speedtest_ookla_cli(single: bool) -> dict | None:
     return None
 
 
+def _check_internet(timeout: float = 5.0) -> bool:
+    """Quick connectivity check -- try to reach a well-known DNS server."""
+    for host in ("1.1.1.1", "8.8.8.8"):
+        try:
+            s = socket.create_connection((host, 53), timeout=timeout)
+            s.close()
+            return True
+        except OSError:
+            continue
+    return False
+
+
 def run_speedtest(single: bool) -> dict | None:
+    if not _check_internet():
+        print("[speedtest_wan] no internet connectivity detected")
+        return None
     res = run_speedtest_python(single)
     if res:
         return res
@@ -293,11 +309,19 @@ try:
                     wait_release(btn)
                     continue
 
-            splash(["Testing…", "Selecting server…"]) 
+            # Pre-check internet before running the full test
+            splash(["Checking internet…"])
+            if not _check_internet():
+                splash(["No internet", "Check cable/WiFi", "then retry"])
+                time.sleep(2.0)
+                wait_release(btn)
+                continue
+
+            splash(["Testing…", "Selecting server…"])
             res = run_speedtest(single)
             if not res:
-                splash(["Speedtest failed", "Check internet/CLI"]) 
-                time.sleep(1.8)
+                splash(["Speedtest failed", "Both backends failed", "pip: speedtest-cli", "apt: speedtest-cli"])
+                time.sleep(2.5)
             else:
                 last = res
                 log_result(single, res)

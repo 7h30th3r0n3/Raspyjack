@@ -401,7 +401,7 @@ def _send_all_files():
 
 def _log_transfer(filename, size, chunks):
     """Log successful transfer to manifest."""
-    log_path = os.path.join(EXFIL_DIR, "transfer_log.jsonl")
+    log_path = os.path.join(LOOT_DIR, "transfer_log.jsonl")
     entry = {
         "timestamp": datetime.now().isoformat(),
         "filename": filename,

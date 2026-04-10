@@ -57,6 +57,7 @@ font = scaled_font()
 LOOT_ROOT = "/root/Raspyjack/loot"
 CONFIG_DIR = "/root/Raspyjack/config/exfil_ftp"
 CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
+os.makedirs(LOOT_ROOT, exist_ok=True)
 os.makedirs(CONFIG_DIR, exist_ok=True)
 
 FTP_PORT = 21
@@ -430,10 +431,10 @@ def _handle_ftp_client(conn, addr, anon, username, password):
 # ---------------------------------------------------------------------------
 def _get_pi_ip():
     try:
+        import subprocess
         out = subprocess.run(
             ["hostname", "-I"], capture_output=True, text=True, timeout=5,
         )
-        import subprocess  # noqa: already imported
         ips = out.stdout.strip().split()
         return ips[0] if ips else "?.?.?.?"
     except Exception:

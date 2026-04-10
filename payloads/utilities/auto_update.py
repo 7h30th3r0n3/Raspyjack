@@ -212,7 +212,7 @@ def show_progress(title, detail="", progress_pct=None):
         d.rectangle((4, 98, 123, 105), outline="#444")
         if bar_w > 0:
             d.rectangle((4, 98, 4 + bar_w, 105), fill="#00FF00")
-        d.text((4, 107), f"{int(progress_pct)}%", font=FONT_SM, fill="#888")
+        d.text((60, 107), f"{int(progress_pct)}%", font=FONT_SM, fill="#888")
 
     LCD.LCD_ShowImage(img, 0, 0)
 

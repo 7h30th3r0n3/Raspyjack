@@ -26,6 +26,7 @@ sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..", "..")))
 
 # Import the working wardriving scanner — we inherit everything from it
 from payloads._display_helper import ScaledDraw, scaled_font
+from payloads._input_helper import get_button
 from payloads._iface_helper import select_interface
 from payloads.reconnaissance.wardriving import (  # type: ignore
     WardrivingScanner,
@@ -738,7 +739,7 @@ class CamFinderScanner(WardrivingScanner):
             iface = self.monitor_interface or "No IF"
             lines.append(f"{status} ({iface})")
             lines.append("[KEY1] Start/Stop")
-            lines.append("[KEY2] Exit")
+            lines.append("[KEY2] Export [KEY3] Exit")
 
             img = Image.new("RGB", (self.WIDTH, self.HEIGHT), "black")
             d = ScaledDraw(img)
@@ -765,6 +766,40 @@ class CamFinderScanner(WardrivingScanner):
     # ------------------------------------------------------------------
     # Interactive: just change the banner
     # ------------------------------------------------------------------
+    def handle_gpio_input(self):
+        """Override parent to make KEY3 exit (go back) instead of export."""
+        if not LCD_AVAILABLE or not hasattr(self, 'gpio_ready') or not self.gpio_ready:
+            return
+
+        try:
+            import RPi.GPIO as GPIO
+            btn = get_button({"KEY1": 21, "KEY2": 20, "KEY3": 16}, GPIO)
+            if not btn:
+                return
+
+            if btn == "KEY1":
+                if self.running:
+                    self.stop_scan()
+                else:
+                    self.start_scan()
+                time.sleep(0.3)
+                return
+
+            if btn == "KEY2":
+                self.export_data()
+                time.sleep(0.3)
+                return
+
+            if btn == "KEY3":
+                print("KEY3 pressed - exiting cam finder")
+                self.cleanup()
+                sys.exit(0)
+
+        except SystemExit:
+            raise
+        except Exception as e:
+            self.log(f"GPIO error: {e}")
+
     def run_interactive(self):
         print("RaspyJack Cam Finder")
         print("====================")
@@ -778,14 +813,16 @@ class CamFinderScanner(WardrivingScanner):
 
             print("LCD Mode - Use hardware buttons:")
             print("  KEY1 - Start/Stop scan")
-            print("  KEY2 - Exit (WebUI immediate / hold 2s on device)")
-            print("  KEY3 - Export data")
+            print("  KEY2 - Export data")
+            print("  KEY3 - Exit (go back)")
             print("\nPress Ctrl+C to exit")
 
             try:
                 while True:
                     try:
                         self.handle_gpio_input()
+                    except SystemExit:
+                        raise
                     except Exception as e:
                         self.log(f"GPIO error: {e}")
                     import time

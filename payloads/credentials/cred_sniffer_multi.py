@@ -384,13 +384,13 @@ def _draw_screen():
 
     if vm == "proto":
         y = 28
-        for proto in PROTOCOLS:
+        visible_protos = PROTOCOLS[sp:sp + ROWS_VISIBLE]
+        for proto in visible_protos:
             cnt = counts.get(proto, 0)
             color = "GREEN" if cnt > 0 else "GRAY"
-            draw.text((2, y), f"{proto:8s} {cnt}", fill=color, font=font)
-            y += 10
-            if y > 108:
-                break
+            line = f"{proto:8s} {cnt}"
+            draw.text((2, y), line[:22], fill=color, font=font)
+            y += 12
     else:
         # Time-ordered view
         visible = creds[sp:sp + ROWS_VISIBLE]
@@ -447,7 +447,10 @@ def main():
 
             elif btn == "DOWN":
                 with lock:
-                    max_scroll = max(0, len(credentials) - ROWS_VISIBLE)
+                    if view_mode == "proto":
+                        max_scroll = max(0, len(PROTOCOLS) - ROWS_VISIBLE)
+                    else:
+                        max_scroll = max(0, len(credentials) - ROWS_VISIBLE)
                     if scroll_pos < max_scroll:
                         scroll_pos += 1
 

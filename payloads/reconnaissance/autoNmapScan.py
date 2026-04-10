@@ -36,6 +36,7 @@ from payloads._display_helper import ScaledDraw, scaled_font
 
 # Shared input helper (WebUI virtual + GPIO)
 from payloads._input_helper import get_button
+from payloads._iface_helper import select_interface
 
 # ---------------------------------------------------------------------------
 # 1) Configuration – GPIO pins (BCM numbering) & constants
@@ -131,15 +132,15 @@ periodic_stop    = threading.Event()
 # 6) Nmap scan routine
 # ---------------------------------------------------------------------------
 
-def current_target() -> str:
-    """Return the IPv4 address + CIDR mask of *eth0* (e.g. 192.168.0.42/24)."""
-    cmd = "ip -4 addr show eth0 | awk '/inet / { print $2 }'"
+def current_target(iface: str = "eth0") -> str:
+    """Return the IPv4 address + CIDR mask of *iface* (e.g. 192.168.0.42/24)."""
+    cmd = f"ip -4 addr show {iface} | awk '/inet / {{ print $2 }}'"
     return subprocess.check_output(cmd, shell=True).decode().strip()
 
 
 def nmap_scan() -> None:
     """Run a single Nmap scan and save results under *LOOT_DIR*."""
-    target = current_target()
+    target = current_target(_selected_iface)
     ts     = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     out    = f"{LOOT_DIR}periodic_scan_{ts}.txt"
     xml_out = out.replace(".txt", ".xml")
@@ -199,7 +200,14 @@ def pressed_button() -> str | None:
 # 10) Main event loop
 # ---------------------------------------------------------------------------
 
-show(["Ready!", "KEY1 : scan now", "KEY2 : auto/stop", "KEY3 : exit"], invert=False)
+# ---------------------------------------------------------------------------
+# 10a) Interface selection
+# ---------------------------------------------------------------------------
+_selected_iface = select_interface(LCD, font_small, PINS, GPIO, iface_type="any")
+if not _selected_iface:
+    _selected_iface = "eth0"
+
+show(["Ready!", f"IF: {_selected_iface}", "KEY1 : scan now", "KEY2 : auto/stop", "KEY3 : exit"], invert=False)
 
 periodic_thread: threading.Thread | None = None
 

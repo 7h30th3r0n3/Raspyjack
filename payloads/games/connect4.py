@@ -15,6 +15,7 @@ sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..", "..")))
 
 import signal
 import random
+import threading
 
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
@@ -74,8 +75,10 @@ DISC_R = 6
 DIFFICULTIES = [
     {"name": "EASY", "depth": 0},
     {"name": "MED", "depth": 3},
-    {"name": "HARD", "depth": 6},
+    {"name": "HARD", "depth": 4},
 ]
+
+AI_TIMEOUT = 3.0  # seconds before falling back to random move
 
 running = True
 
@@ -251,12 +254,26 @@ def minimax(board, depth, alpha, beta, maximizing):
 
 
 def ai_move(board, difficulty):
-    """Choose a column for the AI."""
+    """Choose a column for the AI with timeout fallback."""
     depth = difficulty["depth"]
-    if depth == 0:
-        return random.choice(valid_columns(board))
-    col, _ = minimax(board, depth, -999999, 999999, True)
-    return col
+    vcols = valid_columns(board)
+    if depth == 0 or not vcols:
+        return random.choice(vcols) if vcols else None
+
+    result = [None]
+
+    def _run():
+        col, _ = minimax(board, depth, -999999, 999999, True)
+        result[0] = col
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    t.join(timeout=AI_TIMEOUT)
+
+    if result[0] is not None:
+        return result[0]
+    # Timeout: pick a random valid column
+    return random.choice(vcols)
 
 
 # ---------------------------------------------------------------------------

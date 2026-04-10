@@ -153,19 +153,22 @@ def _draw_screen(length, enabled, setting_cursor, password, status_msg):
     d.text((2, y), f"Pool: {len(alphabet)} chars", font=font, fill="#888")
     y += ROW_H + 2
 
-    # Generated password display
+    # Generated password display -- cap y to avoid overlapping footer at 116
+    max_y = 116 - ROW_H  # last safe row
     if password:
-        d.text((2, y), "Password:", font=font, fill="#aaa")
-        y += ROW_H
+        if y <= max_y:
+            d.text((2, y), "Password:", font=font, fill="#aaa")
+            y += ROW_H
         # Split long passwords across lines
         line1 = password[:20]
         line2 = password[20:40]
         line3 = password[40:60]
-        d.text((2, y), line1, font=font, fill="#00ff00")
-        if line2:
+        if y <= max_y:
+            d.text((2, y), line1, font=font, fill="#00ff00")
+        if line2 and y + ROW_H <= max_y:
             y += ROW_H
             d.text((2, y), line2, font=font, fill="#00ff00")
-        if line3:
+        if line3 and y + ROW_H <= max_y:
             y += ROW_H
             d.text((2, y), line3, font=font, fill="#00ff00")
     else:

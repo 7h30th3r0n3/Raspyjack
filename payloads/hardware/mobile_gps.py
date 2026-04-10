@@ -27,8 +27,11 @@ import os
 import sys
 import time
 import json
+import ssl
+import tempfile
 import threading
 import socket
+import subprocess
 from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
@@ -55,9 +58,13 @@ WIDTH, HEIGHT = LCD.width, LCD.height
 font = scaled_font()
 
 LOOT_DIR = "/root/Raspyjack/loot/GPS"
-HTTP_PORT = 8888
+os.makedirs(LOOT_DIR, exist_ok=True)
+HTTPS_PORT = 4443
 DEBOUNCE = 0.20
 ROW_H = 12
+_CERT_DIR = os.path.join(LOOT_DIR, ".certs")
+_CERT_FILE = os.path.join(_CERT_DIR, "server.pem")
+_KEY_FILE = os.path.join(_CERT_DIR, "server.key")
 
 lock = threading.Lock()
 _app_running = True
@@ -164,14 +171,45 @@ def _get_device_ip():
         return "0.0.0.0"
 
 
-def _start_server():
-    """Start HTTP server in a thread."""
-    global _httpd, _server_running, _status_msg
+def _ensure_self_signed_cert():
+    """Generate a self-signed certificate if one does not exist."""
+    if os.path.isfile(_CERT_FILE) and os.path.isfile(_KEY_FILE):
+        return True
+    os.makedirs(_CERT_DIR, exist_ok=True)
     try:
-        _httpd = HTTPServer(("0.0.0.0", HTTP_PORT), _GPSHandler)
+        subprocess.run(
+            [
+                "openssl", "req", "-x509", "-newkey", "rsa:2048",
+                "-keyout", _KEY_FILE, "-out", _CERT_FILE,
+                "-days", "365", "-nodes",
+                "-subj", "/CN=RaspyJack GPS",
+            ],
+            capture_output=True, timeout=30,
+            check=True,
+        )
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+        return False
+
+
+def _start_server():
+    """Start HTTPS server in a thread with a self-signed certificate."""
+    global _httpd, _server_running, _status_msg
+
+    if not _ensure_self_signed_cert():
+        with lock:
+            _status_msg = "Cert gen failed"
+            _server_running = False
+        return
+
+    try:
+        _httpd = HTTPServer(("0.0.0.0", HTTPS_PORT), _GPSHandler)
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.load_cert_chain(certfile=_CERT_FILE, keyfile=_KEY_FILE)
+        _httpd.socket = ctx.wrap_socket(_httpd.socket, server_side=True)
         with lock:
             _server_running = True
-            _status_msg = "Server running"
+            _status_msg = "HTTPS server running"
         _httpd.serve_forever()
     except OSError as exc:
         with lock:
@@ -242,8 +280,7 @@ def _draw_screen(pos, track, scroll, running, status):
     else:
         ip = _get_device_ip()
         d.text((2, y), f"Open on phone:", font=font, fill="#ccc"); y += ROW_H
-        d.text((2, y), f"http://{ip}", font=font, fill="#00ff00"); y += ROW_H
-        d.text((2, y), f":{HTTP_PORT}", font=font, fill="#00ff00"); y += ROW_H
+        d.text((2, y), f"https://{ip}:{HTTPS_PORT}", font=font, fill="#00ff00"); y += ROW_H
         d.text((2, y), "Waiting for GPS...", font=font, fill="#666"); y += ROW_H
 
     d.text((2, 104), f"Track: {len(track)} pts", font=font, fill="#888")
@@ -303,8 +340,10 @@ def main():
     finally:
         _app_running = False
         _stop_server()
-        if _track_log:
-            _export_track(_track_log)
+        with lock:
+            final_track = list(_track_log)
+        if final_track:
+            _export_track(final_track)
         try:
             LCD.LCD_Clear()
         except Exception:

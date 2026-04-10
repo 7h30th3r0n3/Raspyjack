@@ -59,8 +59,8 @@ CHARSET = list("abcdefghijklmnopqrstuvwxyz0123456789 -_./|&;")
 
 DEFAULT_COMBOS = [
     {"combo": "KEY1+KEY2", "action": "scrot /tmp/rj_screenshot.png"},
-    {"combo": "UP+DOWN", "action": "airmon-ng check kill"},
-    {"combo": "LEFT+RIGHT", "action": "nmap -sn 192.168.1.0/24"},
+    {"combo": "KEY1+UP", "action": "airmon-ng check kill"},
+    {"combo": "KEY2+DOWN", "action": "nmap -sn 192.168.1.0/24"},
 ]
 
 lock = threading.Lock()

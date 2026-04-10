@@ -27,6 +27,7 @@ import os
 import sys
 import time
 import json
+import shutil
 import subprocess
 import threading
 from datetime import datetime
@@ -59,6 +60,7 @@ LOOT_ROOT = "/root/Raspyjack/loot"
 LOOT_DIR = "/root/Raspyjack/loot/SMBExfil"
 CONFIG_DIR = "/root/Raspyjack/config/exfil_smb"
 CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
+os.makedirs(LOOT_ROOT, exist_ok=True)
 os.makedirs(LOOT_DIR, exist_ok=True)
 os.makedirs(CONFIG_DIR, exist_ok=True)
 
@@ -180,31 +182,41 @@ def _start_smb_server():
 
     cfg = _get("config")
     share_name = cfg.get("share_name", "loot")
+    ip = _get_pi_ip()
+    _set(pi_ip=ip)
 
-    # Try impacket-smbserver
+    # Check if impacket-smbserver is available on PATH
+    if not shutil.which("impacket-smbserver"):
+        _add_log("impacket-smbserver not on PATH")
+        _set(status="Trying Python fallback...")
+        _try_python_smbserver(share_name)
+        _cleanup_process()
+        _set(running=False, status="SMB server stopped")
+        _add_log("SMB server stopped")
+        return
+
     cmd = ["impacket-smbserver", share_name, LOOT_ROOT, "-smb2support"]
 
     try:
         proc = subprocess.Popen(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
         _set(process=proc)
-        ip = _get_pi_ip()
-        _set(pi_ip=ip, status=f"Serving: \\\\{ip}\\{share_name}")
-        _add_log(f"SMB share at \\\\{ip}\\{share_name}")
+        _set(status=f"SMB on {ip}:445")
+        _add_log(f"SMB active on {ip}:445")
+        _add_log(f"Share: \\\\{ip}\\{share_name}")
 
-        # Monitor process
-        while not _get("stop"):
-            if proc.poll() is not None:
-                _add_log("SMB server exited")
-                break
-            time.sleep(1)
+        # Monitor process -- give it a moment to start before polling
+        time.sleep(2)
+        if proc.poll() is not None:
+            _add_log(f"SMB server exited immediately (code {proc.returncode})")
+        else:
+            while not _get("stop"):
+                if proc.poll() is not None:
+                    _add_log("SMB server exited")
+                    break
+                time.sleep(1)
 
-    except FileNotFoundError:
-        _add_log("impacket-smbserver not found")
-        _set(status="impacket not found")
-        # Try python3 smbserver fallback
-        _try_python_smbserver(share_name)
     except Exception as exc:
         _add_log(f"Error: {str(exc)[:20]}")
         _set(status=f"Error: {str(exc)[:14]}")
@@ -224,17 +236,21 @@ def _try_python_smbserver(share_name):
     ]
     try:
         proc = subprocess.Popen(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
         _set(process=proc)
         ip = _get_pi_ip()
         _set(status=f"Serving: \\\\{ip}\\{share_name}")
         _add_log(f"Python SMB at \\\\{ip}\\{share_name}")
 
-        while not _get("stop"):
-            if proc.poll() is not None:
-                break
-            time.sleep(1)
+        time.sleep(2)
+        if proc.poll() is not None:
+            _add_log(f"Python SMB exited immediately (code {proc.returncode})")
+        else:
+            while not _get("stop"):
+                if proc.poll() is not None:
+                    break
+                time.sleep(1)
     except Exception as exc:
         _add_log(f"Python SMB fail: {str(exc)[:18]}")
         _set(status="SMB server unavailable")

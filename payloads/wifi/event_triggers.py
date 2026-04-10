@@ -105,6 +105,16 @@ alerts = []
 cursor_pos = 0
 view_mode = "main"
 log_scroll = 0
+log_category = 0  # 0 = all, 1..4 = per trigger category
+LOG_CATEGORIES = ["ALL"] + TRIGGER_NAMES
+LOG_CATEGORY_LABELS = ["ALL"] + TRIGGER_LABELS
+# Prefixes used by each trigger when appending alerts
+_CATEGORY_PREFIXES = {
+    "deauth_flood": "DEAUTH",
+    "client_connected": "NEW CLIENT",
+    "mac_trigger": "MAC DETECTED",
+    "auth_capture": ("HANDSHAKE CAPTURED", "AUTH CAPTURE"),
+}
 known_neighbors = set()
 known_loot_files = set()
 known_resp_lines = 0
@@ -384,20 +394,40 @@ def _draw_main():
     d.text((2, 117), "OK:Tog K1:Log K2:Cfg", font=font, fill="#AAA")
     LCD.LCD_ShowImage(img, 0, 0)
 
+def _filter_alerts_by_category(log_copy, cat_idx):
+    """Return alerts filtered by category index. 0 = all."""
+    if cat_idx == 0:
+        return log_copy
+    cat_name = LOG_CATEGORIES[cat_idx]
+    prefixes = _CATEGORY_PREFIXES.get(cat_name, ())
+    if isinstance(prefixes, str):
+        prefixes = (prefixes,)
+    filtered = []
+    for entry in log_copy:
+        msg_part = entry
+        if entry.startswith("[") and "] " in entry:
+            msg_part = entry[entry.index("] ") + 2:]
+        if any(msg_part.startswith(p) for p in prefixes):
+            filtered.append(entry)
+    return filtered
+
+
 def _draw_log():
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
     d = ScaledDraw(img)
     d.rectangle((0, 0, 127, 13), fill="#111")
-    d.text((2, 1), "ALERT LOG", font=font, fill="#FFAA00")
+    cat_label = LOG_CATEGORY_LABELS[log_category]
+    d.text((2, 1), f"LOG: {cat_label}", font=font, fill="#FFAA00")
 
     with lock:
         log_copy = list(alerts)
-    total = len(log_copy)
+    filtered = _filter_alerts_by_category(log_copy, log_category)
+    total = len(filtered)
 
     if total == 0:
         d.text((2, 30), "No alerts yet", font=font, fill="#555")
     else:
-        rev = list(reversed(log_copy))
+        rev = list(reversed(filtered))
         end = min(log_scroll + 8, total)
         y = 16
         for i in range(log_scroll, end):
@@ -413,7 +443,7 @@ def _draw_log():
                    font=font, fill="#666")
 
     d.rectangle((0, 116, 127, 127), fill="#111")
-    d.text((60, 117), "K3:Back", font=font, fill="#AAA")
+    d.text((2, 117), "LR:Cat K3:Back", font=font, fill="#AAA")
     LCD.LCD_ShowImage(img, 0, 0)
 
 def _draw_config():
@@ -455,7 +485,7 @@ def _config_adjust(direction):
     _save_config()
 
 def main():
-    global cursor_pos, view_mode, log_scroll, _running
+    global cursor_pos, view_mode, log_scroll, log_category, _running
 
     _load_config()
 
@@ -520,9 +550,19 @@ def main():
                     time.sleep(0.15)
                 elif btn == "DOWN":
                     with lock:
-                        mx = max(0, len(alerts) - 8)
+                        log_copy = list(alerts)
+                    filtered = _filter_alerts_by_category(log_copy, log_category)
+                    mx = max(0, len(filtered) - 8)
                     log_scroll = min(log_scroll + 1, mx)
                     time.sleep(0.15)
+                elif btn == "LEFT":
+                    log_category = (log_category - 1) % len(LOG_CATEGORIES)
+                    log_scroll = 0
+                    time.sleep(0.2)
+                elif btn == "RIGHT":
+                    log_category = (log_category + 1) % len(LOG_CATEGORIES)
+                    log_scroll = 0
+                    time.sleep(0.2)
                 elif btn == "OK":
                     view_mode = "main"
                     time.sleep(0.2)

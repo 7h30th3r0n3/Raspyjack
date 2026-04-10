@@ -63,7 +63,8 @@ def set_font(size: int):
     # Measure one glyph
     _img = Image.new("RGB", (10, 10))
     _d = ScaledDraw(_img)
-    CHAR_W, CHAR_H = _d.textsize("M", font=font)
+    _bbox = _d.textbbox((0, 0), "M", font=font)
+    CHAR_W, CHAR_H = _bbox[2] - _bbox[0], _bbox[3] - _bbox[1]
     COLS, ROWS = WIDTH // CHAR_W, HEIGHT // CHAR_H
 
 

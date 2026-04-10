@@ -131,12 +131,22 @@ def _find_external_wifi():
 # ── Monitor mode helpers ────────────────────────────────────────────────────
 
 def _enable_monitor(iface):
+    # Kill interfering processes first (NetworkManager, wpa_supplicant, etc.)
+    subprocess.run(["sudo", "airmon-ng", "check", "kill"],
+                   capture_output=True, timeout=10)
     subprocess.run(["sudo", "ip", "link", "set", iface, "down"],
                    capture_output=True, timeout=5)
-    subprocess.run(["sudo", "iw", iface, "set", "type", "monitor"],
-                   capture_output=True, timeout=5)
+    result = subprocess.run(["sudo", "iw", iface, "set", "type", "monitor"],
+                            capture_output=True, text=True, timeout=5)
+    if result.returncode != 0:
+        print(f"[handshake_auto] monitor mode failed: {result.stderr.strip()}")
     subprocess.run(["sudo", "ip", "link", "set", iface, "up"],
                    capture_output=True, timeout=5)
+    # Verify monitor mode was set
+    verify = subprocess.run(["sudo", "iw", "dev", iface, "info"],
+                            capture_output=True, text=True, timeout=5)
+    if "monitor" not in verify.stdout.lower():
+        print(f"[handshake_auto] WARNING: {iface} may not be in monitor mode")
     return iface
 
 
@@ -148,6 +158,9 @@ def _disable_monitor(iface):
                        capture_output=True, timeout=5)
         subprocess.run(["sudo", "ip", "link", "set", iface, "up"],
                        capture_output=True, timeout=5)
+        # Restart NetworkManager if available so system WiFi recovers
+        subprocess.run(["sudo", "systemctl", "restart", "NetworkManager"],
+                       capture_output=True, timeout=10)
     except Exception:
         pass
 
@@ -316,6 +329,7 @@ def _deauth_assist_thread():
 # ── Channel hopping ─────────────────────────────────────────────────────────
 
 def _channel_hop():
+    global status_msg
     idx = 0
     while True:
         with lock:
@@ -324,23 +338,42 @@ def _channel_hop():
             iface = mon_iface
         if not iface:
             break
-        _set_channel(iface, CHANNELS_24[idx])
+        try:
+            _set_channel(iface, CHANNELS_24[idx])
+        except Exception as e:
+            print(f"[handshake_auto] channel hop error: {e}")
+            with lock:
+                status_msg = f"Ch hop err: {type(e).__name__}"
+            break
         idx = (idx + 1) % len(CHANNELS_24)
         time.sleep(0.3)
 
 
 def _sniff_thread():
+    global status_msg
     with lock:
         iface = mon_iface
     if not iface:
+        with lock:
+            status_msg = "ERR: no iface"
         return
     try:
         scapy_sniff(
             iface=iface, prn=_pkt_handler, store=False,
             stop_filter=lambda _: not capturing,
         )
-    except Exception:
-        pass
+    except PermissionError as e:
+        print(f"[handshake_auto] sniff permission error: {e}")
+        with lock:
+            status_msg = "ERR: need root"
+    except OSError as e:
+        print(f"[handshake_auto] sniff OS error: {e}")
+        with lock:
+            status_msg = f"ERR: {str(e)[:18]}"
+    except Exception as e:
+        print(f"[handshake_auto] sniff error: {e}")
+        with lock:
+            status_msg = f"Sniff err: {type(e).__name__}"
 
 
 # ── Start / stop ─────────────────────────────────────────────────────────────
@@ -354,16 +387,33 @@ def _start_capture():
         return
     if not SCAPY_OK:
         with lock:
-            status_msg = "scapy missing"
+            status_msg = "pip install scapy"
         return
+
+    with lock:
+        status_msg = f"Setting monitor..."
     iface = _enable_monitor(ext)
+
+    # Verify monitor mode before starting threads
+    verify = subprocess.run(["sudo", "iw", "dev", iface, "info"],
+                            capture_output=True, text=True, timeout=5)
+    if "monitor" not in verify.stdout.lower():
+        with lock:
+            status_msg = "Monitor mode FAIL"
+        _disable_monitor(iface)
+        return
+
     with lock:
         mon_iface = iface
         capturing = True
         status_msg = f"Capture on {iface}"
-    threading.Thread(target=_channel_hop, daemon=True).start()
-    threading.Thread(target=_sniff_thread, daemon=True).start()
-    threading.Thread(target=_deauth_assist_thread, daemon=True).start()
+        # Reset tracking state for a fresh capture session
+        targets.clear()
+        ap_channels.clear()
+
+    threading.Thread(target=_channel_hop, daemon=True, name="chan_hop").start()
+    threading.Thread(target=_sniff_thread, daemon=True, name="sniff").start()
+    threading.Thread(target=_deauth_assist_thread, daemon=True, name="deauth").start()
 
 
 def _stop_capture():

