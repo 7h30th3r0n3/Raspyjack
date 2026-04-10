@@ -27,12 +27,18 @@ RaspyJack is for **authorized security testing, research, and education only**.
 
 - LCD-driven handheld-style interface (Waveshare 1.44" or 1.3" HAT)
 - **Dual-display support** — 128x128 (ST7735) and 240x240 (ST7789)
-- **168 payloads** across 13 categories
+- **231 payloads** across 13 categories
 - Loot collection + browsing
 - WebUI remote control dashboard
 - Payload IDE (browser editor + run flow)
-- Responder / DNS spoof tooling integration
-- WiFi utilities + optional attack flows (with compatible USB dongle)
+- Responder / DNS spoof / ARP MITM / handshake hunter tooling integration
+- WiFi utilities + attack flows (deauth, evil twin, SSID injection, beacon flood)
+- Evil portal with 84 captive portal templates + credential capture
+- BLE scanner, spam, beacon flood, MITM, replay, audio inject, DoS
+- Reverse shell, Discord C2, HTTPS stealth shell, DuckyScript generator
+- Exfiltration via HTTP, DNS, BLE, Discord, SMB, FTP, USB, Dropbox
+- Dead drop WiFi file sharing with dashboard
+- 25 games including Pac-Man, Tetris, Tron, LLM adventure, labyrinth
 
 Check the WIKI for more ! https://github.com/7h30th3r0n3/Raspyjack/wiki
 
@@ -326,19 +332,21 @@ Raspyjack/
 ├── payloads/
 │   ├── _display_helper.py # ScaledDraw + scaled_font
 │   ├── _input_helper.py   # GPIO + WebUI input
-│   ├── reconnaissance/    # 33 payloads
-│   ├── wifi/              # 13 payloads
-│   ├── network/           # 30 payloads
-│   ├── credentials/       # 12 payloads
-│   ├── bluetooth/         # 7 payloads
-│   ├── usb/               # 6 payloads
-│   ├── exfiltration/      # 9 payloads
-│   ├── evasion/           # 6 payloads
-│   ├── remote_access/     # 7 payloads
-│   ├── utilities/         # 21 payloads
-│   ├── hardware/          # 5 payloads
-│   ├── games/             # 17 payloads
-│   └── examples/          # 2 payloads
+│   ├── reconnaissance/    # Nmap, Shodan, OSINT, AP/client stats, flock detection, Norse recon suite, pwnagotchi
+│   ├── wifi/              # Deauth, evil twin, CIW Zeroclick (SSID injection), beacon flood, BLE spam, pwnagotchi
+│   ├── network/           # ARP MITM, DNS spoof, handshake hunter with auto-upload, WPA cracking
+│   ├── credentials/       # Responder, credential capture, hash harvesting
+│   ├── bluetooth/         # Scanner, spam, beacon flood, MITM, replay, audio inject, DoS
+│   ├── usb/               # DuckyScript generator, USB attacks
+│   ├── exfiltration/      # HTTP, DNS, BLE, Discord, SMB, FTP, USB, Dropbox
+│   ├── evasion/           # Evasion techniques
+│   ├── remote_access/     # Reverse shell, Discord C2, HTTPS stealth shell
+│   ├── evil_portal/       # Captive portal with 84 templates, whitelist, SSID editor, credential capture
+│   ├── dead_drop/         # WiFi file sharing with dashboard
+│   ├── utilities/         # Weather, IRC, morse, translator, video player, interface manager, system monitor
+│   ├── hardware/          # Hardware interaction payloads
+│   ├── games/             # 25 games including Pac-Man, Tetris, Tron, LLM adventure, labyrinth
+│   └── examples/          # Payload templates
 ├── loot/                  # Captured data
 ├── config/                # Payload configs
 ├── DNSSpoof/

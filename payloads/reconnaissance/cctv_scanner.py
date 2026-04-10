@@ -80,8 +80,12 @@ RTSP_PATHS = [
     "/h264", "/live/ch00_0", "/ch0_0.264",
 ]
 MJPEG_PATHS = [
-    "/mjpg/video.mjpg", "/axis-cgi/mjpg/video.cgi",
-    "/cgi-bin/snapshot.cgi", "/video.mjpg", "/snap.jpg",
+    "/", "/video", "/stream", "/mjpg/video.mjpg",
+    "/axis-cgi/mjpg/video.cgi", "/cgi-bin/snapshot.cgi",
+    "/video.mjpg", "/snap.jpg", "/videostream.cgi",
+    "/live", "/cam", "/feed", "/mjpeg",
+    "/video.cgi", "/image", "/shot.jpg",
+    "/cgi-bin/mjpeg", "/Streaming/channels/1/preview",
 ]
 BRAND_SIGS = {
     "Hikvision": ["/ISAPI/", "hikvision", "DNVRS-Webs"],
@@ -225,8 +229,24 @@ def _rtsp_describe(ip, port, path, timeout=3):
 
 
 def _arp_hosts():
-    """Get list of IPs from ARP table."""
-    hosts = []
+    """Get list of IPs from ARP/neighbor table. Tries multiple methods."""
+    hosts = set()
+
+    # Method 1: ip neigh (most reliable on modern Linux)
+    try:
+        out = subprocess.run(
+            ["ip", "neigh", "show"], capture_output=True, text=True, timeout=5,
+        )
+        for line in out.stdout.splitlines():
+            parts = line.split()
+            if parts and re.match(r"\d+\.\d+\.\d+\.\d+", parts[0]):
+                ip = parts[0]
+                if not ip.endswith(".255") and not ip.endswith(".0"):
+                    hosts.add(ip)
+    except Exception:
+        pass
+
+    # Method 2: arp -an (fallback)
     try:
         out = subprocess.run(
             ["arp", "-an"], capture_output=True, text=True, timeout=5,
@@ -236,10 +256,25 @@ def _arp_hosts():
             if m:
                 ip = m.group(1)
                 if not ip.endswith(".255") and not ip.endswith(".0"):
-                    hosts.append(ip)
+                    hosts.add(ip)
     except Exception:
         pass
-    return hosts
+
+    # Method 3: arp-scan if available and few hosts found
+    if len(hosts) < 3:
+        try:
+            out = subprocess.run(
+                ["sudo", "arp-scan", "-l", "--timeout=1000"],
+                capture_output=True, text=True, timeout=15,
+            )
+            for line in out.stdout.splitlines():
+                m = re.match(r"(\d+\.\d+\.\d+\.\d+)\s", line)
+                if m:
+                    hosts.add(m.group(1))
+        except Exception:
+            pass
+
+    return sorted(hosts)
 
 
 # ---------------------------------------------------------------------------

@@ -344,8 +344,8 @@
         " ciw_zeroclick": "",
         " dead_drop": "",
         " GPS_Doctor": "",
-        " pwnagotchi": "",
-        " video_player": ""
+        " video_player": "",
+        " raspygotchi": ""
     },
     "fallbacks": {
         "__scan__": "",
