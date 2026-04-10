@@ -106,18 +106,19 @@ def _get_operstate(iface):
 
 
 def _get_mode(iface):
-    """Return WiFi mode: Managed, Monitor, Master, or ''."""
-    out = _run(["iwconfig", iface])
-    if "Mode:Monitor" in out:
+    """Return WiFi mode: Managed, Monitor, Master/AP, or ''."""
+    out = _run(["iw", "dev", iface, "info"])
+    if "type monitor" in out:
         return "Monitor"
-    if "Mode:Master" in out:
+    if "type AP" in out:
         return "Master"
-    if "Mode:Managed" in out:
+    if "type managed" in out:
         return "Managed"
-    if "Mode:" in out:
-        import re
-        m = re.search(r"Mode:(\S+)", out)
-        return m.group(1) if m else ""
+    # Try to extract any type
+    import re
+    m = re.search(r"type\s+(\S+)", out)
+    if m:
+        return m.group(1).capitalize()
     return ""
 
 

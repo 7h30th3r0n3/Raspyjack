@@ -146,9 +146,9 @@ def _monitor_up(iface):
         subprocess.run(["sudo", "airmon-ng", "start", iface],
                        capture_output=True, timeout=30)
         for name in (f"{iface}mon", iface):
-            r = subprocess.run(["iwconfig", name],
+            r = subprocess.run(["iw", "dev", name, "info"],
                                capture_output=True, text=True, timeout=5)
-            if "Mode:Monitor" in r.stdout:
+            if "type monitor" in r.stdout:
                 return name
     except Exception:
         pass
@@ -160,9 +160,9 @@ def _monitor_up(iface):
         subprocess.run(["sudo", "ip", "link", "set", iface, "up"],
                        check=True, timeout=10)
         time.sleep(0.5)
-        r = subprocess.run(["iwconfig", iface],
+        r = subprocess.run(["iw", "dev", iface, "info"],
                            capture_output=True, text=True, timeout=5)
-        if "Mode:Monitor" in r.stdout:
+        if "type monitor" in r.stdout:
             return iface
     except Exception:
         pass

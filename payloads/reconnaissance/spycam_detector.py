@@ -15,7 +15,7 @@ Requires a USB WiFi dongle capable of monitor mode for passive scanning.
 Setup / Prerequisites
 ---------------------
 - USB WiFi dongle with monitor mode support.
-- ``iw``, ``iwconfig``, ``airodump-ng`` or ``tshark`` available.
+- ``iw``, ``ip``, ``airodump-ng`` or ``tshark`` available.
 - Root privileges.
 
 Controls

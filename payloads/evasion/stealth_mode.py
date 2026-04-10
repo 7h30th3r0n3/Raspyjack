@@ -185,14 +185,15 @@ def _save_originals():
     if pwr_path:
         new_originals["pwr_led"] = _read_file(pwr_path)
 
-    # WiFi TX power
-    rc, out = _run(["iwconfig", WIFI_IFACE])
+    # WiFi TX power (iw reports in mBm, e.g. "txpower 20.00 dBm")
+    rc, out = _run(["iw", "dev", WIFI_IFACE, "info"])
     if rc == 0:
         for line in out.splitlines():
-            if "Tx-Power" in line:
-                parts = line.split("Tx-Power=")
-                if len(parts) > 1:
-                    new_originals["wifi_txpwr"] = parts[1].split()[0]
+            if "txpower" in line:
+                parts = line.strip().split()
+                # e.g. "txpower 20.00 dBm" -> "20.00"
+                if len(parts) >= 2:
+                    new_originals["wifi_txpwr"] = parts[1]
                 break
 
     # MAC addresses
@@ -243,8 +244,9 @@ def _enable_pwr_led():
 
 
 def _enable_wifi_txpwr():
-    """Reduce WiFi TX power to minimum."""
-    rc, _ = _run(["sudo", "iwconfig", WIFI_IFACE, "txpower", MIN_TX_POWER])
+    """Reduce WiFi TX power to minimum (iw uses mBm: 1 dBm = 100 mBm)."""
+    min_mbm = str(int(float(MIN_TX_POWER) * 100))
+    rc, _ = _run(["sudo", "iw", "dev", WIFI_IFACE, "set", "txpower", "fixed", min_mbm])
     return rc == 0
 
 
@@ -332,11 +334,12 @@ def _disable_pwr_led():
 
 
 def _disable_wifi_txpwr():
-    """Restore WiFi TX power."""
+    """Restore WiFi TX power (iw uses mBm: dBm * 100)."""
     orig = _originals.get("wifi_txpwr", "20")
     if not orig:
         orig = "20"
-    rc, _ = _run(["sudo", "iwconfig", WIFI_IFACE, "txpower", orig])
+    orig_mbm = str(int(float(orig) * 100))
+    rc, _ = _run(["sudo", "iw", "dev", WIFI_IFACE, "set", "txpower", "fixed", orig_mbm])
     return rc == 0
 
 

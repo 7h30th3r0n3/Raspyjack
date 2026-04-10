@@ -922,12 +922,12 @@ class LiveCamDetector(WardrivingScanner):
             print(f"Starting packet capture on {self.monitor_interface}", flush=True)
 
             result = subprocess.run(
-                ['iwconfig', self.monitor_interface],
+                ['iw', 'dev', self.monitor_interface, 'info'],
                 capture_output=True, text=True,
             )
             print(f"Interface check: {result.stdout[:100]}", flush=True)
 
-            if "Mode:Monitor" not in result.stdout:
+            if "type monitor" not in result.stdout:
                 print("ERROR: Interface not in monitor mode!")
                 return
 

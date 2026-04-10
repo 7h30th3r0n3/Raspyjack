@@ -217,18 +217,16 @@ def _read_iface_ips():
 
 
 def _read_wifi_signal():
-    """Return WiFi signal level string from iwconfig wlan0, or None."""
+    """Return WiFi signal level string from iw dev wlan0 link, or None."""
     try:
         out = subprocess.run(
-            ["iwconfig", "wlan0"],
+            ["iw", "dev", "wlan0", "link"],
             capture_output=True, text=True, timeout=3,
         )
         for line in out.stdout.splitlines():
-            if "Signal level" in line:
-                idx = line.index("Signal level")
-                fragment = line[idx:]
-                # e.g. "Signal level=-52 dBm" or "Signal level:3/5"
-                val = fragment.split("=")[-1].split("  ")[0].strip()
+            if "signal:" in line:
+                # e.g. "	signal: -52 dBm"
+                val = line.strip().split("signal:")[1].strip()
                 return val
         return None
     except Exception:

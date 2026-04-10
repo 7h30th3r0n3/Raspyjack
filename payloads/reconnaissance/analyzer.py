@@ -199,30 +199,14 @@ def monitor_up(iface):
         subprocess.run(["sudo", "airmon-ng", "start", iface],
                        capture_output=True, timeout=30)
         for name in (f"{iface}mon", iface):
-            r = subprocess.run(["iwconfig", name],
+            r = subprocess.run(["iw", "dev", name, "info"],
                                capture_output=True, text=True)
-            if "Mode:Monitor" in r.stdout:
+            if "type monitor" in r.stdout:
                 return name
     except Exception:
         pass
 
-    # Method 2 – iwconfig
-    try:
-        subprocess.run(["sudo", "ifconfig", iface, "down"],
-                       check=True, timeout=10)
-        subprocess.run(["sudo", "iwconfig", iface, "mode", "monitor"],
-                       check=True, timeout=10)
-        subprocess.run(["sudo", "ifconfig", iface, "up"],
-                       check=True, timeout=10)
-        time.sleep(1)
-        r = subprocess.run(["iwconfig", iface],
-                           capture_output=True, text=True, timeout=5)
-        if "Mode:Monitor" in r.stdout:
-            return iface
-    except Exception:
-        pass
-
-    # Method 3 – iw
+    # Method 2 – iw
     try:
         subprocess.run(["sudo", "ip", "link", "set", iface, "down"],
                        check=True, timeout=10)
@@ -231,9 +215,9 @@ def monitor_up(iface):
         subprocess.run(["sudo", "ip", "link", "set", iface, "up"],
                        check=True, timeout=10)
         time.sleep(1)
-        r = subprocess.run(["iwconfig", iface],
+        r = subprocess.run(["iw", "dev", iface, "info"],
                            capture_output=True, text=True, timeout=5)
-        if "Mode:Monitor" in r.stdout:
+        if "type monitor" in r.stdout:
             return iface
     except Exception:
         pass

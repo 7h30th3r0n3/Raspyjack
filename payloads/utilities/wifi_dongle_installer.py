@@ -742,14 +742,14 @@ class Installer:
 
 def test_monitor_mode(iface: str) -> bool:
     try:
-        subprocess.run(["ip", "link", "set", iface, "down"],   capture_output=True, timeout=5)
-        subprocess.run(["iwconfig", iface, "mode", "monitor"], capture_output=True, timeout=5)
-        subprocess.run(["ip", "link", "set", iface, "up"],     capture_output=True, timeout=5)
-        out = subprocess.check_output(["iwconfig", iface], text=True, timeout=5)
-        ok  = "Mode:Monitor" in out
-        subprocess.run(["ip", "link", "set", iface, "down"],   capture_output=True, timeout=5)
-        subprocess.run(["iwconfig", iface, "mode", "managed"], capture_output=True, timeout=5)
-        subprocess.run(["ip", "link", "set", iface, "up"],     capture_output=True, timeout=5)
+        subprocess.run(["ip", "link", "set", iface, "down"],              capture_output=True, timeout=5)
+        subprocess.run(["iw", "dev", iface, "set", "type", "monitor"],    capture_output=True, timeout=5)
+        subprocess.run(["ip", "link", "set", iface, "up"],                capture_output=True, timeout=5)
+        out = subprocess.check_output(["iw", "dev", iface, "info"], text=True, timeout=5)
+        ok  = "type monitor" in out
+        subprocess.run(["ip", "link", "set", iface, "down"],              capture_output=True, timeout=5)
+        subprocess.run(["iw", "dev", iface, "set", "type", "managed"],    capture_output=True, timeout=5)
+        subprocess.run(["ip", "link", "set", iface, "up"],                capture_output=True, timeout=5)
         return ok
     except Exception:
         return False

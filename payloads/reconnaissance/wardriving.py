@@ -440,11 +440,11 @@ class WardrivingScanner:
     def get_wifi_interfaces(self):
         """Get available WiFi interfaces"""
         try:
-            result = subprocess.run(['iwconfig'], capture_output=True, text=True)
+            result = subprocess.run(['iw', 'dev'], capture_output=True, text=True)
             interfaces = []
             for line in result.stdout.split('\n'):
-                if 'IEEE 802.11' in line:
-                    interface = line.split()[0]
+                if 'Interface' in line:
+                    interface = line.strip().split()[-1]
                     interfaces.append(interface)
             return interfaces
         except:
@@ -472,12 +472,12 @@ class WardrivingScanner:
         """
         Check each wireless interface's driver to find one that supports
         monitor mode.  Broadcom brcmfmac does NOT.  RTL88xx / Atheros do.
-        Scans /sys/class/net/ directly (iwconfig misses some interfaces).
+        Scans /sys/class/net/ directly (more reliable than command-line tools).
         Returns the best interface name, or None.
 
         The onboard Pi WiFi (WebUI interface) is never selected here.
         """
-        # Discover all wireless interfaces via /sys (more reliable than iwconfig)
+        # Discover all wireless interfaces via /sys
         interfaces = []
         try:
             for name in os.listdir("/sys/class/net"):
@@ -491,7 +491,7 @@ class WardrivingScanner:
         except Exception:
             pass
 
-        # Fallback to iwconfig if /sys found nothing
+        # Fallback to iw dev if /sys found nothing
         if not interfaces:
             interfaces = [i for i in self.get_wifi_interfaces() if not self._is_onboard_wifi_iface(i)]
 
@@ -531,11 +531,11 @@ class WardrivingScanner:
 
     def setup_monitor_mode(self, interface):
         """Comprehensive monitor mode setup.
-        
+
         Only stops services for the specific interface — wlan0/WebUI is never touched.
         """
         print(f"Setting up monitor mode on {interface}")
-        
+
         # Step 1: Stop services for THIS interface only (keeps wlan0/WebUI alive)
         print(f"Unmanaging {interface} from NetworkManager...")
         for cmd_label, cmd in [
@@ -551,71 +551,55 @@ class WardrivingScanner:
             except Exception:
                 print(f"  {cmd_label} not applicable", flush=True)
         time.sleep(1)
-        
+
         # Step 2: Check current interface status
-        result = subprocess.run(['iwconfig', interface], capture_output=True, text=True)
+        result = subprocess.run(['iw', 'dev', interface, 'info'], capture_output=True, text=True)
         print(f"Current interface status: {result.stdout[:200]}")
-        
+
         # Step 3: Try airmon-ng method
         print("Attempting airmon-ng setup...")
         try:
             # Use airmon-ng with verbose output
             cmd = ['sudo', 'airmon-ng', 'start', interface]
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-            
+
             print(f"airmon-ng stdout: {result.stdout}")
             if result.stderr:
                 print(f"airmon-ng stderr: {result.stderr}")
-            
+
             # Check for created monitor interface
             possible_names = [f"{interface}mon", f"{interface}mon0", interface]
             for mon_name in possible_names:
-                check_result = subprocess.run(['iwconfig', mon_name], 
+                check_result = subprocess.run(['iw', 'dev', mon_name, 'info'],
                                             capture_output=True, text=True)
-                if "Mode:Monitor" in check_result.stdout:
+                if "type monitor" in check_result.stdout:
                     print(f"Monitor mode confirmed on {mon_name}")
                     return mon_name
-                    
+
         except subprocess.TimeoutExpired:
             print("airmon-ng timed out")
         except Exception as e:
             print(f"airmon-ng failed: {e}")
-        
-        # Step 4: Manual iwconfig method
-        print("Trying manual iwconfig method...")
-        try:
-            subprocess.run(['sudo', 'ifconfig', interface, 'down'], check=True)
-            time.sleep(1)
-            subprocess.run(['sudo', 'iwconfig', interface, 'mode', 'monitor'], check=True)
-            time.sleep(1)
-            subprocess.run(['sudo', 'ifconfig', interface, 'up'], check=True)
-            time.sleep(2)
-            
-            # Verify
-            result = subprocess.run(['iwconfig', interface], capture_output=True, text=True)
-            if "Mode:Monitor" in result.stdout:
-                print(f"Manual monitor mode successful on {interface}")
-                return interface
-                
-        except Exception as e:
-            print(f"Manual method failed: {e}")
-        
-        # Step 5: iw command method
+
+        # Step 4: iw command method
         print("Trying iw command method...")
         try:
             subprocess.run(['sudo', 'ip', 'link', 'set', interface, 'down'], check=True)
-            subprocess.run(['sudo', 'iw', interface, 'set', 'monitor', 'none'], check=True)
+            time.sleep(1)
+            subprocess.run(['sudo', 'iw', 'dev', interface, 'set', 'type', 'monitor'], check=True)
+            time.sleep(1)
             subprocess.run(['sudo', 'ip', 'link', 'set', interface, 'up'], check=True)
             time.sleep(2)
-            
-            result = subprocess.run(['iwconfig', interface], capture_output=True, text=True)
-            if "Mode:Monitor" in result.stdout:
-                print(f"iw method successful on {interface}")
+
+            # Verify
+            result = subprocess.run(['iw', 'dev', interface, 'info'], capture_output=True, text=True)
+            if "type monitor" in result.stdout:
+                print(f"Monitor mode successful on {interface}")
                 return interface
-                
+
         except Exception as e:
             print(f"iw method failed: {e}")
-        
+
         print("All monitor mode methods failed")
         return None
     
@@ -631,7 +615,7 @@ class WardrivingScanner:
     def set_channel(self, channel):
         """Set WiFi channel"""
         try:
-            subprocess.run(['iwconfig', self.monitor_interface, 'channel', str(channel)], 
+            subprocess.run(['iw', 'dev', self.monitor_interface, 'set', 'channel', str(channel)],
                          capture_output=True)
             self.current_channel = channel
         except Exception as e:
@@ -1416,11 +1400,11 @@ class WardrivingScanner:
             print(f"Starting packet capture on {self.monitor_interface}")
             
             # Verify interface
-            result = subprocess.run(['iwconfig', self.monitor_interface], 
+            result = subprocess.run(['iw', 'dev', self.monitor_interface, 'info'],
                                   capture_output=True, text=True)
             print(f"Interface check: {result.stdout[:100]}")
-            
-            if "Mode:Monitor" not in result.stdout:
+
+            if "type monitor" not in result.stdout:
                 print("ERROR: Interface not in monitor mode!")
                 return
             
