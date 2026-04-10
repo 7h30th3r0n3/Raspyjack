@@ -111,48 +111,77 @@ def show(lines, invert=False, spacing=2):
     LCD.LCD_ShowImage(img, 0, 0)
 
 
-def show_error(title, detail):
-    """Show error screen with word-wrapped detail text, footer at bottom."""
-    img = Image.new("RGB", (WIDTH, HEIGHT), "#1a0000")
-    d = ScaledDraw(img)
-
-    # Header
-    d.rectangle((0, 0, 127, 13), fill="#440000")
-    d.text((2, 1), title[:22], font=FONT, fill="#FF4444")
-
-    # Word-wrap detail into lines of max 22 chars
-    words = detail.split()
+def _wrap_text(text, max_chars=22):
+    """Word-wrap text, also splitting long words by character."""
     lines = []
-    current = ""
-    for w in words:
-        if len(current) + len(w) + 1 > 22:
+    for raw_line in text.split("\n"):
+        words = raw_line.split()
+        if not words:
+            lines.append("")
+            continue
+        current = ""
+        for w in words:
+            if len(w) > max_chars:
+                # Split long word (URLs etc.) by character
+                if current:
+                    lines.append(current)
+                    current = ""
+                for i in range(0, len(w), max_chars):
+                    lines.append(w[i:i + max_chars])
+            elif len(current) + len(w) + 1 > max_chars:
+                lines.append(current)
+                current = w
+            else:
+                current = f"{current} {w}" if current else w
+        if current:
             lines.append(current)
-            current = w
-        else:
-            current = f"{current} {w}" if current else w
-    if current:
-        lines.append(current)
+    return lines
 
-    # Draw lines, stop before footer (y < 112)
-    y = 18
-    for line in lines:
-        if y > 100:
-            break
-        d.text((4, y), line, font=FONT_SM, fill="#FFFFFF")
-        y += 12
 
-    # Footer
-    d.rectangle((0, 116, 127, 127), fill="#111")
-    d.text((2, 117), "Any key to continue", font=FONT_SM, fill="#888")
+def show_error(title, detail):
+    """Show scrollable error screen with word-wrapped detail text."""
+    lines = _wrap_text(detail, 22)
+    scroll = 0
+    max_visible = 7
 
-    LCD.LCD_ShowImage(img, 0, 0)
-
-    # Wait for any button
     while _running:
+        img = Image.new("RGB", (WIDTH, HEIGHT), "#1a0000")
+        d = ScaledDraw(img)
+
+        # Header
+        d.rectangle((0, 0, 127, 13), fill="#440000")
+        d.text((2, 1), title[:22], font=FONT, fill="#FF4444")
+
+        # Lines
+        visible = lines[scroll:scroll + max_visible]
+        for i, line in enumerate(visible):
+            y = 18 + i * 12
+            d.text((4, y), line, font=FONT_SM, fill="#FFFFFF")
+
+        # Scroll indicator if needed
+        if len(lines) > max_visible:
+            total_h = 84
+            bar_h = max(6, int(max_visible / len(lines) * total_h))
+            bar_y = 18 + int(scroll / max(1, len(lines) - max_visible) * (total_h - bar_h))
+            d.rectangle((125, bar_y, 127, bar_y + bar_h), fill="#444")
+
+        # Footer
+        d.rectangle((0, 116, 127, 127), fill="#111")
+        hint = "U/D:Scroll OK:Continue" if len(lines) > max_visible else "Any key to continue"
+        d.text((2, 117), hint, font=FONT_SM, fill="#888")
+
+        LCD.LCD_ShowImage(img, 0, 0)
+
         btn = get_button(PINS, GPIO)
-        if btn:
+        if btn == "UP":
+            scroll = max(0, scroll - 1)
+            time.sleep(0.15)
+        elif btn == "DOWN":
+            scroll = min(max(0, len(lines) - max_visible), scroll + 1)
+            time.sleep(0.15)
+        elif btn in ("OK", "KEY1", "KEY2", "KEY3"):
             break
-        time.sleep(0.1)
+        time.sleep(0.05)
 
 
 def show_progress(title, detail="", progress_pct=None):
@@ -169,18 +198,7 @@ def show_progress(title, detail="", progress_pct=None):
 
     # Word-wrap detail text
     if detail:
-        words = detail.split()
-        lines = []
-        current = ""
-        for w in words:
-            if len(current) + len(w) + 1 > 24:
-                lines.append(current)
-                current = w
-            else:
-                current = f"{current} {w}" if current else w
-        if current:
-            lines.append(current)
-
+        lines = _wrap_text(detail, 24)
         y = 32
         for line in lines:
             if y > 90:
