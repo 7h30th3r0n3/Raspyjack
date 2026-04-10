@@ -341,7 +341,8 @@
         " iface_manager": "",
         " ciw_zeroclick": "",
         " dead_drop": "",
-        " GPS_Doctor": ""
+        " GPS_Doctor": "",
+        " pwnagotchi": ""
     },
     "fallbacks": {
         "__scan__": "",

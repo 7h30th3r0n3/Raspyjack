@@ -1,53 +1,64 @@
 #!/usr/bin/env python3
 """
-RaspyJack *payload* – Auto-Update (LCD-friendly)
-===============================================
-Backs-up the current **/root/Raspyjack** folder, pulls the latest changes
-from GitHub and restarts the *raspyjack* systemd service – while showing a
-simple progress UI on the 1.44-inch LCD.
+RaspyJack payload - Auto-Update (LCD-friendly)
+================================================
+Author: 7h30th3r0n3
+
+Checks for updates from GitHub, shows changelog, backs up configs,
+pulls latest code, restores user configs, and reboots.
 
 Controls
 --------
-* **KEY1**  - launch update immediately.
-* **KEY3**  - abort and return to menu.
+  KEY1  Start update / continue after changelog
+  KEY2  Rollback to previous backup
+  KEY3  Exit
 
-After update, it runs:
-  /root/Raspyjack/install_raspyjack.sh
-then reboots (after LCD/GPIO cleanup).
+After update runs install_raspyjack.sh then reboots.
 """
 
-# ---------------------------------------------------------------------------
-# 0) Imports & path tweak
-# ---------------------------------------------------------------------------
-import os, sys, time, signal, subprocess, tarfile, shutil
+import os
+import sys
+import time
+import signal
+import subprocess
+import shutil
 from datetime import datetime
 
 sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..", "..")))
 
-# ---------------------------- Third-party libs ----------------------------
 import RPi.GPIO as GPIO
-import LCD_1in44, LCD_Config
+import LCD_1in44
+import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
-from payloads._display_helper import ScaledDraw
-
-# Shared input helper (WebUI virtual + GPIO)
+from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
 
 # ---------------------------------------------------------------------------
-# 1) Constants
+# Constants
 # ---------------------------------------------------------------------------
-RASPYJACK_DIR   = "/root/Raspyjack"
-PAYLOADS_DIR    = "/root/Raspyjack/payloads"
-BACKUP_DIR      = "/root"
-SERVICE_NAME    = "raspyjack"
-GIT_REMOTE      = "origin"
-GIT_BRANCH      = "main"
-INSTALL_SCRIPT  = "/root/Raspyjack/install_raspyjack.sh"
+RASPYJACK_DIR = "/root/Raspyjack"
+BACKUP_ROOT = "/root/raspyjack_backups"
+SERVICE_NAME = "raspyjack"
+GIT_REMOTE = "origin"
+GIT_BRANCH = "main"
+INSTALL_SCRIPT = "/root/Raspyjack/install_raspyjack.sh"
 
-PINS = {"KEY1": 21, "KEY3": 16}
+CONFIG_FILES = [
+    "gui_conf.json",
+    "discord_webhook.txt",
+    "menu_icons.json",
+]
+CONFIG_DIRS = [
+    "config",
+]
+
+PINS = {
+    "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
+    "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16,
+}
 
 # ---------------------------------------------------------------------------
-# 2) Hardware init
+# Hardware init
 # ---------------------------------------------------------------------------
 GPIO.setmode(GPIO.BCM)
 for p in PINS.values():
@@ -57,280 +68,556 @@ LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
 LCD.LCD_Clear()
 WIDTH, HEIGHT = LCD.width, LCD.height
-FONT = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", int(10 * LCD_1in44.LCD_SCALE))
+FONT = scaled_font(10)
+FONT_SM = scaled_font(8)
+
+_running = True
+
+
+def _cleanup_signal(*_):
+    global _running
+    _running = False
+
+
+signal.signal(signal.SIGINT, _cleanup_signal)
+signal.signal(signal.SIGTERM, _cleanup_signal)
 
 # ---------------------------------------------------------------------------
-# 3) Helper to show centred text
+# Display helpers
 # ---------------------------------------------------------------------------
 
-def show(lines, *, invert=False, spacing=2):
+def show(lines, invert=False, spacing=2):
+    """Show centered text on LCD."""
     if isinstance(lines, str):
         lines = lines.split("\n")
     bg = "white" if invert else "black"
     fg = "black" if invert else "#00FF00"
-    img  = Image.new("RGB", (WIDTH, HEIGHT), bg)
-    draw = ScaledDraw(img)
-    sizes = [draw.textbbox((0, 0), l, font=FONT)[2:] for l in lines]
+    img = Image.new("RGB", (WIDTH, HEIGHT), bg)
+    d = ScaledDraw(img)
+    sizes = [d.textbbox((0, 0), l, font=FONT)[2:] for l in lines]
     total_h = sum(h + spacing for _, h in sizes) - spacing
-    y = (HEIGHT - total_h) // 2
+    y = max(0, (128 - total_h) // 2)
     for line, (w, h) in zip(lines, sizes):
-        x = (WIDTH - w) // 2
-        draw.text((x, y), line, font=FONT, fill=fg)
+        x = max(0, (128 - w) // 2)
+        d.text((x, y), line, font=FONT, fill=fg)
         y += h + spacing
     LCD.LCD_ShowImage(img, 0, 0)
 
+
+def show_progress(title, detail="", progress_pct=None):
+    """Show a progress screen with optional percentage bar."""
+    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+    d = ScaledDraw(img)
+    d.rectangle((0, 0, 127, 13), fill="#111")
+    d.text((2, 1), "AUTO-UPDATE", font=FONT, fill="#00FF00")
+
+    d.text((4, 24), title[:22], font=FONT, fill="#FFFFFF")
+    if detail:
+        d.text((4, 40), detail[:22], font=FONT_SM, fill="#888888")
+
+    if progress_pct is not None:
+        bar_w = int(1.2 * min(100, max(0, progress_pct)))
+        d.rectangle((4, 56, 123, 64), outline="#444")
+        if bar_w > 0:
+            d.rectangle((4, 56, 4 + bar_w, 64), fill="#00FF00")
+        d.text((4, 68), f"{int(progress_pct)}%", font=FONT_SM, fill="#888")
+
+    LCD.LCD_ShowImage(img, 0, 0)
+
+
 # ---------------------------------------------------------------------------
-# 4) Button helper
+# Git helpers
 # ---------------------------------------------------------------------------
 
-def pressed() -> str | None:
-    return get_button(PINS, GPIO)
+def _git(args, timeout=30):
+    """Run a git command in RASPYJACK_DIR."""
+    try:
+        r = subprocess.run(
+            ["git", "-C", RASPYJACK_DIR] + args,
+            capture_output=True, text=True, timeout=timeout,
+        )
+        return r.returncode == 0, r.stdout.strip(), r.stderr.strip()
+    except Exception as e:
+        return False, "", str(e)
+
+
+def get_current_version():
+    """Return (short_hash, date, full_hash)."""
+    ok, h, _ = _git(["rev-parse", "--short", "HEAD"])
+    short = h if ok else "?"
+    ok, fh, _ = _git(["rev-parse", "HEAD"])
+    full = fh if ok else ""
+    ok, d, _ = _git(["log", "-1", "--format=%cd", "--date=short"])
+    date = d if ok else "?"
+    return short, date, full
+
+
+def check_update_available():
+    """Fetch remote and check if updates exist. Returns (available, info, count)."""
+    show_progress("Checking...", "Fetching remote")
+    ok, _, err = _git(["fetch", GIT_REMOTE], timeout=60)
+    if not ok:
+        return False, f"Fetch failed: {err[:30]}", 0
+
+    ok, local, _ = _git(["rev-parse", "HEAD"])
+    ok2, remote, _ = _git(["rev-parse", f"{GIT_REMOTE}/{GIT_BRANCH}"])
+    if not ok or not ok2:
+        return False, "Can't read hashes", 0
+
+    if local == remote:
+        return False, "Already up to date!", 0
+
+    ok, log, _ = _git(["log", "--oneline", f"HEAD..{GIT_REMOTE}/{GIT_BRANCH}"])
+    lines = [l for l in log.split("\n") if l.strip()] if log else []
+    return True, f"{len(lines)} new commit(s)", len(lines)
+
+
+def get_changelog(old_hash):
+    """Return list of commit messages since old_hash."""
+    ok, log, _ = _git(["log", "--oneline", f"{old_hash}..HEAD"])
+    if not ok or not log:
+        return []
+    return [l.strip() for l in log.split("\n") if l.strip()][:10]
+
 
 # ---------------------------------------------------------------------------
-# 5) Core update logic
+# Backup (lightweight, targeted)
 # ---------------------------------------------------------------------------
 
-def backup() -> tuple[bool, str]:
-    """Create a timestamped tar.gz containing Raspyjack."""
-    ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    archive = os.path.join(BACKUP_DIR, f"raspyjack_backup_{ts}.tar.gz")
+def _count_backups():
+    if not os.path.isdir(BACKUP_ROOT):
+        return 0
+    return len([d for d in os.listdir(BACKUP_ROOT) if os.path.isdir(os.path.join(BACKUP_ROOT, d))])
+
+
+def smart_backup():
+    """Backup only config files and custom payloads. Returns (ok, backup_path)."""
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_dir = os.path.join(BACKUP_ROOT, ts)
+
     try:
-        with tarfile.open(archive, "w:gz") as tar:
-            tar.add(RASPYJACK_DIR, arcname=os.path.basename(RASPYJACK_DIR))
-        if os.path.exists(archive) and os.path.getsize(archive) > 0:
-            return True, archive
-        return False, "backup empty"
-    except Exception as exc:
-        return False, str(exc)
+        os.makedirs(backup_dir, exist_ok=True)
 
-def check_space(min_mb: int = 200) -> tuple[bool, str]:
+        # Backup config files
+        for fname in CONFIG_FILES:
+            src = os.path.join(RASPYJACK_DIR, fname)
+            if os.path.isfile(src):
+                shutil.copy2(src, os.path.join(backup_dir, fname))
+
+        # Backup config directories
+        for dname in CONFIG_DIRS:
+            src = os.path.join(RASPYJACK_DIR, dname)
+            if os.path.isdir(src):
+                shutil.copytree(src, os.path.join(backup_dir, dname))
+
+        # Backup custom payloads (untracked by git)
+        ok, untracked, _ = _git(["ls-files", "--others", "--exclude-standard", "payloads/"])
+        if ok and untracked:
+            custom_dir = os.path.join(backup_dir, "custom_payloads")
+            os.makedirs(custom_dir, exist_ok=True)
+            for relpath in untracked.split("\n"):
+                relpath = relpath.strip()
+                if not relpath:
+                    continue
+                src = os.path.join(RASPYJACK_DIR, relpath)
+                dst = os.path.join(custom_dir, os.path.basename(relpath))
+                if os.path.isfile(src):
+                    shutil.copy2(src, dst)
+
+        return True, backup_dir
+    except Exception as e:
+        return False, str(e)
+
+
+def restore_configs(backup_dir):
+    """Restore config files from a backup directory."""
+    restored = 0
     try:
-        usage = shutil.disk_usage(BACKUP_DIR)
-        free_mb = usage.free // (1024 * 1024)
-        if free_mb < min_mb:
-            return False, f"low space: {free_mb}MB"
-        return True, f"{free_mb}MB free"
-    except Exception as exc:
-        return False, f"disk {exc}"
-
-def ensure_dependencies() -> tuple[bool, str]:
-    """Install missing dependencies via apt when needed."""
-    cmd_map = {
-        "git": "git",
-        "tar": "tar",
-        "systemctl": "systemd",
-        "nmap": "nmap",
-        "tcpdump": "tcpdump",
-        "arp-scan": "arp-scan",
-        "ettercap": "ettercap-text-only",
-        "php": "php",
-        "tshark": "tshark",
-        "dnsmasq": "dnsmasq",
-        "airmon-ng": "aircrack-ng",
-        "aireplay-ng": "aircrack-ng",
-        "airodump-ng": "aircrack-ng",
-    }
-    missing_cmds = [c for c in cmd_map if shutil.which(c) is None]
-    missing_pkgs = sorted({cmd_map[c] for c in missing_cmds})
-
-    py_pkgs = {
-        "evdev": "python3-evdev",
-        "requests": "python3-requests",
-        "PIL": "python3-pil",
-        "RPi": "python3-rpi.gpio",
-        "netifaces": "python3-netifaces",
-        "scapy": "python3-scapy",
-        "pyudev": "python3-pyudev",
-    }
-    missing_py = []
-    try:
-        import importlib
-        for mod, pkg in py_pkgs.items():
-            try:
-                importlib.import_module(mod)
-            except Exception:
-                missing_py.append(pkg)
-    except Exception:
-        pass
-
-    to_install = sorted(set(missing_pkgs + missing_py))
-    if to_install:
-        try:
-            subprocess.run(["apt-get", "update", "-qq"], check=True)
-            subprocess.run(["apt-get", "install", "-y", "--no-install-recommends"] + to_install, check=True)
-        except subprocess.CalledProcessError as exc:
-            return False, f"apt failed {exc.returncode}"
-
-    return True, "ok"
-
-def backup_payloads() -> tuple[bool, str]:
-    """Copy current payloads to a temp dir for restore after update."""
-    ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    dst = f"/tmp/raspyjack_payloads_backup_{ts}"
-    try:
-        if not os.path.isdir(PAYLOADS_DIR):
-            return False, "payloads dir missing"
-        shutil.copytree(PAYLOADS_DIR, dst)
-        return True, dst
-    except Exception as exc:
-        return False, str(exc)
-
-def restore_custom_payloads(backup_dir: str) -> tuple[bool, str]:
-    """Restore only payloads that are not present in the repo version."""
-    try:
-        if not os.path.isdir(backup_dir):
-            return False, "payloads backup missing"
-        os.makedirs(PAYLOADS_DIR, exist_ok=True)
-        current = set(os.listdir(PAYLOADS_DIR))
-        restored = 0
-        for name in os.listdir(backup_dir):
-            if name.startswith("."):
-                continue
-            src = os.path.join(backup_dir, name)
-            dst = os.path.join(PAYLOADS_DIR, name)
-            if name not in current and os.path.isfile(src):
+        # Restore config files
+        for fname in CONFIG_FILES:
+            src = os.path.join(backup_dir, fname)
+            dst = os.path.join(RASPYJACK_DIR, fname)
+            if os.path.isfile(src):
                 shutil.copy2(src, dst)
                 restored += 1
-        return True, f"restored {restored}"
-    except Exception as exc:
-        return False, str(exc)
 
-def git_update() -> tuple[bool, str]:
-    """Fast-forward pull the latest changes."""
-    try:
-        subprocess.run(
-            ["git", "-C", RASPYJACK_DIR, "fetch", GIT_REMOTE],
-            check=True, capture_output=True, text=True
-        )
-        subprocess.run(
-            ["git", "-C", RASPYJACK_DIR, "reset", "--hard", f"{GIT_REMOTE}/{GIT_BRANCH}"],
-            check=True, capture_output=True, text=True
-        )
-        return True, "OK"
-    except subprocess.CalledProcessError as exc:
-        msg = (exc.stderr or "").strip() or f"git error {exc.returncode}"
-        return False, msg
+        # Restore config directories
+        for dname in CONFIG_DIRS:
+            src = os.path.join(backup_dir, dname)
+            dst = os.path.join(RASPYJACK_DIR, dname)
+            if os.path.isdir(src):
+                if os.path.isdir(dst):
+                    shutil.rmtree(dst)
+                shutil.copytree(src, dst)
+                restored += 1
 
-def restart_service() -> tuple[bool, str]:
-    try:
-        subprocess.run(["systemctl", "restart", SERVICE_NAME], check=True)
-        return True, "restarted"
-    except subprocess.CalledProcessError as exc:
-        return False, f"systemctl {exc.returncode}"
+        # Restore custom payloads
+        custom_dir = os.path.join(backup_dir, "custom_payloads")
+        if os.path.isdir(custom_dir):
+            payloads_dir = os.path.join(RASPYJACK_DIR, "payloads")
+            for fname in os.listdir(custom_dir):
+                src = os.path.join(custom_dir, fname)
+                dst = os.path.join(payloads_dir, fname)
+                if os.path.isfile(src) and not os.path.isfile(dst):
+                    shutil.copy2(src, dst)
+                    restored += 1
 
-def run_install_script() -> tuple[bool, str]:
-    """Run /root/Raspyjack/install_raspyjack.sh before reboot."""
+        return True, f"{restored} items restored"
+    except Exception as e:
+        return False, str(e)
+
+
+def cleanup_old_backups(keep=3):
+    """Keep only the N most recent backups."""
+    if not os.path.isdir(BACKUP_ROOT):
+        return
+    dirs = sorted([
+        d for d in os.listdir(BACKUP_ROOT)
+        if os.path.isdir(os.path.join(BACKUP_ROOT, d))
+    ])
+    while len(dirs) > keep:
+        old = dirs.pop(0)
+        try:
+            shutil.rmtree(os.path.join(BACKUP_ROOT, old))
+        except Exception:
+            pass
+
+
+def list_backups():
+    """Return sorted list of backup directory names."""
+    if not os.path.isdir(BACKUP_ROOT):
+        return []
+    return sorted([
+        d for d in os.listdir(BACKUP_ROOT)
+        if os.path.isdir(os.path.join(BACKUP_ROOT, d))
+    ], reverse=True)
+
+
+# ---------------------------------------------------------------------------
+# Update + install
+# ---------------------------------------------------------------------------
+
+def git_update():
+    """Hard reset to latest remote."""
+    ok, _, err = _git(["reset", "--hard", f"{GIT_REMOTE}/{GIT_BRANCH}"])
+    if not ok:
+        return False, err[:40]
+    return True, "OK"
+
+
+def run_install_script():
+    """Run install script with live progress on LCD."""
     if not os.path.isfile(INSTALL_SCRIPT):
-        return False, "install script missing"
-    if not os.access(INSTALL_SCRIPT, os.X_OK):
-        return False, "install script not executable"
+        return True, "no script"
+
     try:
-        res = subprocess.run(
+        proc = subprocess.Popen(
             ["bash", INSTALL_SCRIPT],
             cwd=RASPYJACK_DIR,
-            capture_output=True,
-            text=True
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
         )
-        if res.returncode != 0:
-            err = (res.stderr or res.stdout or "").strip()
-            err = err.splitlines()[-1] if err else f"rc={res.returncode}"
-            return False, err[:120]
-        return True, "ok"
-    except Exception as exc:
-        return False, str(exc)[:120]
+        line_count = 0
+        last_line = ""
+        while True:
+            line = proc.stdout.readline()
+            if not line and proc.poll() is not None:
+                break
+            if line.strip():
+                line_count += 1
+                last_line = line.strip()[:20]
+                show_progress("Installing...", last_line, min(95, line_count * 2))
 
-def do_reboot_now() -> tuple[bool, str]:
+        rc = proc.wait(timeout=300)
+        if rc != 0:
+            return False, f"exit code {rc}"
+        return True, "OK"
+    except Exception as e:
+        return False, str(e)[:40]
+
+
+def restart_service():
     try:
-        subprocess.run(["sync"], check=False)
-        subprocess.run(["systemctl", "reboot"], check=True)
-        return True, "rebooting"
-    except Exception as exc:
-        return False, str(exc)
+        subprocess.run(["systemctl", "restart", SERVICE_NAME], check=True, timeout=10)
+        return True, "OK"
+    except Exception as e:
+        return False, str(e)
+
+
+def do_reboot():
+    subprocess.run(["sync"], check=False)
+    subprocess.run(["systemctl", "reboot"], check=False)
+
 
 # ---------------------------------------------------------------------------
-# 6) Main
+# LCD screens
 # ---------------------------------------------------------------------------
 
-running = True
-should_reboot = False
+def draw_home(version, date, disk_free, backup_count):
+    """Draw the home screen with system info."""
+    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+    d = ScaledDraw(img)
 
-signal.signal(signal.SIGINT,  lambda *_: sys.exit(0))
-signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+    d.rectangle((0, 0, 127, 13), fill="#111")
+    d.text((2, 1), "AUTO-UPDATE", font=FONT, fill="#00FF00")
 
-show(["Auto-Update", "KEY1: start", "KEY3: exit"])
+    d.text((4, 18), f"Version: {version}", font=FONT, fill="#FFFFFF")
+    d.text((4, 32), f"Date: {date}", font=FONT, fill="#888888")
+    d.text((4, 46), f"Disk: {disk_free}", font=FONT, fill="#888888")
+    d.text((4, 60), f"Backups: {backup_count}", font=FONT, fill="#888888")
 
-try:
-    while running:
-        btn = pressed()
-        if btn == "KEY1":
-            while pressed() == "KEY1":
-                time.sleep(0.05)
+    d.text((4, 80), "KEY1  Check & Update", font=FONT_SM, fill="#58a6ff")
+    d.text((4, 92), "KEY2  Rollback", font=FONT_SM, fill="#FFAA00")
 
-            # 0. Prechecks
-            ok, info = check_space()
-            if not ok:
-                show(["No space", info], invert=True); time.sleep(4); break
+    d.rectangle((0, 116, 127, 127), fill="#111")
+    d.text((2, 117), "KEY1:Update K2:Roll K3:X", font=FONT_SM, fill="#888")
 
-            ok, info = ensure_dependencies()
-            if not ok:
-                show(["Deps install", info], invert=True); time.sleep(4); break
+    LCD.LCD_ShowImage(img, 0, 0)
 
-            # 1. Backup
-            show(["Backing-up…"])
-            ok, info = backup()
-            if not ok:
-                show(["Backup failed", info], invert=True); time.sleep(4); break
 
-            # 1b. Backup payloads for restore
-            show(["Saving payloads…"])
-            ok, payloads_backup = backup_payloads()
-            if not ok:
-                show(["Payload save fail", payloads_backup], invert=True); time.sleep(4); break
+def draw_changelog(commits, scroll_pos):
+    """Draw changelog screen."""
+    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+    d = ScaledDraw(img)
 
-            # 2. Pull latest
-            show(["Updating…"])
-            ok, info = git_update()
-            if not ok:
-                show(["Update failed", info], invert=True); time.sleep(4); break
+    d.rectangle((0, 0, 127, 13), fill="#002200")
+    d.text((2, 1), f"CHANGELOG ({len(commits)})", font=FONT, fill="#00FF00")
 
-            # 2b. Restore custom payloads
-            show(["Restoring payloads…"])
-            ok, info = restore_custom_payloads(payloads_backup)
-            if not ok:
-                show(["Restore failed", info], invert=True); time.sleep(4); break
-
-            # 3. Restart service
-            show(["Restarting…"])
-            ok, info = restart_service()
-            if not ok:
-                show(["Restart failed", info], invert=True); time.sleep(4); break
-
-            # 4. Re-run installer BEFORE reboot
-            show(["Running installer…"])
-            ok, info = run_install_script()
-            if not ok:
-                show(["Install failed", info], invert=True); time.sleep(5); break
-
-            show(["Update done!", "Reboot…"])
-            time.sleep(1.5)
-
-            should_reboot = True
-            running = False
-
-        elif btn == "KEY3":
-            running = False
+    visible = commits[scroll_pos:scroll_pos + 7]
+    for i, line in enumerate(visible):
+        y = 16 + i * 13
+        # Truncate hash, show message
+        parts = line.split(" ", 1)
+        if len(parts) == 2:
+            d.text((2, y), parts[0][:7], font=FONT_SM, fill="#58a6ff")
+            d.text((36, y), parts[1][:14], font=FONT_SM, fill="#CCCCCC")
         else:
-            time.sleep(0.1)
-finally:
-    try:
-        LCD.LCD_Clear()
-    except Exception:
-        pass
-    try:
-        GPIO.cleanup()
-    except Exception:
-        pass
+            d.text((2, y), line[:22], font=FONT_SM, fill="#CCCCCC")
 
-# reboot AFTER cleanup
-if should_reboot:
-    do_reboot_now()
+    d.rectangle((0, 116, 127, 127), fill="#111")
+    d.text((2, 117), "KEY1:Continue KEY3:Abort", font=FONT_SM, fill="#888")
+
+    LCD.LCD_ShowImage(img, 0, 0)
+
+
+def draw_rollback(backups, sel):
+    """Draw rollback selection screen."""
+    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+    d = ScaledDraw(img)
+
+    d.rectangle((0, 0, 127, 13), fill="#442200")
+    d.text((2, 1), "ROLLBACK", font=FONT, fill="#FFAA00")
+
+    if not backups:
+        d.text((4, 50), "No backups found", font=FONT, fill="#FF4444")
+    else:
+        visible = backups[:7]
+        for i, name in enumerate(visible):
+            y = 18 + i * 13
+            prefix = ">" if i == sel else " "
+            color = "#00FF00" if i == sel else "#CCCCCC"
+            # Format: 20260408_223000 -> 2026-04-08 22:30
+            display = name
+            if len(name) >= 15:
+                display = f"{name[:4]}-{name[4:6]}-{name[6:8]} {name[9:11]}:{name[11:13]}"
+            d.text((2, y), f"{prefix}{display}", font=FONT_SM, fill=color)
+
+    d.rectangle((0, 116, 127, 127), fill="#111")
+    d.text((2, 117), "OK:Restore KEY3:Back", font=FONT_SM, fill="#888")
+
+    LCD.LCD_ShowImage(img, 0, 0)
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def main():
+    global _running
+
+    # Get system info for home screen
+    version, date, full_hash = get_current_version()
+    try:
+        usage = shutil.disk_usage(RASPYJACK_DIR)
+        disk_free = f"{usage.free // (1024*1024)}MB"
+    except Exception:
+        disk_free = "?"
+    backup_count = _count_backups()
+
+    view = "home"
+    changelog = []
+    changelog_scroll = 0
+    rollback_sel = 0
+    backups = []
+    should_reboot = False
+    backup_path = None
+
+    try:
+        while _running:
+            btn = get_button(PINS, GPIO)
+
+            if view == "home":
+                if btn == "KEY3":
+                    break
+                elif btn == "KEY1":
+                    # Debounce
+                    while get_button(PINS, GPIO) == "KEY1":
+                        time.sleep(0.05)
+
+                    # 1. Check for updates
+                    available, info, count = check_update_available()
+                    if not available:
+                        show([info], invert=count == 0)
+                        time.sleep(3)
+                        # Refresh home info
+                        version, date, full_hash = get_current_version()
+                        draw_home(version, date, disk_free, backup_count)
+                        time.sleep(0.3)
+                        continue
+
+                    show([f"{count} update(s)", "available!", "", "Backing up..."])
+                    time.sleep(1)
+
+                    # 2. Smart backup
+                    show_progress("Backing up...", "Configs & custom")
+                    ok, backup_path = smart_backup()
+                    if not ok:
+                        show(["Backup failed", backup_path[:20]], invert=True)
+                        time.sleep(4)
+                        continue
+
+                    # 3. Check disk space
+                    try:
+                        usage = shutil.disk_usage(RASPYJACK_DIR)
+                        if usage.free < 100 * 1024 * 1024:
+                            show(["Low disk space!", f"{usage.free//(1024*1024)}MB free"], invert=True)
+                            time.sleep(4)
+                            continue
+                    except Exception:
+                        pass
+
+                    # 4. Git pull
+                    old_hash = full_hash
+                    show_progress("Updating...", "git reset --hard")
+                    ok, info = git_update()
+                    if not ok:
+                        show(["Update failed", info], invert=True)
+                        time.sleep(4)
+                        continue
+
+                    # 5. Restore configs
+                    show_progress("Restoring...", "configs & payloads")
+                    ok, info = restore_configs(backup_path)
+
+                    # 6. Cleanup old backups
+                    cleanup_old_backups(keep=3)
+
+                    # 7. Show changelog
+                    changelog = get_changelog(old_hash)
+                    if changelog:
+                        changelog_scroll = 0
+                        view = "changelog"
+                    else:
+                        # No changelog, go straight to install
+                        show_progress("Installing...", "Please wait")
+                        ok, info = run_install_script()
+                        if not ok:
+                            show(["Install failed", info], invert=True)
+                            time.sleep(5)
+                            continue
+
+                        show(["Update done!", "Rebooting..."])
+                        time.sleep(2)
+                        should_reboot = True
+                        break
+
+                    time.sleep(0.3)
+
+                elif btn == "KEY2":
+                    # Rollback menu
+                    backups = list_backups()
+                    rollback_sel = 0
+                    view = "rollback"
+                    time.sleep(0.3)
+
+                draw_home(version, date, disk_free, backup_count)
+
+            elif view == "changelog":
+                if btn == "KEY3":
+                    view = "home"
+                    version, date, full_hash = get_current_version()
+                    backup_count = _count_backups()
+                    time.sleep(0.3)
+                elif btn == "KEY1":
+                    # Continue to install
+                    show_progress("Installing...", "Please wait")
+                    ok, info = run_install_script()
+                    if not ok:
+                        show(["Install failed", info], invert=True)
+                        time.sleep(5)
+                        view = "home"
+                        version, date, full_hash = get_current_version()
+                        backup_count = _count_backups()
+                        continue
+
+                    show(["Update done!", "Rebooting..."])
+                    time.sleep(2)
+                    should_reboot = True
+                    break
+                elif btn == "UP":
+                    changelog_scroll = max(0, changelog_scroll - 1)
+                    time.sleep(0.15)
+                elif btn == "DOWN":
+                    changelog_scroll = min(max(0, len(changelog) - 7), changelog_scroll + 1)
+                    time.sleep(0.15)
+
+                draw_changelog(changelog, changelog_scroll)
+
+            elif view == "rollback":
+                if btn == "KEY3":
+                    view = "home"
+                    time.sleep(0.3)
+                elif btn == "UP":
+                    rollback_sel = max(0, rollback_sel - 1)
+                    time.sleep(0.15)
+                elif btn == "DOWN":
+                    rollback_sel = min(max(0, len(backups) - 1), rollback_sel + 1)
+                    time.sleep(0.15)
+                elif btn == "OK" and backups:
+                    selected = backups[rollback_sel]
+                    bpath = os.path.join(BACKUP_ROOT, selected)
+                    show_progress("Restoring...", selected[:16])
+                    ok, info = restore_configs(bpath)
+                    if ok:
+                        show(["Restored!", info, "", "Restarting..."])
+                        time.sleep(2)
+                        restart_service()
+                        time.sleep(1)
+                        break
+                    else:
+                        show(["Restore failed", info[:20]], invert=True)
+                        time.sleep(3)
+
+                draw_rollback(backups, rollback_sel)
+
+            time.sleep(0.05)
+
+    finally:
+        try:
+            LCD.LCD_Clear()
+        except Exception:
+            pass
+        try:
+            GPIO.cleanup()
+        except Exception:
+            pass
+
+    if should_reboot:
+        do_reboot()
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

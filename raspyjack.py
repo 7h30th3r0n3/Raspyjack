@@ -1960,8 +1960,8 @@ def GetMenuString(inlist, duplicates=False):
         inlist = [f"{i}#{txt}" for i, txt in enumerate(inlist)]
 
     total   = len(inlist)           # nb total d'items
-    index   = 0                     # position réelle du curseur (0-based)
-    offset  = 0                     # index du 1er item visible (0-based)
+    index   = min(m.select, total - 1) if total > 0 else 0  # restore last position
+    offset  = max(0, index - WINDOW + 1) if index >= WINDOW else 0
 
     while True:
         # -- 1/ Recalcule la fenêtre pour que index soit toujours dedans -----
