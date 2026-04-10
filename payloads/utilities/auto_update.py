@@ -436,8 +436,8 @@ def run_install_script():
             clean = _strip_ansi(line.strip())
             if clean:
                 line_count += 1
-                last_line = clean[:22]
-                show_progress("Installing...", last_line, min(95, line_count * 2))
+                last_line = clean
+                show_progress("Installing...", clean, min(95, line_count * 2))
 
         rc = proc.wait(timeout=300)
         if rc != 0:
