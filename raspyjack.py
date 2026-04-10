@@ -87,9 +87,40 @@ _repeat_interval = 0.08
 _double_click_window = 0.35
 LOCK_PIN_PBKDF2_ROUNDS = 40000
 LOCK_SCREEN_STATIC_SECONDS = 1.2
+LOCK_MODE_PIN = "pin"
+LOCK_MODE_SEQUENCE = "sequence"
+LOCK_SEQUENCE_LENGTH = 6
+LOCK_SEQUENCE_ALLOWED_BUTTONS = (
+    "KEY_UP_PIN",
+    "KEY_DOWN_PIN",
+    "KEY_LEFT_PIN",
+    "KEY_RIGHT_PIN",
+    "KEY1_PIN",
+    "KEY2_PIN",
+)
+LOCK_SEQUENCE_LABELS = {
+    "KEY_UP_PIN": "UP",
+    "KEY_DOWN_PIN": "DOWN",
+    "KEY_LEFT_PIN": "LEFT",
+    "KEY_RIGHT_PIN": "RIGHT",
+    "KEY1_PIN": "KEY1",
+    "KEY2_PIN": "KEY2",
+}
+LOCK_SEQUENCE_TOKENS = {
+    "KEY_UP_PIN": "U",
+    "KEY_DOWN_PIN": "D",
+    "KEY_LEFT_PIN": "L",
+    "KEY_RIGHT_PIN": "R",
+    "KEY1_PIN": "1",
+    "KEY2_PIN": "2",
+}
+LOCK_SEQUENCE_DEBOUNCE = 0.06
 LOCK_DEFAULTS = {
     "enabled": False,
+    "mode": LOCK_MODE_PIN,
     "pin_hash": "",
+    "sequence_hash": "",
+    "sequence_length": LOCK_SEQUENCE_LENGTH,
     "auto_lock_seconds": 0,
 }
 LOCK_TIMEOUT_OPTIONS = [
@@ -436,23 +467,55 @@ def _normalize_lock_config(raw: dict | None) -> dict[str, object]:
     cfg = raw if isinstance(raw, dict) else {}
     normalized = LOCK_DEFAULTS.copy()
     normalized["enabled"] = bool(cfg.get("enabled", normalized["enabled"]))
+    mode = str(cfg.get("mode", cfg.get("lock_type", normalized["mode"])) or normalized["mode"]).strip().lower()
+    if mode not in (LOCK_MODE_PIN, LOCK_MODE_SEQUENCE):
+        mode = LOCK_MODE_PIN
+    normalized["mode"] = mode
     normalized["pin_hash"] = str(cfg.get("pin_hash", normalized["pin_hash"]) or "").strip()
+    normalized["sequence_hash"] = str(cfg.get("sequence_hash", normalized["sequence_hash"]) or "").strip()
+    normalized["sequence_length"] = LOCK_SEQUENCE_LENGTH
     try:
         auto_lock_seconds = int(cfg.get("auto_lock_seconds", normalized["auto_lock_seconds"]))
     except (TypeError, ValueError):
         auto_lock_seconds = int(normalized["auto_lock_seconds"])
     normalized["auto_lock_seconds"] = max(0, auto_lock_seconds)
-    if normalized["enabled"] and not normalized["pin_hash"]:
+    if not normalized["pin_hash"] and normalized["sequence_hash"] and "mode" not in cfg and "lock_type" not in cfg:
+        normalized["mode"] = LOCK_MODE_SEQUENCE
+    if normalized["enabled"] and not _lock_config_has_secret(normalized, str(normalized["mode"])):
         normalized["enabled"] = False
     return normalized
+
+
+def _lock_config_has_secret(config: dict[str, object], mode: str | None = None) -> bool:
+    selected_mode = str(mode or config.get("mode") or LOCK_MODE_PIN)
+    if selected_mode == LOCK_MODE_SEQUENCE:
+        return bool(str(config.get("sequence_hash") or "").strip())
+    return bool(str(config.get("pin_hash") or "").strip())
+
+
+def _lock_mode() -> str:
+    mode = str(lock_config.get("mode") or LOCK_MODE_PIN)
+    return mode if mode in (LOCK_MODE_PIN, LOCK_MODE_SEQUENCE) else LOCK_MODE_PIN
+
+
+def _lock_mode_label(mode: str | None = None) -> str:
+    return "Sequence" if (mode or _lock_mode()) == LOCK_MODE_SEQUENCE else "PIN"
 
 
 def _lock_has_pin() -> bool:
     return bool(str(lock_config.get("pin_hash") or "").strip())
 
 
+def _lock_has_sequence() -> bool:
+    return bool(str(lock_config.get("sequence_hash") or "").strip())
+
+
+def _lock_has_secret(mode: str | None = None) -> bool:
+    return _lock_config_has_secret(lock_config, mode or _lock_mode())
+
+
 def _lock_is_enabled() -> bool:
-    return bool(lock_config.get("enabled")) and _lock_has_pin()
+    return bool(lock_config.get("enabled")) and _lock_has_secret()
 
 
 def _mark_user_activity() -> None:
@@ -489,23 +552,27 @@ def _handle_main_menu_key3_double_click() -> bool:
                 key3_released = True
             elif key3_released:
                 _mark_user_activity()
-                if _lock_has_pin():
+                if _lock_has_secret():
                     lock_device("Locked")
                 else:
-                    Dialog_info("Set PIN first", wait=False, timeout=1.0)
+                    Dialog_info(f"Set {_lock_mode_label()} first", wait=False, timeout=1.0)
                 return True
         except Exception:
             pass
         virtual_button = rj_input.get_virtual_button()
         if virtual_button == "KEY3_PIN":
             _mark_user_activity()
-            if _lock_has_pin():
+            if _lock_has_secret():
                 lock_device("Locked")
             else:
-                Dialog_info("Set PIN first", wait=False, timeout=1.0)
+                Dialog_info(f"Set {_lock_mode_label()} first", wait=False, timeout=1.0)
             return True
         time.sleep(0.01)
     return False
+
+
+def _serialize_sequence(sequence: list[str]) -> str:
+    return "|".join(sequence)
 
 
 def _hash_pin(pin: str, rounds: int = LOCK_PIN_PBKDF2_ROUNDS) -> str:
@@ -536,6 +603,14 @@ def _verify_pin(pin: str, encoded: str) -> bool:
         return False
 
 
+def _hash_sequence(sequence: list[str], rounds: int = LOCK_PIN_PBKDF2_ROUNDS) -> str:
+    return _hash_pin(_serialize_sequence(sequence), rounds=rounds)
+
+
+def _verify_sequence(sequence: list[str], encoded: str) -> bool:
+    return _verify_pin(_serialize_sequence(sequence), encoded)
+
+
 def _should_rehash_pin(encoded: str) -> bool:
     parsed = _parse_pin_hash(encoded)
     if not parsed:
@@ -551,14 +626,24 @@ def _rehash_pin_if_needed(pin: str, encoded: str) -> None:
     SaveConfig()
 
 
+def _rehash_sequence_if_needed(sequence: list[str], encoded: str) -> None:
+    if not _should_rehash_pin(encoded):
+        return
+    lock_config["sequence_hash"] = _hash_sequence(sequence)
+    SaveConfig()
+
+
 def _wait_for_button_release(timeout: float = 1.0) -> None:
     deadline = time.monotonic() + max(0.0, timeout)
     while time.monotonic() < deadline:
         try:
-            if all(GPIO.input(pin) != 0 for pin in PINS.values()):
+            physical_released = all(GPIO.input(pin) != 0 for pin in PINS.values())
+            virtual_released = not rj_input.get_held_buttons()
+            if physical_released and virtual_released:
                 return
         except Exception:
-            return
+            if not rj_input.get_held_buttons():
+                return
         time.sleep(0.01)
 
 
@@ -605,7 +690,10 @@ def SaveConfig() -> None:
         "COLORS": color.Dictonary(),
         "LOCK":   {
             "enabled": bool(lock_config.get("enabled")),
+            "mode": _lock_mode(),
             "pin_hash": str(lock_config.get("pin_hash") or ""),
+            "sequence_hash": str(lock_config.get("sequence_hash") or ""),
+            "sequence_length": LOCK_SEQUENCE_LENGTH,
             "auto_lock_seconds": max(0, int(lock_config.get("auto_lock_seconds") or 0)),
         },
     }
@@ -779,35 +867,103 @@ def _draw_lock_screen(title: str, prompt: str, entered: list[str] | None = None,
         draw.text((S(8), S(16)), _truncate_to_width(title, _SCR_W - S(18), text_font), fill=color.selected_text, font=text_font)
         draw.text((S(8), S(28)), _truncate_to_width(prompt, _SCR_W - S(18), font), fill=color.text, font=font)
 
+        slot_w = S(18)
+        slot_gap = S(6)
+        total_w = (slot_w * 4) + (slot_gap * 3)
+        slot_x = max(S(10), (_SCR_W - total_w) // 2)
+        slot_y = S(40)
         for index in range(4):
-            x0 = S(10) + (index * S(28))
-            y0 = S(42)
-            x1 = x0 + S(20)
-            y1 = S(58)
+            x0 = slot_x + (index * (slot_w + slot_gap))
+            x1 = x0 + slot_w
+            y0 = slot_y
+            y1 = y0 + S(18)
             filled = index < len(entered)
-            box_fill = color.select if filled else color.background
-            box_text = "*" if filled else "-"
-            draw.rectangle((x0, y0, x1, y1), outline=color.border, fill=box_fill)
-            _draw_centered_text((x0, y0 + 1, x1, y1), box_text, fill=color.selected_text if filled else color.text, font=text_font)
+            box_fill = color.select if filled else "#07140b"
+            box_outline = color.selected_text if filled else color.border
+            box_text = "*" if filled else "•"
+            box_text_fill = color.selected_text if filled else "#446b52"
+            draw.rounded_rectangle((x0, y0, x1, y1), radius=S(3), outline=box_outline, fill=box_fill)
+            _draw_centered_text((x0, y0 + 1, x1, y1), box_text, fill=box_text_fill, font=text_font)
 
-        start_x = S(10)
-        start_y = S(66)
-        cell_w = S(34)
-        cell_h = S(14)
-        cell_gap_x = S(36)
-        cell_gap_y = S(14)
+        cell_w = S(28)
+        cell_h = S(12)
+        cell_gap_x = S(6)
+        cell_gap_y = S(4)
+        total_keypad_w = (cell_w * 3) + (cell_gap_x * 2)
+        total_keypad_h = (cell_h * 4) + (cell_gap_y * 3)
+        start_x = max(S(8), (_SCR_W - total_keypad_w) // 2)
+        start_y = S(62)
         for row_index, row in enumerate(keypad):
             for col_index, key in enumerate(row):
-                x0 = start_x + (col_index * cell_gap_x)
-                y0 = start_y + (row_index * cell_gap_y)
+                x0 = start_x + (col_index * (cell_w + cell_gap_x))
+                y0 = start_y + (row_index * (cell_h + cell_gap_y))
                 x1 = x0 + cell_w
                 y1 = y0 + cell_h
                 is_selected = row_index == selected_row and col_index == selected_col
-                fill = color.select if is_selected else color.background
+                fill = color.select if is_selected else "#07140b"
+                outline = color.selected_text if is_selected else color.border
                 text_fill = color.selected_text if is_selected else color.text
-                draw.rectangle((x0, y0, x1, y1), outline=color.border, fill=fill)
+                draw.rounded_rectangle((x0, y0, x1, y1), radius=S(3), outline=outline, fill=fill)
                 key_font = text_font if len(key) == 1 else font
-                _draw_centered_text((x0, y0 + 1, x1, y1), key, fill=text_fill, font=key_font)
+                key_bbox = draw.textbbox((0, 0), key, font=key_font)
+                key_w = key_bbox[2] - key_bbox[0]
+                key_h = key_bbox[3] - key_bbox[1]
+                text_x = x0 + max(0, (cell_w - key_w) // 2) - key_bbox[0]
+                text_y = y0 + max(0, (cell_h - key_h) // 2) - key_bbox[1]
+                if len(key) == 1:
+                    text_y += S(1)
+                draw.text((text_x, text_y), key, fill=text_fill, font=key_font)
+    finally:
+        draw_lock.release()
+
+
+def _draw_sequence_screen(title: str, prompt: str, entered: list[str] | None = None,
+                          allow_cancel: bool = True, allow_hide: bool = False,
+                          mask_entered: bool = False) -> None:
+    entered = entered or []
+    controls = "OK=clear K3=Exit"
+    try:
+        draw_lock.acquire()
+        draw.rectangle((0, 0, _SCR_W - 1, _SCR_H - 1), fill=color.background)
+        _draw_toolbar()
+        color.DrawBorder()
+        draw.text((S(8), S(16)), _truncate_to_width(title, _SCR_W - S(18), text_font), fill=color.selected_text, font=text_font)
+        _draw_centered_text((S(12), S(28), _SCR_W - S(12), S(46)), prompt, fill=color.text, font=font)
+
+        progress_text = f"{len(entered)}/{LOCK_SEQUENCE_LENGTH}"
+        progress_bbox = draw.textbbox((0, 0), progress_text, font=text_font)
+        progress_w = progress_bbox[2] - progress_bbox[0]
+        draw.text((_SCR_W - S(10) - progress_w, S(16)), progress_text, fill="#7fdc9c", font=text_font)
+
+        slot_w = S(17)
+        slot_gap = S(2)
+        total_w = (slot_w * LOCK_SEQUENCE_LENGTH) + (slot_gap * (LOCK_SEQUENCE_LENGTH - 1))
+        slot_x = max(S(4), (_SCR_W - total_w) // 2)
+        slot_y = S(52)
+        for index in range(LOCK_SEQUENCE_LENGTH):
+            x0 = slot_x + (index * (slot_w + slot_gap))
+            x1 = x0 + slot_w
+            y0 = slot_y
+            y1 = y0 + S(18)
+            filled = index < len(entered)
+            fill = color.select if filled else "#07140b"
+            outline = color.selected_text if filled else color.border
+            if filled:
+                token = "*" if mask_entered else LOCK_SEQUENCE_TOKENS.get(entered[index], "?")
+            else:
+                token = "•"
+            text_fill = color.selected_text if filled else "#446b52"
+            draw.rounded_rectangle((x0, y0, x1, y1), radius=S(3), outline=outline, fill=fill)
+            _draw_centered_text((x0, y0 + 1, x1, y1), token, fill=text_fill, font=text_font)
+
+        if entered and not mask_entered:
+            latest = LOCK_SEQUENCE_LABELS.get(entered[-1], "")
+            _draw_centered_text((S(12), S(82), _SCR_W - S(12), S(96)), f"Last input: {latest}", fill="#88f0aa", font=font)
+        elif entered:
+            _draw_centered_text((S(12), S(82), _SCR_W - S(12), S(96)), "Sequence entered", fill="#88f0aa", font=font)
+
+        footer_text = _truncate_to_width(controls, _SCR_W - S(16), font)
+        draw.text((S(8), _SCR_H - S(17)), footer_text, fill="#6ea680", font=font)
     finally:
         draw_lock.release()
 
@@ -852,6 +1008,28 @@ def _get_fresh_lock_button() -> str | None:
     except Exception:
         return None
     return None
+
+
+def _get_sequence_lock_button(held_buttons: set[str]) -> tuple[str | None, set[str]]:
+    virtual_button = rj_input.get_virtual_button()
+    if virtual_button:
+        _mark_user_activity()
+        return virtual_button, held_buttons
+
+    current_held: set[str] = set()
+    try:
+        for item in PINS:
+            if GPIO.input(PINS[item]) == 0:
+                current_held.add(item)
+    except Exception:
+        return None, held_buttons
+
+    for button in ("KEY_PRESS_PIN", "KEY3_PIN", *LOCK_SEQUENCE_ALLOWED_BUTTONS):
+        if button in current_held and button not in held_buttons:
+            _mark_user_activity()
+            return button, current_held
+
+    return None, current_held
 
 
 def _load_lock_screensaver_frames() -> tuple[list[Image.Image], list[float]]:
@@ -973,6 +1151,70 @@ def _enter_pin_via_keypad(title: str, prompt: str, allow_cancel: bool = True,
         lock_runtime["suspend_auto_lock"] = previous_suspend
 
 
+def _enter_sequence_via_buttons(title: str, prompt: str, allow_cancel: bool = True,
+                                allow_hide: bool = False,
+                                mask_entered: bool = False) -> list[str] | str | None:
+    entered: list[str] = []
+    hint = prompt
+    last_button = None
+    last_press_at = 0.0
+    held_buttons: set[str] = set()
+    needs_redraw = True
+    previous_suspend = bool(lock_runtime["suspend_auto_lock"])
+    lock_runtime["suspend_auto_lock"] = True
+    try:
+        _wait_for_button_release(timeout=0.35)
+        while True:
+            if needs_redraw:
+                _draw_sequence_screen(
+                    title,
+                    hint,
+                    entered,
+                    allow_cancel=allow_cancel,
+                    allow_hide=allow_hide,
+                    mask_entered=mask_entered,
+                )
+                needs_redraw = False
+            btn, held_buttons = _get_sequence_lock_button(held_buttons)
+            if not btn:
+                time.sleep(0.005)
+                continue
+
+            now = time.monotonic()
+
+            if btn == "KEY3_PIN":
+                if allow_cancel:
+                    return None
+                if allow_hide:
+                    return "__hide__"
+                continue
+
+            if btn == "KEY_PRESS_PIN":
+                if entered:
+                    entered.pop()
+                hint = prompt
+                last_button = btn
+                last_press_at = now
+                needs_redraw = True
+                continue
+
+            if btn not in LOCK_SEQUENCE_ALLOWED_BUTTONS:
+                continue
+
+            if btn == last_button and (now - last_press_at) < LOCK_SEQUENCE_DEBOUNCE:
+                continue
+
+            entered.append(btn)
+            last_button = btn
+            last_press_at = now
+            hint = prompt
+            needs_redraw = True
+            if len(entered) >= LOCK_SEQUENCE_LENGTH:
+                return entered.copy()
+    finally:
+        lock_runtime["suspend_auto_lock"] = previous_suspend
+
+
 def _set_pin_flow(require_current: bool = False) -> bool:
     if require_current:
         current = _enter_pin_via_keypad("Change PIN", "Current PIN", allow_cancel=True)
@@ -996,6 +1238,82 @@ def _set_pin_flow(require_current: bool = False) -> bool:
         SaveConfig()
         Dialog_info("PIN saved", wait=False, timeout=1.0)
         return True
+
+
+def _set_sequence_flow(require_current: bool = False) -> bool:
+    if require_current:
+        current = _enter_sequence_via_buttons("Change Sequence", "Current 6-step seq", allow_cancel=True)
+        if current is None:
+            return False
+        if not _verify_sequence(current, str(lock_config.get("sequence_hash") or "")):
+            Dialog_info("Wrong current\nsequence", wait=False, timeout=1.2)
+            return False
+
+    while True:
+        first_sequence = _enter_sequence_via_buttons("Set Sequence", "Enter new 6-step", allow_cancel=True)
+        if first_sequence is None:
+            return False
+        confirm_sequence = _enter_sequence_via_buttons("Confirm Sequence", "Repeat 6-step", allow_cancel=True)
+        if confirm_sequence is None:
+            return False
+        if first_sequence != confirm_sequence:
+            Dialog_info("Sequence\nmismatch", wait=False, timeout=1.2)
+            continue
+        lock_config["sequence_hash"] = _hash_sequence(first_sequence)
+        SaveConfig()
+        Dialog_info("Sequence saved", wait=False, timeout=1.0)
+        return True
+
+
+def _verify_current_lock_secret_flow() -> bool:
+    if not _lock_has_secret():
+        return True
+    if _lock_mode() == LOCK_MODE_SEQUENCE:
+        current = _enter_sequence_via_buttons("Verify Sequence", "Enter current 6-step", allow_cancel=True, mask_entered=True)
+        if current is None:
+            return False
+        if not _verify_sequence(current, str(lock_config.get("sequence_hash") or "")):
+            Dialog_info("Wrong current\nsequence", wait=False, timeout=1.2)
+            return False
+        return True
+
+    current_pin = _enter_pin_via_keypad("Verify PIN", "Current PIN", allow_cancel=True)
+    if current_pin is None:
+        return False
+    if not _verify_pin(current_pin, str(lock_config.get("pin_hash") or "")):
+        Dialog_info("Wrong current PIN", wait=False, timeout=1.2)
+        return False
+    return True
+
+
+def _set_active_lock_secret_flow(require_current: bool = False) -> bool:
+    if _lock_mode() == LOCK_MODE_SEQUENCE:
+        return _set_sequence_flow(require_current=require_current)
+    return _set_pin_flow(require_current=require_current)
+
+
+def _select_lock_mode() -> None:
+    labels = [" PIN", " Sequence"]
+    current_mode = _lock_mode()
+    idx, _value = GetMenuString(labels, duplicates=True)
+    if idx == -1:
+        return
+    target_mode = LOCK_MODE_SEQUENCE if idx == 1 else LOCK_MODE_PIN
+    if target_mode == current_mode:
+        return
+
+    previous_mode = current_mode
+    if _lock_has_secret() and not _verify_current_lock_secret_flow():
+        return
+
+    lock_config["mode"] = target_mode
+    if not _lock_has_secret(target_mode):
+        if not _set_active_lock_secret_flow(require_current=False):
+            lock_config["mode"] = previous_mode
+            return
+
+    SaveConfig()
+    Dialog_info(f"Lock type\n{_lock_mode_label(target_mode)}", wait=False, timeout=1.0)
 
 
 def configure_auto_lock_timeout() -> None:
@@ -1128,8 +1446,8 @@ def select_lock_screensaver_gif() -> None:
 
 
 def toggle_lock_enabled() -> None:
-    if not _lock_has_pin():
-        if not _set_pin_flow(require_current=False):
+    if not _lock_has_secret():
+        if not _set_active_lock_secret_flow(require_current=False):
             return
     lock_config["enabled"] = not bool(lock_config.get("enabled"))
     SaveConfig()
@@ -1138,7 +1456,7 @@ def toggle_lock_enabled() -> None:
 
 
 def lock_device(reason: str = "Locked") -> bool:
-    if not _lock_has_pin():
+    if not _lock_has_secret():
         return False
     if lock_runtime["locked"]:
         return True
@@ -1157,10 +1475,23 @@ def lock_device(reason: str = "Locked") -> bool:
                 show_keypad = True
                 continue
 
-            entered = _enter_pin_via_keypad("Unlock", "Enter 4-digit PIN", allow_cancel=False, allow_hide=True)
+            if _lock_mode() == LOCK_MODE_SEQUENCE:
+                entered = _enter_sequence_via_buttons("Unlock", "Enter 6-step seq", allow_cancel=False, allow_hide=True, mask_entered=True)
+            else:
+                entered = _enter_pin_via_keypad("Unlock", "Enter 4-digit PIN", allow_cancel=False, allow_hide=True)
             if entered == "__hide__":
                 _wait_for_button_release()
                 show_keypad = False
+                continue
+            if _lock_mode() == LOCK_MODE_SEQUENCE:
+                stored_sequence_hash = str(lock_config.get("sequence_hash") or "")
+                if entered and _verify_sequence(entered, stored_sequence_hash):
+                    _rehash_sequence_if_needed(entered, stored_sequence_hash)
+                    lock_runtime["locked"] = False
+                    _mark_user_activity()
+                    RenderCurrentMenuOnce()
+                    return True
+                Dialog_info("Wrong sequence", wait=False, timeout=1.0)
                 continue
             stored_pin_hash = str(lock_config.get("pin_hash") or "")
             if entered and _verify_pin(entered, stored_pin_hash):
@@ -1177,19 +1508,12 @@ def lock_device(reason: str = "Locked") -> bool:
 
 
 def OpenLockMenu() -> None:
-    if not _lock_has_pin():
-        if not _set_pin_flow(require_current=False):
-            return
-        lock_config["enabled"] = True
-        SaveConfig()
-        lock_device("Locked")
-        return
-
     while True:
         options = [
             " Lock now",
             f" {'Deactivate' if lock_config.get('enabled') else 'Activate'} lock",
-            " Change PIN",
+            f" Lock type: {_lock_mode_label()}",
+            f" Change {_lock_mode_label()}",
             f" Auto-lock: {_lock_timeout_label()}",
             " Screensaver GIF",
         ]
@@ -1197,14 +1521,18 @@ def OpenLockMenu() -> None:
         if idx == -1:
             return
         if idx == 0:
+            if not _lock_has_secret() and not _set_active_lock_secret_flow(require_current=False):
+                continue
             lock_device("Locked")
         elif idx == 1:
             toggle_lock_enabled()
         elif idx == 2:
-            _set_pin_flow(require_current=True)
+            _select_lock_mode()
         elif idx == 3:
-            configure_auto_lock_timeout()
+            _set_active_lock_secret_flow(require_current=_lock_has_secret())
         elif idx == 4:
+            configure_auto_lock_timeout()
+        elif idx == 5:
             select_lock_screensaver_gif()
 
 ### Simple message box ###
@@ -1362,7 +1690,7 @@ def ShowLines(arr,bold=[]):
                                 (_SCR_W - 8, default.start_text[1] + default.text_gap * i + 10)], fill=color.select)
             # Draw icons on main menu when available
             if m.which == "a":
-                icon = MENU_ICONS.get(render_text, "")
+                icon = _menu_icon_for_label(render_text, "")
                 if icon:
                     draw.text(
                         (default.start_text[0] - 2, default.start_text[1] + default.text_gap * i),
@@ -1425,7 +1753,7 @@ def RenderMenuWindowOnce(inlist, selected_index=0):
                      row_y + default.text_gap - 2),
                     fill=color.select
                 )
-            icon = MENU_ICONS.get(txt, "")
+            icon = _menu_icon_for_label(txt, "")
             if icon:
                 draw.text(
                     (default.start_text[0],
@@ -1474,7 +1802,7 @@ def RenderMenuCarouselOnce(inlist, selected_index=0):
         main_x = _SCR_W // 2
         main_y = _SCR_H // 2
 
-        icon = MENU_ICONS.get(current_item, "\uf192")
+        icon = _menu_icon_for_label(current_item, "\uf192")
         huge_icon_font = ImageFont.truetype('/usr/share/fonts/truetype/fontawesome/fa-solid-900.ttf', S(48))
         draw.text((main_x, main_y - S(12)), icon, font=huge_icon_font, fill=color.selected_text, anchor="mm")
 
@@ -1522,7 +1850,7 @@ def RenderMenuGridOnce(inlist, selected_index=0):
             else:
                 fill_color = color.text
 
-            icon = MENU_ICONS.get(item, "")
+            icon = _menu_icon_for_label(item, "")
             if icon:
                 draw.text((x + 2, y), icon, font=icon_font, fill=fill_color)
                 short_text = item.strip()[:8]
@@ -1666,7 +1994,7 @@ def GetMenuString(inlist, duplicates=False):
                         fill=color.select
                     )
 
-                icon = MENU_ICONS.get(txt, "")
+                icon = _menu_icon_for_label(txt, "")
                 if icon:
                     draw.text(
                         (default.start_text[0],
@@ -3484,7 +3812,7 @@ class DisposableMenu:
 
         "ah": (
             [" Nmap",      ReadTextFileNmap],
-            [" Responder", ReadTextFileResponder],
+            [" Responder logs", ReadTextFileResponder],
             [" Wardriving", ReadTextFileWardriving],
             [" DNSSpoof",  ReadTextFileDNSSpoof]
         ),
@@ -3667,12 +3995,37 @@ def _load_menu_icons():
     try:
         with open(icon_path, "r") as f:
             data = json.load(f)
-        for section in ("main_menu", "categories", "payloads"):
+        for section in ("main_menu", "submenus", "categories", "payloads", "fallbacks"):
             if section in data:
                 icons.update(data[section])
     except Exception:
         pass
     return icons
+
+
+def _menu_icon_for_label(label: str, default_icon: str = "") -> str:
+    if not label:
+        return default_icon
+    normalized = label.strip()
+    for candidate in (label, normalized):
+        icon = MENU_ICONS.get(candidate, "")
+        if icon:
+            return icon
+    if ":" in label:
+        prefix = label.split(":", 1)[0]
+        for candidate in (prefix, prefix.rstrip(), prefix.strip()):
+            icon = MENU_ICONS.get(candidate, "")
+            if icon:
+                return icon
+    if normalized in SCANS:
+        icon = MENU_ICONS.get("__scan__", "")
+        if icon:
+            return icon
+    if normalized in SITES:
+        icon = MENU_ICONS.get("__site__", "")
+        if icon:
+            return icon
+    return default_icon
 
 MENU_ICONS = _load_menu_icons()
 
@@ -3688,7 +4041,7 @@ MENU_DESCRIPTIONS = {
     " Other features": "Additional tools\nand system\nconfiguration",
     " Read file": "View captured\ndata and scan\nresults",
     " Payload": "Execute custom\nPython scripts\nand tools",
-    " Lock": "Set a 4-digit PIN,\nlock the device,\nand manage auto-lock",
+    " Lock": "Set a PIN or\n6-step sequence,\nlock the device,\nand manage auto-lock",
 }
 
 
@@ -3725,7 +4078,7 @@ def GetMenuCarousel(inlist, duplicates=False):
             main_y = _SCR_H // 2
 
             # Draw huge icon in center
-            icon = MENU_ICONS.get(txt, "\uf192")  # Default to dot-circle icon
+            icon = _menu_icon_for_label(txt, "\uf192")  # Default to dot-circle icon
             # Large font for the icon
             huge_icon_font = ImageFont.truetype('/usr/share/fonts/truetype/fontawesome/fa-solid-900.ttf', S(48))
             draw.text((main_x, main_y - S(12)), icon, font=huge_icon_font, fill=color.selected_text, anchor="mm")
@@ -3833,7 +4186,7 @@ def GetMenuGrid(inlist, duplicates=False):
 
                 # Draw icon and text
                 txt = item if not duplicates else item.split('#', 1)[1]
-                icon = MENU_ICONS.get(txt, "")
+                icon = _menu_icon_for_label(txt, "")
 
                 if icon:
                     # Draw icon
@@ -3974,17 +4327,23 @@ def main():
         if x >= 0:
             m.select = x
             if isinstance(m.menu[m.which][m.select][1], str):
-                # Entering a submenu: save current position and reset to 0
+                # Entering submenu: save position, reset to 0
                 m._select_stack.append(m.select)
                 m.which = m.menu[m.which][m.select][1]
                 m.select = 0
             elif isinstance(m.menu[m.which][m.select][1], list):
-                m.menu[m.which][m.select][1][0](
-                    m.menu[m.which][m.select][1][1])
+                _saved_select = m.select
+                m.select = 0
+                m.menu[m.which][_saved_select][1][0](
+                    m.menu[m.which][_saved_select][1][1])
+                m.select = _saved_select
             else:
-                m.menu[m.which][m.select][1]()
+                _saved_select = m.select
+                m.select = 0
+                m.menu[m.which][_saved_select][1]()
+                m.select = _saved_select
         elif len(m.which) > 1:
-            # Going back to parent: restore saved position
+            # Going back: restore parent position
             if m._select_stack:
                 m.select = m._select_stack.pop()
             else:
