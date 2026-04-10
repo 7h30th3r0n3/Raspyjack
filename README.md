@@ -223,7 +223,6 @@ This validates syntax for:
 | KEY1 | Context/extra action (varies) |
 | KEY2 | Secondary action (varies) |
 | KEY3 | Exit / Cancel |
-
 ---
 
 ## 🖥️ Dual-Display Support

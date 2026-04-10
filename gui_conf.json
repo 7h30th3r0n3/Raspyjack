@@ -16,7 +16,10 @@
     "LOCK": {
         "auto_lock_seconds": 0,
         "enabled": false,
-        "pin_hash": ""
+        "mode": "pin",
+        "pin_hash": "",
+        "sequence_hash": "",
+        "sequence_length": 6
     },
     "PATHS": {
         "IMAGEBROWSER_START": "/root/Raspyjack/img/",
