@@ -41,6 +41,7 @@ import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._iface_helper import select_interface
 
 try:
     from scapy.all import sniff, DHCP, BOOTP, IP, UDP, Ether, conf
@@ -89,6 +90,7 @@ status_msg = "Ready"
 sniff_active = False
 app_running = True
 total_packets = 0
+selected_iface = ""
 
 
 # ---------------------------------------------------------------------------
@@ -203,6 +205,7 @@ def _sniff_thread():
         status_msg = "Sniffing DHCP..."
     try:
         sniff(
+            iface=selected_iface,
             filter="udp and (port 67 or port 68)",
             prn=_packet_handler,
             store=False,
@@ -302,6 +305,12 @@ def main():
         d.text((4, 50), "scapy not found!", font=font, fill="RED")
         LCD.LCD_ShowImage(img, 0, 0)
         time.sleep(3)
+        GPIO.cleanup()
+        return
+
+    global selected_iface
+    selected_iface = select_interface(LCD, font, PINS, GPIO, iface_type="any")
+    if not selected_iface:
         GPIO.cleanup()
         return
 

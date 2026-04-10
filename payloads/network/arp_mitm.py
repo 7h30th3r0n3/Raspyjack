@@ -520,7 +520,7 @@ def main():
 
     try:
         # Select interface via shared helper
-        selected = select_interface(LCD, font, PINS, GPIO, iface_type="eth")
+        selected = select_interface(LCD, font, PINS, GPIO, iface_type="any")
         if selected is None:
             GPIO.cleanup()
             return

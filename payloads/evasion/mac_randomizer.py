@@ -28,6 +28,7 @@ import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._iface_helper import select_interface
 
 PINS = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
@@ -187,6 +188,11 @@ def _draw_status(lcd, msg, color="#00ff00"):
 
 def main():
     """Main entry point."""
+    selected_iface = select_interface(LCD, font, PINS, GPIO, iface_type="any")
+    if not selected_iface:
+        GPIO.cleanup()
+        return 0
+
     original_macs = {}
     for iface in INTERFACES:
         original_macs[iface] = _get_mac(iface)

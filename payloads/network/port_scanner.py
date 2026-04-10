@@ -337,7 +337,7 @@ def main():
         return
 
     try:
-        selected = select_interface(LCD, font, PINS, GPIO, iface_type="eth")
+        selected = select_interface(LCD, font, PINS, GPIO, iface_type="any")
         if selected is None:
             GPIO.cleanup()
             return

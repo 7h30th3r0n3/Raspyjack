@@ -244,7 +244,7 @@ def main():
             time.sleep(0.1)
         return 1
 
-    selected = select_interface(lcd, scaled_font(), {"UP": KEY_UP, "DOWN": KEY_DOWN, "OK": KEY_PRESS, "KEY3": KEY3}, GPIO, iface_type="eth")
+    selected = select_interface(lcd, scaled_font(), {"UP": KEY_UP, "DOWN": KEY_DOWN, "OK": KEY_PRESS, "KEY3": KEY3}, GPIO, iface_type="any")
     if selected is None:
         draw_lines(lcd, ["Rogue DHCP", "Cancelled", "", "KEY3=Exit"])
         while True:

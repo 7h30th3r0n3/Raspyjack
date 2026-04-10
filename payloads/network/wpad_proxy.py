@@ -547,7 +547,7 @@ def main():
     global running, scroll_pos, content_injection
 
     try:
-        selected = select_interface(LCD, font, PINS, GPIO, iface_type="eth")
+        selected = select_interface(LCD, font, PINS, GPIO, iface_type="any")
         if selected is None:
             GPIO.cleanup()
             return

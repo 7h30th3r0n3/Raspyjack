@@ -430,7 +430,7 @@ def main():
         GPIO.cleanup()
         return 1
 
-    selected = select_interface(lcd, font, PINS, GPIO, iface_type="eth")
+    selected = select_interface(lcd, font, PINS, GPIO, iface_type="any")
     if selected is None:
         GPIO.cleanup()
         return 0

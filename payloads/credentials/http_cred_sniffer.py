@@ -36,6 +36,7 @@ import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._iface_helper import select_interface
 
 try:
     from scapy.all import sniff as scapy_sniff, TCP, Raw, IP
@@ -308,6 +309,11 @@ def main():
         GPIO.cleanup()
         return 1
 
+    selected_iface = select_interface(lcd, font, PINS, GPIO, iface_type="any")
+    if not selected_iface:
+        GPIO.cleanup()
+        return 1
+
     # Splash
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
     d = ScaledDraw(img)
@@ -332,7 +338,7 @@ def main():
                 if sniffing:
                     sniffing = False
                 else:
-                    iface = INTERFACES[iface_idx]
+                    iface = selected_iface
                     sniffing = True
                     sniffer_thread = threading.Thread(
                         target=_sniffer_thread_fn, args=(iface,), daemon=True,

@@ -38,6 +38,7 @@ import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._iface_helper import select_interface
 
 PINS = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
@@ -414,6 +415,11 @@ def _draw_screen():
 def main():
     global running, sniffing, scroll_pos, view_mode, _sniff_thread
 
+    selected_iface = select_interface(LCD, font, PINS, GPIO, iface_type="any")
+    if not selected_iface:
+        GPIO.cleanup()
+        return
+
     try:
         _draw_screen()
 
@@ -428,7 +434,7 @@ def main():
                 with lock:
                     sniffing = not sniffing
                 if sniffing:
-                    iface = _get_active_iface()
+                    iface = selected_iface
                     _sniff_thread = threading.Thread(
                         target=_sniff_loop, args=(iface,), daemon=True,
                     )

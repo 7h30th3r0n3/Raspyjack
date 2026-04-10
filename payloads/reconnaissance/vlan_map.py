@@ -42,6 +42,7 @@ import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._iface_helper import select_interface
 
 try:
     from scapy.all import (
@@ -645,7 +646,12 @@ def main():
         GPIO.cleanup()
         return 1
 
-    my_iface = _get_default_iface()
+    selected_iface = select_interface(LCD, font, PINS, GPIO, iface_type="wifi")
+    if not selected_iface:
+        GPIO.cleanup()
+        return 1
+
+    my_iface = selected_iface
     my_mac = _get_iface_mac(my_iface)
 
     with lock:

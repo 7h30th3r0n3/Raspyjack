@@ -349,7 +349,7 @@ def main():
     lcd.LCD_ShowImage(img, 0, 0)
     time.sleep(1.5)
 
-    selected = select_interface(lcd, font, PINS, GPIO, iface_type="eth")
+    selected = select_interface(lcd, font, PINS, GPIO, iface_type="any")
     if selected is None:
         GPIO.cleanup()
         return 0

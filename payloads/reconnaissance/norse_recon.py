@@ -35,6 +35,7 @@ import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._iface_helper import select_interface
 
 # ---------------------------------------------------------------------------
 # Pin / LCD setup
@@ -523,6 +524,11 @@ def main():
     lcd.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
     lcd.LCD_Clear()
     font = scaled_font()
+
+    selected_iface = select_interface(lcd, font, PINS, GPIO, iface_type="wifi")
+    if not selected_iface:
+        GPIO.cleanup()
+        return 0
 
     # Splash screen
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")

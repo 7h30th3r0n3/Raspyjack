@@ -32,6 +32,7 @@ import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._iface_helper import select_interface
 
 PINS = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
@@ -321,6 +322,11 @@ def _show_message(line1, line2=""):
 
 def main():
     global scroll_pos, stop_flag, os_table, pkt_count
+
+    selected_iface = select_interface(LCD, font, PINS, GPIO, iface_type="any")
+    if not selected_iface:
+        GPIO.cleanup()
+        return 0
 
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
     d = ScaledDraw(img)

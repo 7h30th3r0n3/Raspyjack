@@ -34,6 +34,7 @@ import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._iface_helper import select_interface
 
 try:
     from scapy.all import (
@@ -268,6 +269,11 @@ def main():
         d.text((4, 65), "pip install scapy", font=font_obj, fill="#888")
         lcd.LCD_ShowImage(img, 0, 0)
         time.sleep(3)
+        GPIO.cleanup()
+        return 1
+
+    selected_iface = select_interface(lcd, font_obj, PINS, GPIO, iface_type="any")
+    if not selected_iface:
         GPIO.cleanup()
         return 1
 

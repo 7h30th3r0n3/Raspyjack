@@ -81,6 +81,7 @@ from payloads._display_helper import ScaledDraw, scaled_font
 
 # Shared input helper (WebUI virtual + GPIO)
 from payloads._input_helper import get_button
+from payloads._iface_helper import select_interface
 
 from scapy.all import sniff, DNS, DNSQR, IP
 from scapy.layers.netbios import NBNSQueryRequest
@@ -134,8 +135,8 @@ internal_count = 0
 internal_suffixes = (".local", ".lan", ".corp", ".internal")
 top_index = 0
 
-# >>> ADJUST IF NEEDED <<<
-SNIFF_IFACE = "eth0"
+# Interface selected at runtime via select_interface()
+SNIFF_IFACE = "eth0"  # default fallback
 
 # ==================================================
 # CLEAN EXIT
@@ -224,6 +225,17 @@ def handle_packet(pkt):
 # ==================================================
 # SNIFFER THREAD
 # ==================================================
+PINS_FULL = {
+    "UP": PIN_UP, "DOWN": PIN_DOWN, "LEFT": 5, "RIGHT": 26,
+    "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": PIN_KEY3,
+}
+_selected = select_interface(LCD, font, PINS_FULL, GPIO, iface_type="any")
+if not _selected:
+    GPIO.cleanup()
+    sys.exit(0)
+SNIFF_IFACE = _selected
+
+
 def sniff_thread():
     sniff(
         iface=SNIFF_IFACE,

@@ -37,6 +37,7 @@ import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._iface_helper import select_interface
 
 PINS = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
@@ -371,6 +372,11 @@ def _draw_screen():
 def main():
     global app_running, selected_idx, scroll_pos, view_mode
     global whitelist, status_msg
+
+    selected_iface = select_interface(LCD, font, PINS, GPIO, iface_type="wifi")
+    if not selected_iface:
+        GPIO.cleanup()
+        return
 
     whitelist = _load_whitelist()
     last_press = 0.0

@@ -399,7 +399,7 @@ def main():
     lcd.LCD_Clear()
     font = scaled_font()
 
-    selected = select_interface(lcd, font, PINS, GPIO, iface_type="eth")
+    selected = select_interface(lcd, font, PINS, GPIO, iface_type="any")
     if selected is None:
         GPIO.cleanup()
         return 0
