@@ -310,14 +310,31 @@ def run_install_script():
     if not os.path.isfile(INSTALL_SCRIPT):
         return True, "no script"
 
+    # Detect current display type to auto-answer the interactive prompt
+    display_choice = "1"  # default ST7735_128
+    try:
+        with open(os.path.join(RASPYJACK_DIR, "gui_conf.json"), "r") as f:
+            cfg = json.load(f)
+        if cfg.get("DISPLAY", {}).get("type") == "ST7789_240":
+            display_choice = "2"
+    except Exception:
+        pass
+
     try:
         proc = subprocess.Popen(
             ["bash", INSTALL_SCRIPT],
             cwd=RASPYJACK_DIR,
+            stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
         )
+        # Send display choice to satisfy the interactive read prompt
+        try:
+            proc.stdin.write(display_choice + "\n")
+            proc.stdin.flush()
+        except Exception:
+            pass
         line_count = 0
         last_line = ""
         while True:
