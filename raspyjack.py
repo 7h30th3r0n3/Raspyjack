@@ -3730,6 +3730,9 @@ def exec_payload(filename: str, *args) -> None:
     finally:
         draw_lock.release()
 
+    # refresh favorites in main menu (user may have changed them)
+    m._inject_favorites()
+
     # rebuild the current menu image (respect current view mode)
     RenderCurrentMenuOnce()
     _mark_user_activity()
@@ -3868,6 +3871,42 @@ class DisposableMenu:
                 if label == x:
                     return i
         return -1
+    # Favoris injection into main menu ----------------------------------------
+    _fav_labels = set()  # track injected favorite labels for cleanup
+
+    def _inject_favorites(self):
+        """Read favorites.json and inject payloads into main menu 'a' with their original icon."""
+        fav_file = "/root/Raspyjack/loot/Favorites/favorites.json"
+        try:
+            with open(fav_file, "r") as f:
+                favs = json.load(f).get("favorites", [])
+        except Exception:
+            favs = []
+
+        # Remove old favorites from menu
+        base_menu = [item for item in self.menu["a"] if item[0] not in self._fav_labels]
+        self._fav_labels.clear()
+
+        if not favs:
+            self.menu["a"] = tuple(base_menu)
+            return
+
+        # Build favorite entries using same label format as payload menu: " name"
+        # This way MENU_ICONS[" name"] matches and the correct icon is displayed
+        fav_entries = []
+        for fav_path in sorted(favs):
+            name = os.path.splitext(os.path.basename(fav_path))[0]
+            label = f" {name}"  # same format as payload menu
+            self._fav_labels.add(label)
+            fav_entries.append([label, partial(exec_payload, fav_path)])
+
+        if fav_entries:
+            menu_list = list(base_menu)
+            insert_idx = len(menu_list) - 1  # before Lock
+            for i, entry in enumerate(fav_entries):
+                menu_list.insert(insert_idx + i, entry)
+            self.menu["a"] = tuple(menu_list)
+
     # Génération à chaud du sous-menu Payload -------------------------------
     def _build_payload_menu(self):
         """Crée (ou rafraîchit) le menu 'ap' par catégories."""
@@ -3985,6 +4024,7 @@ class DisposableMenu:
         # cette fois, `default` est déjà instancié → pas d'erreur
         self.menu_parent = {}
         self._build_payload_menu()
+        self._inject_favorites()
 
 
 ### Font Awesome Icon Mapping ###
