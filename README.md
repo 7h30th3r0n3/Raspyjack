@@ -332,7 +332,7 @@ Raspyjack/
 ├── payloads/
 │   ├── _display_helper.py # ScaledDraw + scaled_font
 │   ├── _input_helper.py   # GPIO + WebUI input
-│   ├── reconnaissance/    # Nmap, Shodan, OSINT, AP/client stats, flock detection, Norse recon suite, pwnagotchi
+│   ├── reconnaissance/    # Nmap, Shodan, OSINT, AP/client stats, flock detection, Norse recon suite, pwnagotchi, Gobuster
 │   ├── wifi/              # Deauth, evil twin, CIW Zeroclick (SSID injection), beacon flood, BLE spam, pwnagotchi
 │   ├── network/           # ARP MITM, DNS spoof, handshake hunter with auto-upload, WPA cracking
 │   ├── credentials/       # Responder, credential capture, hash harvesting
