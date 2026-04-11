@@ -124,13 +124,14 @@ class WiFiLCDInterface:
         d.line([(0, 13), (127, 13)], fill="blue", width=1)
 
     def draw_status_bar(self):
-        """Draw connection status at bottom."""
+        """Draw connection status + active interface at bottom."""
+        iface = self.wifi_manager.get_active_interface() or "?"
         status = self.wifi_manager.get_connection_status()
         if status["status"] == "connected":
-            status_text = f"~ {status['ssid'][:12]}"
+            status_text = f"{iface}:{status['ssid'][:10]}"
             color = "green"
         else:
-            status_text = "~ Disconnected"
+            status_text = f"{iface}:disconnected"
             color = "red"
 
         self.draw.text((2, 117), status_text, fill=color, font=self.font)
@@ -140,26 +141,27 @@ class WiFiLCDInterface:
         self.draw_header("WiFi Manager")
         d = self.draw
 
-        menu_icons = ["\uf002", "\uf0c7", "\uf0e8", "\uf085", "\uf05a", "\uf2f5"]
+        menu_icons = ["\uf002", "\uf0c7", "\uf0e8", "\uf127", "\uf085", "\uf05a", "\uf2f5"]
         menu_labels = [
             "Scan Networks",
             "Saved Profiles",
             "Quick Connect",
+            "Disconnect",
             "Interface Config",
             "Status & Info",
             "Exit"
         ]
 
-        y_pos = 18
+        y_pos = 17
         for i, label in enumerate(menu_labels):
             if i == self.menu_index:
-                d.rectangle((0, y_pos - 2, 127, y_pos + 12), fill="blue")
+                d.rectangle((0, y_pos - 1, 127, y_pos + 11), fill="blue")
 
             d.text((4, y_pos), menu_icons[i], fill="white", font=self.icon_font)
             d.text((18, y_pos), label[:14], fill="white", font=self.font)
-            y_pos += 14
+            y_pos += 13
 
-        d.text((2, 104), "U/D Nav  OK Select", fill="cyan", font=self.font)
+        d.text((2, 108), "U/D Nav  OK Select", fill="cyan", font=self.font)
         self.draw_status_bar()
 
     def draw_network_scan(self):
@@ -226,21 +228,31 @@ class WiFiLCDInterface:
         d = self.draw
 
         interfaces = ["eth0"] + self.wifi_manager.wifi_interfaces
-        current_interface = self.wifi_manager.get_interface_for_tool()
+        active_iface = self.wifi_manager.get_active_interface()
 
         y_pos = 18
-        d.text((4, y_pos), "Default Interface:", fill="yellow", font=self.font)
+        d.text((4, y_pos), "Active Interface:", fill="yellow", font=self.font)
         y_pos += 16
 
         for i, interface in enumerate(interfaces):
             if i == self.menu_index:
                 d.rectangle((0, y_pos - 2, 127, y_pos + 12), fill="blue")
 
-            marker = ">" if interface == current_interface else " "
-            d.text((4, y_pos), f"{marker} {interface}", fill="white", font=self.font)
+            # Show active marker and connection status
+            marker = "*" if interface == active_iface else " "
+            # Check if this specific interface is connected
+            st = self.wifi_manager.get_connection_status(interface)
+            if st["status"] == "connected":
+                info = f" ({st['ssid'][:8]})"
+                color = "green" if i == self.menu_index else "#00AA00"
+            else:
+                info = ""
+                color = "white"
+
+            d.text((4, y_pos), f"{marker} {interface}{info}", fill=color, font=self.font)
             y_pos += 14
 
-        d.text((2, 104), "OK Select  KEY3:Back", fill="cyan", font=self.font)
+        d.text((2, 104), "OK:Select  KEY3:Back", fill="cyan", font=self.font)
         self.draw_status_bar()
 
     def draw_status_info(self):
@@ -306,9 +318,9 @@ class WiFiLCDInterface:
     def handle_main_menu(self, button):
         """Handle main menu button presses."""
         if button == "UP":
-            self.menu_index = (self.menu_index - 1) % 6
+            self.menu_index = (self.menu_index - 1) % 7
         elif button == "DOWN":
-            self.menu_index = (self.menu_index + 1) % 6
+            self.menu_index = (self.menu_index + 1) % 7
         elif button == "CENTER":
             if self.menu_index == 0:  # Scan Networks
                 self.current_menu = "scan"
@@ -319,12 +331,14 @@ class WiFiLCDInterface:
                 self.menu_index = 0
             elif self.menu_index == 2:  # Quick Connect
                 self.quick_connect()
-            elif self.menu_index == 3:  # Interface Config
+            elif self.menu_index == 3:  # Disconnect
+                self.do_disconnect()
+            elif self.menu_index == 4:  # Interface Config
                 self.current_menu = "interface"
                 self.menu_index = 0
-            elif self.menu_index == 4:  # Status
+            elif self.menu_index == 5:  # Status
                 self.current_menu = "status"
-            elif self.menu_index == 5:  # Exit
+            elif self.menu_index == 6:  # Exit
                 self.running = False
 
     def handle_scan_menu(self, button):
@@ -371,7 +385,10 @@ class WiFiLCDInterface:
             self.menu_index = (self.menu_index + 1) % len(interfaces)
         elif button == "CENTER":
             selected_interface = interfaces[self.menu_index]
-            self.show_message(f"Selected: {selected_interface}")
+            self.wifi_manager.set_selected_interface(selected_interface)
+            self.show_message(f"Active: {selected_interface}")
+            # Rescan on new interface
+            self.refresh_data()
         elif button == "KEY3":
             self.current_menu = "main"
             self.menu_index = 0
@@ -407,6 +424,19 @@ class WiFiLCDInterface:
                 self.show_message("Connection failed")
         elif button == "KEY3":  # Cancel
             self.current_menu = "scan"
+
+    def do_disconnect(self):
+        """Disconnect the active interface from WiFi."""
+        iface = self.wifi_manager.get_active_interface()
+        if not iface:
+            self.show_message("No interface")
+            return
+        self.show_message(f"Disconnecting {iface}...")
+        success = self.wifi_manager.disconnect(iface)
+        if success:
+            self.show_message(f"{iface} disconnected")
+        else:
+            self.show_message("Disconnect failed")
 
     def quick_connect(self):
         """Quick connect to best available network."""

@@ -66,6 +66,7 @@ SYSTEM_WORDLIST = "/usr/share/john/password.lst"
 HANDSHAKE_DIRS = [
     "/root/Raspyjack/loot/Handshakes",
     "/root/Raspyjack/loot/Pwnagotchi/handshakes",
+    "/root/Raspyjack/loot/ESPNow/handshakes",
 ]
 PMKID_DIR = "/root/Raspyjack/loot/PMKID"
 LOOT_DIR = "/root/Raspyjack/loot/CrackedWPA"
@@ -80,9 +81,11 @@ target_files = []       # [{path, name, ftype, size_kb}]
 wordlists = []          # [{name, path}] built dynamically
 scroll_pos = 0
 selected_idx = 0
-phase = "files"         # files | wordlist | cracking | results
+phase = "files"         # files | network_select | wordlist | cracking | results
 wl_idx = 0
 status_msg = "Scanning for targets..."
+cap_networks = []       # networks found in selected pcap
+selected_bssid = None   # BSSID to crack (None = auto/single)
 keys_tested = 0
 speed_kps = ""
 elapsed_secs = 0
@@ -120,13 +123,20 @@ def _scan_targets():
                 low = fname.lower()
                 if low.endswith(".cap") or low.endswith(".pcap"):
                     if fpath not in seen:
+                        # Skip empty pcaps (header-only, 24 bytes)
+                        try:
+                            fsize = os.path.getsize(fpath)
+                        except Exception:
+                            fsize = 0
+                        if fsize <= 24:
+                            continue
                         seen.add(fpath)
                         ftype = "PMKID" if fname.startswith("pmkid_") else "CAP"
                         found.append({
                             "path": fpath,
                             "name": fname,
                             "ftype": ftype,
-                            "size_kb": _file_size_kb(fpath),
+                            "size_kb": fsize // 1024,
                         })
         except Exception:
             pass
@@ -218,7 +228,38 @@ def _extract_essid_from_filename(fname):
     return ""
 
 
-def _crack_cap_thread(capfile, wordlist_path):
+def _list_networks_in_cap(capfile):
+    """List networks with valid handshakes in a pcap using aircrack-ng.
+
+    Returns list of {"bssid": ..., "essid": ..., "enc": ..., "hs_count": ...}.
+    Only includes networks with at least 1 handshake.
+    """
+    networks = []
+    try:
+        proc = subprocess.run(
+            [AIRCRACK_BIN, capfile],
+            capture_output=True, text=True, timeout=15,
+            input="q\n",
+        )
+        # Parse aircrack-ng network listing lines
+        net_re = re.compile(
+            r"^\s*\d+\s+([0-9A-Fa-f:]{17})\s+(.+?)\s+(WPA|WEP|OPN)\s+\((\d+)\s+handshake",
+        )
+        for line in proc.stdout.splitlines():
+            m = net_re.match(line)
+            if m and int(m.group(4)) > 0:
+                networks.append({
+                    "bssid": m.group(1),
+                    "essid": m.group(2).strip(),
+                    "enc": m.group(3),
+                    "hs_count": int(m.group(4)),
+                })
+    except Exception:
+        pass
+    return networks
+
+
+def _crack_cap_thread(capfile, wordlist_path, bssid=None):
     """Crack a .cap handshake file using aircrack-ng."""
     global _crack_proc, keys_tested, speed_kps, elapsed_secs
     global found_key, phase, status_msg, _running
@@ -231,9 +272,10 @@ def _crack_cap_thread(capfile, wordlist_path):
         found_key = ""
         status_msg = "Starting aircrack-ng..."
 
-    # Try without -e first (beacon in pcap provides ESSID)
-    # Only use -e as fallback for old captures without beacon
-    cmd = [AIRCRACK_BIN, "-w", wordlist_path, capfile]
+    cmd = [AIRCRACK_BIN, "-w", wordlist_path]
+    if bssid:
+        cmd += ["-b", bssid]
+    cmd.append(capfile)
 
     try:
         proc = subprocess.Popen(
@@ -533,6 +575,37 @@ def _draw_files_view():
 
 
 # ---------------------------------------------------------------------------
+# View: network selection (multi-network pcaps)
+# ---------------------------------------------------------------------------
+
+def _draw_network_select_view():
+    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+    d = ScaledDraw(img)
+    _draw_header(d, "SELECT NETWORK")
+
+    with lock:
+        nets = list(cap_networks)
+        sc = scroll_pos
+        sel = selected_idx
+
+    d.text((2, 16), f"{len(nets)} networks in pcap", font=font, fill="#888")
+
+    visible = nets[sc:sc + ROWS_VISIBLE]
+    for i, net in enumerate(visible):
+        y = 30 + i * ROW_H
+        idx = sc + i
+        prefix = ">" if idx == sel else " "
+        color = "#00FF00" if idx == sel else "#CCCCCC"
+        essid = net["essid"][:12] or "Hidden"
+        hs = net["hs_count"]
+        d.text((2, y), f"{prefix}{essid}", font=font, fill=color)
+        d.text((90, y), f"{hs}hs", font=font, fill="#FFAA00")
+
+    _draw_footer(d, "OK:Select K3:Back")
+    LCD.LCD_ShowImage(img, 0, 0)
+
+
+# ---------------------------------------------------------------------------
 # View: wordlist selection
 # ---------------------------------------------------------------------------
 
@@ -669,6 +742,13 @@ def main():
                         selected_idx = 0
                     time.sleep(0.25)
                     continue
+                if phase == "network_select":
+                    phase = "files"
+                    with lock:
+                        scroll_pos = 0
+                        selected_idx = 0
+                    time.sleep(0.25)
+                    continue
                 # Exit
                 break
 
@@ -680,6 +760,30 @@ def main():
                             selected_target = dict(target_files[selected_idx])
                             wl_idx = selected_idx
                     if selected_target:
+                        # Check how many networks are in this pcap
+                        if selected_target["ftype"] == "CAP":
+                            with lock:
+                                status_msg = "Analyzing pcap..."
+                            _draw_files_view()
+                            nets = _list_networks_in_cap(selected_target["path"])
+                            with lock:
+                                cap_networks = nets
+                                selected_bssid = None
+                            if len(nets) == 0:
+                                with lock:
+                                    status_msg = "No valid handshake!"
+                                time.sleep(1.5)
+                                continue
+                            if len(nets) > 1:
+                                phase = "network_select"
+                                with lock:
+                                    selected_idx = 0
+                                    scroll_pos = 0
+                                time.sleep(0.3)
+                                continue
+                            elif len(nets) == 1:
+                                with lock:
+                                    selected_bssid = nets[0]["bssid"]
                         phase = "wordlist"
                         with lock:
                             selected_idx = 0
@@ -704,6 +808,36 @@ def main():
 
                 _draw_files_view()
 
+            # --- Network selection (multi-network pcaps) ---
+            elif phase == "network_select":
+                if btn == "OK" and cap_networks:
+                    with lock:
+                        if 0 <= selected_idx < len(cap_networks):
+                            selected_bssid = cap_networks[selected_idx]["bssid"]
+                    phase = "wordlist"
+                    with lock:
+                        selected_idx = 0
+                        scroll_pos = 0
+                    time.sleep(0.3)
+
+                elif btn == "UP":
+                    selected_idx = max(0, selected_idx - 1)
+                    if selected_idx < scroll_pos:
+                        with lock:
+                            scroll_pos = selected_idx
+                    time.sleep(0.15)
+
+                elif btn == "DOWN":
+                    with lock:
+                        total = len(cap_networks)
+                    selected_idx = min(selected_idx + 1, max(0, total - 1))
+                    if selected_idx >= scroll_pos + ROWS_VISIBLE:
+                        with lock:
+                            scroll_pos = selected_idx - ROWS_VISIBLE + 1
+                    time.sleep(0.15)
+
+                _draw_network_select_view()
+
             # --- Wordlist selection ---
             elif phase == "wordlist":
                 if btn == "OK" and selected_target:
@@ -716,7 +850,7 @@ def main():
                     if selected_target["ftype"] == "CAP":
                         threading.Thread(
                             target=_crack_cap_thread,
-                            args=(selected_target["path"], wl_entry["path"]),
+                            args=(selected_target["path"], wl_entry["path"], selected_bssid),
                             daemon=True,
                         ).start()
                     else:
