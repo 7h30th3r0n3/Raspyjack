@@ -346,7 +346,8 @@
                 " GPS_Doctor": "",
                 " video_player": "",
                 " raspygotchi": "",
-                " espnow_evil_master": "📡"
+                " espnow_evil_master": "📡",
+                " unitree_pwn": "🤖"
         },
         "fallbacks": {
                 "__scan__": "",
