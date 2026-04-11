@@ -3925,11 +3925,28 @@ class DisposableMenu:
         # Build favorite entries using same label format as payload menu: " name"
         # This way MENU_ICONS[" name"] matches and the correct icon is displayed
         fav_entries = []
+        stale = []
         for fav_path in sorted(favs):
+            # Validate that the payload file still exists on disk
+            full = os.path.join(default.payload_path, fav_path)
+            if not full.endswith(".py"):
+                full += ".py"
+            if not os.path.isfile(full):
+                stale.append(fav_path)
+                continue
             name = os.path.splitext(os.path.basename(fav_path))[0]
             label = f" {name}"  # same format as payload menu
             self._fav_labels.add(label)
             fav_entries.append([label, partial(exec_payload, fav_path)])
+
+        # Auto-clean stale favorites (renamed/deleted payloads)
+        if stale:
+            cleaned = [f for f in favs if f not in stale]
+            try:
+                with open(fav_file, "w") as f:
+                    json.dump({"favorites": sorted(cleaned)}, f, indent=2)
+            except Exception:
+                pass
 
         if fav_entries:
             menu_list = list(base_menu)

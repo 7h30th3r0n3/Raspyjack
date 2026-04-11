@@ -195,7 +195,11 @@ def _draw_favs_only(lcd, font, all_favs, favorites_set, cursor, scroll):
         y = 16 + i * ROW_H
         idx = scroll + i
         prefix = ">" if idx == cursor else " "
-        color = "#00FF00" if idx == cursor else "#FFAA00"
+        is_orphan = item.get("orphan", False)
+        if is_orphan:
+            color = "#FF4444" if idx == cursor else "#883333"
+        else:
+            color = "#00FF00" if idx == cursor else "#FFAA00"
         cat_short = item["category"][:4]
         d.text((2, y), f"{prefix}*{item['name'][:14]}", font=font, fill=color)
         d.text((105, y), cat_short, font=font, fill="#555")
@@ -248,10 +252,23 @@ def main():
 
     def _build_favs_list():
         result = []
+        matched_keys = set()
         for cat in CATEGORY_ORDER:
             for item in categories.get(cat, []):
                 if item["key"] in favorites:
                     result.append(dict(item, category=cat))
+                    matched_keys.add(item["key"])
+        # Include orphaned favorites (renamed/deleted payloads) so user can remove them
+        for key in sorted(favorites - matched_keys):
+            name = os.path.splitext(os.path.basename(key))[0]
+            cat = key.split("/")[0] if "/" in key else "?"
+            result.append({
+                "name": f"{name} (gone)",
+                "path": "",
+                "key": key,
+                "category": cat,
+                "orphan": True,
+            })
         return result
 
     try:
@@ -355,7 +372,7 @@ def main():
                     _save_favorites(favorites)
                     cursor = min(cursor, max(0, len(fav_list) - 2))
                     time.sleep(0.2)
-                elif btn == "OK" and fav_list and cursor < len(fav_list):
+                elif btn == "OK" and fav_list and cursor < len(fav_list) and not fav_list[cursor].get("orphan"):
                     _draw_confirm(lcd, font, fav_list[cursor]["name"])
                     time.sleep(0.1)
                     while _running:

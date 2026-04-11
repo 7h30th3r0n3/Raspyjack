@@ -95,66 +95,70 @@ class WiFiManager:
         return interfaces
     
     def scan_networks(self, interface=None):
-        """Scan for available WiFi networks."""
+        """Scan for available WiFi networks using nmcli (same tool as connect)."""
         if not interface:
             interface = self.wifi_interfaces[0] if self.wifi_interfaces else None
-        
+
         if not interface:
             self.log("No WiFi interface available for scanning")
             return []
-        
+
         try:
             self.log(f"Scanning networks on {interface}...")
-            
-            # Bring interface up if needed
-            subprocess.run(['ip', 'link', 'set', interface, 'up'], 
-                         capture_output=True, check=False)
-            
-            # Scan for networks
-            result = subprocess.run(['iwlist', interface, 'scan'], 
-                                  capture_output=True, text=True, check=False)
-            
+
+            # Trigger a fresh scan on the interface
+            subprocess.run(['nmcli', 'device', 'wifi', 'rescan', 'ifname', interface],
+                         capture_output=True, check=False, timeout=15)
+            time.sleep(2)  # give nmcli time to populate results
+
+            # List networks using nmcli (ensures they are in nmcli's cache for connect)
+            result = subprocess.run(
+                ['nmcli', '-t', '-f', 'BSSID,SSID,SIGNAL,SECURITY', 'device', 'wifi', 'list',
+                 'ifname', interface],
+                capture_output=True, text=True, check=False, timeout=15,
+            )
+
             networks = []
-            current_network = {}
-            
-            for line in result.stdout.split('\n'):
-                line = line.strip()
-                
-                if 'Cell' in line and 'Address:' in line:
-                    if current_network:
-                        networks.append(current_network)
-                    current_network = {'bssid': line.split('Address: ')[1]}
-                
-                elif 'ESSID:' in line:
-                    essid = line.split('ESSID:')[1].strip('"')
-                    if essid and essid != '\\x00':
-                        current_network['ssid'] = essid
-                
-                elif 'Quality=' in line:
-                    try:
-                        quality = line.split('Quality=')[1].split()[0]
-                        current_network['quality'] = quality
-                    except:
-                        pass
-                
-                elif 'Encryption key:' in line:
-                    current_network['encrypted'] = 'on' in line
-            
-            if current_network:
-                networks.append(current_network)
-            
-            # Filter out empty SSIDs and duplicates
-            unique_networks = []
             seen_ssids = set()
-            
-            for network in networks:
-                if 'ssid' in network and network['ssid'] not in seen_ssids:
-                    seen_ssids.add(network['ssid'])
-                    unique_networks.append(network)
-            
-            self.log(f"Found {len(unique_networks)} unique networks")
-            return unique_networks
-            
+
+            for line in result.stdout.strip().split('\n'):
+                if not line.strip():
+                    continue
+                # nmcli -t uses ':' as separator; BSSID contains '\:'
+                # Replace escaped colons in BSSID first
+                parts = line.replace('\\:', '#').split(':')
+                if len(parts) < 4:
+                    continue
+                bssid = parts[0].replace('#', ':')
+                ssid = parts[1].replace('#', ':')
+                try:
+                    signal = int(parts[2])
+                except ValueError:
+                    signal = 0
+                security = parts[3].replace('#', ':') if len(parts) > 3 else ""
+
+                if not ssid or ssid in seen_ssids:
+                    continue
+                seen_ssids.add(ssid)
+
+                encrypted = bool(security and security != "" and security != "--")
+                quality = f"{signal}/100"
+
+                networks.append({
+                    'bssid': bssid,
+                    'ssid': ssid,
+                    'quality': quality,
+                    'signal': signal,
+                    'encrypted': encrypted,
+                    'security': security,
+                })
+
+            # Sort by signal strength (strongest first)
+            networks.sort(key=lambda n: n.get('signal', 0), reverse=True)
+
+            self.log(f"Found {len(networks)} unique networks")
+            return networks
+
         except Exception as e:
             self.log(f"Error scanning networks: {e}")
             return []
@@ -224,43 +228,55 @@ class WiFiManager:
         """Connect to a WiFi network."""
         if not interface:
             interface = self.wifi_interfaces[0] if self.wifi_interfaces else None
-        
+
         if not interface:
             self.log("No WiFi interface available")
             return False
-        
+
         self.log(f"Connecting to {ssid} on {interface}...")
-        
+
         try:
-            # Disconnect from current network
-            subprocess.run(['nmcli', 'device', 'disconnect', interface], 
-                         capture_output=True, check=False)
-            
-            # Connect to network
+            # Check if already connected to this SSID
+            status = self.get_connection_status(interface)
+            if status["status"] == "connected" and status.get("ssid") == ssid:
+                self.log(f"Already connected to {ssid}")
+                return True
+
+            # Ensure nmcli has the network in its cache
+            subprocess.run(['nmcli', 'device', 'wifi', 'rescan', 'ifname', interface],
+                         capture_output=True, check=False, timeout=10)
+            time.sleep(1)
+
+            # Build connect command - nmcli handles disconnect/reconnect internally
             if password:
-                cmd = ['nmcli', 'device', 'wifi', 'connect', ssid, 'password', password, 'ifname', interface]
+                cmd = ['nmcli', 'device', 'wifi', 'connect', ssid,
+                       'password', password, 'ifname', interface]
             else:
-                cmd = ['nmcli', 'device', 'wifi', 'connect', ssid, 'ifname', interface]
-            
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-            
+                cmd = ['nmcli', 'device', 'wifi', 'connect', ssid,
+                       'ifname', interface]
+
+            self.log(f"Running: nmcli device wifi connect {ssid} ifname {interface}")
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=45)
+
             if result.returncode == 0:
                 self.log(f"Successfully connected to {ssid}")
                 self.current_interface = interface
                 self.current_profile = ssid
                 self.connection_status = "connected"
-                
-                # Update profile last_used
+
                 self.update_profile_last_used(ssid)
-                
-                # Save current connection
                 self.save_current_connection(ssid, interface)
-                
                 return True
             else:
-                self.log(f"Failed to connect to {ssid}: {result.stderr}")
+                err = result.stderr.strip() or result.stdout.strip()
+                self.log(f"Failed to connect to {ssid}: {err}")
+
+                # If key-mgmt missing, the network needs a password but none given
+                if "key-mgmt" in err and not password:
+                    self.log(f"Network {ssid} requires a password")
+
                 return False
-                
+
         except subprocess.TimeoutExpired:
             self.log(f"Connection to {ssid} timed out")
             return False
