@@ -216,7 +216,7 @@ class CounterState:
 
 
 state = CounterState()
-state_lock = threading.Lock()
+state_lock = threading.RLock()
 running = True
 
 

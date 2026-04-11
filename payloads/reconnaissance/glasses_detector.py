@@ -197,7 +197,7 @@ class GlassesState:
 
 
 state = GlassesState()
-state_lock = threading.Lock()
+state_lock = threading.RLock()
 running = True
 
 
@@ -220,30 +220,22 @@ class ScannerWorker:
             self.thread.join(timeout=3.0)
 
     def _run(self) -> None:
+        # Try bleak first (preferred, async)
         if BleakScanner is not None:
             with state_lock:
                 state.scanner_backend = "bleak"
                 state.scanner_health = "running"
             try:
-                asyncio.run(self._run_bleak())
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(self._run_bleak())
                 return
             except Exception as exc:
                 with state_lock:
-                    state.last_error = f"Bleak: {exc}"
+                    state.last_error = f"Bleak: {str(exc)[:30]}"
                     state.scanner_health = "degraded"
 
-        if BluepyScanner is not None:
-            with state_lock:
-                state.scanner_backend = "bluepy"
-                state.scanner_health = "running"
-            try:
-                self._run_bluepy()
-                return
-            except Exception as exc:
-                with state_lock:
-                    state.last_error = f"Bluepy: {exc}"
-                    state.scanner_health = "degraded"
-
+        # Fallback to bluetoothctl (always available, no library needed)
         with state_lock:
             state.scanner_backend = "bluetoothctl"
             state.scanner_health = "running"
@@ -732,6 +724,10 @@ def main():
         ui.lcd.LCD_ShowImage(img, 0, 0)
         time.sleep(1.5)
 
+    # Ensure BT adapter is up
+    subprocess.run(["hciconfig", "hci0", "up"], capture_output=True, timeout=5)
+    time.sleep(0.5)
+
     # Start scanner
     scanner = ScannerWorker()
     scanner.start()
@@ -744,8 +740,8 @@ def main():
                     brand = state.alert_brand
                     distance = state.alert_distance
                     state.alert_pending = False
-            else:
-                brand = None
+                else:
+                    brand = None
 
             if brand:
                 ui.flash_alert(brand, distance)
