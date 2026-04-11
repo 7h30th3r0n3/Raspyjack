@@ -347,7 +347,9 @@
                 " video_player": "",
                 " raspygotchi": "",
                 " espnow_evil_master": "📡",
-                " unitree_pwn": "🤖"
+                " unitree_pwn": "🤖",
+                " glasses_detector": "👓",
+                " glasses_counter": "👓"
         },
         "fallbacks": {
                 "__scan__": "",
