@@ -71,17 +71,43 @@ def _run(cmd):
     return subprocess.run(cmd, capture_output=True, text=True)
 
 
+PROFILES_DIR = "/root/Raspyjack/wifi/profiles"
+
+
 def _get_saved_wifi():
+    """Get saved WiFi networks from both nmcli and RaspyJack JSON profiles."""
+    saved = {}  # ssid -> password (None if nmcli-only)
+
+    # 1. nmcli saved connections (already known to NetworkManager)
     res = _run(["nmcli", "-t", "-f", "NAME,TYPE", "connection", "show"])
-    if res.returncode != 0:
-        return []
-    saved = []
-    for line in res.stdout.strip().splitlines():
-        if not line:
-            continue
-        name, ctype = line.split(":", 1)
-        if ctype in ("wifi", "802-11-wireless") and name:
-            saved.append(name)
+    if res.returncode == 0:
+        for line in res.stdout.strip().splitlines():
+            if not line:
+                continue
+            name, ctype = line.split(":", 1)
+            if ctype in ("wifi", "802-11-wireless") and name:
+                saved[name] = None  # nmcli knows the password
+
+    # 2. RaspyJack WiFi Manager JSON profiles (may have password nmcli doesn't)
+    try:
+        import json
+        for fname in os.listdir(PROFILES_DIR):
+            if not fname.endswith(".json"):
+                continue
+            try:
+                with open(os.path.join(PROFILES_DIR, fname), "r") as f:
+                    profile = json.load(f)
+                ssid = profile.get("ssid", "")
+                password = profile.get("password", "")
+                if ssid and ssid not in saved:
+                    saved[ssid] = password
+                elif ssid and password and saved.get(ssid) is None:
+                    saved[ssid] = password  # enrich nmcli entry with password
+            except Exception:
+                continue
+    except Exception:
+        pass
+
     return saved
 
 
@@ -121,6 +147,29 @@ def _get_wifi_device():
         if dtype == "wifi" and state in ("connected", "connecting", "disconnected"):
             return dev
     return None
+
+
+def _select_wifi_iface():
+    """Let the user pick a WiFi interface on LCD, or auto-select if only one."""
+    if not LCD_OK:
+        return _get_wifi_device()
+    try:
+        import RPi.GPIO as GPIO
+        from payloads._iface_helper import select_interface
+        from payloads._input_helper import get_button
+
+        PINS = {
+            "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
+            "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16,
+        }
+        GPIO.setmode(GPIO.BCM)
+        for p in PINS.values():
+            GPIO.setup(p, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+        iface = select_interface(LCD, font, PINS, GPIO, iface_type="wifi",
+                                 title="CONNECT IFACE")
+        return iface
+    except Exception:
+        return _get_wifi_device()
 
 
 def _discover_hosts(iface, local_ip):
@@ -173,12 +222,24 @@ def _discover_hosts(iface, local_ip):
 
 def main():
     _init_lcd()
-    _show(["Quick WiFi", "Scanning...", "", "Please wait"], progress=0.10)
+
+    # Interface selection
+    dev = _select_wifi_iface()
+    if not dev:
+        _show(["No interface", "selected", "", "Exiting"], progress=1.0)
+        time.sleep(0.8)
+        return 1
+
+    _show(["Quick WiFi", f"Using: {dev}", "Scanning...", "Please wait"], progress=0.10)
     saved = _get_saved_wifi()
     if not saved:
         _show(["No saved WiFi", "Use WiFi Manager", "", "Exiting"], progress=1.0)
         time.sleep(0.8)
         return 1
+
+    # Rescan on selected interface
+    _run(["nmcli", "device", "wifi", "rescan", "ifname", dev])
+    time.sleep(2)
 
     nets = _scan_wifi()
     candidates = [n for n in nets if n["ssid"] in saved]
@@ -188,18 +249,23 @@ def main():
         return 1
 
     best = sorted(candidates, key=lambda x: x["signal"], reverse=True)[0]
+    ssid = best["ssid"]
+    password = saved.get(ssid)
     _show(
-        ["SSID:", best["ssid"][:16], f"Signal: {best['signal']}", "Connecting..."],
+        ["SSID:", ssid[:16], f"Signal: {best['signal']}", "Connecting..."],
         progress=0.55,
     )
 
-    res = _run(["nmcli", "dev", "wifi", "connect", best["ssid"]])
+    # Build nmcli command with password if available
+    cmd = ["nmcli", "dev", "wifi", "connect", ssid, "ifname", dev]
+    if password:
+        cmd += ["password", password]
+
+    res = _run(cmd)
     if res.returncode != 0:
-        _show(["Connect failed", best["ssid"][:16], "Use WiFi Manager", ""], progress=1.0)
+        _show(["Connect failed", ssid[:16], "Use WiFi Manager", ""], progress=1.0)
         time.sleep(0.8)
         return 1
-
-    dev = _get_wifi_device() or "wlan0"
     _show(
         ["Connected", best["ssid"][:16], f"Interface: {dev}", "Getting IP..."],
         progress=0.80,
