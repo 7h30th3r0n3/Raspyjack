@@ -1,0 +1,997 @@
+[
+  {
+    "route": "/",
+    "methods": [
+      "GET"
+    ],
+    "handler": "index"
+  },
+  {
+    "route": "/<path:filename>",
+    "methods": [
+      "GET"
+    ],
+    "handler": "serve_static"
+  },
+  {
+    "route": "/api/actions",
+    "methods": [
+      "GET"
+    ],
+    "handler": "get_actions"
+  },
+  {
+    "route": "/api/ai/clear-cache",
+    "methods": [
+      "POST"
+    ],
+    "handler": "clear_ai_cache"
+  },
+  {
+    "route": "/api/ai/insights",
+    "methods": [
+      "GET"
+    ],
+    "handler": "get_ai_insights"
+  },
+  {
+    "route": "/api/ai/network-summary",
+    "methods": [
+      "GET"
+    ],
+    "handler": "get_ai_network_summary"
+  },
+  {
+    "route": "/api/ai/status",
+    "methods": [
+      "GET"
+    ],
+    "handler": "get_ai_status"
+  },
+  {
+    "route": "/api/ai/token",
+    "methods": [
+      "GET"
+    ],
+    "handler": "get_ai_token"
+  },
+  {
+    "route": "/api/ai/token",
+    "methods": [
+      "POST"
+    ],
+    "handler": "save_ai_token"
+  },
+  {
+    "route": "/api/ai/token",
+    "methods": [
+      "DELETE"
+    ],
+    "handler": "remove_ai_token"
+  },
+  {
+    "route": "/api/ai/vulnerabilities",
+    "methods": [
+      "GET"
+    ],
+    "handler": "get_ai_vulnerability_analysis"
+  },
+  {
+    "route": "/api/ai/weaknesses",
+    "methods": [
+      "GET"
+    ],
+    "handler": "get_ai_weakness_analysis"
+  },
+  {
+    "route": "/api/attack",
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "handler": "attack_logs"
+  },
+  {
+    "route": "/api/automation/orchestrator/start",
+    "methods": [
+      "POST"
+    ],
+    "handler": "start_orchestrator_automation"
+  },
+  {
+    "route": "/api/automation/orchestrator/stop",
+    "methods": [
+      "POST"
+    ],
+    "handler": "stop_orchestrator_automation"
+  },
+  {
+    "route": "/api/bluetooth/devices",
+    "methods": [
+      "GET"
+    ],
+    "handler": "get_bluetooth_devices"
+  },
+  {
+    "route": "/api/bluetooth/diagnose",
+    "methods": [
+      "GET"
+    ],
+    "handler": "diagnose_bluetooth"
+  },
+  {
+    "route": "/api/bluetooth/disable",
+    "methods": [
+      "POST"
+    ],
+    "handler": "disable_bluetooth"
+  },
+  {
+    "route": "/api/bluetooth/discoverable/off",
+    "methods": [
+      "POST"
+    ],
+    "handler": "hide_bluetooth_device"
+  },
+  {
+    "route": "/api/bluetooth/discoverable/on",
+    "methods": [
+      "POST"
+    ],
+    "handler": "make_bluetooth_discoverable"
+  },
+  {
+    "route": "/api/bluetooth/enable",
+    "methods": [
+      "POST"
+    ],
+    "handler": "enable_bluetooth"
+  },
+  {
+    "route": "/api/bluetooth/enumerate",
+    "methods": [
+      "POST"
+    ],
+    "handler": "enumerate_bluetooth_services"
+  },
+  {
+    "route": "/api/bluetooth/pair",
+    "methods": [
+      "POST"
+    ],
+    "handler": "pair_bluetooth_device"
+  },
+  {
+    "route": "/api/bluetooth/pentest/beacon-track",
+    "methods": [
+      "POST"
+    ],
+    "handler": "pentest_beacon_track"
+  },
+  {
+    "route": "/api/bluetooth/pentest/blueborne-scan",
+    "methods": [
+      "POST"
+    ],
+    "handler": "pentest_blueborne"
+  },
+  {
+    "route": "/api/bluetooth/pentest/exfiltrate",
+    "methods": [
+      "POST"
+    ],
+    "handler": "pentest_exfiltrate"
+  },
+  {
+    "route": "/api/bluetooth/pentest/report",
+    "methods": [
+      "GET"
+    ],
+    "handler": "pentest_get_report"
+  },
+  {
+    "route": "/api/bluetooth/pentest/track-movement",
+    "methods": [
+      "POST"
+    ],
+    "handler": "pentest_track_movement"
+  },
+  {
+    "route": "/api/bluetooth/scan/start",
+    "methods": [
+      "POST"
+    ],
+    "handler": "start_bluetooth_scan"
+  },
+  {
+    "route": "/api/bluetooth/scan/stop",
+    "methods": [
+      "POST"
+    ],
+    "handler": "stop_bluetooth_scan"
+  },
+  {
+    "route": "/api/bluetooth/status",
+    "methods": [
+      "GET"
+    ],
+    "handler": "get_bluetooth_status"
+  },
+  {
+    "route": "/api/bluetooth/unpair",
+    "methods": [
+      "POST"
+    ],
+    "handler": "unpair_bluetooth_device"
+  },
+  {
+    "route": "/api/config",
+    "methods": [
+      "GET"
+    ],
+    "handler": "get_config"
+  },
+  {
+    "route": "/api/config",
+    "methods": [
+      "POST"
+    ],
+    "handler": "update_config"
+  },
+  {
+    "route": "/api/config/apply-profile",
+    "methods": [
+      "POST"
+    ],
+    "handler": "apply_hardware_profile"
+  },
+  {
+    "route": "/api/config/detect-hardware",
+    "methods": [
+      "GET"
+    ],
+    "handler": "detect_hardware"
+  },
+  {
+    "route": "/api/config/hardware-profiles",
+    "methods": [
+      "GET"
+    ],
+    "handler": "get_hardware_profiles"
+  },
+  {
+    "route": "/api/credentials",
+    "methods": [
+      "GET"
+    ],
+    "handler": "get_credentials"
+  },
+  {
+    "route": "/api/credentials",
+    "methods": [
+      "GET"
+    ],
+    "handler": "get_credentials_api"
+  },
+  {
+    "route": "/api/dashboard/quick",
+    "methods": [
+      "GET"
+    ],
+    "handler": "get_dashboard_quick"
+  },
+  {
+    "route": "/api/dashboard/stats",
+    "methods": [
+      "GET"
+    ],
+    "handler": "get_dashboard_stats"
+  },
+  {
+    "route": "/api/data/reset-threat-intel",
+    "methods": [
+      "POST"
+    ],
+    "handler": "reset_threat_intelligence"
+  },
+  {
+    "route": "/api/data/reset-vulnerabilities",
+    "methods": [
+      "POST"
+    ],
+    "handler": "reset_vulnerabilities"
+  },
+  {
+    "route": "/api/debug/ai-service",
+    "methods": [
+      "GET"
+    ],
+    "handler": "get_ai_service_diagnostic"
+  },
+  {
+    "route": "/api/debug/connectivity-tracking",
+    "methods": [
+      "GET"
+    ],
+    "handler": "get_connectivity_tracking"
+  },
+  {
+    "route": "/api/debug/force-arp-scan",
+    "methods": [
+      "POST"
+    ],
+    "handler": "force_arp_scan"
+  },
+  {
+    "route": "/api/debug/orchestrator-status",
+    "methods": [
+      "GET"
+    ],
+    "handler": "get_orchestrator_diagnostic"
+  },
+  {
+    "route": "/api/debug/scanned-networks",
+    "methods": [
+      "GET"
+    ],
+    "handler": "debug_scanned_networks"
+  },
+  {
+    "route": "/api/debug/test-robust-tracking",
+    "methods": [
+      "GET"
+    ],
+    "handler": "test_robust_tracking"
+  },
+  {
+    "route": "/api/debug/verbose-logs",
+    "methods": [
+      "GET"
+    ],
+    "handler": "get_verbose_debug_logs"
+  },
+  {
+    "route": "/api/display",
+    "methods": [
+      "GET"
+    ],
+    "handler": "get_display"
+  },
+  {
+    "route": "/api/epaper-display",
+    "methods": [
+      "GET"
+    ],
+    "handler": "get_epaper_display"
+  },
+  {
+    "route": "/api/files/clear",
+    "methods": [
+      "POST"
+    ],
+    "handler": "clear_files_api"
+  },
+  {
+    "route": "/api/files/delete",
+    "methods": [
+      "POST"
+    ],
+    "handler": "delete_file_api"
+  },
+  {
+    "route": "/api/files/download",
+    "methods": [
+      "GET"
+    ],
+    "handler": "download_file_api"
+  },
+  {
+    "route": "/api/files/list",
+    "methods": [
+      "GET"
+    ],
+    "handler": "list_files_api"
+  },
+  {
+    "route": "/api/files/upload",
+    "methods": [
+      "POST"
+    ],
+    "handler": "upload_file_api"
+  },
+  {
+    "route": "/api/kill",
+    "methods": [
+      "POST"
+    ],
+    "handler": "kill_switch"
+  },
+  {
+    "route": "/api/logs",
+    "methods": [
+      "GET"
+    ],
+    "handler": "get_logs"
+  },
+  {
+    "route": "/api/logs/activity",
+    "methods": [
+      "GET"
+    ],
+    "handler": "get_activity_logs"
+  },
+  {
+    "route": "/api/loot",
+    "methods": [
+      "GET"
+    ],
+    "handler": "get_loot"
+  },
+  {
+    "route": "/api/manual/execute-attack",
+    "methods": [
+      "POST"
+    ],
+    "handler": "execute_manual_attack"
+  },
+  {
+    "route": "/api/manual/orchestrator/start",
+    "methods": [
+      "POST"
+    ],
+    "handler": "start_orchestrator_manual"
+  },
+  {
+    "route": "/api/manual/orchestrator/stop",
+    "methods": [
+      "POST"
+    ],
+    "handler": "stop_orchestrator_manual"
+  },
+  {
+    "route": "/api/manual/pentest/lynis",
+    "methods": [
+      "POST"
+    ],
+    "handler": "run_manual_lynis_pentest"
+  },
+  {
+    "route": "/api/manual/scan/network",
+    "methods": [
+      "POST"
+    ],
+    "handler": "trigger_network_scan"
+  },
+  {
+    "route": "/api/manual/scan/vulnerability",
+    "methods": [
+      "POST"
+    ],
+    "handler": "trigger_vulnerability_scan"
+  },
+  {
+    "route": "/api/manual/status",
+    "methods": [
+      "GET"
+    ],
+    "handler": "get_manual_mode_status"
+  },
+  {
+    "route": "/api/manual/targets",
+    "methods": [
+      "GET"
+    ],
+    "handler": "get_manual_targets"
+  },
+  {
+    "route": "/api/netkb/data",
+    "methods": [
+      "GET"
+    ],
+    "handler": "get_netkb_data"
+  },
+  {
+    "route": "/api/netkb/entry/<entry_id>",
+    "methods": [
+      "GET"
+    ],
+    "handler": "get_netkb_entry"
+  },
+  {
+    "route": "/api/netkb/export",
+    "methods": [
+      "GET"
+    ],
+    "handler": "export_netkb_data"
+  },
+  {
+    "route": "/api/network",
+    "methods": [
+      "GET"
+    ],
+    "handler": "get_network"
+  },
+  {
+    "route": "/api/network-intelligence",
+    "methods": [
+      "GET"
+    ],
+    "handler": "get_network_intelligence"
+  },
+  {
+    "route": "/api/network-intelligence/add-credential",
+    "methods": [
+      "POST"
+    ],
+    "handler": "add_credential"
+  },
+  {
+    "route": "/api/network-intelligence/add-vulnerability",
+    "methods": [
+      "POST"
+    ],
+    "handler": "add_vulnerability"
+  },
+  {
+    "route": "/api/network/stable",
+    "methods": [
+      "GET"
+    ],
+    "handler": "get_stable_network_data"
+  },
+  {
+    "route": "/api/pwnagotchi/install",
+    "methods": [
+      "POST"
+    ],
+    "handler": "install_pwnagotchi_from_dashboard"
+  },
+  {
+    "route": "/api/pwnagotchi/logs",
+    "methods": [
+      "GET"
+    ],
+    "handler": "stream_pwnagotchi_logs"
+  },
+  {
+    "route": "/api/pwnagotchi/status",
+    "methods": [
+      "GET"
+    ],
+    "handler": "get_pwnagotchi_status"
+  },
+  {
+    "route": "/api/pwnagotchi/swap",
+    "methods": [
+      "POST"
+    ],
+    "handler": "swap_to_pwnagotchi_mode"
+  },
+  {
+    "route": "/api/scan/arp-localnet",
+    "methods": [
+      "GET"
+    ],
+    "handler": "get_arp_scan_localnet"
+  },
+  {
+    "route": "/api/scan/combined-network",
+    "methods": [
+      "GET"
+    ],
+    "handler": "get_combined_network_scan"
+  },
+  {
+    "route": "/api/scan/deep",
+    "methods": [
+      "POST"
+    ],
+    "handler": "deep_scan_host"
+  },
+  {
+    "route": "/api/scan/host",
+    "methods": [
+      "POST"
+    ],
+    "handler": "scan_single_host"
+  },
+  {
+    "route": "/api/scan/nmap-ping",
+    "methods": [
+      "GET"
+    ],
+    "handler": "get_nmap_ping_scan"
+  },
+  {
+    "route": "/api/scan/start-realtime",
+    "methods": [
+      "POST"
+    ],
+    "handler": "start_realtime_scan"
+  },
+  {
+    "route": "/api/scan/status",
+    "methods": [
+      "GET"
+    ],
+    "handler": "get_scan_status"
+  },
+  {
+    "route": "/api/stats",
+    "methods": [
+      "GET"
+    ],
+    "handler": "get_stats"
+  },
+  {
+    "route": "/api/status",
+    "methods": [
+      "GET"
+    ],
+    "handler": "get_status"
+  },
+  {
+    "route": "/api/system/check-updates",
+    "methods": [
+      "GET"
+    ],
+    "handler": "check_updates"
+  },
+  {
+    "route": "/api/system/fix-git",
+    "methods": [
+      "POST"
+    ],
+    "handler": "fix_git_safe_directory"
+  },
+  {
+    "route": "/api/system/network-stats",
+    "methods": [
+      "GET"
+    ],
+    "handler": "get_network_stats_api"
+  },
+  {
+    "route": "/api/system/processes",
+    "methods": [
+      "GET"
+    ],
+    "handler": "get_processes_api"
+  },
+  {
+    "route": "/api/system/reboot",
+    "methods": [
+      "POST"
+    ],
+    "handler": "reboot_system"
+  },
+  {
+    "route": "/api/system/restart-service",
+    "methods": [
+      "POST"
+    ],
+    "handler": "restart_service"
+  },
+  {
+    "route": "/api/system/stash-update",
+    "methods": [
+      "POST"
+    ],
+    "handler": "stash_and_update"
+  },
+  {
+    "route": "/api/system/status",
+    "methods": [
+      "GET"
+    ],
+    "handler": "get_system_status_api"
+  },
+  {
+    "route": "/api/system/update",
+    "methods": [
+      "POST"
+    ],
+    "handler": "perform_update"
+  },
+  {
+    "route": "/api/threat-intelligence/dashboard",
+    "methods": [
+      "GET"
+    ],
+    "handler": "get_threat_intelligence_dashboard"
+  },
+  {
+    "route": "/api/threat-intelligence/download-report",
+    "methods": [
+      "POST"
+    ],
+    "handler": "download_threat_intelligence_report"
+  },
+  {
+    "route": "/api/threat-intelligence/enrich-finding",
+    "methods": [
+      "POST"
+    ],
+    "handler": "enrich_finding_endpoint"
+  },
+  {
+    "route": "/api/threat-intelligence/enrich-target",
+    "methods": [
+      "POST"
+    ],
+    "handler": "enrich_target_endpoint"
+  },
+  {
+    "route": "/api/threat-intelligence/enriched-findings",
+    "methods": [
+      "GET"
+    ],
+    "handler": "get_enriched_findings"
+  },
+  {
+    "route": "/api/threat-intelligence/status",
+    "methods": [
+      "GET"
+    ],
+    "handler": "get_threat_intelligence_status"
+  },
+  {
+    "route": "/api/threat-intelligence/trigger-vuln-scan",
+    "methods": [
+      "POST"
+    ],
+    "handler": "trigger_vulnerability_scan_for_threat_intel"
+  },
+  {
+    "route": "/api/vulnerabilities",
+    "methods": [
+      "GET"
+    ],
+    "handler": "get_vulnerabilities"
+  },
+  {
+    "route": "/api/vulnerabilities/grouped",
+    "methods": [
+      "GET"
+    ],
+    "handler": "get_vulnerabilities_grouped"
+  },
+  {
+    "route": "/api/vulnerability-intel",
+    "methods": [
+      "GET"
+    ],
+    "handler": "get_vulnerability_intel"
+  },
+  {
+    "route": "/api/vulnerability-report/<path:filename>",
+    "methods": [
+      "GET"
+    ],
+    "handler": "download_vulnerability_report"
+  },
+  {
+    "route": "/api/vulnerability-scan/history",
+    "methods": [
+      "GET"
+    ],
+    "handler": "get_vulnerability_scan_history"
+  },
+  {
+    "route": "/api/vulnerability-scan/history/reset",
+    "methods": [
+      "POST"
+    ],
+    "handler": "reset_vulnerability_scan_history"
+  },
+  {
+    "route": "/api/wifi/ap/enable",
+    "methods": [
+      "POST"
+    ],
+    "handler": "enable_wifi_ap_mode"
+  },
+  {
+    "route": "/api/wifi/ap/exit",
+    "methods": [
+      "POST"
+    ],
+    "handler": "exit_wifi_ap_mode"
+  },
+  {
+    "route": "/api/wifi/ap/start",
+    "methods": [
+      "POST"
+    ],
+    "handler": "start_wifi_ap"
+  },
+  {
+    "route": "/api/wifi/ap/stop",
+    "methods": [
+      "POST"
+    ],
+    "handler": "stop_wifi_ap"
+  },
+  {
+    "route": "/api/wifi/connect",
+    "methods": [
+      "POST"
+    ],
+    "handler": "connect_wifi"
+  },
+  {
+    "route": "/api/wifi/disconnect",
+    "methods": [
+      "POST"
+    ],
+    "handler": "disconnect_wifi"
+  },
+  {
+    "route": "/api/wifi/exit-ap",
+    "methods": [
+      "POST"
+    ],
+    "handler": "exit_ap_mode"
+  },
+  {
+    "route": "/api/wifi/force-recovery",
+    "methods": [
+      "POST"
+    ],
+    "handler": "force_wifi_recovery"
+  },
+  {
+    "route": "/api/wifi/forget",
+    "methods": [
+      "POST"
+    ],
+    "handler": "forget_wifi_network"
+  },
+  {
+    "route": "/api/wifi/interfaces",
+    "methods": [
+      "GET"
+    ],
+    "handler": "get_wifi_interfaces"
+  },
+  {
+    "route": "/api/wifi/log",
+    "methods": [
+      "GET"
+    ],
+    "handler": "get_wifi_log"
+  },
+  {
+    "route": "/api/wifi/networks",
+    "methods": [
+      "GET"
+    ],
+    "handler": "get_wifi_networks"
+  },
+  {
+    "route": "/api/wifi/reconnect",
+    "methods": [
+      "POST"
+    ],
+    "handler": "reconnect_wifi"
+  },
+  {
+    "route": "/api/wifi/scan",
+    "methods": [
+      "POST"
+    ],
+    "handler": "scan_wifi_networks"
+  },
+  {
+    "route": "/api/wifi/status",
+    "methods": [
+      "GET"
+    ],
+    "handler": "get_wifi_status"
+  },
+  {
+    "route": "/connecttest.txt",
+    "methods": [
+      "GET"
+    ],
+    "handler": "captive_portal_detection"
+  },
+  {
+    "route": "/download_file",
+    "methods": [
+      "GET"
+    ],
+    "handler": "legacy_download_file"
+  },
+  {
+    "route": "/gen_204",
+    "methods": [
+      "GET"
+    ],
+    "handler": "captive_portal_detection"
+  },
+  {
+    "route": "/generate_204",
+    "methods": [
+      "GET"
+    ],
+    "handler": "captive_portal_detection"
+  },
+  {
+    "route": "/get_logs",
+    "methods": [
+      "GET"
+    ],
+    "handler": "legacy_logs"
+  },
+  {
+    "route": "/list_credentials",
+    "methods": [
+      "GET"
+    ],
+    "handler": "legacy_credentials"
+  },
+  {
+    "route": "/list_files",
+    "methods": [
+      "GET"
+    ],
+    "handler": "legacy_list_files"
+  },
+  {
+    "route": "/ncsi.txt",
+    "methods": [
+      "GET"
+    ],
+    "handler": "captive_portal_detection"
+  },
+  {
+    "route": "/netkb_data_json",
+    "methods": [
+      "GET"
+    ],
+    "handler": "legacy_netkb_json"
+  },
+  {
+    "route": "/network_data",
+    "methods": [
+      "GET"
+    ],
+    "handler": "legacy_network_data"
+  },
+  {
+    "route": "/portal",
+    "methods": [
+      "GET"
+    ],
+    "handler": "captive_portal"
+  },
+  {
+    "route": "/setup",
+    "methods": [
+      "GET"
+    ],
+    "handler": "wifi_config_alt"
+  },
+  {
+    "route": "/success.txt",
+    "methods": [
+      "GET"
+    ],
+    "handler": "captive_portal_detection"
+  },
+  {
+    "route": "/wifi",
+    "methods": [
+      "GET"
+    ],
+    "handler": "wifi_config_alt"
+  },
+  {
+    "route": "/wifi-config",
+    "methods": [
+      "GET"
+    ],
+    "handler": "wifi_config_page"
+  }
+]

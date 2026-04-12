@@ -1,0 +1,212 @@
+# Node.js / npm
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+package-lock.json*
+
+# TypeScript / TSX
+dist/
+*.tsbuildinfo
+
+# Poetry
+poetry.lock
+
+# Environment variables
+.env
+.env.*.local
+
+# Logs
+logs
+*.log
+pnpm-debug.log*
+lerna-debug.log*
+
+# Dependency directories
+jspm_packages/
+
+# Optional npm cache directory
+.npm
+
+# Output of 'npm pack'
+*.tgz
+
+# Lockfiles
+yarn.lock
+.pnpm-lock.yaml
+
+# Optional eslint cache
+.eslintcache
+
+# Optional stylelint cache
+.stylelintcache
+
+# Optional REPL history
+.node_repl_history
+
+# Coverage directory used by tools like
+instanbul/
+istanbul/jest
+jest/
+coverage/
+
+# Output of 'tsc' command
+out/
+build/
+tmp/
+temp/
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg
+*.egg-info/
+pip-wheel-metadata/
+*.pyo
+*.pyd
+*.whl
+*.pytest_cache/
+.tox/
+env/
+venv
+venv/
+ENV/
+env.bak/
+.venv/
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# Coverage reports
+htmlcov/
+.coverage
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Django stuff:
+staticfiles/
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+
+# Flask stuff:
+instance/
+.webassets-cache
+
+# VS Code settings
+.vscode/
+.idea/
+
+# macOS files
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Linux system files
+*.swp
+*~
+
+# IDE specific
+*.iml
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+*/certs/
+
+# Bjorn-specific files and directories
+# Runtime data directories
+data/logs/
+data/output/
+backup/backups/
+backup/uploads/
+
+# Configuration files (contains sensitive data)
+config/shared_config.json
+
+# Actions configuration (auto-generated but preserve for runtime)
+# config/actions.json
+
+# Installation and runtime logs
+install_*.log
+/var/log/bjorn_install/
+
+# Network and scan results
+data/output/scan_results/
+data/output/crackedpwd/
+data/output/data_stolen/
+data/output/vulnerabilities/
+data/output/zombies/
+
+# Runtime data files (generated during execution)
+data/ragnar.db
+data/livestatus.csv
+data/netkb.csv
+data/pwnagotchi_status.json
+data/logs/temp_log.txt
+data/networks/*/db/*.db
+data/networks/*/intelligence/*.json
+data/networks/*/threat_intelligence/*.json
+data/networks/*/loot/data_stolen/
+data/networks/*/loot/credentials/
+
+# Intelligence and threat data (runtime - templates are tracked)
+data/intelligence/active_findings.json
+data/intelligence/network_profiles.json
+data/intelligence/resolved_findings.json
+data/threat_intelligence/enriched_findings.json
+data/threat_intelligence/sources_config.json
+data/threat_intelligence/threat_cache.json
+data/networks/*/threat_intelligence/enriched_findings.json
+data/networks/*/threat_intelligence/sources_config.json
+data/networks/*/threat_intelligence/threat_cache.json
+data/network_data/network_unknown_network.csv
+
+# User dictionaries (may contain custom wordlists)
+data/input/dictionary/passwords.txt
+data/input/dictionary/users.txt
+
+# System service files (installed by script)
+/etc/systemd/system/bjorn.service
+/etc/systemd/system/usb-gadget.service
+/usr/local/bin/usb-gadget.sh
+
+# Web interface uploads
+web/uploads/
+
+# Comments data (may contain sensitive analysis)
+resources/comments/comments.json
+
+# Runtime process files
+*.pid
+*.lock
+
+# Backup files
+*.backup
+*.bak
+*.orig
+web/screen.png
+
+# Claude Code
+.claude/

@@ -144,6 +144,13 @@ sudo pip3 install --break-system-packages smbus2 2>/dev/null \
   || sudo pip3 install smbus2 2>/dev/null \
   || warn "smbus2 pip install failed – i2c_scanner payload may not work"
 
+# Ragnar port web/runtime dependencies
+if [[ -x /root/Raspyjack/scripts/install_ragnar_port.sh ]]; then
+  step "Installing vendored Ragnar dependencies …"
+  /root/Raspyjack/scripts/install_ragnar_port.sh \
+    || warn "Ragnar dependency helper failed – Ragnar payload may not work until fixed"
+fi
+
 
 # Disable hostapd/dnsmasq auto-start (only used on-demand by payloads)
 sudo systemctl disable --now hostapd 2>/dev/null || true
