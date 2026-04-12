@@ -45,7 +45,10 @@ class WiFiManager:
         
         # Available WiFi interfaces
         self.wifi_interfaces = self.detect_wifi_interfaces()
-        
+
+        # User-selected interface (persists during session)
+        self.selected_interface = None
+
         # Current status
         self.current_interface = None
         self.current_profile = None
@@ -97,7 +100,7 @@ class WiFiManager:
     def scan_networks(self, interface=None):
         """Scan for available WiFi networks using nmcli (same tool as connect)."""
         if not interface:
-            interface = self.wifi_interfaces[0] if self.wifi_interfaces else None
+            interface = self.get_active_interface()
 
         if not interface:
             self.log("No WiFi interface available for scanning")
@@ -227,7 +230,7 @@ class WiFiManager:
     def connect_to_network(self, ssid, password=None, interface=None):
         """Connect to a WiFi network."""
         if not interface:
-            interface = self.wifi_interfaces[0] if self.wifi_interfaces else None
+            interface = self.get_active_interface()
 
         if not interface:
             self.log("No WiFi interface available")
@@ -288,7 +291,7 @@ class WiFiManager:
         """Connect using a saved profile."""
         interface = profile.get('interface', 'auto')
         if interface == 'auto':
-            interface = self.wifi_interfaces[0] if self.wifi_interfaces else None
+            interface = self.get_active_interface()
         
         return self.connect_to_network(
             profile['ssid'], 
@@ -299,7 +302,7 @@ class WiFiManager:
     def disconnect(self, interface=None):
         """Disconnect from WiFi."""
         if not interface:
-            interface = self.current_interface or (self.wifi_interfaces[0] if self.wifi_interfaces else None)
+            interface = self.current_interface or self.get_active_interface()
         
         if not interface:
             return False
@@ -321,7 +324,7 @@ class WiFiManager:
     def get_connection_status(self, interface=None):
         """Get current WiFi connection status."""
         if not interface:
-            interface = self.current_interface or (self.wifi_interfaces[0] if self.wifi_interfaces else None)
+            interface = self.current_interface or self.get_active_interface()
         
         if not interface:
             return {"status": "no_interface", "ssid": None, "ip": None}
@@ -415,14 +418,28 @@ class WiFiManager:
         except Exception as e:
             self.log(f"Error saving current connection: {e}")
     
+    def set_selected_interface(self, iface):
+        """Set the user-selected WiFi interface for scan/connect."""
+        self.selected_interface = iface
+        self.log(f"Active interface set to: {iface}")
+
+    def get_active_interface(self):
+        """Return the user-selected interface, or first available."""
+        if self.selected_interface and self.selected_interface in self.wifi_interfaces:
+            return self.selected_interface
+        return self.wifi_interfaces[0] if self.wifi_interfaces else None
+
     def get_interface_for_tool(self, preferred="auto"):
         """Get the best interface for network tools."""
         if preferred == "auto":
+            # Use user-selected interface if set
+            if self.selected_interface:
+                return self.selected_interface
             # Check current WiFi connection first
             status = self.get_connection_status()
             if status["status"] == "connected":
                 return status["interface"]
-            
+
             # Fall back to ethernet
             return "eth0"
         

@@ -415,14 +415,15 @@ def run_install_script():
 
     try:
         proc = subprocess.Popen(
-            ["bash", INSTALL_SCRIPT],
+            ["bash", INSTALL_SCRIPT, "--update"],
             cwd=RASPYJACK_DIR,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
         )
-        # Send display choice to satisfy the interactive read prompt
+        # In --update mode, display is auto-detected from gui_conf.json
+        # No interactive prompt needed, but send choice as fallback
         try:
             proc.stdin.write(display_choice + "\n")
             proc.stdin.flush()

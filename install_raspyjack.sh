@@ -16,6 +16,10 @@ warn()  { printf "\e[1;33m[WARN]\e[0m %s\n"  "$*"; }
 fail()  { printf "\e[1;31m[FAIL]\e[0m %s\n"  "$*"; exit 1; }
 cmd()   { command -v "$1" >/dev/null 2>&1; }
 
+# ───── mode flag ─────────────────────────────────────────────
+UPDATE_MODE=0
+[[ "${1:-}" == "--update" ]] && UPDATE_MODE=1
+
 # ───── 0 ▸ convert CRLF if file came from Windows ────────────
 if grep -q $'\r' "$0"; then
   step "Converting CRLF → LF in $0"
@@ -36,18 +40,30 @@ add_dtparam() {
 }
 
 # ───── 1‑b ▸ select display type ─────────────────────────────
-step "Display configuration"
-echo ""
-echo "  Which LCD screen are you using?"
-echo ""
-echo "    1) ST7735_128  — 1.44\" 128×128  (original Waveshare HAT)"
-echo "    2) ST7789_240  — 1.3\"  240×240"
-echo ""
-read -rp "  Enter choice [1/2] (default: 1): " DISPLAY_CHOICE
-case "$DISPLAY_CHOICE" in
-  2) DISPLAY_TYPE="ST7789_240" ;;
-  *) DISPLAY_TYPE="ST7735_128" ;;
-esac
+if [[ $UPDATE_MODE -eq 1 ]]; then
+  # Auto-detect from existing gui_conf.json
+  DISPLAY_TYPE=$(python3 -c "
+import json
+try:
+    with open('/root/Raspyjack/gui_conf.json') as f:
+        print(json.load(f).get('DISPLAY',{}).get('type','ST7735_128'))
+except: print('ST7735_128')
+" 2>/dev/null)
+  info "Update mode: detected display $DISPLAY_TYPE from gui_conf.json"
+else
+  step "Display configuration"
+  echo ""
+  echo "  Which LCD screen are you using?"
+  echo ""
+  echo "    1) ST7735_128  — 1.44\" 128×128  (original Waveshare HAT)"
+  echo "    2) ST7789_240  — 1.3\"  240×240"
+  echo ""
+  read -rp "  Enter choice [1/2] (default: 1): " DISPLAY_CHOICE
+  case "$DISPLAY_CHOICE" in
+    2) DISPLAY_TYPE="ST7789_240" ;;
+    *) DISPLAY_TYPE="ST7735_128" ;;
+  esac
+fi
 info "Selected display: $DISPLAY_TYPE"
 
 # Write DISPLAY type into gui_conf.json (preserve ALL existing settings: flip, colors, pins, etc.)
@@ -92,7 +108,6 @@ PACKAGES=(
   python3-evdev \
   libglib2.0-dev python3-bluez bluez \
   fonts-dejavu-core nmap ncat tcpdump tshark arp-scan dsniff ettercap-text-only php procps \
-  gobuster dirb \
   aircrack-ng wireless-tools wpasupplicant iw \
   hostapd dnsmasq-base sshpass bridge-utils john autossh reaver ebtables \
   firmware-linux-nonfree firmware-realtek firmware-atheros \
@@ -122,61 +137,6 @@ if ((${#to_install[@]})); then
 else
   info "All packages already installed & up‑to‑date."
 fi
-
-# ───── 2‑a1 ▸ Gobuster wordlists: dirb + DirBuster (OWASP) → loot ─────
-step "Copying directory wordlists for Gobuster …"
-WL_DST="/root/Raspyjack/loot/wordlists"
-mkdir -p "$WL_DST"
-mkdir -p "$WL_DST/dirbuster"
-
-# dirb (Debian package) → loot root
-for wl in common.txt small.txt; do
-  if [ -f "/usr/share/dirb/wordlists/$wl" ]; then
-    sudo cp -f "/usr/share/dirb/wordlists/$wl" "$WL_DST/$wl" \
-      && info "Installed loot/wordlists/$wl (from dirb)" \
-      || warn "Could not copy $wl to loot/wordlists"
-  else
-    warn "dirb wordlist missing: /usr/share/dirb/wordlists/$wl (install dirb package)"
-  fi
-done
-
-# DirBuster: optional apt only if the package exists (Kali etc.); skip failed installs on Pi OS
-step "DirBuster wordlists …"
-if apt-cache show dirbuster >/dev/null 2>&1; then
-  if sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends dirbuster 2>/dev/null; then
-    if [ -d /usr/share/dirbuster/wordlists ]; then
-      sudo cp -f /usr/share/dirbuster/wordlists/*.txt "$WL_DST/dirbuster/" 2>/dev/null \
-        && info "Copied DirBuster wordlists from apt package" \
-        || warn "dirbuster installed but copy to loot failed"
-    fi
-  else
-    warn "dirbuster package listed but install failed — will download lists"
-  fi
-else
-  info "Package dirbuster not in APT (normal on Raspberry Pi OS) — fetching OWASP lists"
-fi
-
-# OWASP DirBuster-style lists (dirbuster-ng mirror, same classic filenames)
-DB_BASE="https://raw.githubusercontent.com/digination/dirbuster-ng/master/wordlists"
-_fetch_db_wl() {
-  local f="$1"
-  local dest="$WL_DST/dirbuster/$f"
-  local tmp="${dest}.part"
-  if sudo wget -q -O "$tmp" "$DB_BASE/$f" 2>/dev/null \
-    || sudo curl -fsSL -o "$tmp" "$DB_BASE/$f" 2>/dev/null; then
-    sudo mv -f "$tmp" "$dest"
-    info "DirBuster wordlist: loot/wordlists/dirbuster/$f"
-  else
-    sudo rm -f "$tmp"
-    warn "Could not download DirBuster wordlist: $f (check network)"
-  fi
-}
-for dbf in small.txt common.txt big.txt extensions_common.txt indexes.txt mutations_common.txt; do
-  _fetch_db_wl "$dbf"
-done
-
-command -v gobuster >/dev/null 2>&1 && info "gobuster: $(gobuster version 2>/dev/null | head -1 || echo ok)" \
-  || warn "gobuster not on PATH — check apt install"
 
 # ───── 2‑a2 ▸ pip packages not available via APT ─────────────────
 step "Installing Python packages via pip …"
@@ -264,26 +224,32 @@ else
 fi
 
 # ───── 3 ▸ enable I²C / SPI & kernel modules ────────────────
-step "Enabling I²C & SPI …"
-add_dtparam dtparam=i2c_arm=on
-add_dtparam dtparam=i2c1=on
-add_dtparam dtparam=spi=on
-
-MODULES=(i2c-bcm2835 i2c-dev spi_bcm2835 spidev)
-for m in "${MODULES[@]}"; do
-  grep -qxF "$m" /etc/modules || echo "$m" | sudo tee -a /etc/modules >/dev/null
-  sudo modprobe "$m" || true
-done
-
-grep -qE '^dtoverlay=spi0-[12]cs' "$CFG" || echo 'dtoverlay=spi0-2cs' | sudo tee -a "$CFG" >/dev/null
+step "Checking I²C & SPI …"
+SPI_OK=0
+ls /dev/spidev0.0 >/dev/null 2>&1 && grep -q "i2c-dev" /etc/modules 2>/dev/null && SPI_OK=1
+if [[ $SPI_OK -eq 1 ]]; then
+  info "I²C & SPI already configured"
+else
+  add_dtparam dtparam=i2c_arm=on
+  add_dtparam dtparam=i2c1=on
+  add_dtparam dtparam=spi=on
+  MODULES=(i2c-bcm2835 i2c-dev spi_bcm2835 spidev)
+  for m in "${MODULES[@]}"; do
+    grep -qxF "$m" /etc/modules || echo "$m" | sudo tee -a /etc/modules >/dev/null
+    sudo modprobe "$m" || true
+  done
+  grep -qE '^dtoverlay=spi0-[12]cs' "$CFG" || echo 'dtoverlay=spi0-2cs' | sudo tee -a "$CFG" >/dev/null
+  info "I²C & SPI configured"
+fi
 
 # ───── 4 ▸ WiFi attack setup ──────────────────────────────────
 step "Setting up WiFi attack environment …"
 
 # Pin onboard WiFi to wlan0 so it never swaps with USB dongles across reboots.
-# Without this, Linux can assign wlan0/wlan1 in random order on each boot,
-# which breaks the WebUI (wlan0) vs monitor-mode (wlan1+) separation.
-step "Pinning onboard WiFi to wlan0 (persistent naming) …"
+if [[ -f /etc/systemd/network/10-onboard-wifi.link ]]; then
+  info "WiFi interface pinning already configured"
+else
+  step "Pinning onboard WiFi to wlan0 (persistent naming) …"
 
 # Detect WiFi MAC addresses by bus:
 # - onboard chip: SDIO/MMC -> forced to wlan0
@@ -347,6 +313,7 @@ else
   warn "Could not detect onboard WiFi MAC — skipping interface pinning"
   warn "Run 'ip link' and manually create /etc/systemd/network/10-onboard-wifi.link"
 fi
+fi  # end WiFi pinning check
 
 sudo mkdir -p /root/Raspyjack/wifi/profiles
 sudo chown root:root /root/Raspyjack/wifi/profiles
@@ -366,8 +333,11 @@ sudo tee /root/Raspyjack/wifi/profiles/sample.json >/dev/null <<'PROFILE'
 PROFILE
 
 if systemctl is-active --quiet NetworkManager; then
-  info "NetworkManager is active - configuring for WiFi attacks"
-  sudo tee /etc/NetworkManager/conf.d/99-wifi-attacks.conf >/dev/null <<'NM_CONF'
+  if [[ -f /etc/NetworkManager/conf.d/99-wifi-attacks.conf ]]; then
+    info "NetworkManager WiFi attack config already present"
+  else
+    info "NetworkManager is active - configuring for WiFi attacks"
+    sudo tee /etc/NetworkManager/conf.d/99-wifi-attacks.conf >/dev/null <<'NM_CONF'
 [main]
 plugins=ifupdown,keyfile
 
@@ -377,14 +347,18 @@ managed=true
 [keyfile]
 unmanaged-devices=interface-name:wlan0mon;interface-name:wlan1mon;interface-name:wlan2mon
 NM_CONF
-  sudo systemctl restart NetworkManager
+    sudo systemctl restart NetworkManager
+  fi
 else
   warn "NetworkManager not active - WiFi attacks may need manual setup"
 fi
 
 # Hard fallback: force WiFi naming at boot before NetworkManager
-step "Installing boot-time WiFi name pinning service …"
-sudo install -m 0755 /root/Raspyjack/scripts/pin_wifi_names.sh /usr/local/sbin/raspyjack-pin-wifi.sh
+if systemctl is-enabled raspyjack-pin-wifi.service >/dev/null 2>&1; then
+  info "WiFi name pinning service already installed"
+else
+  step "Installing boot-time WiFi name pinning service …"
+  sudo install -m 0755 /root/Raspyjack/scripts/pin_wifi_names.sh /usr/local/sbin/raspyjack-pin-wifi.sh
 sudo tee /etc/systemd/system/raspyjack-pin-wifi.service >/dev/null <<'UNIT'
 [Unit]
 Description=RaspyJack Pin WiFi Interface Names
@@ -400,12 +374,13 @@ RemainAfterExit=yes
 [Install]
 WantedBy=multi-user.target
 UNIT
-sudo systemctl daemon-reload
-sudo systemctl enable raspyjack-pin-wifi.service
+  sudo systemctl daemon-reload
+  sudo systemctl enable raspyjack-pin-wifi.service
+fi
 
 # ───── 5 ▸ RaspyJack core service ────────────────────────────
 SERVICE=/etc/systemd/system/raspyjack.service
-step "Installing core systemd service $SERVICE …"
+step "Checking core systemd services …"
 
 sudo tee "$SERVICE" >/dev/null <<'UNIT'
 [Unit]
@@ -526,7 +501,9 @@ set +e
 TLS_SETUP_OK=1
 
 # Install Caddy best-effort. If this fails, keep plain HTTP stack available.
-if ! dpkg -s caddy >/dev/null 2>&1; then
+if dpkg -s caddy >/dev/null 2>&1; then
+  info "Caddy already installed"
+else
   step "Installing Caddy package ..."
   if ! sudo apt-get install -y --no-install-recommends caddy; then
     warn "Caddy install failed; keeping WebUI on HTTP only."
@@ -534,11 +511,12 @@ if ! dpkg -s caddy >/dev/null 2>&1; then
   fi
 fi
 
-# Install a boot-time script that auto-detects ALL interface IPs and regenerates
-# the Caddyfile on every boot. This ensures any new IP (DHCP, Tailscale, etc.)
-# is always included without manual intervention.
+# Install Caddy auto-config service (skip if already present)
 if [ "$TLS_SETUP_OK" -eq 1 ]; then
-  step "Installing Caddy auto-config service …"
+  if [[ -f /usr/local/sbin/raspyjack-caddy-autoconfig.sh ]] && systemctl is-enabled raspyjack-caddy-autoconfig.service >/dev/null 2>&1; then
+    info "Caddy auto-config service already installed"
+  else
+    step "Installing Caddy auto-config service …"
 
   sudo tee /usr/local/sbin/raspyjack-caddy-autoconfig.sh >/dev/null <<'SCRIPT'
 #!/usr/bin/env bash
@@ -610,11 +588,11 @@ RemainAfterExit=yes
 WantedBy=multi-user.target
 UNIT
 
-  sudo systemctl daemon-reload
-  sudo systemctl enable raspyjack-caddy-autoconfig.service
-
-  # Run it now to generate the initial Caddyfile
-  sudo /usr/local/sbin/raspyjack-caddy-autoconfig.sh
+    sudo systemctl daemon-reload
+    sudo systemctl enable raspyjack-caddy-autoconfig.service
+    # Run it now to generate the initial Caddyfile
+    sudo /usr/local/sbin/raspyjack-caddy-autoconfig.sh
+  fi
 fi
 
 if [ "$TLS_SETUP_OK" -eq 1 ]; then
