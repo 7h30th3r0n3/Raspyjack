@@ -45,6 +45,10 @@ font = scaled_font()
 LOOT_ROOT = "/root/Raspyjack/loot"
 DEBOUNCE = 0.25
 
+# Chars per line depends on screen resolution
+_SCALE = getattr(LCD_1in44, "LCD_SCALE", 1.0)
+CHARS_PER_LINE = int(20 * _SCALE)  # 20 on 128, ~37 on 240
+
 
 def _fmt_size(nbytes):
     for unit in ("B", "K", "M", "G"):
@@ -126,8 +130,9 @@ def _draw_browser(lcd, cwd, entries, cursor, scroll_offset, status=""):
     d = ScaledDraw(img)
 
     rel_path = cwd.replace(LOOT_ROOT, "loot") if cwd.startswith(LOOT_ROOT) else cwd
-    if len(rel_path) > 16:
-        rel_path = "..." + rel_path[-13:]
+    max_path = CHARS_PER_LINE - 4
+    if len(rel_path) > max_path:
+        rel_path = "..." + rel_path[-(max_path - 3):]
 
     d.rectangle((0, 0, 127, 12), fill="#1a1a1a")
     d.text((2, 1), rel_path, font=font, fill="#00ff00")
@@ -146,15 +151,15 @@ def _draw_browser(lcd, cwd, entries, cursor, scroll_offset, status=""):
             is_cursor = idx == cursor
             prefix = ">" if is_cursor else " "
             if entry["is_dir"]:
-                label = f"{prefix}[{entry['name'][:13]}]"
+                label = f"{prefix}[{entry['name'][:CHARS_PER_LINE - 3]}]"
                 color = "#00aaff" if is_cursor else "#5588bb"
             else:
                 size_str = _fmt_size(entry["size"])
-                name_max = 14 - len(size_str)
+                name_max = CHARS_PER_LINE - 2 - len(size_str)
                 name_short = entry["name"][:name_max]
                 label = f"{prefix}{name_short} {size_str}"
                 color = "#00ff00" if is_cursor else "#aaaaaa"
-            d.text((2, y), label[:20], font=font, fill=color)
+            d.text((2, y), label[:CHARS_PER_LINE], font=font, fill=color)
             y += 13
 
     y = 106
@@ -164,27 +169,33 @@ def _draw_browser(lcd, cwd, entries, cursor, scroll_offset, status=""):
 
     if status:
         d.rectangle((0, 50, 127, 75), fill="#222200")
-        d.text((2, 55), status[:20], font=font, fill="#ffff00")
+        d.text((2, 55), status[:CHARS_PER_LINE], font=font, fill="#ffff00")
 
     lcd.LCD_ShowImage(img, 0, 0)
 
 
-def _draw_preview(lcd, path, lines):
+def _draw_preview(lcd, path, lines, h_offset=0):
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
     d = ScaledDraw(img)
 
     name = os.path.basename(path)
-    if len(name) > 18:
-        name = name[:15] + "..."
+    max_name = CHARS_PER_LINE - 2
+    if len(name) > max_name:
+        name = name[:max_name - 3] + "..."
     d.rectangle((0, 0, 127, 12), fill="#1a1a1a")
     d.text((2, 1), name, font=font, fill="#00ff00")
 
     y = 16
     for line in lines:
-        d.text((2, y), line[:20], font=font, fill="#cccccc")
+        display = line[h_offset:h_offset + CHARS_PER_LINE]
+        d.text((2, y), display, font=font, fill="#cccccc")
         y += 12
 
-    d.text((2, 116), "UP/DOWN=scroll", font=font, fill="#666666")
+    # Scroll indicator
+    hint = "U/D:scroll L/R:pan"
+    if h_offset > 0:
+        hint = f"<{h_offset} " + hint
+    d.text((2, 116), hint[:CHARS_PER_LINE], font=font, fill="#666666")
     lcd.LCD_ShowImage(img, 0, 0)
 
 
@@ -192,7 +203,7 @@ def _draw_confirm(lcd, filename):
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
     d = ScaledDraw(img)
     d.text((10, 30), "Delete file?", font=font, fill="#ff4444")
-    name = filename[:18]
+    name = filename[:CHARS_PER_LINE]
     d.text((10, 48), name, font=font, fill="#aaaaaa")
     d.text((10, 70), "OK = Yes", font=font, fill="#00ff00")
     d.text((10, 85), "Any = Cancel", font=font, fill="#666666")
@@ -206,8 +217,8 @@ def _draw_stats(lcd, path, file_count, total_size):
     d.text((10, 40), f"Files: {file_count}", font=font, fill="white")
     d.text((10, 55), f"Size:  {_fmt_size(total_size)}", font=font, fill="white")
     rel = path.replace(LOOT_ROOT, "loot")
-    if len(rel) > 18:
-        rel = "..." + rel[-15:]
+    if len(rel) > CHARS_PER_LINE:
+        rel = "..." + rel[-(CHARS_PER_LINE - 3):]
     d.text((10, 75), rel, font=font, fill="#888888")
     d.text((10, 100), "Any key=back", font=font, fill="#666666")
     lcd.LCD_ShowImage(img, 0, 0)
@@ -278,14 +289,22 @@ def main():
                             "(binary file)",
                         ]
                     scroll_offset_preview = 0
+                    h_offset = 0
                     max_display = 8
                     while True:
-                        _draw_preview(LCD, entry["path"], lines[scroll_offset_preview:scroll_offset_preview+max_display])
+                        visible_lines = lines[scroll_offset_preview:scroll_offset_preview+max_display]
+                        _draw_preview(LCD, entry["path"], visible_lines, h_offset)
                         btn_preview = get_button(PINS, GPIO)
                         if btn_preview == "UP":
                             scroll_offset_preview = max(0, scroll_offset_preview - 1)
                         elif btn_preview == "DOWN":
-                            scroll_offset_preview = min(len(lines)-max_display, scroll_offset_preview + 1)
+                            scroll_offset_preview = min(max(0, len(lines)-max_display), scroll_offset_preview + 1)
+                        elif btn_preview == "RIGHT":
+                            h_offset += 10
+                        elif btn_preview == "LEFT":
+                            h_offset = max(0, h_offset - 10)
+                        elif btn_preview == "KEY3":
+                            break
                         elif btn_preview:
                             break
                         time.sleep(0.05)
