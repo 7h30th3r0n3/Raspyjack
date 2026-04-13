@@ -350,7 +350,8 @@
                 " unitree_pwn": "🤖",
                 " glasses_detector": "👓",
                 " glasses_counter": "👓",
-                " pcap_analyzer": ""
+                " pcap_analyzer": "",
+                " payload_updater": ""
         },
         "fallbacks": {
                 "__scan__": "",
