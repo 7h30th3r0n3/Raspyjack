@@ -76,8 +76,9 @@ LOOT_DIR = "/root/Raspyjack/loot/wardriving"
 DB_PATH = os.path.join(LOOT_DIR, "networks.db")
 
 CHANNELS_24 = list(range(1, 14))
-CHANNELS_5_EU = [36, 40, 44, 48, 52, 56, 60, 64,
-                 100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140]
+CHANNELS_5 = [36, 40, 44, 48, 52, 56, 60, 64,
+              100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140,
+              149, 153, 157, 161, 165]
 DWELL_24 = 0.3       # 300ms like Kismet (was 800ms)
 DWELL_5 = 0.4        # slightly longer for DFS channels
 
@@ -533,7 +534,7 @@ def _channel_hopper_24(iface):
 def _channel_hopper_5(iface):
     """Hop 5GHz channels on iface."""
     while not _shutdown.is_set() and _scanning.is_set():
-        for ch in CHANNELS_5_EU:
+        for ch in CHANNELS_5:
             if _shutdown.is_set() or not _scanning.is_set():
                 return
             r = subprocess.run(
@@ -561,7 +562,7 @@ def _channel_hopper_all(iface):
                 current_channel = ch
             if _shutdown.wait(timeout=DWELL_24):
                 return
-        for ch in CHANNELS_5_EU:
+        for ch in CHANNELS_5:
             if _shutdown.is_set() or not _scanning.is_set():
                 return
             subprocess.run(
@@ -1190,9 +1191,9 @@ def _draw_channels(lcd, font, font_sm):
     d.text((2, y5), "5 GHz", font=font_sm, fill="#FF00FF")
 
     # Only show channels that have APs or are in the common set
-    ch5_active = [ch for ch in CHANNELS_5_EU if ch_count.get(ch, 0) > 0]
-    ch5_show = CHANNELS_5_EU[:8] if not ch5_active else sorted(
-        set(CHANNELS_5_EU[:8]) | set(ch5_active))[:13]
+    ch5_active = [ch for ch in CHANNELS_5 if ch_count.get(ch, 0) > 0]
+    ch5_show = CHANNELS_5[:8] if not ch5_active else sorted(
+        set(CHANNELS_5[:8]) | set(ch5_active))[:13]
 
     max_5 = max((ch_count.get(ch, 0) for ch in ch5_show), default=1) or 1
     bar_top_5 = y5 + 10
@@ -1496,7 +1497,7 @@ def main():
                             if cards_5g:
                                 n_5g = len(cards_5g)
                                 for idx, iface in enumerate(cards_5g):
-                                    ch_list = [CHANNELS_5_EU[i] for i in range(idx, len(CHANNELS_5_EU), n_5g)]
+                                    ch_list = [CHANNELS_5[i] for i in range(idx, len(CHANNELS_5), n_5g)]
                                     t = threading.Thread(
                                         target=_channel_hopper_split,
                                         args=(iface, ch_list),

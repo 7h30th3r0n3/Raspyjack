@@ -70,8 +70,8 @@ VIEWS = ["DEVICES", "ALERTS", "STATS"]
 
 CH24 = list(range(1, 14))
 CH5  = [36, 40, 44, 48, 52, 56, 60, 64,
-        100, 104, 108, 112, 116, 120, 124, 128,
-        132, 136, 140, 149, 153, 157, 161, 165]
+        100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140,
+        149, 153, 157, 161, 165]
 CHALL = CH24 + CH5
 
 # Known tracker company IDs (from BLE Manufacturer Specific Data, AD type 0xFF)
@@ -761,10 +761,14 @@ def main():
         GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
     font = scaled_font()
 
-    _selected_iface = select_interface(lcd, font, PINS, GPIO, iface_type="wifi")
+    _selected_iface = select_interface(lcd, font, PINS, GPIO, iface_type="wifi",
+                                       require_monitor=True)
     if not _selected_iface:
-        GPIO.cleanup()
-        return 1
+        # No monitor card — try with onboard for iw scan fallback
+        _selected_iface = "wlan0" if os.path.isdir("/sys/class/net/wlan0/wireless") else None
+        if not _selected_iface:
+            GPIO.cleanup()
+            return 1
 
     # Splash screen
     img = Image.new("RGB", (W, H), "black")
