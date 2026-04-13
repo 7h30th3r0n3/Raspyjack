@@ -43,6 +43,7 @@ import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._keyboard_helper import lcd_keyboard
 
 PINS = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
@@ -419,14 +420,28 @@ def _log_transfer(filename, size, chunks):
 # URL preset cycling
 # ---------------------------------------------------------------------------
 def _cycle_url_preset():
-    """Cycle through URL presets."""
+    """Cycle through URL presets, then offer custom input."""
     st = _get_state()
-    new_idx = (st["url_preset_idx"] + 1) % len(URL_PRESETS)
-    new_url = URL_PRESETS[new_idx]
-    cfg = {**st["config"], "target_url": new_url}
-    _set_state(config=cfg, url_preset_idx=new_idx)
-    _save_config()
-    _set_state(last_message=f"URL: {new_url[:18]}")
+    new_idx = (st["url_preset_idx"] + 1) % (len(URL_PRESETS) + 1)
+    if new_idx < len(URL_PRESETS):
+        new_url = URL_PRESETS[new_idx]
+        cfg = {**st["config"], "target_url": new_url}
+        _set_state(config=cfg, url_preset_idx=new_idx)
+        _save_config()
+        _set_state(last_message=f"URL: {new_url[:18]}")
+    else:
+        # Custom URL input
+        current = st["config"].get("target_url", "http://")
+        custom = lcd_keyboard(LCD, font, PINS, GPIO,
+                              title="Target URL",
+                              default=current,
+                              charset="url")
+        if custom:
+            cfg = {**st["config"], "target_url": custom}
+            _set_state(config=cfg, url_preset_idx=0)
+            _save_config()
+            _set_state(last_message=f"URL: {custom[:18]}")
+        _set_state(url_preset_idx=0)
 
 
 # ---------------------------------------------------------------------------

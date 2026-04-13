@@ -37,6 +37,7 @@ import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._keyboard_helper import lcd_keyboard
 
 PINS = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
@@ -322,9 +323,19 @@ def main():
                 time.sleep(0.2)
 
             elif btn == "KEY2":
-                target_idx = (target_idx + 1) % len(PRESET_TARGETS)
-                target_ip = PRESET_TARGETS[target_idx]
-                _show_message("Target:", target_ip)
+                target_idx = (target_idx + 1) % (len(PRESET_TARGETS) + 1)
+                if target_idx < len(PRESET_TARGETS):
+                    target_ip = PRESET_TARGETS[target_idx]
+                    _show_message("Target:", target_ip)
+                else:
+                    custom = lcd_keyboard(LCD, font, PINS, GPIO,
+                                          title="Target IP",
+                                          default=target_ip,
+                                          charset="ip")
+                    if custom:
+                        target_ip = custom
+                    target_idx = 0
+                    _show_message("Target:", target_ip)
                 time.sleep(0.2)
 
             elif btn == "UP":

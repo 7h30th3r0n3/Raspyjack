@@ -39,6 +39,7 @@ import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._keyboard_helper import lcd_keyboard
 
 PINS = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
@@ -185,9 +186,10 @@ def _start_smb_server():
     ip = _get_pi_ip()
     _set(pi_ip=ip)
 
-    # Check if impacket-smbserver is available on PATH
-    if not shutil.which("impacket-smbserver"):
-        _add_log("impacket-smbserver not on PATH")
+    # Try impacket-smbserver (CLI tool or Python module)
+    smb_bin = shutil.which("impacket-smbserver")
+    if not smb_bin:
+        _add_log("impacket-smbserver not found")
         _set(status="Trying Python fallback...")
         _try_python_smbserver(share_name)
         _cleanup_process()
@@ -195,21 +197,36 @@ def _start_smb_server():
         _add_log("SMB server stopped")
         return
 
-    cmd = ["impacket-smbserver", share_name, LOOT_ROOT, "-smb2support"]
+    cmd = [smb_bin, share_name, LOOT_ROOT, "-smb2support"]
 
     try:
         proc = subprocess.Popen(
-            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         )
         _set(process=proc)
         _set(status=f"SMB on {ip}:445")
         _add_log(f"SMB active on {ip}:445")
         _add_log(f"Share: \\\\{ip}\\{share_name}")
 
-        # Monitor process -- give it a moment to start before polling
+        # Give it time to start, check stderr for errors
         time.sleep(2)
         if proc.poll() is not None:
-            _add_log(f"SMB server exited immediately (code {proc.returncode})")
+            # Read why it failed
+            try:
+                out = proc.stdout.read().decode("utf-8", errors="replace")[-200:]
+            except Exception:
+                out = ""
+            rc = proc.returncode
+            _add_log(f"Exit code {rc}")
+            if "Address already in use" in out:
+                _add_log("Port 445 already in use")
+                _set(status="Port 445 busy")
+            elif "Permission" in out or "Errno 13" in out:
+                _add_log("Need root for port 445")
+                _set(status="Permission denied")
+            else:
+                _add_log(f"Err: {out[:40]}")
+                _set(status=f"Failed (code {rc})")
         else:
             while not _get("stop"):
                 if proc.poll() is not None:
@@ -469,8 +486,39 @@ def main():
                     _set(mode_idx=(idx + 1) % len(MODES))
 
             elif btn == "KEY2":
-                cfg = _get("config")
-                _show_msg("Config:", CONFIG_PATH[-20:])
+                if not _get("running"):
+                    cfg = _get("config")
+                    # Edit remote host
+                    new_host = lcd_keyboard(LCD, font, PINS, GPIO,
+                                            title="Remote Host",
+                                            default=cfg["remote_host"],
+                                            charset="ip")
+                    if new_host:
+                        cfg["remote_host"] = new_host
+                    # Edit share name
+                    new_share = lcd_keyboard(LCD, font, PINS, GPIO,
+                                             title="Share Name",
+                                             default=cfg["remote_share"],
+                                             charset="full")
+                    if new_share:
+                        cfg["remote_share"] = new_share
+                    # Edit username
+                    new_user = lcd_keyboard(LCD, font, PINS, GPIO,
+                                            title="Username (empty=anon)",
+                                            default=cfg.get("remote_user", ""),
+                                            charset="full")
+                    if new_user is not None:
+                        cfg["remote_user"] = new_user
+                    # Edit password
+                    new_pass = lcd_keyboard(LCD, font, PINS, GPIO,
+                                            title="Password",
+                                            default=cfg.get("remote_pass", ""),
+                                            charset="full")
+                    if new_pass is not None:
+                        cfg["remote_pass"] = new_pass
+                    _set(config=cfg)
+                    _save_config()
+                    _show_msg("Config saved!")
 
             elif btn == "UP":
                 s = _get("scroll")
