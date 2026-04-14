@@ -52,10 +52,14 @@ PRESET_NAMES = [
     "Echo Dot", "HomePod mini", "Apple Watch", "Tile Pro",
     "Mi Band 8", "Fitbit Versa", "Chromecast",
     # RaspyJack / Hacking tools
-    "RaspyJack C2", "RaspyJack Agent", "Evil-M5 Active",
-    "RaspyJack Pwnd", "Evil-Portal AP", "Pwnagotchi v2",
-    "RJ-Deauther", "Evil-Twin AP", "RJ-Sniffer",
-    "Flipper Zero", "HackRF One", "WiFi Pineapple",
+    "\U0001F480 pwned lol", "\U0001F525 ur hacked", "\U00002620 oopsie",
+    "\U0001F916 beep boop", "\U0001F47E game over", "\U0001F47B boo!",
+    "\U0001F4A9 oh no", "\U0001F608 hehehe", "\U0001F92F mind blown",
+    "\U0001F6A8 busted!", "\U0001F512 locked out", "\U0001F4A3 boom",
+    "\U0001F440 watching u", "\U0001F575 undercover", "\U0001F921 honk",
+    "send memes", "pls no hack", "oui oui wifi",
+    "not a virus", "trust me bro", "free robux",
+    "HackRF One", "WiFi Pineapple", "Shark Jack",
     "Rubber Ducky", "Bash Bunny", "LAN Turtle",
     "Shark Jack", "Key Croc", "O.MG Cable",
     # Hacker culture
