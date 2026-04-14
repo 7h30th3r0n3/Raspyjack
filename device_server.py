@@ -43,7 +43,9 @@ SEND_TIMEOUT = 0.5
 PING_INTERVAL = 15
 
 # WebSocket server only listens on these interfaces — wlan1+ are for attacks
-WEBUI_INTERFACES = ["eth0", "eth1", "wlan0", "tailscale0"]
+# Override via RJ_WEBUI_INTERFACES env var (comma-separated)
+_env_ifaces = os.environ.get("RJ_WEBUI_INTERFACES", "").strip()
+WEBUI_INTERFACES = [i.strip() for i in _env_ifaces.split(",") if i.strip()] if _env_ifaces else ["eth0", "eth1", "wlan0", "tailscale0"]
 
 
 def _load_shared_token():
@@ -507,8 +509,12 @@ async def handle_client(ws):
                     shell = None
                 continue
 
-    except Exception:
+    except websockets.exceptions.ConnectionClosed:
         pass
+    except asyncio.TimeoutError:
+        log.warning("Client timed out")
+    except Exception as exc:
+        log.warning("Client handler error: %s", exc)
     finally:
         if shell:
             shell.close()

@@ -1,0 +1,38 @@
+{
+  "CISA_KEV": {
+    "name": "CISA_KEV",
+    "type": "cisa",
+    "url": "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json",
+    "api_key": null,
+    "enabled": true,
+    "confidence_weight": 0.9,
+    "last_updated": null
+  },
+  "NVD_CVE": {
+    "name": "NVD_CVE",
+    "type": "nvd",
+    "url": "https://services.nvd.nist.gov/rest/json/cves/2.0",
+    "api_key": null,
+    "enabled": true,
+    "confidence_weight": 0.8,
+    "last_updated": null
+  },
+  "AlienVault_OTX": {
+    "name": "AlienVault_OTX",
+    "type": "otx",
+    "url": "https://otx.alienvault.com/api/v1",
+    "api_key": null,
+    "enabled": true,
+    "confidence_weight": 0.7,
+    "last_updated": null
+  },
+  "MITRE_ATT&CK": {
+    "name": "MITRE_ATT&CK",
+    "type": "mitre",
+    "url": "https://raw.githubusercontent.com/mitre/cti/master/enterprise-attack/enterprise-attack.json",
+    "api_key": null,
+    "enabled": true,
+    "confidence_weight": 0.9,
+    "last_updated": null
+  }
+}

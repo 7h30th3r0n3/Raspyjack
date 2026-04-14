@@ -1,0 +1,24 @@
+{
+  "name": "ragnar",
+  "version": "1.0.0",
+  "description": "[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/J3J2EARPK)\r ![GitHub stars](https://img.shields.io/github/stars/PierreGode/Ragnar)\r ![Python](https://img.shields.io/badge/Python-3776AB?logo=python&logoColor=fff)\r ![Status](https://img.shields.io/badge/Status-Development-blue.svg)\r [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)",
+  "main": "tailwind.config.js",
+  "scripts": {
+    "build:css": "tailwindcss -i ./web/css/tailwind-input.css -o ./web/css/tailwind.css --minify",
+    "watch:css": "tailwindcss -i ./web/css/tailwind-input.css -o ./web/css/tailwind.css --watch"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/PierreGode/Ragnar.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/PierreGode/Ragnar/issues"
+  },
+  "homepage": "https://github.com/PierreGode/Ragnar#readme",
+  "devDependencies": {
+    "tailwindcss": "^3.4.19"
+  }
+}

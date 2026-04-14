@@ -31,6 +31,7 @@ RaspyJack is for **authorized security testing, research, and education only**.
 - Loot collection + browsing
 - WebUI remote control dashboard
 - Payload IDE (browser editor + run flow)
+- Vendored Ragnar port with native Raspyjack launcher
 - Responder / DNS spoof / ARP MITM / handshake hunter tooling integration
 - WiFi utilities + attack flows (deauth, evil twin, SSID injection, beacon flood)
 - Evil portal with 84 captive portal templates + credential capture
@@ -216,6 +217,23 @@ This validates syntax for:
 - `web/shared.js`
 - `web/app.js`
 - `web/ide.js`
+
+---
+
+## Ragnar Port
+
+Raspyjack now includes a vendored port of
+[`PierreGode/Ragnar`](https://github.com/PierreGode/Ragnar).
+
+- Launch it from `Payload -> Utilities -> Ragnar`
+- Ragnar runs as a separate headless stack on `http://<device-ip>:8091`
+- The Raspyjack payload now acts as an on-device controller: status, readable URL, automation/manual toggles, network scan trigger, vulnerability scan trigger, and log view
+- The upstream source lives in [`vendor/ragnar/`](vendor/ragnar/)
+- If the launcher reports missing Python packages, install the optional bridge deps with:
+
+```bash
+./scripts/install_ragnar_port.sh
+```
 
 ---
 

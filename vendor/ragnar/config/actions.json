@@ -1,0 +1,107 @@
+[
+    {
+        "b_module": "scanning",
+        "b_class": "NetworkScanner",
+        "b_port": null,
+        "b_status": "network_scanner",
+        "b_parent": null
+    },
+    {
+        "b_module": "airsnitch",
+        "b_class": "AirSnitch",
+        "b_port": null,
+        "b_status": "airsnitch_scan",
+        "b_parent": null
+    },
+    {
+        "b_module": "ble",
+        "b_class": "BLE",
+        "b_port": null,
+        "b_status": "bluetooth_scan",
+        "b_parent": null
+    },
+    {
+        "b_module": "ble_pentest",
+        "b_class": "BLEPentest",
+        "b_port": null,
+        "b_status": "bluetooth_pentest",
+        "b_parent": null
+    },
+    {
+        "b_module": "ftp_connector",
+        "b_class": "FTPBruteforce",
+        "b_port": 21,
+        "b_status": "brute_force_ftp",
+        "b_parent": null
+    },
+    {
+        "b_module": "IDLE",
+        "b_class": "IDLE",
+        "b_port": null,
+        "b_status": "idle_action",
+        "b_parent": null
+    },
+    {
+        "b_module": "log_standalone",
+        "b_class": "LogStandalone",
+        "b_port": 0,
+        "b_status": "log_standalone",
+        "b_parent": null
+    },
+    {
+        "b_module": "log_standalone2",
+        "b_class": "LogStandalone2",
+        "b_port": 0,
+        "b_status": "log_standalone2",
+        "b_parent": null
+    },
+    {
+        "b_module": "nmap_vuln_scanner",
+        "b_class": "NmapVulnScanner",
+        "b_port": null,
+        "b_status": "vuln_scan",
+        "b_parent": null
+    },
+    {
+        "b_module": "rdp_connector",
+        "b_class": "RDPBruteforce",
+        "b_port": 3389,
+        "b_status": "brute_force_rdp",
+        "b_parent": null
+    },
+    {
+        "b_module": "steal_data_sql",
+        "b_class": "StealDataSQL",
+        "b_port": 3306,
+        "b_status": "steal_data_sql",
+        "b_parent": "SQLBruteforce"
+    },
+    {
+        "b_module": "steal_files_ftp",
+        "b_class": "StealFilesFTP",
+        "b_port": 21,
+        "b_status": "steal_files_ftp",
+        "b_parent": "FTPBruteforce"
+    },
+    {
+        "b_module": "steal_files_rdp",
+        "b_class": "StealFilesRDP",
+        "b_port": 3389,
+        "b_status": "steal_files_rdp",
+        "b_parent": "RDPBruteforce"
+    },
+    {
+        "b_module": "steal_files_telnet",
+        "b_class": "StealFilesTelnet",
+        "b_port": 23,
+        "b_status": "steal_files_telnet",
+        "b_parent": "TelnetBruteforce"
+    },
+    {
+        "b_module": "telnet_connector",
+        "b_class": "TelnetBruteforce",
+        "b_port": 23,
+        "b_status": "brute_force_telnet",
+        "b_parent": null
+    }
+]

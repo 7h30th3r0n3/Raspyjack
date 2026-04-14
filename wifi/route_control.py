@@ -178,7 +178,7 @@ def cmd_test(interface):
             if wifi_status["ssid"]:
                 print(f"📶 WiFi SSID: {wifi_status['ssid']}")
                 print(f"💪 Signal: {wifi_status.get('signal', 'Unknown')}")
-        except:
+        except Exception:
             pass
     
     # Test readiness for switching
