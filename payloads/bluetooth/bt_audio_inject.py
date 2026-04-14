@@ -78,8 +78,13 @@ _scan_active = False
 # ── HCI helpers ──────────────────────────────────────────────────────────────
 
 def _hci_up():
+    subprocess.run(["sudo", "systemctl", "stop", "bluetooth"],
+                   capture_output=True, timeout=5)
+    subprocess.run(["sudo", "hciconfig", HCI_DEV, "down"],
+                   capture_output=True, timeout=5)
     subprocess.run(["sudo", "hciconfig", HCI_DEV, "up"],
                    capture_output=True, timeout=5)
+    time.sleep(0.3)
 
 
 # ── Scan for BT Classic devices (bluetoothctl) ────────────────────────────────
@@ -396,6 +401,7 @@ def main():
 
     HCI_DEV = select_bt_interface(LCD, font, PINS, GPIO)
     if not HCI_DEV:
+        subprocess.run(["sudo", "systemctl", "start", "bluetooth"], capture_output=True, timeout=5)
         GPIO.cleanup()
         return 1
 

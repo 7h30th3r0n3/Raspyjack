@@ -175,12 +175,14 @@ def _check_ble():
 
 
 def _enable_ble():
-    """Bring up the BLE adapter."""
+    """Stop bluetoothd and bring up the BLE adapter for raw HCI."""
     try:
-        subprocess.run(
-            ["hciconfig", HCI_DEVICE, "up"],
-            capture_output=True, timeout=5,
-        )
+        subprocess.run(["sudo", "systemctl", "stop", "bluetooth"],
+                       capture_output=True, timeout=5)
+        subprocess.run(["hciconfig", HCI_DEVICE, "down"],
+                       capture_output=True, timeout=5)
+        subprocess.run(["hciconfig", HCI_DEVICE, "up"],
+                       capture_output=True, timeout=5)
         time.sleep(0.5)
         return _check_ble()
     except Exception:

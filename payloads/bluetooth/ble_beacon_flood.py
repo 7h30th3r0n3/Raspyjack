@@ -1,40 +1,34 @@
 #!/usr/bin/env python3
 """
-RaspyJack Payload -- BLE Beacon Flood
-======================================
+RaspyJack Payload -- BLE Flood
+================================
 Author: 7h30th3r0n3
 
-Broadcasts fake iBeacon and Eddystone-URL advertisements using hcitool
-and hciconfig on the hci0 interface.
-
-Setup / Prerequisites:
-  - Requires Bluetooth adapter (hci0, usually built-in on Pi).  Randomises UUID, major, minor for
-iBeacon frames.
+Flood nearby Bluetooth scans with fake devices.
+Two modes:
+  PRESET   Named devices (real products, hacker memes, pop culture)
+  ENTROPY  Random unicode names (letters, digits, specials, emojis)
 
 Controls:
-  OK   -- Start / Stop flood
-  KEY1 -- Cycle mode: iBeacon / Eddystone / Both
-  KEY2 -- Randomise all beacon parameters
-  KEY3 -- Exit
-
-Loot: /root/Raspyjack/loot/BLEBeacon/<timestamp>.json
+  OK         Start / Stop flood
+  KEY1       Toggle mode (Preset / Entropy)
+  UP/DOWN    Adjust speed
+  KEY3       Exit
 """
 
 import os
 import sys
-import json
-import time
-import struct
 import random
+import time
 import threading
 import subprocess
-from datetime import datetime
 
 sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..", "..")))
 
 import RPi.GPIO as GPIO
-import LCD_1in44, LCD_Config
-from PIL import Image, ImageDraw, ImageFont
+import LCD_1in44
+import LCD_Config
+from PIL import Image
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
 from payloads._iface_helper import select_bt_interface
@@ -43,409 +37,344 @@ PINS = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
     "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16,
 }
-GPIO.setmode(GPIO.BCM)
-for pin in PINS.values():
-    GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-
-LCD = LCD_1in44.LCD()
-LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-WIDTH, HEIGHT = LCD.width, LCD.height
-font = scaled_font()
+WIDTH, HEIGHT = LCD_1in44.LCD_WIDTH, LCD_1in44.LCD_HEIGHT
+LCD = None
 
 # ---------------------------------------------------------------------------
-# Constants
+# Fake device names
 # ---------------------------------------------------------------------------
-HCI_DEV = None  # set in main() via select_bt_interface
-MODES = ["iBeacon", "Eddystone", "Both"]
-
-LOOT_DIR = "/root/Raspyjack/loot/BLEBeacon"
-os.makedirs(LOOT_DIR, exist_ok=True)
-
-EDDYSTONE_URLS = [
-    "http://evil.com",
-    "http://free-wifi.net",
-    "http://update.local",
-    "http://config.io",
-    "http://login.test",
+PRESET_NAMES = [
+    # Real products
+    "AirPods Pro", "AirPods Max", "AirPods 4", "AirTag",
+    "Galaxy Buds2", "Galaxy Watch", "Bose QC45", "Bose QC Ultra",
+    "JBL Flip 6", "JBL Charge 5", "Sony WH-1000", "Sony WF-1000",
+    "Beats Solo", "Beats Fit Pro", "Pixel Buds", "Nothing Ear",
+    "Echo Dot", "HomePod mini", "Apple Watch", "Tile Pro",
+    "Mi Band 8", "Fitbit Versa", "Chromecast",
+    # RaspyJack / Hacking tools
+    "RaspyJack C2", "RaspyJack Agent", "Evil-M5 Active",
+    "RaspyJack Pwnd", "Evil-Portal AP", "Pwnagotchi v2",
+    "RJ-Deauther", "Evil-Twin AP", "RJ-Sniffer",
+    "Flipper Zero", "HackRF One", "WiFi Pineapple",
+    "Rubber Ducky", "Bash Bunny", "LAN Turtle",
+    "Shark Jack", "Key Croc", "O.MG Cable",
+    # Hacker culture
+    "FBI Surveillance", "NSA Van #3", "CIA Listening",
+    "MI6 Field Kit", "GCHQ Monitor", "Mossad Unit",
+    "Mr. Robot", "fsociety", "Dark Army",
+    "Hack The Planet", "Zero Cool", "Acid Burn",
+    "Crash Override", "The Gibson", "l33t h4x0r",
+    "root@kali", "sudo rm -rf /", "DROP TABLE",
+    "'; OR 1=1 --", "alert(1)", "<script>hi",
+    # Trolling
+    "Totally Not Spy", "Not A Tracker", "Free Candy Van",
+    "Definitely Safe", "Trust Me Bro", "No Virus Here",
+    "Your WiFi Sucks", "Get Off My LAN", "It Burns When IP",
+    "Yell PINEAPPLE", "Send Nudes", "Loading...",
+    "Searching...", "Connecting...", "Error 404",
+    # WiFi name memes
+    "Abraham Linksys", "Bill Wi The Kid", "LAN Solo",
+    "The LAN Before", "Wu Tang LAN", "Pretty Fly WiFi",
+    "Silence of LANs", "LAN of the Free", "Drop It Like Hz",
+    "Martin Router K", "The Promised LAN", "LAN Down Under",
+    "New England Clam Router", "Hide Yo Kids WiFi",
+    # Fake scary
+    "Hidden Camera 4", "Smart Lock Open", "Baby Monitor",
+    "Garage Opener", "Alarm Disabled", "Door Unlocked",
+    "Tesla Model 3", "BMW Connected", "Audi MMI",
+    # Pop culture
+    "Skynet Active", "HAL 9000", "JARVIS Online",
+    "FRIDAY System", "Deathstar WiFi", "Mordor Guest",
+    "Hogwarts BT", "Batcave Entry", "Wakanda Tech",
+    "Stark Industries", "Umbrella Corp", "Cyberdyne Sys",
+    "Weyland-Yutani", "Aperture Sci", "Black Mesa",
+    "Abstergo BT", "SHIELD Comm", "Wayne Ent",
+    "LexCorp Device", "Dharma Init", "Los Pollos BT",
+    "Dunder Mifflin", "Saul Goodman", "Heisenberg",
+    "TARDIS Signal", "Sonic Screwdrv", "Matrix Node",
 ]
 
-# URL encoding schemes for Eddystone-URL
-EDDYSTONE_SCHEMES = {
-    "http://www.":  0x00,
-    "https://www.": 0x01,
-    "http://":      0x02,
-    "https://":     0x03,
-}
+# Emoji pool for entropy mode (BLE-safe subset)
+ENTROPY_CHARS = (
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+    "0123456789"
+    "!@#$%&*+-=<>?~"
+    "\U0001F600\U0001F608\U0001F47B\U0001F480\U0001F4A3"  # grinning, devil, ghost, skull, bomb
+    "\U0001F525\U0001F4A9\U0001F916\U0001F47E\U0001F47D"  # fire, poop, robot, alien, alien2
+    "\U0001F512\U0001F513\U0001F6A8\U0001F6AB\U00002620"  # lock, unlock, siren, prohibited, skull&crossbones
+    "\U0001F3F4\U0001F577\U0001F50D\U0001F4E1\U0001F4BB"  # pirate flag, spider, magnifying, satellite, laptop
+    "\U000026A0\U000026D4\U0001F6E1\U00002622\U00002623"  # warning, no entry, shield, radioactive, biohazard
+)
 
-EDDYSTONE_SUFFIXES = {
-    ".com/":  0x00, ".org/":  0x01, ".edu/": 0x02, ".net/": 0x03,
-    ".info/": 0x04, ".biz/":  0x05, ".gov/": 0x06,
-    ".com":   0x07, ".org":   0x08, ".edu":  0x09, ".net":  0x0A,
-    ".info":  0x0B, ".biz":   0x0C, ".gov":  0x0D,
-    ".io":    0x0E, ".test":  0x0F,
-}
+# Speed settings
+SPEEDS = [
+    ("Slow", 0.15),
+    ("Med", 0.08),
+    ("Fast", 0.03),
+    ("Max", 0.0),
+]
 
 # ---------------------------------------------------------------------------
-# Shared state (protected by lock)
+# State
 # ---------------------------------------------------------------------------
 lock = threading.Lock()
+HCI_DEV = None
 flooding = False
-mode_idx = 0
-beacons_sent = 0
-last_error = ""
-
-# Current beacon parameters
-beacon_uuid = ""
-beacon_major = 0
-beacon_minor = 0
-eddystone_url = ""
-
-
-def _randomise_params():
-    """Return a new tuple of (uuid, major, minor, url)."""
-    uuid = "".join(f"{random.randint(0, 255):02X}" for _ in range(16))
-    major = random.randint(0, 65535)
-    minor = random.randint(0, 65535)
-    url = random.choice(EDDYSTONE_URLS)
-    return uuid, major, minor, url
-
-
-def _set_params(uuid, major, minor, url):
-    """Update shared beacon parameters."""
-    global beacon_uuid, beacon_major, beacon_minor, eddystone_url
-    with lock:
-        beacon_uuid = uuid
-        beacon_major = major
-        beacon_minor = minor
-        eddystone_url = url
-
-
-# Initialise parameters
-_set_params(*_randomise_params())
+mode = 0           # 0=Preset, 1=Entropy
+speed_idx = 2      # default Fast
+sent = 0
+last_name = ""
 
 # ---------------------------------------------------------------------------
-# HCI helpers
+# HCI
 # ---------------------------------------------------------------------------
-
-def _hci_reset_adv():
-    """Disable advertising via HCI command (BlueZ 5.80+ compatible)."""
-    subprocess.run(
-        ["sudo", "hcitool", "-i", HCI_DEV, "cmd", "0x08", "0x000A", "00"],
-        capture_output=True, timeout=5,
-    )
-
-
-def _hci_set_adv_params():
-    """Set advertising parameters: fast interval, non-connectable undirected."""
-    subprocess.run(
-        ["sudo", "hcitool", "-i", HCI_DEV, "cmd", "0x08", "0x0006",
-         "20", "00", "20", "00", "03", "00", "00", "00", "00", "00",
-         "00", "00", "00", "07", "00"],
-        capture_output=True, timeout=5,
-    )
-
-
-def _hci_enable_adv():
-    """Enable LE advertising via HCI command (BlueZ 5.80+ compatible)."""
-    subprocess.run(
-        ["sudo", "hcitool", "-i", HCI_DEV, "cmd", "0x08", "0x000A", "01"],
-        capture_output=True, timeout=5,
-    )
 
 
 def _hci_up():
-    """Bring the HCI device up."""
-    subprocess.run(
-        ["sudo", "hciconfig", HCI_DEV, "up"],
-        capture_output=True, timeout=5,
+    subprocess.run(["sudo", "systemctl", "stop", "bluetooth"],
+                   capture_output=True, timeout=5)
+    subprocess.run(["sudo", "hciconfig", HCI_DEV, "down"],
+                   capture_output=True, timeout=5)
+    subprocess.run(["sudo", "hciconfig", HCI_DEV, "up"],
+                   capture_output=True, timeout=5)
+    time.sleep(0.3)
+
+
+def _send_fake_device(name):
+    """Send one fake device advertisement via single bash call."""
+    global last_name
+    # Encode name — truncate to fit BLE adv (max ~20 bytes UTF-8)
+    name_bytes = name.encode("utf-8")[:20]
+    name_len = len(name_bytes)
+
+    # Build adv data: Flags + Complete Local Name
+    adv = bytearray([0x02, 0x01, 0x06, name_len + 1, 0x09])
+    adv.extend(name_bytes)
+    while len(adv) < 31:
+        adv.append(0x00)
+    adv_hex = " ".join(f"{b:02X}" for b in adv)
+    data_len = f"{name_len + 5:02X}"
+
+    # Random MAC
+    mac = [random.randint(0, 255) for _ in range(6)]
+    mac[0] = mac[0] | 0xC0
+    mac_hex = " ".join(f"{b:02X}" for b in mac)
+
+    # Single bash call — all HCI commands chained
+    script = (
+        f"hcitool -i {HCI_DEV} cmd 0x08 0x000A 00 >/dev/null 2>&1;"
+        f"hcitool -i {HCI_DEV} cmd 0x08 0x0005 {mac_hex} >/dev/null 2>&1;"
+        f"hcitool -i {HCI_DEV} cmd 0x08 0x0006 20 00 20 00 00 01 00 "
+        f"00 00 00 00 00 00 07 00 >/dev/null 2>&1;"
+        f"hcitool -i {HCI_DEV} cmd 0x08 0x0008 {data_len} {adv_hex} >/dev/null 2>&1;"
+        f"hcitool -i {HCI_DEV} cmd 0x08 0x000A 01 >/dev/null 2>&1"
     )
-
-
-def _build_ibeacon_cmd():
-    """Build hcitool cmd bytes for an iBeacon advertisement."""
-    with lock:
-        uuid_hex = beacon_uuid
-        major = beacon_major
-        minor = beacon_minor
-
-    # iBeacon prefix: Apple company ID (4C 00), type 02 15
-    prefix = "1E 02 01 06 1A FF 4C 00 02 15"
-    uuid_spaced = " ".join(uuid_hex[i:i + 2] for i in range(0, 32, 2))
-    major_hex = f"{major:04X}"
-    minor_hex = f"{minor:04X}"
-    major_spaced = f"{major_hex[0:2]} {major_hex[2:4]}"
-    minor_spaced = f"{minor_hex[0:2]} {minor_hex[2:4]}"
-    tx_power = "C5"
-
-    payload = f"{prefix} {uuid_spaced} {major_spaced} {minor_spaced} {tx_power}"
-    return ["sudo", "hcitool", "-i", HCI_DEV, "cmd", "0x08", "0x0008"] + payload.split()
-
-
-def _encode_eddystone_url(url):
-    """Encode a URL into Eddystone-URL frame bytes (as hex strings)."""
-    scheme_byte = 0x02  # default http://
-    body = url
-    for prefix, code in sorted(EDDYSTONE_SCHEMES.items(), key=lambda x: -len(x[0])):
-        if url.startswith(prefix):
-            scheme_byte = code
-            body = url[len(prefix):]
-            break
-
-    encoded = []
-    i = 0
-    while i < len(body):
-        matched = False
-        for suffix, code in sorted(EDDYSTONE_SUFFIXES.items(), key=lambda x: -len(x[0])):
-            if body[i:].startswith(suffix):
-                encoded.append(f"{code:02X}")
-                i += len(suffix)
-                matched = True
-                break
-        if not matched:
-            encoded.append(f"{ord(body[i]):02X}")
-            i += 1
-
-    return f"{scheme_byte:02X}", encoded
-
-
-def _build_eddystone_cmd():
-    """Build hcitool cmd bytes for an Eddystone-URL advertisement."""
-    with lock:
-        url = eddystone_url
-
-    scheme_hex, body_hex = _encode_eddystone_url(url)
-    body_str = " ".join(body_hex)
-
-    # Eddystone service UUID: AA FE
-    # Frame type 0x10 = URL, TX power 0xEB
-    url_frame_len = 5 + len(body_hex)
-    total_len = url_frame_len + 10
-
-    payload = (
-        f"{total_len:02X} 02 01 06 03 03 AA FE "
-        f"{url_frame_len + 1:02X} 16 AA FE 10 EB {scheme_hex} {body_str}"
-    )
-    return ["sudo", "hcitool", "-i", HCI_DEV, "cmd", "0x08", "0x0008"] + payload.split()
-
-
-def _send_beacon(cmd):
-    """Send one beacon advertisement via hcitool, returns True on success."""
-    global last_error
     try:
-        _hci_up()
-        _hci_reset_adv()
-        _hci_set_adv_params()
-        time.sleep(0.02)
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
-        if result.returncode != 0:
-            err_msg = (result.stderr or "").strip()
-            # If hcitool cmd fails, try resetting and retrying once
-            if err_msg:
-                subprocess.run(
-                    ["sudo", "hciconfig", HCI_DEV, "reset"],
-                    capture_output=True, timeout=5,
-                )
-                time.sleep(0.1)
-                _hci_up()
-                time.sleep(0.1)
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
-                if result.returncode != 0:
-                    with lock:
-                        last_error = err_msg[:40] or "hcitool cmd error"
-                    return False
-        _hci_enable_adv()
-        time.sleep(0.05)
+        subprocess.run(["sudo", "bash", "-c", script],
+                       capture_output=True, timeout=3)
+        last_name = name
         return True
-    except subprocess.TimeoutExpired:
-        with lock:
-            last_error = "Command timeout"
+    except Exception:
         return False
-    except Exception as exc:
-        with lock:
-            last_error = str(exc)[:40]
-        return False
+
+
+def _gen_entropy_name():
+    """Generate a random name with mixed chars + emojis."""
+    length = random.randint(4, 12)
+    return "".join(random.choice(ENTROPY_CHARS) for _ in range(length))
 
 
 # ---------------------------------------------------------------------------
 # Flood thread
 # ---------------------------------------------------------------------------
 
+
 def _flood_loop():
-    """Main flood loop: sends beacons until stopped."""
-    global beacons_sent
+    global sent
     while True:
         with lock:
             if not flooding:
                 break
-            current_mode = MODES[mode_idx]
+            m = mode
+            delay = SPEEDS[speed_idx][1]
 
-        if current_mode in ("iBeacon", "Both"):
-            cmd = _build_ibeacon_cmd()
-            if _send_beacon(cmd):
-                with lock:
-                    beacons_sent += 1
-            time.sleep(0.1)
+        if m == 0:
+            name = random.choice(PRESET_NAMES)
+        else:
+            name = _gen_entropy_name()
 
-        if current_mode in ("Eddystone", "Both"):
-            cmd = _build_eddystone_cmd()
-            if _send_beacon(cmd):
-                with lock:
-                    beacons_sent += 1
-            time.sleep(0.1)
+        if _send_fake_device(name):
+            with lock:
+                sent += 1
 
-        # Small delay between bursts
-        time.sleep(0.05)
-
-
-def start_flood():
-    """Start the flood in a background thread."""
-    global flooding
-    with lock:
-        if flooding:
-            return
-        flooding = True
-    _hci_up()
-    threading.Thread(target=_flood_loop, daemon=True).start()
-
-
-def stop_flood():
-    """Stop the flood and reset advertising."""
-    global flooding
-    with lock:
-        flooding = False
-    time.sleep(0.2)
-    try:
-        _hci_reset_adv()
-    except Exception:
-        pass
+        if delay > 0:
+            time.sleep(delay)
 
 
 # ---------------------------------------------------------------------------
-# Loot
+# LCD
 # ---------------------------------------------------------------------------
 
-def export_loot():
-    """Save current session data to loot directory."""
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    with lock:
-        data = {
-            "timestamp": ts,
-            "mode": MODES[mode_idx],
-            "beacons_sent": beacons_sent,
-            "uuid": beacon_uuid,
-            "major": beacon_major,
-            "minor": beacon_minor,
-            "eddystone_url": eddystone_url,
-        }
-    path = os.path.join(LOOT_DIR, f"beacon_flood_{ts}.json")
-    with open(path, "w") as f:
-        json.dump(data, f, indent=2)
-    return path
 
-
-# ---------------------------------------------------------------------------
-# Drawing
-# ---------------------------------------------------------------------------
-
-def draw_screen():
-    """Render the current state to the LCD."""
-    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+def _draw(lcd, font, font_sm):
+    img = Image.new("RGB", (WIDTH, HEIGHT), "#000000")
     d = ScaledDraw(img)
 
-    # Header
-    d.rectangle((0, 0, 127, 13), fill="#111")
-    d.text((2, 1), "BLE FLOOD", font=font, fill="#FF4444")
     with lock:
-        active = flooding
-        sent = beacons_sent
-        mode = MODES[mode_idx]
-        err = last_error
-        uuid_short = beacon_uuid[:8] + "..." if beacon_uuid else "N/A"
-        major = beacon_major
-        minor = beacon_minor
-        url = eddystone_url
+        is_on = flooding
+        m = mode
+        sp = speed_idx
+        count = sent
+        dev = last_name
 
-    status_color = "#00FF00" if active else "#FF0000"
-    d.ellipse((118, 3, 122, 7), fill=status_color)
+    mode_name = "PRESET" if m == 0 else "ENTROPY"
+    speed_name = SPEEDS[sp][0]
 
-    # Mode and count
-    y = 18
-    d.text((2, y), f"Mode: {mode}", font=font, fill="white")
+    # Header
+    d.rectangle((0, 0, 127, 13), fill="#0a0a14")
+    d.text((2, 1), "BLE FLOOD", font=font_sm, fill="#FF4444")
+    d.text((70, 1), mode_name, font=font_sm, fill="#00CCFF")
+    d.ellipse((120, 3, 126, 9), fill="#FF0000" if is_on else "#333")
+
+    # Stats
+    y = 17
+    d.text((2, y), f"Sent: {count}", font=font, fill="#FFFFFF")
+    y += 16
+    d.text((2, y), f"Speed: {speed_name}", font=font_sm, fill="#FFAA00")
     y += 14
-    d.text((2, y), f"Sent: {sent}", font=font, fill="#00FF00")
-    y += 14
-    d.text((2, y), f"UUID: {uuid_short}", font=font, fill="#888")
-    y += 12
-    d.text((2, y), f"Maj: {major}  Min: {minor}", font=font, fill="#888")
-    y += 12
-    d.text((2, y), f"URL: {url[:18]}", font=font, fill="#888")
 
-    if err:
+    # Last device
+    if dev:
+        d.text((2, y), "Last:", font=font_sm, fill="#666")
+        y += 11
+        # Truncate display to fit LCD
+        display = dev[:20]
+        d.text((4, y), display, font=font_sm, fill="#00FF88")
         y += 14
-        d.text((2, y), f"Err: {err[:20]}", font=font, fill="#FF4444")
+    else:
+        y += 25
+
+    # Rate estimate
+    if is_on and count > 0:
+        elapsed = max(1, time.time() - _start_time)
+        rate = count / elapsed
+        d.text((2, y), f"{rate:.1f} dev/s", font=font_sm, fill="#888")
+
+    # Visual activity bar
+    if is_on:
+        bar_y = 95
+        d.rectangle((2, bar_y, 125, bar_y + 6), outline="#222")
+        # Animated fill
+        phase = int(time.time() * 10) % 20
+        for i in range(0, 124, 6):
+            if (i // 6 + phase) % 3 == 0:
+                d.rectangle((i + 2, bar_y + 1, i + 5, bar_y + 5), fill="#FF4444")
 
     # Footer
-    d.rectangle((0, 116, 127, 127), fill="#111")
-    status = "OK:Stop" if active else "OK:Start"
-    d.text((2, 117), f"{status} K1:Mode K3:Exit", font=font, fill="#AAA")
+    d.rectangle((0, 116, 127, 127), fill="#0a0a14")
+    if is_on:
+        d.text((2, 117), "OK:Stop U/D:Speed", font=font_sm, fill="#666")
+    else:
+        d.text((2, 117), "OK:Go K1:Mode K3:X", font=font_sm, fill="#666")
 
-    LCD.LCD_ShowImage(img, 0, 0)
+    lcd.LCD_ShowImage(img, 0, 0)
 
 
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
+_start_time = 0.0
+
+
 def main():
-    global mode_idx, HCI_DEV
+    global HCI_DEV, flooding, mode, speed_idx, sent, _start_time, LCD
+
+    GPIO.setmode(GPIO.BCM)
+    for pin in PINS.values():
+        GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+
+    LCD_Config.GPIO_Init()
+    LCD = LCD_1in44.LCD()
+    LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
+    LCD.LCD_Clear()
+
+    font = scaled_font(10)
+    font_sm = scaled_font(8)
+
+    # Splash
+    img = Image.new("RGB", (WIDTH, HEIGHT), "#000000")
+    d = ScaledDraw(img)
+    d.text((64, 25), "BLE", font=font, fill="#FF4444", anchor="mm")
+    d.text((64, 40), "FLOOD", font=font, fill="#FF4444", anchor="mm")
+    d.line([(20, 50), (108, 50)], fill="#333")
+    d.text((64, 62), "Fake Device Storm", font=font_sm, fill="#888", anchor="mm")
+    d.text((64, 78), "PRESET: Named devices", font=font_sm, fill="#666", anchor="mm")
+    d.text((64, 90), "ENTROPY: Random chaos", font=font_sm, fill="#666", anchor="mm")
+    d.text((64, 108), "Selecting adapter...", font=font_sm, fill="#FFAA00", anchor="mm")
+    LCD.LCD_ShowImage(img, 0, 0)
 
     HCI_DEV = select_bt_interface(LCD, font, PINS, GPIO)
     if not HCI_DEV:
         GPIO.cleanup()
         return 1
 
-    # Splash
-    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ScaledDraw(img)
-    d.text((8, 20), "BLE BEACON FLOOD", font=font, fill="#FF4444")
-    d.text((4, 40), "Fake iBeacon &", font=font, fill="#888")
-    d.text((4, 52), "Eddystone-URL adverts", font=font, fill="#888")
-    d.text((4, 72), "OK    Start / Stop", font=font, fill="#666")
-    d.text((4, 84), "KEY1  Cycle mode", font=font, fill="#666")
-    d.text((4, 96), "KEY2  Randomise", font=font, fill="#666")
-    d.text((4, 108), "KEY3  Exit", font=font, fill="#666")
-    LCD.LCD_ShowImage(img, 0, 0)
+    # Debounce
     time.sleep(0.3)
+    while get_button(PINS, GPIO) is not None:
+        time.sleep(0.05)
 
     try:
         while True:
             btn = get_button(PINS, GPIO)
 
             if btn == "KEY3":
-                export_loot()
                 break
 
-            if btn == "OK":
+            elif btn == "OK":
                 if flooding:
-                    stop_flood()
+                    with lock:
+                        flooding = False
+                    time.sleep(0.3)
+                    # Disable advertising
+                    subprocess.run(
+                        ["sudo", "hcitool", "-i", HCI_DEV, "cmd",
+                         "0x08", "0x000A", "00"],
+                        capture_output=True, timeout=3)
                 else:
-                    start_flood()
+                    with lock:
+                        flooding = True
+                        sent = 0
+                    _start_time = time.time()
+                    _hci_up()
+                    threading.Thread(target=_flood_loop, daemon=True).start()
                 time.sleep(0.3)
 
-            elif btn == "KEY1":
-                with lock:
-                    mode_idx = (mode_idx + 1) % len(MODES)
-                time.sleep(0.25)
+            elif btn == "KEY1" and not flooding:
+                mode = (mode + 1) % 2
+                time.sleep(0.2)
 
-            elif btn == "KEY2":
-                _set_params(*_randomise_params())
-                time.sleep(0.25)
+            elif btn == "UP":
+                speed_idx = min(len(SPEEDS) - 1, speed_idx + 1)
+                time.sleep(0.15)
 
-            draw_screen()
-            time.sleep(0.05)
+            elif btn == "DOWN":
+                speed_idx = max(0, speed_idx - 1)
+                time.sleep(0.15)
+
+            _draw(LCD, font, font_sm)
+            time.sleep(0.03)
 
     finally:
-        stop_flood()
+        with lock:
+            flooding = False
+        time.sleep(0.3)
+        # Disable advertising + restore bluetooth
+        subprocess.run(["sudo", "hcitool", "-i", HCI_DEV or "hci0", "cmd",
+                        "0x08", "0x000A", "00"],
+                       capture_output=True, timeout=3)
+        subprocess.run(["sudo", "systemctl", "start", "bluetooth"],
+                       capture_output=True, timeout=5)
         try:
             LCD.LCD_Clear()
         except Exception:

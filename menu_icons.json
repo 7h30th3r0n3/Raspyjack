@@ -237,7 +237,6 @@
                 " packet_replay": "",
                 " payload_scheduler": "",
                 " qr_generator": "",
-                " ragnar": "",
                 " system_monitor": "",
                 " WanTest": "",
                 " webui": "",
@@ -352,7 +351,8 @@
                 " glasses_detector": "👓",
                 " glasses_counter": "👓",
                 " pcap_analyzer": "",
-                " payload_updater": ""
+                " payload_updater": "",
+                " card_tester": ""
         },
         "fallbacks": {
                 "__scan__": "",

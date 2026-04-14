@@ -108,7 +108,11 @@ async def _bleak_scan(timeout=10):
 
 def _ble_scan():
     """Scan for BLE devices using bleak."""
-    # Bring HCI up
+    # Stop bluetoothd for raw HCI access, bring adapter up
+    subprocess.run(["sudo", "systemctl", "stop", "bluetooth"],
+                   capture_output=True, timeout=5)
+    subprocess.run(["sudo", "hciconfig", HCI_DEV, "down"],
+                   capture_output=True, timeout=5)
     subprocess.run(["sudo", "hciconfig", HCI_DEV, "up"],
                    capture_output=True, timeout=5)
     time.sleep(0.3)
