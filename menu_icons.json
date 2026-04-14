@@ -308,7 +308,7 @@
                 " norse_recon": "",
                 " event_triggers": "",
                 " dropbox_upload": "",
-                " pagecord": "",
+                " pagecord": "",
                 " stealthlink": "",
                 " reverse_ducky": "",
                 " firewall_switcher": "",
@@ -349,7 +349,10 @@
                 " espnow_evil_master": "📡",
                 " unitree_pwn": "🤖",
                 " glasses_detector": "👓",
-                " glasses_counter": "👓"
+                " glasses_counter": "👓",
+                " pcap_analyzer": "",
+                " payload_updater": "",
+                " card_tester": ""
         },
         "fallbacks": {
                 "__scan__": "",

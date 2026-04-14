@@ -1,717 +1,770 @@
 #!/usr/bin/env python3
 """
-RaspyJack Payload – Device Scout
-==================================
-Wireless device scanner combining Bluetooth and WiFi detection with
-anti-surveillance capabilities.  Discovers nearby devices and ranks
-by persistence to identify trackers following you.
+RaspyJack Payload -- Device Scout
+===================================
+Author: 7h30th3r0n3
 
-Views (cycle with LEFT / RIGHT):
-  DEVICES – All detected devices sorted by persistence
-  ALERTS  – Flagged potential trackers only
-  STATS   – Dashboard with scan duration, counts, top threat
+Anti-surveillance scanner. Detects nearby WiFi + BLE devices and
+flags trackers (AirTag, Tile, SmartTag) or persistent followers.
+
+Views (KEY1 to cycle):
+  RADAR    Threat gauge + live device count + scan animation
+  THREATS  Flagged devices only with threat score bars
+  DEVICES  Full device list sorted by persistence
+  BLE      Bluetooth-only view
 
 Controls:
-  LEFT / RIGHT – Cycle view
-  UP / DOWN    – Scroll device list
-  KEY1         – Start / Stop scan
-  KEY2         – Exit
-  KEY3         – Export data to loot/DeviceScout/
-
-Author: dag nazty
+  OK         Start / Stop scan
+  KEY1       Cycle views
+  UP/DOWN    Scroll
+  KEY2       Export data
+  KEY3       Exit
 """
 
 import os
 import sys
 import csv
 import json
+import math
 import time
-import struct
-import socket
-import threading
 import subprocess
+import threading
 from datetime import datetime
 
 sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..", "..")))
 
-import RPi.GPIO as GPIO                          # type: ignore
-import LCD_1in44, LCD_Config                      # type: ignore
-from PIL import Image, ImageDraw, ImageFont       # type: ignore
+import RPi.GPIO as GPIO
+import LCD_1in44
+import LCD_Config
+from PIL import Image
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
-from payloads._iface_helper import select_interface
+from payloads._iface_helper import list_interfaces
 
-# Scapy (optional – WiFi capture won't work without it)
 try:
-    from scapy.all import Dot11, Dot11Elt, Dot11Beacon  # type: ignore
-    from scapy.all import Dot11ProbeReq, Dot11ProbeResp  # type: ignore
-    from scapy.all import sniff as scapy_sniff            # type: ignore
+    from scapy.all import (
+        Dot11, Dot11Elt, Dot11Beacon, Dot11ProbeReq, Dot11ProbeResp,
+        sniff as scapy_sniff,
+    )
     SCAPY_OK = True
 except ImportError:
     SCAPY_OK = False
 
-# BLE HCI socket constants
-AF_BT   = getattr(socket, "AF_BLUETOOTH", 31)
-BT_HCI  = getattr(socket, "BTPROTO_HCI", 1)
-SOL_HCI = getattr(socket, "SOL_HCI", 0)
-HCI_FLT = getattr(socket, "HCI_FILTER", 2)
-
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-W, H = LCD_1in44.LCD_WIDTH, LCD_1in44.LCD_HEIGHT
-
 PINS = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
     "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16,
 }
+WIDTH, HEIGHT = LCD_1in44.LCD_WIDTH, LCD_1in44.LCD_HEIGHT
+LOOT_DIR = "/root/Raspyjack/loot/DeviceScout"
+VIEWS = ["RADAR", "THREATS", "DEVICES", "BLE"]
 
-VIEWS = ["DEVICES", "ALERTS", "STATS"]
+ALL_CHANNELS = list(range(1, 14)) + [
+    36, 40, 44, 48, 52, 56, 60, 64,
+    100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140,
+    149, 153, 157, 161, 165]
 
-CH24 = list(range(1, 14))
-CH5  = [36, 40, 44, 48, 52, 56, 60, 64,
-        100, 104, 108, 112, 116, 120, 124, 128,
-        132, 136, 140, 149, 153, 157, 161, 165]
-CHALL = CH24 + CH5
+TRACKER_NAMES = {"apple": "AirTag", "tile": "Tile", "samsung": "SmartTag",
+                 "chipolo": "Chipolo", "pebblebee": "Pebble"}
 
-# Known tracker company IDs (from BLE Manufacturer Specific Data, AD type 0xFF)
-TRACKER_COMPANY = {
-    0x004C: "AirTag",       # Apple (AirTag / Find My)
-    0xFFFE: "Tile",         # Tile Inc.
-    0x0075: "SmartTag",     # Samsung
+PERSIST_MIN = 60
+PERSIST_ALERT = 0.70
+PERSIST_ALERT_DUR = 300
+
+KNOWN_MONITOR_DRIVERS = {
+    "rtl88XXau", "rtl8812au", "rtl8821au", "rtl88x2bu",
+    "rtl8188eus", "rtl8187", "rt2800usb", "ath9k_htc",
+    "mt76x2u", "mt76x0u", "mt7921u", "rtl8814au",
 }
 
-import os
-paths = [
-    "/root/Raspyjack/loot/DeviceScout",
-    "/root/raspyjack/loot/DeviceScout"
-]
-
-LOOT_DIR = next((p for p in paths if os.path.exists(os.path.dirname(p))), paths[0])
-
-os.makedirs(LOOT_DIR, exist_ok=True)
-
-# Persistence tuning
-PERSIST_MIN_OBS  = 60      # seconds before scoring begins
-PERSIST_ALERT_TH = 0.70    # score threshold for alert
-PERSIST_ALERT_DUR = 300    # must be observed 5 min before score-alert
-
-# Display
-ROWS_VISIBLE = 7           # device rows that fit on LCD
-ROW_H        = 12          # pixel height per row
+# Theme colors
+C_BG = "#000000"
+C_SAFE = "#00FF88"
+C_WARN = "#FFAA00"
+C_DANGER = "#FF3333"
+C_BLE = "#0099FF"
+C_WIFI = "#00CC66"
+C_BT_CLASSIC = "#8844FF"
+C_DIM = "#333333"
+C_TEXT = "#CCCCCC"
+C_MUTED = "#666666"
+C_ACCENT = "#00DDFF"
+C_HEADER_BG = "#0a0a14"
+C_PANEL_BG = "#0d0d1a"
 
 # ---------------------------------------------------------------------------
-# Mutable global state  (threads share via `lock`)
+# State
 # ---------------------------------------------------------------------------
-running   = False
-view_idx  = 0
-scroll    = 0              # list scroll offset
-cur_ch    = 1
-mon_iface = None
-_selected_iface = None
-ble_ready = False
-scan_start = 0.0           # epoch when scan started
-
-# Unified device dict:  mac → { type, name, rssi, first_seen, last_seen,
-#                                sightings, persistence, alert, tracker_type }
-devices = {}
-
 lock = threading.Lock()
+running = False
+scan_start = 0.0
+view_idx = 0
+scroll = 0
+_frame = 0      # animation frame counter
 
-# ===================================================================
-# LCD init
-# ===================================================================
+devices = {}
+mon_ifaces = []
+hci_ifaces = []
+cur_ch = 1
 
-def lcd_init():
-    LCD_Config.GPIO_Init()
-    lcd = LCD_1in44.LCD()
-    lcd.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-    lcd.LCD_Clear()
-    return lcd
 
-# ===================================================================
-# WiFi monitor-mode setup  (from analyzer.py)
-# ===================================================================
+# ---------------------------------------------------------------------------
+# Device helpers
+# ---------------------------------------------------------------------------
 
-def _is_onboard_wifi_iface(iface):
-    """True for the onboard Pi WiFi device (SDIO/mmc or brcmfmac driver)."""
+
+def _get_driver(iface):
     try:
-        devpath = os.path.realpath(f"/sys/class/net/{iface}/device")
-        if "mmc" in devpath:
-            return True
+        return os.path.basename(
+            os.path.realpath(f"/sys/class/net/{iface}/device/driver"))
     except Exception:
-        pass
-    try:
-        driver = os.path.basename(
-            os.path.realpath(f"/sys/class/net/{iface}/device/driver")
-        )
-        if driver == "brcmfmac":
-            return True
-    except Exception:
-        pass
-    return False
+        return ""
 
 
-def find_iface():
-    """Find a monitor-mode capable wireless interface.
-    
-    The onboard Pi WiFi (WebUI interface) is reserved and never selected.
-    """
-    ifs = []
-    try:
-        for n in os.listdir("/sys/class/net"):
-            if n == "lo":
-                continue
-            if os.path.isdir(f"/sys/class/net/{n}/wireless"):
-                if _is_onboard_wifi_iface(n):
-                    continue
-                ifs.append(n)
-    except Exception:
-        pass
-    no_mon = {"brcmfmac", "b43", "wl"}
-    good, fall = [], []
-    for i in ifs:
-        drv = ""
-        try:
-            drv = os.path.basename(
-                os.path.realpath(f"/sys/class/net/{i}/device/driver"))
-        except Exception:
-            pass
-        (fall if drv in no_mon else good).append(i)
-    return (good or fall or [None])[0]
-
-
-def monitor_up(iface):
-    """Put *iface* into monitor mode. Returns interface name or None.
-    
-    Only stops services for this specific interface — wlan0/WebUI is never touched.
-    """
-    for cmd in [
-        ["nmcli", "device", "set", iface, "managed", "no"],
-        ["sudo", "pkill", "-f", f"wpa_supplicant.*{iface}"],
-        ["sudo", "pkill", "-f", f"dhcpcd.*{iface}"],
-    ]:
-        try:
-            subprocess.run(cmd, capture_output=True, timeout=5)
-        except Exception:
-            pass
-    time.sleep(0.5)
-
-    # airmon-ng
-    try:
-        subprocess.run(["sudo", "airmon-ng", "start", iface],
-                       capture_output=True, timeout=30)
-        for name in (f"{iface}mon", iface):
-            r = subprocess.run(["iw", "dev", name, "info"],
-                               capture_output=True, text=True)
-            if "type monitor" in r.stdout:
-                return name
-    except Exception:
-        pass
-
-    # iw
-    try:
-        subprocess.run(["sudo", "ip", "link", "set", iface, "down"],
-                       check=True, timeout=10)
-        subprocess.run(["sudo", "iw", iface, "set", "monitor", "none"],
-                       check=True, timeout=10)
-        subprocess.run(["sudo", "ip", "link", "set", iface, "up"],
-                       check=True, timeout=10)
-        time.sleep(1)
-        r = subprocess.run(["iw", "dev", iface, "info"],
-                           capture_output=True, text=True, timeout=5)
-        if "type monitor" in r.stdout:
-            return iface
-    except Exception:
-        pass
-
-    return None
-
-
-def monitor_down(iface):
-    """Best-effort restore to managed mode.
-    
-    Re-manages the interface in NetworkManager instead of restarting the service
-    (which would disrupt wlan0/WebUI).
-    """
-    if not iface:
-        return
-    base = iface.replace("mon", "")
-    try:
-        subprocess.run(["sudo", "airmon-ng", "stop", iface],
-                       capture_output=True, timeout=10)
-    except Exception:
-        pass
-    for cmd in [
-        ["sudo", "ip", "link", "set", base, "down"],
-        ["sudo", "iw", base, "set", "type", "managed"],
-        ["sudo", "ip", "link", "set", base, "up"],
-        ["nmcli", "device", "set", base, "managed", "yes"],
-    ]:
-        try:
-            subprocess.run(cmd, capture_output=True, timeout=5)
-        except Exception:
-            pass
-
-# ===================================================================
-# WiFi threads
-# ===================================================================
-
-def _hop_thread():
-    """Channel hopper: cycles all WiFi channels."""
-    global cur_ch
-    idx = 0
-    while running:
-        if mon_iface:
-            ch = CHALL[idx % len(CHALL)]
-            try:
-                subprocess.run(
-                    ["sudo", "iw", "dev", mon_iface, "set", "channel", str(ch)],
-                    capture_output=True, timeout=3)
-                cur_ch = ch
-            except Exception:
-                pass
-            idx += 1
-        time.sleep(0.3)
-
-
-def _add_wifi_device(mac, rssi, ssid):
-    """Insert or update a WiFi device in the unified dict."""
+def _add_device(mac, dev_type, rssi, name="", tracker=""):
     mac = mac.upper()
     now = time.time()
     with lock:
         if mac in devices:
-            devices[mac]["rssi"] = rssi
-            devices[mac]["last_seen"] = now
-            devices[mac]["sightings"] += 1
-            if ssid and not devices[mac]["name"]:
-                devices[mac]["name"] = ssid
+            d = devices[mac]
+            if rssi and rssi > -99:
+                d["rssi"] = rssi
+            d["last_seen"] = now
+            d["sightings"] += 1
+            if name and not d["name"]:
+                d["name"] = name
+            if tracker and not d["tracker_type"]:
+                d["tracker_type"] = tracker
+                d["alert"] = True
         else:
             devices[mac] = {
-                "type": "WiFi",
-                "name": ssid or "",
-                "rssi": rssi,
+                "type": dev_type,
+                "name": name,
+                "rssi": rssi or -99,
                 "first_seen": now,
                 "last_seen": now,
                 "sightings": 1,
                 "persistence": 0.0,
-                "alert": False,
-                "tracker_type": "",
+                "alert": bool(tracker),
+                "tracker_type": tracker,
             }
 
 
+# ---------------------------------------------------------------------------
+# Monitor mode
+# ---------------------------------------------------------------------------
+
+
+def _monitor_up(iface):
+    for cmd in [
+        ["sudo", "ip", "link", "set", iface, "down"],
+        ["sudo", "iw", iface, "set", "monitor", "none"],
+        ["sudo", "ip", "link", "set", iface, "up"],
+    ]:
+        subprocess.run(cmd, capture_output=True, timeout=5)
+    time.sleep(0.3)
+    r = subprocess.run(["iw", "dev", iface, "info"],
+                       capture_output=True, text=True, timeout=5)
+    if "type monitor" in r.stdout:
+        return iface
+    subprocess.run(["sudo", "airmon-ng", "start", iface],
+                   capture_output=True, timeout=15)
+    for name in (f"{iface}mon", iface):
+        r = subprocess.run(["iw", "dev", name, "info"],
+                           capture_output=True, text=True, timeout=5)
+        if "type monitor" in r.stdout:
+            return name
+    return None
+
+
+def _monitor_down(iface):
+    if not iface:
+        return
+    base = iface.replace("mon", "")
+    subprocess.run(["sudo", "airmon-ng", "stop", iface],
+                   capture_output=True, timeout=10)
+    for cmd in [
+        ["sudo", "ip", "link", "set", base, "down"],
+        ["sudo", "iw", base, "set", "type", "managed"],
+        ["sudo", "ip", "link", "set", base, "up"],
+    ]:
+        subprocess.run(cmd, capture_output=True, timeout=5)
+
+
+# ---------------------------------------------------------------------------
+# WiFi scanner threads
+# ---------------------------------------------------------------------------
+
+
 def _wifi_cb(pkt):
-    """Scapy per-packet callback – extract source MAC, RSSI, SSID."""
     if not pkt.haslayer(Dot11):
         return
-    dot = pkt[Dot11]
-    src = dot.addr2
-    if not src or src == "ff:ff:ff:ff:ff:ff":
+    src = (pkt[Dot11].addr2 or "").upper()
+    if not src or src == "FF:FF:FF:FF:FF:FF":
         return
-
     rssi = getattr(pkt, "dBm_AntSignal", None)
-
-    # Try to extract SSID from beacons / probe requests / responses
     ssid = ""
     if pkt.haslayer(Dot11Elt):
         try:
             ssid = pkt[Dot11Elt].info.decode("utf-8", errors="ignore")
         except Exception:
             pass
+    _add_device(src, "WiFi", rssi, ssid)
 
-    _add_wifi_device(src, rssi, ssid)
 
-
-def _sniff_thread():
-    """Scapy capture loop (management + data frames)."""
-    if not SCAPY_OK or not mon_iface:
+def _sniff_worker(iface):
+    if not SCAPY_OK:
         return
     try:
-        scapy_sniff(iface=mon_iface, prn=_wifi_cb,
-                    filter="type mgt or type data",
-                    stop_filter=lambda x: not running, store=0)
+        scapy_sniff(iface=iface, prn=_wifi_cb,
+                    stop_filter=lambda _: not running, store=0)
     except Exception:
         pass
 
-# ===================================================================
-# BLE scanner  (raw HCI socket – no extra pip packages)
-# ===================================================================
 
-def _hci_opcode(ogf, ocf):
-    return (ogf << 10) | ocf
-
-
-def _ble_open():
-    """Open HCI socket, enable LE passive scan. Returns socket or None."""
-    try:
-        subprocess.run(["sudo", "hciconfig", "hci0", "up"],
-                       capture_output=True, timeout=5)
+def _hop_worker(iface, channels):
+    global cur_ch
+    idx = 0
+    while running:
+        ch = channels[idx % len(channels)]
+        r = subprocess.run(
+            ["sudo", "iw", "dev", iface, "set", "channel", str(ch)],
+            capture_output=True, timeout=3)
+        if r.returncode == 0:
+            cur_ch = ch
+        idx += 1
         time.sleep(0.3)
-    except Exception:
-        return None
 
-    try:
-        s = socket.socket(AF_BT, socket.SOCK_RAW, BT_HCI)
-        s.bind((0,))
-        s.settimeout(1.0)
 
-        # HCI filter: HCI_EVENT_PKT, CMD_COMPLETE + LE_META
-        s.setsockopt(SOL_HCI, HCI_FLT,
-                     struct.pack("<IIIH", 1 << 4, 1 << 14, 1 << 30, 0))
-
-        # LE Set Scan Parameters: passive, 10 ms interval/window
-        op = _hci_opcode(0x08, 0x000B)
-        p = struct.pack("<BHHBB", 0x00, 0x0010, 0x0010, 0x00, 0x00)
-        s.send(struct.pack("<BHB", 0x01, op, len(p)) + p)
+def _iw_scan_worker():
+    while running:
         try:
-            s.recv(256)
-        except socket.timeout:
+            r = subprocess.run(
+                ["sudo", "iw", "dev", "wlan0", "scan", "-u"],
+                capture_output=True, text=True, timeout=15)
+            if r.returncode == 0:
+                cur_mac = None
+                cur_ssid = ""
+                cur_sig = -80
+                for line in r.stdout.splitlines():
+                    s = line.strip()
+                    if s.startswith("BSS "):
+                        if cur_mac:
+                            _add_device(cur_mac, "WiFi", cur_sig, cur_ssid)
+                        parts = s.split()
+                        cur_mac = parts[1].split("(")[0].upper() if len(parts) > 1 else None
+                        cur_ssid = ""
+                        cur_sig = -80
+                    elif s.startswith("SSID:"):
+                        cur_ssid = s[5:].strip()
+                    elif s.startswith("signal:"):
+                        try:
+                            cur_sig = int(float(s.split(":")[1].strip().split()[0]))
+                        except Exception:
+                            pass
+                if cur_mac:
+                    _add_device(cur_mac, "WiFi", cur_sig, cur_ssid)
+        except Exception:
             pass
+        for _ in range(50):
+            if not running:
+                return
+            time.sleep(0.1)
 
-        # LE Set Scan Enable: on, no duplicate filter
-        op = _hci_opcode(0x08, 0x000C)
-        p = struct.pack("<BB", 0x01, 0x00)
-        s.send(struct.pack("<BHB", 0x01, op, len(p)) + p)
+
+# ---------------------------------------------------------------------------
+# BLE scanner (btmgmt)
+# ---------------------------------------------------------------------------
+
+
+def _ble_worker(hci="hci0"):
+    """BLE scan using btmgmt find — reads output line by line in real-time."""
+    while running:
         try:
-            s.recv(256)
-        except socket.timeout:
-            pass
+            idx = hci.replace("hci", "")
+            proc = subprocess.Popen(
+                ["sudo", "btmgmt", "--index", idx, "find"],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True)
 
-        return s
-    except Exception:
-        return None
-
-
-def _ble_close(s):
-    """Disable scan and close socket."""
-    if not s:
-        return
-    try:
-        op = _hci_opcode(0x08, 0x000C)
-        p = struct.pack("<BB", 0x00, 0x00)
-        s.send(struct.pack("<BHB", 0x01, op, len(p)) + p)
-    except Exception:
-        pass
-    try:
-        s.close()
-    except Exception:
-        pass
-
-
-def _parse_adv(data):
-    """Parse LE Advertising Report.
-
-    Returns list of ``(mac, rssi, name, tracker_type)`` tuples.
-    *tracker_type* is a string like ``"AirTag"`` or ``""`` if unknown.
-    """
-    out = []
-    if len(data) < 5 or data[0] != 0x04 or data[1] != 0x3E:
-        return out
-    if data[3] != 0x02:
-        return out
-    try:
-        num = data[4]
-        off = 5
-        for _ in range(num):
-            if off + 9 > len(data):
-                break
-            addr = data[off + 2:off + 8]
-            dlen = data[off + 8]
-            off += 9
-
-            mac = ":".join(f"{b:02X}" for b in reversed(addr))
-
-            name = ""
-            tracker = ""
-            ad = data[off:off + dlen]
-            j = 0
-            while j < len(ad) - 1:
-                al = ad[j]
-                if al == 0 or j + al >= len(ad):
+            deadline = time.time() + 10
+            for line in iter(proc.stdout.readline, ""):
+                if not running or time.time() > deadline:
                     break
-                ad_type = ad[j + 1]
+                line = line.strip()
+                if "dev_found:" not in line:
+                    continue
+                parts = line.split()
+                try:
+                    mac_idx = parts.index("dev_found:") + 1
+                    mac = parts[mac_idx].upper()
+                except (ValueError, IndexError):
+                    continue
+                rssi = -99
+                try:
+                    rssi_idx = parts.index("rssi") + 1
+                    rssi = int(parts[rssi_idx])
+                except (ValueError, IndexError):
+                    pass
+                dev_type = "BT" if "BR/EDR" in line else "BLE"
+                tracker = ""
+                for key, tname in TRACKER_NAMES.items():
+                    if key in line.lower():
+                        tracker = tname
+                _add_device(mac, dev_type, rssi, tracker=tracker)
 
-                # 0x08 / 0x09 = Shortened / Complete Local Name
-                if ad_type in (0x08, 0x09):
-                    try:
-                        name = bytes(ad[j + 2:j + 1 + al]).decode(
-                            "utf-8", errors="ignore")
-                    except Exception:
-                        pass
-
-                # 0xFF = Manufacturer Specific Data (first 2 bytes = company ID)
-                if ad_type == 0xFF and al >= 3:
-                    company_id = ad[j + 2] | (ad[j + 3] << 8)
-                    t = TRACKER_COMPANY.get(company_id)
-                    if t:
-                        tracker = t
-
-                j += al + 1
-            off += dlen
-
-            rssi = (struct.unpack("b", bytes([data[off]]))[0]
-                    if off < len(data) else -127)
-            off += 1
-            out.append((mac, rssi, name, tracker))
-    except Exception:
-        pass
-    return out
-
-
-def _ble_thread():
-    """BLE scanner thread – reads advertising reports via HCI socket."""
-    global ble_ready
-    s = _ble_open()
-    if not s:
-        return
-    ble_ready = True
-    try:
-        while running:
             try:
-                data = s.recv(256)
-            except socket.timeout:
-                continue
+                proc.terminate()
+                proc.wait(timeout=3)
             except Exception:
-                continue
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        for _ in range(20):
+            if not running:
+                return
+            time.sleep(0.1)
 
-            now = time.time()
-            for mac, rssi, name, tracker in _parse_adv(data):
-                with lock:
-                    if mac in devices:
-                        devices[mac]["rssi"] = rssi
-                        devices[mac]["last_seen"] = now
-                        devices[mac]["sightings"] += 1
-                        if name:
-                            devices[mac]["name"] = name
-                        if tracker and not devices[mac]["tracker_type"]:
-                            devices[mac]["tracker_type"] = tracker
-                            devices[mac]["alert"] = True
-                    else:
-                        is_tracker = bool(tracker)
-                        devices[mac] = {
-                            "type": "BLE",
-                            "name": name,
-                            "rssi": rssi,
-                            "first_seen": now,
-                            "last_seen": now,
-                            "sightings": 1,
-                            "persistence": 0.0,
-                            "alert": is_tracker,
-                            "tracker_type": tracker,
-                        }
-    finally:
-        ble_ready = False
-        _ble_close(s)
 
-# ===================================================================
-# Persistence calculator thread
-# ===================================================================
+def _find_all_hci():
+    result = []
+    bt_path = "/sys/class/bluetooth"
+    if os.path.isdir(bt_path):
+        for name in sorted(os.listdir(bt_path)):
+            if name.startswith("hci"):
+                subprocess.run(["sudo", "hciconfig", name, "up"],
+                               capture_output=True, timeout=5)
+                result.append(name)
+    return result
 
-def _persist_thread():
-    """Recalculate persistence scores every 2 seconds."""
+
+# ---------------------------------------------------------------------------
+# Persistence calculator
+# ---------------------------------------------------------------------------
+
+
+def _persist_worker():
     while running:
         now = time.time()
         with lock:
-            for mac, d in devices.items():
-                duration = now - d["first_seen"]
-                if duration < PERSIST_MIN_OBS:
-                    continue   # too early to score
-
-                # Sighting rate: 10 sightings/min = max
-                rate = min(1.0, (d["sightings"] / (duration / 60.0)) / 10.0)
-
-                # Recency: drops to 0 after 120 s of silence
+            for d in devices.values():
+                dur = now - d["first_seen"]
+                if dur < PERSIST_MIN:
+                    continue
+                rate = min(1.0, (d["sightings"] / (dur / 60.0)) / 10.0)
                 age = now - d["last_seen"]
                 recency = max(0.0, 1.0 - age / 120.0)
-
-                # Duration: maxes at 30 min
-                dur = min(1.0, duration / 1800.0)
-
-                score = rate * 0.4 + recency * 0.3 + dur * 0.3
+                dur_score = min(1.0, dur / 1800.0)
+                score = rate * 0.4 + recency * 0.3 + dur_score * 0.3
                 d["persistence"] = round(score, 2)
-
-                # Alert on high persistence (if not already flagged by tracker ID)
-                if (not d["alert"]
-                        and score > PERSIST_ALERT_TH
-                        and duration > PERSIST_ALERT_DUR):
+                if (not d["alert"] and score > PERSIST_ALERT
+                        and dur > PERSIST_ALERT_DUR):
                     d["alert"] = True
         time.sleep(2)
 
-# ===================================================================
+
+# ---------------------------------------------------------------------------
+# Start / Stop
+# ---------------------------------------------------------------------------
+
+
+def start_all():
+    global running, scan_start
+    if running:
+        return
+    running = True
+    scan_start = time.time()
+
+    # WiFi
+    wifi_all = list_interfaces("wifi")
+    usb_wifi = [i["name"] for i in wifi_all
+                if not i.get("is_onboard") and
+                (i.get("supports_monitor") or
+                 _get_driver(i["name"]) in KNOWN_MONITOR_DRIVERS)]
+
+    mon_ifaces.clear()
+    for iface in usb_wifi:
+        m = _monitor_up(iface)
+        if m:
+            mon_ifaces.append(m)
+
+    if mon_ifaces:
+        n = len(mon_ifaces)
+        for idx, iface in enumerate(mon_ifaces):
+            threading.Thread(target=_sniff_worker, args=(iface,), daemon=True).start()
+            chs = [ALL_CHANNELS[i] for i in range(idx, len(ALL_CHANNELS), n)]
+            threading.Thread(target=_hop_worker, args=(iface, chs), daemon=True).start()
+
+    if os.path.isdir("/sys/class/net/wlan0/wireless"):
+        threading.Thread(target=_iw_scan_worker, daemon=True).start()
+
+    # BLE
+    hci_list = _find_all_hci()
+    hci_ifaces.clear()
+    hci_ifaces.extend(hci_list)
+    for hci in hci_list:
+        threading.Thread(target=_ble_worker, args=(hci,), daemon=True).start()
+
+    threading.Thread(target=_persist_worker, daemon=True).start()
+
+
+def stop_all():
+    global running
+    running = False
+    time.sleep(0.5)
+
+
+# ---------------------------------------------------------------------------
 # Drawing helpers
-# ===================================================================
-
-def _header(d, font, view_name):
-    d.rectangle((0, 0, W - 1, 13), fill="#111")
-    d.text((2, 1), "SCOUT", font=font, fill="#00FF00")
-    if hasattr(d, "textbbox"):
-        tw = d.textbbox((0, 0), view_name, font=font)[2]
-    else:
-        tw, _ = d.textsize(view_name, font=font)
-    d.text((W - 3 - tw, 1), view_name, font=font, fill="white")
-    d.ellipse((108, 3, 112, 7), fill="#00FF00" if running else "#FF0000")
+# ---------------------------------------------------------------------------
 
 
-def _footer(d, font, text):
-    d.rectangle((0, H - 12, W - 1, H - 1), fill="#111")
-    d.text((2, H - 11), text[:24], font=font, fill="#AAA")
+def _signal_level(rssi):
+    if rssi is None or rssi <= -90:
+        return 0
+    if rssi >= -50:
+        return 4
+    if rssi >= -60:
+        return 3
+    if rssi >= -70:
+        return 2
+    return 1
 
 
-def _draw_persist_bar(d, x, y, ratio, alert):
-    """Draw a small 16x6 persistence bar at (x, y)."""
-    w, h = 16, 6
-    d.rectangle((x, y + 3, x + w - 1, y + h + 2), outline="#444")
-    filled = int(ratio * (w - 2))
-    if filled > 0:
-        color = "#FF4444" if alert else "#00FF00"
-        d.rectangle((x + 1, y + 4, x + filled, y + h + 1), fill=color)
+def _threat_color(score, alert):
+    if alert:
+        return C_DANGER
+    if score > 0.5:
+        return C_WARN
+    return C_SAFE
 
 
-def _sorted_devices(alert_only=False):
-    """Return devices as list of (mac, info) sorted by persistence desc."""
+def _sorted_devs(alert_only=False, type_filter=None):
     with lock:
-        items = [(m, dict(d)) for m, d in devices.items()
-                 if not alert_only or d["alert"]]
-    items.sort(key=lambda kv: kv[1]["persistence"], reverse=True)
+        items = []
+        for m, d in devices.items():
+            if alert_only and not d["alert"]:
+                continue
+            if type_filter and d["type"] not in (type_filter if isinstance(type_filter, (list, tuple)) else [type_filter]):
+                continue
+            items.append((m, dict(d)))
+    items.sort(key=lambda x: x[1]["persistence"], reverse=True)
     return items
 
 
-def _draw_device_list(d, font, devs, y0, alert_color=False):
-    """Draw a scrollable device list starting at *y0*."""
-    visible = devs[scroll:scroll + ROWS_VISIBLE]
-    for i, (mac, info) in enumerate(visible):
-        y = y0 + i * ROW_H
-        typ = "B" if info["type"] == "BLE" else "W"
-        name = (info["name"] or mac[-8:])[:9]
-        rssi = info["rssi"]
-        rssi_s = f"{rssi}" if rssi is not None else "?"
-
-        # Color: red tint for alerts, green for normal
-        if info["alert"]:
-            color = "#FF4444" if alert_color else "#FF8800"
-        else:
-            color = "#CCCCCC"
-
-        line = f"{typ} {name:<9s}{rssi_s:>4s}"
-        d.text((1, y), line, font=font, fill=color)
-        # Persistence bar (graphical, right side)
-        _draw_persist_bar(d, 102, y, info["persistence"], info["alert"])
-        # Alert marker
-        if info["alert"]:
-            d.text((120, y), "!", font=font, fill="#FF0000")
-
-    # Scroll indicator
-    total = len(devs)
-    if total > ROWS_VISIBLE:
-        bar_h = max(4, int(ROWS_VISIBLE / total * 88))
-        bar_y = y0 + int(scroll / total * 88)
-        d.rectangle((W - 2, bar_y, W - 1, bar_y + bar_h), fill="#444")
+# ---------------------------------------------------------------------------
+# RADAR view — main threat overview
+# ---------------------------------------------------------------------------
 
 
-def _draw_devices_view(d, font):
-    """DEVICES view: all detected devices."""
-    devs = _sorted_devices(alert_only=False)
-    if not devs:
-        msg = "Scanning..." if running else "Press KEY1"
-        d.text((25, 55), msg, font=font, fill="#666")
-    else:
-        _draw_device_list(d, font, devs, 15)
-
-    n_wifi = sum(1 for _, v in devs if v["type"] == "WiFi")
-    n_ble  = sum(1 for _, v in devs if v["type"] == "BLE")
-    n_alert = sum(1 for _, v in devs if v["alert"])
-    _footer(d, font, f"W:{n_wifi} B:{n_ble} Alert:{n_alert}")
-
-
-def _draw_alerts_view(d, font):
-    """ALERTS view: only flagged devices."""
-    devs = _sorted_devices(alert_only=True)
-    if not devs:
-        d.text((20, 45), "All clear", font=font, fill="#00FF00")
-        d.text((12, 60), "No trackers found", font=font, fill="#666")
-    else:
-        _draw_device_list(d, font, devs, 15, alert_color=True)
-
-    n = len(devs)
-    _footer(d, font, f"Alerts: {n} device{'s' if n != 1 else ''}")
-
-
-def _draw_stats_view(d, font):
-    """STATS view: scan dashboard."""
-    with lock:
-        total = len(devices)
-        n_wifi  = sum(1 for v in devices.values() if v["type"] == "WiFi")
-        n_ble   = sum(1 for v in devices.values() if v["type"] == "BLE")
-        n_alert = sum(1 for v in devices.values() if v["alert"])
-        # Most persistent device
-        top_mac, top_info = "", None
-        for m, v in devices.items():
-            if top_info is None or v["persistence"] > top_info["persistence"]:
-                top_mac, top_info = m, v
-
-    # Scan duration
-    if scan_start > 0:
-        elapsed = int(time.time() - scan_start)
-        mins, secs = divmod(elapsed, 60)
-        dur_s = f"{mins}m {secs:02d}s"
-    else:
-        dur_s = "not started"
-
-    y = 18
-    lines = [
-        f"Scan: {dur_s}",
-        f"WiFi:  {n_wifi} devices",
-        f"BLE:   {n_ble} devices",
-        f"Total: {total}",
-        f"Alerts: {n_alert} active",
-    ]
-    for line in lines:
-        d.text((4, y), line, font=font, fill="#CCCCCC")
-        y += 12
-
-    if top_info and top_info["persistence"] > 0:
-        d.text((4, y + 4), "Most persistent:", font=font, fill="#888")
-        name = (top_info["name"] or top_mac[-8:])[:14]
-        score = top_info["persistence"]
-        color = "#FF4444" if top_info["alert"] else "#FFAA00"
-        d.text((4, y + 16), f" {name} ({score:.2f})", font=font, fill=color)
-
-    status = "KEY1:Stop" if running else "KEY1:Start"
-    _footer(d, font, f"{status}  KEY3:Export")
-
-
-def draw_frame(lcd, font):
-    """Render one frame to the LCD."""
-    img = Image.new("RGB", (W, H), "black")
+def _draw_radar(lcd, font, font_sm):
+    global _frame
+    _frame += 1
+    img = Image.new("RGB", (WIDTH, HEIGHT), C_BG)
     d = ScaledDraw(img)
 
-    view = VIEWS[view_idx]
-    _header(d, font, view)
+    with lock:
+        total = len(devices)
+        n_wifi = sum(1 for v in devices.values() if v["type"] == "WiFi")
+        n_ble = sum(1 for v in devices.values() if v["type"] in ("BLE", "BT"))
+        n_alert = sum(1 for v in devices.values() if v["alert"])
+        max_persist = max((v["persistence"] for v in devices.values()), default=0)
 
-    if   view == "DEVICES":  _draw_devices_view(d, font)
-    elif view == "ALERTS":   _draw_alerts_view(d, font)
-    elif view == "STATS":    _draw_stats_view(d, font)
+    # Header bar
+    d.rectangle((0, 0, 127, 13), fill=C_HEADER_BG)
+    d.text((2, 1), "SCOUT", font=font_sm, fill=C_ACCENT)
+    if running:
+        # Scanning animation dots
+        dots = "." * ((_frame // 3) % 4)
+        d.text((38, 1), f"SCAN{dots}", font=font_sm, fill=C_SAFE)
+    else:
+        d.text((38, 1), "IDLE", font=font_sm, fill=C_MUTED)
+    d.text((90, 1), f"CH:{cur_ch}", font=font_sm, fill=C_MUTED)
+
+    # --- Threat gauge (arc) ---
+    cx, cy = 64, 52
+    radius = 28
+
+    # Background arc
+    d.arc((cx - radius, cy - radius, cx + radius, cy + radius),
+          180, 360, fill=C_DIM, width=2)
+
+    # Threat level arc (0-180 degrees based on max persistence)
+    if max_persist > 0:
+        angle = int(max_persist * 180)
+        if n_alert > 0:
+            arc_color = C_DANGER
+        elif max_persist > 0.5:
+            arc_color = C_WARN
+        else:
+            arc_color = C_SAFE
+        d.arc((cx - radius, cy - radius, cx + radius, cy + radius),
+              180, 180 + angle, fill=arc_color, width=3)
+
+    # Threat level text in center
+    if n_alert > 0:
+        level_text = "THREAT"
+        level_color = C_DANGER
+    elif max_persist > 0.5:
+        level_text = "CAUTION"
+        level_color = C_WARN
+    elif total > 0:
+        level_text = "CLEAR"
+        level_color = C_SAFE
+    else:
+        level_text = "---"
+        level_color = C_MUTED
+
+    d.text((cx, cy - 5), level_text, font=font_sm, fill=level_color, anchor="mm")
+
+    # Alert count below gauge
+    if n_alert > 0:
+        d.text((cx, cy + 10), f"{n_alert} ALERT{'S' if n_alert > 1 else ''}",
+               font=font_sm, fill=C_DANGER, anchor="mm")
+
+    # --- Device counters (bottom panels) ---
+    panel_y = 82
+    panel_h = 28
+
+    # WiFi panel
+    d.rectangle((2, panel_y, 41, panel_y + panel_h), fill=C_PANEL_BG, outline=C_DIM)
+    d.text((6, panel_y + 2), "WiFi", font=font_sm, fill=C_WIFI)
+    d.text((6, panel_y + 14), str(n_wifi), font=font, fill="#FFFFFF")
+
+    # BLE panel
+    d.rectangle((44, panel_y, 83, panel_y + panel_h), fill=C_PANEL_BG, outline=C_DIM)
+    d.text((48, panel_y + 2), "BLE", font=font_sm, fill=C_BLE)
+    d.text((48, panel_y + 14), str(n_ble), font=font, fill="#FFFFFF")
+
+    # Alerts panel
+    alert_bg = "#1a0a0a" if n_alert > 0 else C_PANEL_BG
+    alert_border = C_DANGER if n_alert > 0 else C_DIM
+    d.rectangle((86, panel_y, 125, panel_y + panel_h), fill=alert_bg, outline=alert_border)
+    d.text((90, panel_y + 2), "Alert", font=font_sm, fill=C_DANGER if n_alert else C_MUTED)
+    d.text((90, panel_y + 14), str(n_alert), font=font,
+           fill=C_DANGER if n_alert else C_MUTED)
+
+    # Footer
+    d.rectangle((0, 116, 127, 127), fill=C_HEADER_BG)
+    action = "STOP" if running else "START"
+    d.text((2, 117), f"OK:{action} K1:View K2:Exp", font=font_sm, fill=C_MUTED)
 
     lcd.LCD_ShowImage(img, 0, 0)
 
-# ===================================================================
-# Export
-# ===================================================================
 
-def export_data():
-    """Write JSON + CSV to loot/DeviceScout/."""
+# ---------------------------------------------------------------------------
+# THREATS view
+# ---------------------------------------------------------------------------
+
+
+def _draw_threats(lcd, font, font_sm):
+    img = Image.new("RGB", (WIDTH, HEIGHT), C_BG)
+    d = ScaledDraw(img)
+
+    devs = _sorted_devs(alert_only=True)
+
+    # Header
+    d.rectangle((0, 0, 127, 13), fill="#1a0808")
+    d.text((2, 1), "THREATS", font=font_sm, fill=C_DANGER)
+    d.text((90, 1), f"{len(devs)}", font=font_sm,
+           fill=C_DANGER if devs else C_MUTED)
+
+    if not devs:
+        # Safe screen
+        d.text((64, 50), "ALL CLEAR", font=font, fill=C_SAFE, anchor="mm")
+        d.text((64, 68), "No trackers detected", font=font_sm,
+               fill=C_MUTED, anchor="mm")
+        # Checkmark
+        d.ellipse((52, 30, 76, 40), outline=C_SAFE)
+    else:
+        y = 16
+        visible = devs[scroll:scroll + 7]
+        for mac, info in visible:
+            name = (info["name"] or info.get("tracker_type", "") or mac[-8:])[:11]
+            score = info["persistence"]
+            rssi = info["rssi"]
+            tracker = info.get("tracker_type", "")[:5]
+
+            # Red gradient row background based on score
+            row_bg = f"#{min(255, int(score * 40)):02x}0000"
+            d.rectangle((0, y, 127, y + 13), fill=row_bg)
+
+            # Threat bar
+            bar_w = int(score * 30)
+            if bar_w > 0:
+                d.rectangle((2, y + 2, 2 + bar_w, y + 10), fill=C_DANGER)
+
+            # Name + info
+            d.text((36, y + 1), name, font=font_sm, fill="#FFFFFF")
+            if tracker:
+                d.text((100, y + 1), tracker, font=font_sm, fill=C_WARN)
+            else:
+                d.text((108, y + 1), f"{rssi}", font=font_sm, fill=C_MUTED)
+
+            y += 14
+
+    d.rectangle((0, 116, 127, 127), fill=C_HEADER_BG)
+    d.text((2, 117), "K1:View U/D:Scroll K3:X", font=font_sm, fill=C_MUTED)
+    lcd.LCD_ShowImage(img, 0, 0)
+
+
+# ---------------------------------------------------------------------------
+# DEVICES view
+# ---------------------------------------------------------------------------
+
+
+def _draw_devices(lcd, font, font_sm):
+    img = Image.new("RGB", (WIDTH, HEIGHT), C_BG)
+    d = ScaledDraw(img)
+
+    devs = _sorted_devs()
+
+    # Header
+    d.rectangle((0, 0, 127, 13), fill=C_HEADER_BG)
+    d.text((2, 1), "DEVICES", font=font_sm, fill=C_ACCENT)
+    d.text((65, 1), f"{len(devs)}", font=font_sm, fill="#FFFFFF")
+
+    if not devs:
+        msg = "Scanning..." if running else "OK to start"
+        d.text((64, 60), msg, font=font_sm, fill=C_MUTED, anchor="mm")
+    else:
+        y = 15
+        visible = devs[scroll:scroll + 8]
+        for mac, info in visible:
+            typ = info["type"]
+            name = (info["name"] or mac[-8:])[:11]
+            rssi = info["rssi"]
+            score = info["persistence"]
+
+            # Type indicator dot
+            if typ == "BLE":
+                dot_col = C_BLE
+            elif typ == "BT":
+                dot_col = C_BT_CLASSIC
+            else:
+                dot_col = C_WIFI
+            d.ellipse((2, y + 3, 6, y + 7), fill=dot_col)
+
+            # Name
+            name_col = C_DANGER if info["alert"] else C_TEXT
+            d.text((9, y), name, font=font_sm, fill=name_col)
+
+            # Mini signal dots
+            lvl = _signal_level(rssi)
+            for i in range(4):
+                sx = 76 + i * 4
+                sh = 2 + i * 2
+                col = C_SAFE if i < lvl else "#1a1a1a"
+                d.rectangle((sx, y + 8 - sh, sx + 2, y + 8), fill=col)
+
+            # Persistence mini bar
+            bar_x = 96
+            d.rectangle((bar_x, y + 3, bar_x + 20, y + 7), outline="#222")
+            pw = int(score * 18)
+            if pw > 0:
+                d.rectangle((bar_x + 1, y + 4, bar_x + pw, y + 6),
+                             fill=_threat_color(score, info["alert"]))
+
+            # Alert icon
+            if info["alert"]:
+                d.text((120, y), "!", font=font_sm, fill=C_DANGER)
+
+            y += 12
+
+        # Scroll bar
+        if len(devs) > 8:
+            sb_h = max(4, int(8 / len(devs) * 98))
+            sb_y = 15 + int(scroll / max(len(devs), 1) * 98)
+            d.rectangle((126, sb_y, 127, sb_y + sb_h), fill=C_DIM)
+
+    d.rectangle((0, 116, 127, 127), fill=C_HEADER_BG)
+    d.text((2, 117), "K1:View U/D:Scrl K2:Exp", font=font_sm, fill=C_MUTED)
+    lcd.LCD_ShowImage(img, 0, 0)
+
+
+# ---------------------------------------------------------------------------
+# BLE view
+# ---------------------------------------------------------------------------
+
+
+def _draw_ble(lcd, font, font_sm):
+    img = Image.new("RGB", (WIDTH, HEIGHT), C_BG)
+    d = ScaledDraw(img)
+
+    devs = _sorted_devs(type_filter=("BLE", "BT"))
+
+    # Header
+    d.rectangle((0, 0, 127, 13), fill="#080814")
+    d.text((2, 1), "BLUETOOTH", font=font_sm, fill=C_BLE)
+    d.text((80, 1), f"{len(devs)} dev", font=font_sm, fill=C_MUTED)
+
+    if not devs:
+        if running:
+            d.text((64, 45), "Scanning...", font=font_sm, fill=C_BLE, anchor="mm")
+            d.text((64, 60), f"{len(hci_ifaces)} adapter(s)",
+                   font=font_sm, fill=C_MUTED, anchor="mm")
+        else:
+            d.text((64, 55), "OK to start", font=font_sm,
+                   fill=C_MUTED, anchor="mm")
+    else:
+        y = 15
+        visible = devs[scroll:scroll + 8]
+        for mac, info in visible:
+            name = (info["name"] or mac[-8:])[:12]
+            rssi = info["rssi"]
+            is_classic = info["type"] == "BT"
+
+            # Type badge
+            badge_col = C_BT_CLASSIC if is_classic else C_BLE
+            badge_txt = "C" if is_classic else "L"
+            d.rectangle((1, y + 1, 8, y + 9), fill=badge_col)
+            d.text((2, y), badge_txt, font=font_sm, fill="#FFF")
+
+            # Name
+            d.text((11, y), name, font=font_sm,
+                   fill=C_DANGER if info["alert"] else C_TEXT)
+
+            # Signal
+            lvl = _signal_level(rssi)
+            for i in range(4):
+                sx = 88 + i * 4
+                sh = 2 + i * 2
+                col = C_BLE if i < lvl else "#111"
+                d.rectangle((sx, y + 8 - sh, sx + 2, y + 8), fill=col)
+
+            d.text((108, y), str(rssi), font=font_sm, fill=C_MUTED)
+
+            if info["alert"]:
+                t = info.get("tracker_type", "!")[:4]
+                d.text((108, y), t, font=font_sm, fill=C_DANGER)
+
+            y += 12
+
+    d.rectangle((0, 116, 127, 127), fill=C_HEADER_BG)
+    d.text((2, 117), "K1:View U/D:Scroll", font=font_sm, fill=C_MUTED)
+    lcd.LCD_ShowImage(img, 0, 0)
+
+
+# ---------------------------------------------------------------------------
+# Export
+# ---------------------------------------------------------------------------
+
+
+def _export():
     os.makedirs(LOOT_DIR, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-
     with lock:
         snapshot = {m: dict(d) for m, d in devices.items()}
 
-    # JSON
     jpath = os.path.join(LOOT_DIR, f"scout_{ts}.json")
     with open(jpath, "w") as f:
         json.dump(snapshot, f, indent=2, default=str)
 
-    # CSV
     cpath = os.path.join(LOOT_DIR, f"scout_{ts}.csv")
     fields = ["mac", "type", "name", "rssi", "persistence",
               "alert", "tracker_type", "first_seen", "last_seen", "sightings"]
@@ -722,104 +775,95 @@ def export_data():
             row = {"mac": mac}
             row.update({k: info.get(k, "") for k in fields if k != "mac"})
             w.writerow(row)
-
-    return f"{LOOT_DIR}/scout_{ts}.*"
-
-# ===================================================================
-# Start / stop
-# ===================================================================
-
-def start_all():
-    global running, mon_iface, scan_start
-    if running:
-        return
-    if not mon_iface:
-        iface = _selected_iface or find_iface()
-        if iface:
-            mon_iface = monitor_up(iface)
-    running = True
-    scan_start = time.time()
-    for fn in (_hop_thread, _sniff_thread, _ble_thread, _persist_thread):
-        threading.Thread(target=fn, daemon=True).start()
+    return f"scout_{ts}"
 
 
-def stop_all():
-    global running
-    running = False
-    time.sleep(0.5)
-
-# ===================================================================
+# ---------------------------------------------------------------------------
 # Main
-# ===================================================================
+# ---------------------------------------------------------------------------
+
 
 def main():
-    global view_idx, scroll, _selected_iface
+    global view_idx, scroll
 
-    lcd = lcd_init()
     GPIO.setmode(GPIO.BCM)
     for pin in PINS.values():
         GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-    font = scaled_font()
 
-    _selected_iface = select_interface(lcd, font, PINS, GPIO, iface_type="wifi")
-    if not _selected_iface:
-        GPIO.cleanup()
-        return 1
+    LCD_Config.GPIO_Init()
+    lcd = LCD_1in44.LCD()
+    lcd.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
+    lcd.LCD_Clear()
+    font = scaled_font(10)
+    font_sm = scaled_font(8)
 
-    # Splash screen
-    img = Image.new("RGB", (W, H), "black")
+    os.makedirs(LOOT_DIR, exist_ok=True)
+
+    # Splash
+    img = Image.new("RGB", (WIDTH, HEIGHT), C_BG)
     d = ScaledDraw(img)
-    d.text((12, 20), "DEVICE SCOUT", font=font, fill="#00FF00")
-    d.text((4, 42), "Anti-surveillance", font=font, fill="#888")
-    d.text((4, 54), "tracker detector", font=font, fill="#888")
-    d.text((4, 72), "KEY1  Start / Stop", font=font, fill="#666")
-    d.text((4, 84), "KEY2  Exit", font=font, fill="#666")
-    d.text((4, 96), "KEY3  Export data", font=font, fill="#666")
-    d.text((4, 108), "L/R Views  U/D Scroll", font=font, fill="#666")
+    d.rectangle((0, 0, 127, 127), fill=C_BG)
+    d.text((64, 25), "DEVICE", font=font, fill=C_ACCENT, anchor="mm")
+    d.text((64, 40), "SCOUT", font=font, fill=C_ACCENT, anchor="mm")
+    d.line([(20, 50), (108, 50)], fill=C_DIM)
+    d.text((64, 60), "Anti-Surveillance", font=font_sm, fill=C_MUTED, anchor="mm")
+    d.text((64, 74), "Tracker Detection", font=font_sm, fill=C_MUTED, anchor="mm")
+    d.text((64, 95), "OK = Start Scan", font=font_sm, fill=C_SAFE, anchor="mm")
+    d.text((64, 108), "KEY3 = Exit", font=font_sm, fill=C_MUTED, anchor="mm")
     lcd.LCD_ShowImage(img, 0, 0)
+
+    # Wait for button release
+    time.sleep(0.3)
+    while get_button(PINS, GPIO) is not None:
+        time.sleep(0.05)
 
     try:
         while True:
             btn = get_button(PINS, GPIO)
 
-            if btn == "KEY2":
+            if btn == "KEY3":
                 break
-            elif btn == "KEY1":
+            elif btn == "OK":
                 if running:
                     stop_all()
                 else:
                     start_all()
                 time.sleep(0.3)
-            elif btn == "LEFT":
-                view_idx = (view_idx - 1) % len(VIEWS)
-                scroll = 0
-                time.sleep(0.2)
-            elif btn == "RIGHT":
+            elif btn == "KEY1":
                 view_idx = (view_idx + 1) % len(VIEWS)
                 scroll = 0
                 time.sleep(0.2)
             elif btn == "UP":
                 scroll = max(0, scroll - 1)
-                time.sleep(0.15)
+                time.sleep(0.12)
             elif btn == "DOWN":
                 scroll += 1
-                time.sleep(0.15)
-            elif btn == "KEY3":
-                path = export_data()
-                # Brief confirmation on LCD
-                img2 = Image.new("RGB", (W, H), "black")
+                time.sleep(0.12)
+            elif btn == "KEY2":
+                name = _export()
+                img2 = Image.new("RGB", (WIDTH, HEIGHT), C_BG)
                 d2 = ScaledDraw(img2)
-                d2.text((10, 50), "Data exported!", font=font, fill="#00FF00")
-                d2.text((4, 65), path[-22:], font=font, fill="#888")
+                d2.text((64, 50), "Exported!", font=font, fill=C_SAFE, anchor="mm")
+                d2.text((64, 68), name[:22], font=font_sm, fill=C_MUTED, anchor="mm")
                 lcd.LCD_ShowImage(img2, 0, 0)
                 time.sleep(1.5)
 
-            draw_frame(lcd, font)
+            view = VIEWS[view_idx]
+            if view == "RADAR":
+                _draw_radar(lcd, font, font_sm)
+            elif view == "THREATS":
+                _draw_threats(lcd, font, font_sm)
+            elif view == "DEVICES":
+                _draw_devices(lcd, font, font_sm)
+            elif view == "BLE":
+                _draw_ble(lcd, font, font_sm)
+
             time.sleep(0.05)
 
     finally:
         stop_all()
-        monitor_down(mon_iface)
+        for iface in mon_ifaces:
+            _monitor_down(iface)
         try:
             lcd.LCD_Clear()
         except Exception:

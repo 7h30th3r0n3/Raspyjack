@@ -1,1748 +1,1620 @@
 #!/usr/bin/env python3
 """
-RaspyJack Wardriving Payload
-===========================
-Comprehensive WiFi network discovery and mapping tool
+RaspyJack Payload -- Wardriving
+================================
+Author: 7h30th3r0n3 / dag nazty
 
-Features:
-- Passive WiFi network scanning
-- GPS coordinate logging
-- Real-time LCD interface
-- Multiple export formats (JSON, CSV, KML)
-- Security protocol detection
-- Channel hopping
-- Database storage
-- Integration with RaspyJack WiFi manager
+Professional wardriving scanner with multi-card support,
+GPS tracking, and Wigle-compatible export.
 
-Author: dag nazty
+Views (cycle with KEY1):
+  LIVE       Real-time AP discovery with signal bars
+  GPS        Coordinates, speed, satellites, movement
+  STATS      Security distribution, channel heatmap
+  NETWORKS   Scrollable list of discovered APs
+  EXPORT     Export status, file counts
+
+Controls:
+  OK         Start / Stop scan
+  KEY1       Cycle views
+  KEY2       Export data now
+  KEY3       Exit (hold 2s)
+  UP/DOWN    Scroll (in NETWORKS view)
+  LEFT/RIGHT Change sort (NETWORKS view)
+
+Exports: Wigle CSV, JSON, KML
+Loot: /root/Raspyjack/loot/wardriving/
 """
 
 import os
 import sys
-import json
 import time
+import json
+import csv
 import sqlite3
+import signal
 import threading
 import subprocess
-import logging
-import csv
-import socket
 from datetime import datetime
-from pathlib import Path
+from collections import Counter
+
+sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..", "..")))
+
+import RPi.GPIO as GPIO
+import LCD_1in44
+import LCD_Config
+from PIL import Image
 from payloads._display_helper import ScaledDraw, scaled_font
-
-# Add RaspyJack modules to path
-sys.path.append('/root/Raspyjack/wifi/')
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..', '..')))  # Add root directory like working examples
+from payloads._input_helper import get_button
+from payloads._iface_helper import list_interfaces
 
 try:
-    import LCD_1in44, LCD_Config
-    from PIL import Image, ImageDraw, ImageFont
-    from payloads._display_helper import ScaledDraw, scaled_font
-    from payloads._iface_helper import select_interface as _select_interface
-    import RPi.GPIO as GPIO
-    from payloads._input_helper import get_button
-    LCD_AVAILABLE = True
+    from scapy.all import (
+        Dot11, Dot11Beacon, Dot11Elt, Dot11ProbeResp, Dot11ProbeReq,
+        RadioTap, sniff as scapy_sniff, conf,
+    )
+    SCAPY_OK = True
 except ImportError:
-    LCD_AVAILABLE = False
-    print("LCD modules not available - running in console mode")
+    SCAPY_OK = False
 
 try:
-    from scapy.all import *
-    SCAPY_AVAILABLE = True
+    import gpsd as gpsd_mod
+    GPSD_OK = True
 except ImportError:
-    SCAPY_AVAILABLE = False
-    print("Scapy not available - install with: pip3 install scapy")
+    GPSD_OK = False
 
-try:
-    import gpsd
-    GPS_AVAILABLE = True
-except ImportError:
-    GPS_AVAILABLE = False
-    print("GPS not available - install with: pip3 install gpsd-py3")
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+PINS = {
+    "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
+    "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16,
+}
+WIDTH, HEIGHT = LCD_1in44.LCD_WIDTH, LCD_1in44.LCD_HEIGHT
 
-# Try to import WiFi manager (optional - don't require internet)
-try:
-    from wifi_manager import WiFiManager
-    WIFI_MANAGER_AVAILABLE = True
-except ImportError:
-    WIFI_MANAGER_AVAILABLE = False
-    print("WiFi manager not available - continuing without WiFi management")
+LOOT_DIR = "/root/Raspyjack/loot/wardriving"
+DB_PATH = os.path.join(LOOT_DIR, "networks.db")
 
-class WardrivingScanner:
-    def __init__(self):
-        self.base_dir = "/root/Raspyjack"
-        self.loot_dir = f"{self.base_dir}/loot/wardriving"
-        self.db_path = f"{self.loot_dir}/networks.db"
-        
-        # Create directories
-        os.makedirs(self.loot_dir, exist_ok=True)
-        
-        # Setup logging - replace log file each run
-        self.log_file = os.path.join(self.loot_dir, "wardriving.log")
-        
-        # Exit confirmation tracking
-        self.exit_press_count = 0
-        self.last_exit_press = 0
-        
-        # Thread control
-        self.lcd_running = True
-        
-        # Simple logging setup - create/replace log file immediately
-        try:
-            with open(self.log_file, 'w') as f:
-                f.write(f"=== WARDRIVING LOG STARTED {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===\n")
-                f.write(f"Log file: {self.log_file}\n")
-                f.write(f"LCD Available: {LCD_AVAILABLE}\n")
-                f.write(f"Scapy Available: {SCAPY_AVAILABLE}\n")
-                f.write(f"GPS Available: {GPS_AVAILABLE}\n")
-                f.write(f"WiFi Manager Available: {WIFI_MANAGER_AVAILABLE}\n")
-                f.flush()
-            print(f"Log file created: {self.log_file}")
-        except Exception as e:
-            print(f"Failed to create log file: {e}")
-        
-        # Scanner state
-        self.running = False
-        self.interface = None
-        self.monitor_interface = None
-        self.networks = {}
-        self.total_networks = 0
-        self.current_channel = 1
-        self.gps_data = None
-        
-        # Threading
-        self.scan_thread = None
-        self.channel_thread = None
-        self.gps_thread = None
-        
-        # LCD and GPIO setup
-        if LCD_AVAILABLE:
-            self.setup_lcd()
-            self.setup_gpio()
-            # Test LCD immediately
-            self.test_lcd()
-        
-        # Database setup
-        self.setup_database()
-        
-        # GPS setup
-        if GPS_AVAILABLE:
-            self.setup_gps()
-        
-        # WiFi manager (after all other setup)
-        self.wifi_manager_available = WIFI_MANAGER_AVAILABLE
-        if self.wifi_manager_available:
-            try:
-                self.wifi_manager = WiFiManager()
-                self.log("WiFi manager loaded successfully")
-            except Exception as e:
-                self.log(f"WiFi manager failed to load: {e}")
-                self.wifi_manager_available = False
-        else:
-            self.log("WiFi manager not available - continuing without WiFi management")
-        
-        self.log("Wardriving scanner initialized successfully")
-        print("Wardriving scanner initialized")
-    
-    def log(self, message):
-        """Log message to file with timestamp - only important events"""
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        log_msg = f"[{timestamp}] {message}"
-        
-        # Always write to file
-        try:
-            with open(self.log_file, 'a') as f:
-                f.write(log_msg + '\n')
-                f.flush()
-        except Exception as e:
-            print(f"Failed to write to log: {e}")
-            
-        # Only print important messages to console (not LCD spam)
-        if any(keyword in message.lower() for keyword in ['error', 'failed', 'success', 'started', 'completed', 'fix', 'network:', 'gps fix']):
-            print(log_msg)
-    
-    def setup_lcd(self):
-        """Initialize LCD display - EXACT same as example_show_buttons.py"""
-        try:
-            self.log("Starting LCD initialization...")
-            
-            # EXACT same initialization as example_show_buttons.py
-            self.LCD = LCD_1in44.LCD()
-            self.log("LCD object created")
-            
-            self.LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-            self.log("LCD initialized with default scan direction")
-            
-            # CRITICAL: Clear the LCD first (like working examples do)
-            self.LCD.LCD_Clear()
-            self.log("LCD cleared - this should fix white screen issue")
-            
-            self.WIDTH, self.HEIGHT = self.LCD.width, self.LCD.height
-            self.log(f"LCD dimensions set: {self.WIDTH}x{self.HEIGHT}")
+CHANNELS_24 = list(range(1, 14))
+CHANNELS_5 = [36, 40, 44, 48, 52, 56, 60, 64,
+              100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140,
+              149, 153, 157, 161, 165]
+DWELL_24 = 0.3       # 300ms like Kismet (was 800ms)
+DWELL_5 = 0.4        # slightly longer for DFS channels
 
-            self.font = scaled_font()
-            self.log("Default font loaded")
-            
-            self.lcd_ready = True
-            self.log("LCD setup completed successfully")
-            print("LCD initialized successfully")
-            
-        except Exception as e:
-            self.log(f"LCD initialization FAILED: {e}")
-            print(f"LCD initialization failed: {e}")
-            self.lcd_ready = False
-    
-    def draw(self, text):
-        """EXACT copy of example_show_buttons.py draw() function with LCD clear"""
-        if not self.lcd_ready:
-            return
-        try:
-            self.log(f"Drawing text to LCD: '{text}'")
-            
-            # EXACT COPY of example_show_buttons.py draw() function
-            img = Image.new("RGB", (self.WIDTH, self.HEIGHT), "black")
-            d = ScaledDraw(img)
+VIEWS = ["live", "gps", "channels", "stats", "networks", "export"]
+AUTOSAVE_INTERVAL = 20   # auto-save Wigle CSV every 20 seconds
 
-            # Draw centred text
-            d.text((64, 64), text, font=self.font, fill="#00FF00", anchor="mm")
-            self.LCD.LCD_ShowImage(img, 0, 0)
-            self.log("LCD draw completed successfully")
-            
-        except Exception as e:
-            self.log(f"LCD draw ERROR: {e}")
-            print(f"LCD draw error: {e}")
-            import traceback
-            self.log(f"LCD draw traceback: {traceback.format_exc()}")
-    
-    def test_lcd(self):
-        """Test LCD with simple message"""
-        self.log("Testing LCD with 'Ready!' message")
-        self.draw("Ready!")
-        self.log("LCD test completed")
-    
-    def setup_gpio(self):
-        """Initialize GPIO for button controls"""
-        try:
-            self.log("Starting GPIO initialization...")
-            GPIO.setmode(GPIO.BCM)
-            self.log("GPIO mode set to BCM")
-            
-            GPIO.setup(21, GPIO.IN, pull_up_down=GPIO.PUD_UP)  # KEY1
-            GPIO.setup(20, GPIO.IN, pull_up_down=GPIO.PUD_UP)  # KEY3
-            GPIO.setup(16, GPIO.IN, pull_up_down=GPIO.PUD_UP)  # KEY2
-            GPIO.setup(6, GPIO.IN, pull_up_down=GPIO.PUD_UP)   # UP
-            GPIO.setup(19, GPIO.IN, pull_up_down=GPIO.PUD_UP)  # DOWN
-            GPIO.setup(5, GPIO.IN, pull_up_down=GPIO.PUD_UP)   # LEFT
-            GPIO.setup(26, GPIO.IN, pull_up_down=GPIO.PUD_UP)  # RIGHT
-            GPIO.setup(13, GPIO.IN, pull_up_down=GPIO.PUD_UP)  # PRESS
-            self.log("All GPIO pins configured with pull-up resistors")
-            
-            self.gpio_ready = True
-            self.log("GPIO setup completed successfully")
-            print("GPIO initialized successfully")
-        except Exception as e:
-            self.log(f"GPIO initialization FAILED: {e}")
-            print(f"GPIO initialization failed: {e}")
-            self.gpio_ready = False
-    
-    def setup_database(self):
-        """Initialize SQLite database for storing networks"""
-        try:
-            self.log(f"Setting up database at: {self.db_path}")
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            
-            # Create networks table
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS networks (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    ssid TEXT,
-                    bssid TEXT UNIQUE,
-                    channel INTEGER,
-                    frequency INTEGER,
-                    security_type TEXT,
-                    encryption TEXT,
-                    cipher TEXT,
-                    authentication TEXT,
-                    wps_enabled BOOLEAN,
-                    signal_strength INTEGER,
-                    first_seen TIMESTAMP,
-                    last_seen TIMESTAMP,
-                    vendor TEXT,
-                    country_code TEXT
-                )
-            ''')
-            self.log("Networks table created/verified")
-            
-            # Create locations table
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS locations (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    network_id INTEGER,
-                    latitude REAL,
-                    longitude REAL,
-                    altitude REAL,
-                    accuracy REAL,
-                    timestamp TIMESTAMP,
-                    FOREIGN KEY (network_id) REFERENCES networks (id)
-                )
-            ''')
-            self.log("Locations table created/verified")
-            
-            # Create indexes
-            cursor.execute('CREATE INDEX IF NOT EXISTS idx_networks_bssid ON networks(bssid)')
-            cursor.execute('CREATE INDEX IF NOT EXISTS idx_networks_ssid ON networks(ssid)')
-            cursor.execute('CREATE INDEX IF NOT EXISTS idx_locations_network_id ON locations(network_id)')
-            self.log("Database indexes created/verified")
-            
-            conn.commit()
-            conn.close()
-            self.log("Database setup completed successfully")
-            print("Database initialized successfully")
-        except Exception as e:
-            self.log(f"Database initialization FAILED: {e}")
-            print(f"Database initialization failed: {e}")
-    
-    def setup_gps(self):
-        """Initialize GPS connection for u-blox 7 GPS module - Enhanced with u-blox optimization"""
-        try:
-            self.log("Starting GPS setup for u-blox 7...")
-            print("Setting up u-blox 7 GPS module...")
-            
-            # First, detect available GPS devices (u-blox 7 typically uses ACM0)
-            gps_devices = []
-            try:
-                # Check for common GPS device paths (u-blox 7 priority)
-                for device in ['/dev/ttyACM1', '/dev/ttyACM0', '/dev/ttyUSB0', '/dev/ttyUSB1']:
-                    if os.path.exists(device):
-                        gps_devices.append(device)
-                
-                # Also check USB devices for u-blox
-                usb_check = subprocess.run(['lsusb'], capture_output=True, text=True)
-                if 'u-blox' in usb_check.stdout.lower():
-                    self.log("u-blox GPS device detected via USB")
-                    print("✓ u-blox GPS device detected via USB")
-                elif 'gps' in usb_check.stdout.lower():
-                    self.log("GPS device detected via USB")
-                    print("✓ GPS device detected via USB")
-                
-                self.log(f"Found GPS devices: {gps_devices}")
-                print(f"Found GPS devices: {gps_devices}")
-                
-            except Exception as e:
-                self.log(f"GPS device detection failed: {e}")
-            
-            # Check if gpsd process is running
-            gps_check = subprocess.run(['ps', '-ef'], capture_output=True, text=True)
-            if 'gpsd' in gps_check.stdout:
-                self.log("GPSD daemon already running")
-                print("GPSD daemon already running")
-                self.gps_ready = True
-            else:
-                self.log("Starting GPSD daemon for u-blox 7...")
-                print("Starting GPSD daemon for u-blox 7...")
-                
-                # Try to start gpsd with detected device or default to ACM0 for u-blox
-                gps_device = gps_devices[0] if gps_devices else '/dev/ttyACM1'
-                
-                # Kill any existing gpsd processes first
-                subprocess.run(['sudo', 'pkill', '-f', 'gpsd'], capture_output=True)
-                time.sleep(1)
-                
-                # Start gpsd with proper options for u-blox 7 real-time data
-                cmd = ['sudo', 'gpsd', '-n', '-b', '-D', '2', gps_device]
-                self.log(f"Starting gpsd with: {' '.join(cmd)}")
-                subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                time.sleep(3)
-                self.gps_ready = True
-            
-            # Test GPS connection using gpsd-py3 with enhanced retry logic for u-blox
-            try:
-                self.log("Testing u-blox 7 GPS connection...")
-                # Wait a moment for GPS daemon to be ready
-                time.sleep(2)
-                gpsd.connect()
-                self.log("Connected to GPSD")
-                
-                # Try to get GPS data with enhanced retries for u-blox
-                for attempt in range(5):  # Increased retries for u-blox
-                    try:
-                        self.log(f"GPS connection attempt {attempt + 1}")
-                        packet = gpsd.get_current()
-                        
-                        # Check if GPS is active and has a fix
-                        if hasattr(packet, 'mode') and packet.mode >= 2:
-                            self.log("GPS packet received successfully")
-                            print("✓ u-blox 7 GPS module initialized successfully")
-                            
-                            self.log(f"GPS fix acquired: {packet.mode}D fix")
-                            print(f"GPS fix acquired: {packet.mode}D fix")
-                            if hasattr(packet, 'sats'):
-                                self.log(f"Satellites: {packet.sats}")
-                                print(f"Satellites: {packet.sats}")
-                            
-                            # Set initial GPS data so LCD shows coordinates immediately
-                            self.gps_data = {
-                                'latitude': packet.lat,
-                                'longitude': packet.lon,
-                                'altitude': packet.alt if packet.mode >= 3 else None,
-                                'speed': packet.hspeed if hasattr(packet, 'hspeed') else 0,
-                                'satellites': packet.sats if hasattr(packet, 'sats') else 0,
-                                'timestamp': datetime.now().isoformat()
-                            }
-                            self.log(f"Initial GPS coordinates: {packet.lat:.4f},{packet.lon:.4f}")
-                            print(f"Initial GPS coordinates: {packet.lat:.4f},{packet.lon:.4f}")
-                            
-                            # START GPS UPDATER THREAD IMMEDIATELY (not just during scan)
-                            self.log("Starting GPS updater thread for continuous tracking")
-                            self.gps_thread = threading.Thread(target=self.gps_updater)
-                            self.gps_thread.daemon = True
-                            self.gps_thread.start()
-                            print("GPS updater started - coordinates will update continuously")
-                            print("u-blox 7 optimized for real-time wardriving!")
-                            break
-                        else:
-                            packet_mode = getattr(packet, 'mode', 'unknown')
-                            self.log(f"GPS not ready - mode: {packet_mode}")
-                            if attempt < 4:
-                                print(f"GPS not ready (mode {packet_mode}), retrying... (attempt {attempt + 1}/5)")
-                                time.sleep(3)  # Longer wait between attempts for u-blox
-                            else:
-                                self.log("GPS connected but no fix after 5 attempts")
-                                print("GPS connected but no fix - continuing without GPS")
-                                print("Move to area with clear sky view for GPS fix")
-                                print("u-blox 7 will still work for scanning when fix is acquired")
-                                
-                    except Exception as retry_e:
-                        self.log(f"GPS attempt {attempt + 1} failed: {retry_e}")
-                        if attempt < 4:
-                            print(f"GPS connection attempt {attempt + 1} failed, retrying...")
-                            time.sleep(3)
-                        else:
-                            self.log("All GPS attempts failed")
-                            print("GPS connection failed - continuing without GPS")
-                    
-            except Exception as e:
-                self.log(f"GPS connection test failed: {e}")
-                print(f"GPS connection test failed: {e}")
-                print("GPS daemon running but connection failed - GPS will still work for scanning")
-                self.gps_ready = True  # Still mark as ready since daemon is running
-                
-        except Exception as e:
-            self.log(f"u-blox 7 GPS initialization FAILED: {e}")
-            print(f"u-blox 7 GPS initialization failed: {e}")
-            print("Check: lsusb | grep -i u-blox")
-            print("Check: ls -la /dev/ttyUSB* /dev/ttyACM*")
-            print("Check: sudo systemctl status gpsd")
-            self.gps_ready = False
-    
-    def get_wifi_interfaces(self):
-        """Get available WiFi interfaces"""
-        try:
-            result = subprocess.run(['iw', 'dev'], capture_output=True, text=True)
-            interfaces = []
-            for line in result.stdout.split('\n'):
-                if 'Interface' in line:
-                    interface = line.strip().split()[-1]
-                    interfaces.append(interface)
-            return interfaces
-        except:
-            return []
+# Known monitor drivers (from _iface_helper)
+KNOWN_MONITOR_DRIVERS = {
+    "rtl88XXau", "rtl8812au", "rtl8821au", "rtl88x2bu",
+    "rtl8188eus", "rtl8187", "rt2800usb", "ath9k_htc",
+    "mt76x2u", "mt76x0u", "mt7921u", "rtl8814au",
+}
 
-    def _is_onboard_wifi_iface(self, iface):
-        """True for onboard Pi WiFi (SDIO/mmc path or brcmfmac driver)."""
-        try:
-            devpath = os.path.realpath(f"/sys/class/net/{iface}/device")
-            if "mmc" in devpath:
-                return True
-        except Exception:
-            pass
-        try:
-            driver = os.path.basename(
-                os.path.realpath(f"/sys/class/net/{iface}/device/driver")
-            )
-            if driver == "brcmfmac":
-                return True
-        except Exception:
-            pass
+# OUI vendor lookup (top entries)
+OUI_DB = {
+    "00:1A:2B": "Ayecom", "00:50:F2": "Microsoft", "00:0C:29": "VMware",
+    "00:1E:58": "D-Link", "00:14:6C": "Netgear", "00:1B:11": "D-Link",
+    "00:24:D7": "Intel", "00:26:5A": "D-Link", "3C:37:86": "Netgear",
+    "F8:E4:FB": "Apple", "D8:6C:63": "Apple", "AC:BC:32": "Apple",
+    "B0:BE:76": "TP-Link", "50:C7:BF": "TP-Link", "C0:25:E9": "TP-Link",
+    "E4:F0:42": "Google", "94:B8:6D": "Google", "00:1F:33": "Netgear",
+    "20:CF:30": "ASUSTek", "04:D4:C4": "ASUSTek", "2C:FD:A1": "Intel",
+    "DC:A6:32": "Raspberry", "B8:27:EB": "Raspberry",
+    "00:23:69": "Cisco", "00:1A:A0": "Dell", "F0:9F:C2": "Ubiquiti",
+    "18:E8:29": "Samsung", "00:26:B0": "Apple", "C8:69:CD": "Apple",
+    "F4:F5:D8": "Google", "7C:2F:80": "Huawei", "88:71:B1": "Huawei",
+    "FC:F5:28": "ZyXEL", "34:31:C4": "AVM/Fritz",
+    "A4:91:B1": "Actiontec", "CC:2D:E0": "Routerboard",
+    "E0:63:DA": "Ubiquiti", "24:A4:3C": "Ubiquiti",
+    "44:D9:E7": "Ubiquiti", "78:8A:20": "Ubiquiti",
+    "28:80:23": "SFR", "E8:F7:24": "SFR",
+    "14:0C:76": "Freebox", "F4:CA:E5": "Freebox",
+    "00:07:CB": "Freebox", "00:24:D4": "Freebox",
+    "5C:A6:E6": "Bouygues", "34:8A:AE": "Bouygues",
+    "68:A3:78": "Freebox", "24:95:04": "SFR",
+    "A4:3E:51": "Orange/Livebox", "E4:5D:51": "Orange/Livebox",
+    "84:A1:D1": "Orange/Livebox", "30:23:03": "Belkin",
+}
+
+# ---------------------------------------------------------------------------
+# Thread-safe state
+# ---------------------------------------------------------------------------
+lock = threading.Lock()
+_shutdown = threading.Event()
+_scanning = threading.Event()
+
+# Scan data
+networks = {}          # bssid -> {ssid, channel, signal, security, ...}
+probes = {}            # client_mac -> {ssids: set, count, last_seen, signal}
+gps_data = None        # {lat, lon, alt, speed, sats, mode, ts}
+gps_ready = False
+current_channel = 0
+scan_start_time = 0
+total_beacons = 0
+total_probes = 0
+
+# Interfaces
+mon_ifaces = []        # list of active monitor interfaces
+dual_mode = False
+
+# UI
+view_idx = 0
+scroll = 0
+sort_mode = 0          # 0=signal, 1=name, 2=security
+
+
+def _cleanup_signal(*_):
+    _shutdown.set()
+    _scanning.clear()
+
+
+signal.signal(signal.SIGINT, _cleanup_signal)
+signal.signal(signal.SIGTERM, _cleanup_signal)
+
+
+# ---------------------------------------------------------------------------
+# GPS
+# ---------------------------------------------------------------------------
+
+
+def _detect_gps_device():
+    """Auto-detect GPS device path."""
+    for dev in ["/dev/ttyACM0", "/dev/ttyACM1", "/dev/ttyUSB0",
+                "/dev/ttyUSB1", "/dev/ttyAMA0"]:
+        if os.path.exists(dev):
+            return dev
+    return None
+
+
+def _start_gpsd():
+    """Start gpsd daemon if not running."""
+    try:
+        r = subprocess.run(["pgrep", "-x", "gpsd"], capture_output=True)
+        if r.returncode == 0:
+            return True  # already running
+
+        dev = _detect_gps_device()
+        if not dev:
+            return False
+
+        subprocess.run(["sudo", "killall", "gpsd"], capture_output=True)
+        time.sleep(0.5)
+        subprocess.Popen(
+            ["sudo", "gpsd", "-n", dev],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        time.sleep(2)
+        return True
+    except Exception:
         return False
-    
-    def _find_monitor_capable_interface(self):
-        """
-        Check each wireless interface's driver to find one that supports
-        monitor mode.  Broadcom brcmfmac does NOT.  RTL88xx / Atheros do.
-        Scans /sys/class/net/ directly (more reliable than command-line tools).
-        Returns the best interface name, or None.
 
-        The onboard Pi WiFi (WebUI interface) is never selected here.
-        """
-        # Discover all wireless interfaces via /sys
-        interfaces = []
+
+def _gps_updater():
+    """Background thread: poll gpsd for position updates."""
+    global gps_data, gps_ready
+
+    if not GPSD_OK:
+        return
+
+    _start_gpsd()
+
+    try:
+        gpsd_mod.connect()
+    except Exception:
+        return
+
+    gps_ready = True
+
+    while not _shutdown.is_set():
         try:
-            for name in os.listdir("/sys/class/net"):
-                if name == "lo" or name == "wlan0":
-                    continue  # wlan0 reserved for WebUI
-                # An interface is wireless if /sys/class/net/<name>/wireless exists
-                if os.path.isdir(f"/sys/class/net/{name}/wireless"):
-                    if self._is_onboard_wifi_iface(name):
-                        continue
-                    interfaces.append(name)
+            pkt = gpsd_mod.get_current()
+            if hasattr(pkt, 'mode') and pkt.mode >= 2:
+                with lock:
+                    gps_data = {
+                        "lat": pkt.lat,
+                        "lon": pkt.lon,
+                        "alt": pkt.alt if pkt.mode >= 3 else 0,
+                        "speed": getattr(pkt, 'hspeed', 0),
+                        "sats": getattr(pkt, 'sats', 0),
+                        "mode": pkt.mode,
+                        "ts": time.time(),
+                    }
         except Exception:
             pass
 
-        # Fallback to iw dev if /sys found nothing
-        if not interfaces:
-            interfaces = [i for i in self.get_wifi_interfaces() if not self._is_onboard_wifi_iface(i)]
+        if _shutdown.wait(timeout=1):
+            break
 
-        if not interfaces:
-            return None
 
-        print(f"  Found wireless interfaces (excluding onboard/WebUI): {interfaces}", flush=True)
+# ---------------------------------------------------------------------------
+# Monitor mode
+# ---------------------------------------------------------------------------
 
-        # Drivers known NOT to support monitor mode
-        no_monitor = {'brcmfmac', 'b43', 'wl'}
 
-        capable = []
-        fallback = []
-        for iface in interfaces:
-            driver = ""
-            driver_path = f"/sys/class/net/{iface}/device/driver"
+def _get_driver(iface):
+    try:
+        return os.path.basename(
+            os.path.realpath(f"/sys/class/net/{iface}/device/driver"))
+    except Exception:
+        return ""
+
+
+def _is_onboard(iface):
+    drv = _get_driver(iface)
+    if drv == "brcmfmac":
+        return True
+    try:
+        devpath = os.path.realpath(f"/sys/class/net/{iface}/device")
+        return "mmc" in devpath
+    except Exception:
+        return False
+
+
+def _find_monitor_interfaces():
+    """Find all monitor-capable USB WiFi interfaces."""
+    result = []
+    ifaces = list_interfaces("wifi")
+    for i in ifaces:
+        if i.get("is_onboard"):
+            continue
+        if i.get("supports_monitor") or _get_driver(i["name"]) in KNOWN_MONITOR_DRIVERS:
+            result.append(i["name"])
+    return result
+
+
+def _monitor_up(iface):
+    """Enable monitor mode on interface."""
+    for cmd in [
+        ["sudo", "ip", "link", "set", iface, "down"],
+        ["sudo", "iw", iface, "set", "monitor", "none"],
+        ["sudo", "ip", "link", "set", iface, "up"],
+    ]:
+        subprocess.run(cmd, capture_output=True, timeout=5)
+    time.sleep(0.3)
+
+    r = subprocess.run(["iw", "dev", iface, "info"],
+                       capture_output=True, text=True, timeout=5)
+    if "type monitor" in r.stdout:
+        return iface
+
+    # Fallback: airmon-ng
+    subprocess.run(["sudo", "airmon-ng", "start", iface],
+                   capture_output=True, timeout=15)
+    for name in (f"{iface}mon", iface):
+        r = subprocess.run(["iw", "dev", name, "info"],
+                           capture_output=True, text=True, timeout=5)
+        if "type monitor" in r.stdout:
+            return name
+    return None
+
+
+def _monitor_down(iface):
+    if not iface:
+        return
+    base = iface.replace("mon", "")
+    subprocess.run(["sudo", "airmon-ng", "stop", iface],
+                   capture_output=True, timeout=10)
+    for cmd in [
+        ["sudo", "ip", "link", "set", base, "down"],
+        ["sudo", "iw", base, "set", "type", "managed"],
+        ["sudo", "ip", "link", "set", base, "up"],
+    ]:
+        subprocess.run(cmd, capture_output=True, timeout=5)
+
+
+# ---------------------------------------------------------------------------
+# Security detection
+# ---------------------------------------------------------------------------
+
+
+def _parse_security(pkt):
+    """Parse security type from beacon frame."""
+    cap = pkt.sprintf("{Dot11Beacon:%Dot11Beacon.cap%}").strip()
+    privacy = "privacy" in cap.lower() if cap else False
+
+    security = "Open"
+    cipher = ""
+    auth = ""
+    wps = False
+
+    try:
+        elt = pkt.getlayer(Dot11Elt)
+        while elt:
+            # RSN IE (WPA2/WPA3)
+            if elt.ID == 48 and elt.info and len(elt.info) >= 8:
+                raw = bytes(elt.info)
+                # AKM suite
+                if len(raw) >= 14:
+                    akm_count = int.from_bytes(raw[8:10], "little")
+                    for i in range(akm_count):
+                        off = 10 + i * 4
+                        if off + 4 <= len(raw):
+                            akm_type = raw[off + 3]
+                            if akm_type == 8:
+                                security = "WPA3-SAE"
+                                auth = "SAE"
+                            elif akm_type == 2:
+                                if security != "WPA3-SAE":
+                                    security = "WPA2-PSK"
+                                    auth = "PSK"
+                            elif akm_type == 1:
+                                security = "WPA2-EAP"
+                                auth = "Enterprise"
+                # Cipher
+                if len(raw) >= 8:
+                    cs = raw[5]
+                    cipher = "CCMP" if cs == 4 else "TKIP" if cs == 2 else "AES"
+
+                if security == "Open":
+                    security = "WPA2"
+
+            # WPA IE (vendor specific)
+            if elt.ID == 221 and elt.info and len(elt.info) >= 8:
+                raw = bytes(elt.info)
+                if raw[:3] == b'\x00\x50\xf2' and raw[3] == 1:
+                    if security == "Open":
+                        security = "WPA"
+                        cipher = "TKIP"
+                        auth = "PSK"
+
+            # WPS
+            if elt.ID == 221 and elt.info:
+                raw = bytes(elt.info)
+                if raw[:4] == b'\x00\x50\xf2\x04':
+                    wps = True
+
+            elt = elt.payload.getlayer(Dot11Elt)
+    except Exception:
+        pass
+
+    if privacy and security == "Open":
+        security = "WEP"
+
+    return {"security": security, "cipher": cipher, "auth": auth, "wps": wps}
+
+
+def _get_vendor(mac):
+    """OUI vendor lookup."""
+    prefix = mac[:8].upper()
+    return OUI_DB.get(prefix, "")
+
+
+# ---------------------------------------------------------------------------
+# Packet handler
+# ---------------------------------------------------------------------------
+
+
+def _packet_handler(pkt):
+    global total_beacons, total_probes
+
+    if not pkt.haslayer(Dot11):
+        return
+
+    # --- Probe Requests: track client devices ---
+    if pkt.haslayer(Dot11ProbeReq):
+        try:
+            client_mac = (pkt[Dot11].addr2 or "").upper()
+            if not client_mac or client_mac == "FF:FF:FF:FF:FF:FF":
+                return
             try:
-                real = os.path.realpath(driver_path)
-                driver = os.path.basename(real)
+                probe_ssid = pkt[Dot11Elt].info.decode("utf-8", errors="replace")
             except Exception:
-                pass
+                probe_ssid = ""
 
-            print(f"  {iface}: driver={driver or 'unknown'}", flush=True)
+            sig = getattr(pkt, "dBm_AntSignal", -99)
+            now = datetime.now().isoformat()
 
-            if driver and driver in no_monitor:
-                fallback.append(iface)
-            else:
-                capable.append(iface)
-
-        if capable:
-            print(f"Monitor-capable interface: {capable[0]}", flush=True)
-            return capable[0]
-        if fallback:
-            print(f"No confirmed monitor-capable interface, trying: {fallback[0]}", flush=True)
-            return fallback[0]
-        return None
-
-    def setup_monitor_mode(self, interface):
-        """Comprehensive monitor mode setup.
-
-        Only stops services for the specific interface — wlan0/WebUI is never touched.
-        """
-        print(f"Setting up monitor mode on {interface}")
-
-        # Step 1: Stop services for THIS interface only (keeps wlan0/WebUI alive)
-        print(f"Unmanaging {interface} from NetworkManager...")
-        for cmd_label, cmd in [
-            ("NM unmanage",    ['nmcli', 'device', 'set', interface, 'managed', 'no']),
-            ("wpa_supplicant", ['sudo', 'pkill', '-f', f'wpa_supplicant.*{interface}']),
-            ("dhcpcd",         ['sudo', 'pkill', '-f', f'dhcpcd.*{interface}']),
-        ]:
-            try:
-                subprocess.run(cmd, capture_output=True, timeout=5)
-                print(f"  {cmd_label} done", flush=True)
-            except subprocess.TimeoutExpired:
-                print(f"  {cmd_label} timed out - skipping", flush=True)
-            except Exception:
-                print(f"  {cmd_label} not applicable", flush=True)
-        time.sleep(1)
-
-        # Step 2: Check current interface status
-        result = subprocess.run(['iw', 'dev', interface, 'info'], capture_output=True, text=True)
-        print(f"Current interface status: {result.stdout[:200]}")
-
-        # Step 3: Try airmon-ng method
-        print("Attempting airmon-ng setup...")
-        try:
-            # Use airmon-ng with verbose output
-            cmd = ['sudo', 'airmon-ng', 'start', interface]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-
-            print(f"airmon-ng stdout: {result.stdout}")
-            if result.stderr:
-                print(f"airmon-ng stderr: {result.stderr}")
-
-            # Check for created monitor interface
-            possible_names = [f"{interface}mon", f"{interface}mon0", interface]
-            for mon_name in possible_names:
-                check_result = subprocess.run(['iw', 'dev', mon_name, 'info'],
-                                            capture_output=True, text=True)
-                if "type monitor" in check_result.stdout:
-                    print(f"Monitor mode confirmed on {mon_name}")
-                    return mon_name
-
-        except subprocess.TimeoutExpired:
-            print("airmon-ng timed out")
-        except Exception as e:
-            print(f"airmon-ng failed: {e}")
-
-        # Step 4: iw command method
-        print("Trying iw command method...")
-        try:
-            subprocess.run(['sudo', 'ip', 'link', 'set', interface, 'down'], check=True)
-            time.sleep(1)
-            subprocess.run(['sudo', 'iw', 'dev', interface, 'set', 'type', 'monitor'], check=True)
-            time.sleep(1)
-            subprocess.run(['sudo', 'ip', 'link', 'set', interface, 'up'], check=True)
-            time.sleep(2)
-
-            # Verify
-            result = subprocess.run(['iw', 'dev', interface, 'info'], capture_output=True, text=True)
-            if "type monitor" in result.stdout:
-                print(f"Monitor mode successful on {interface}")
-                return interface
-
-        except Exception as e:
-            print(f"iw method failed: {e}")
-
-        print("All monitor mode methods failed")
-        return None
-    
-    def stop_monitor_mode(self, monitor_interface):
-        """Stop monitor mode"""
-        try:
-            base_interface = monitor_interface.replace('mon', '')
-            subprocess.run(['airmon-ng', 'stop', monitor_interface], capture_output=True)
-            print(f"Monitor mode stopped on {monitor_interface}")
-        except Exception as e:
-            print(f"Failed to stop monitor mode: {e}")
-    
-    def set_channel(self, channel):
-        """Set WiFi channel"""
-        try:
-            subprocess.run(['iw', 'dev', self.monitor_interface, 'set', 'channel', str(channel)],
-                         capture_output=True)
-            self.current_channel = channel
-        except Exception as e:
-            print(f"Failed to set channel {channel}: {e}")
-    
-    def channel_hopper(self):
-        """Channel hopping thread"""
-        channels_2ghz = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
-        channels_5ghz = [36, 40, 44, 48, 52, 56, 60, 64, 100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140, 149, 153, 157, 161, 165]
-        
-        all_channels = channels_2ghz + channels_5ghz
-        channel_index = 0
-        
-        while self.running:
-            if self.monitor_interface:
-                channel = all_channels[channel_index % len(all_channels)]
-                self.set_channel(channel)
-                channel_index += 1
-            time.sleep(0.5)  # Dwell time per channel
-    
-    def get_fresh_gps_data(self):
-        """Get fresh GPS data by forcing gpsd to update its cache"""
-        try:
-            # Force gpsd to update its cache by reconnecting
-            gpsd.connect()
-            
-            # Get the current data (should be fresh after reconnect)
-            packet = gpsd.get_current()
-            
-            if packet and hasattr(packet, 'mode') and packet.mode >= 2:
-                self.log("Using gpsd-py3 fresh GPS data (forced update)")
-                return packet
-            else:
-                self.log("gpsd-py3 no valid fix")
-                return None
-                
-        except Exception as e:
-            self.log(f"gpsd-py3 failed: {e}")
-            return None
-    
-    def gps_updater(self):
-        """GPS update thread - using ONLY gpsd with forced cache updates"""
-        self.log("GPS updater thread started - using gpsd with forced cache updates")
-        print("GPS updater thread started - forcing gpsd cache updates")
-        update_count = 0
-        
-        # Run continuously while LCD is running (app lifecycle)
-        while self.lcd_running:
-            update_count += 1
-            current_time = time.time()
-            
-            if self.gps_ready:
-                try:
-                    # METHOD 1: gpsd with forced cache updates
-                    packet = None
-                    try:
-                        packet = self.get_fresh_gps_data()
-                        if not packet:
-                            self.log("No GPS data available")
-                            time.sleep(1)
-                            continue
-                    except Exception as e:
-                        self.log(f"GPS method failed: {e}")
-                        time.sleep(1)
-                        continue
-                    
-                    # Only process packets with valid 2D/3D fix
-                    if packet and hasattr(packet, 'mode') and packet.mode >= 2:
-                        old_coords = None
-                        if self.gps_data:
-                            old_coords = (self.gps_data['latitude'], self.gps_data['longitude'])
-                        
-                        # Extract coordinates - handle potential None values
-                        lat = getattr(packet, 'lat', None)
-                        lon = getattr(packet, 'lon', None)
-                        alt = getattr(packet, 'alt', None)
-                        speed = getattr(packet, 'hspeed', 0)
-                        sats = getattr(packet, 'sats', 0)
-                        
-                        if lat is not None and lon is not None:
-                            # Update GPS data
-                            new_gps_data = {
-                                'latitude': lat,
-                                'longitude': lon,
-                                'altitude': alt if packet.mode >= 3 else None,
-                                'speed': speed,
-                                'satellites': sats,
-                                'timestamp': datetime.now().isoformat()
-                            }
-                            
-                            # Check if coordinates actually changed (real-time movement detection)
-                            coords_changed = False
-                            movement_type = "stationary"
-                            if old_coords:
-                                lat_diff = abs(lat - old_coords[0])
-                                lon_diff = abs(lon - old_coords[1])
-                                
-                                # More sensitive detection for walking: ~0.3 meters instead of ~1 meter
-                                if lat_diff > 0.000003 or lon_diff > 0.000003:
-                                    coords_changed = True
-                                    speed_mph = speed * 2.237  # Convert m/s to mph
-                                    
-                                    if speed_mph < 0.5:
-                                        movement_type = "walking"
-                                        self.log(f"GPS MOVED (walking): {lat:.6f},{lon:.6f} (was {old_coords[0]:.6f},{old_coords[1]:.6f}) Speed: {speed:.1f} m/s")
-                                        print(f"GPS MOVED (walking): {lat:.6f},{lon:.6f} Speed: {speed:.1f} m/s")
-                                    elif speed_mph < 5:
-                                        movement_type = "slow"
-                                        self.log(f"GPS MOVED (slow): {lat:.6f},{lon:.6f} (was {old_coords[0]:.6f},{old_coords[1]:.6f}) Speed: {speed_mph:.1f} mph")
-                                        print(f"GPS MOVED (slow): {lat:.6f},{lon:.6f} Speed: {speed_mph:.1f} mph")
-                                    else:
-                                        movement_type = "driving"
-                                        self.log(f"GPS MOVED (driving): {lat:.6f},{lon:.6f} (was {old_coords[0]:.6f},{old_coords[1]:.6f}) Speed: {speed_mph:.1f} mph")
-                                        print(f"GPS MOVED (driving): {lat:.6f},{lon:.6f} Speed: {speed_mph:.1f} mph")
-                                else:
-                                    # Only log stationary if speed is significant (> 1.0 m/s) to reduce spam
-                                    if speed > 1.0:
-                                        self.log(f"GPS STATIONARY: {lat:.6f},{lon:.6f} Speed: {speed:.1f} m/s")
-                                        print(f"GPS STATIONARY: {lat:.6f},{lon:.6f} Speed: {speed:.1f} m/s")
-                            else:
-                                self.log(f"GPS FIRST READ: {lat:.6f},{lon:.6f} Speed: {speed:.1f} m/s")
-                                print(f"GPS FIRST READ: {lat:.6f},{lon:.6f} Speed: {speed:.1f} m/s")
-                            
-                            # ALWAYS update the GPS data (even if stationary)
-                            self.gps_data = new_gps_data
-                            
-                            # Log updates every 10 seconds or when coordinates change significantly
-                            if update_count % 10 == 1 or coords_changed:
-                                if coords_changed:
-                                    self.log(f"GPS {movement_type.upper()}: {lat:.6f},{lon:.6f} Speed: {speed:.1f} Sats: {sats}")
-                                else:
-                                    self.log(f"GPS update: {lat:.6f},{lon:.6f} Speed: {speed:.1f} Sats: {sats}")
-                        else:
-                            self.log(f"GPS packet missing coordinates - lat: {lat}, lon: {lon}")
-                            
-                    else:
-                        packet_mode = getattr(packet, 'mode', 'unknown') if packet else 'no packet'
-                        self.log(f"GPS no fix - mode: {packet_mode}")
-                        if update_count % 10 == 1:
-                            print(f"GPS waiting for fix - mode: {packet_mode}")
-                            
-                except Exception as e:
-                    self.log(f"GPS update error: {e}")
-                    if update_count % 5 == 1:
-                        print(f"GPS update error: {e}")
-                    # Small delay on error to prevent spam
-                    time.sleep(0.5)
-            else:
-                self.log("GPS not ready for updates")
-                if update_count % 5 == 1:
-                    print("GPS not ready for updates")
-                time.sleep(1)
-            
-            # Update every 1 second for real-time tracking
-                time.sleep(1)
-        
-        self.log("GPS updater thread stopped")
-        print("GPS updater thread stopped")
-    
-    def get_vendor_from_mac(self, mac):
-        """Get vendor from MAC address OUI"""
-        oui_dict = {
-            '00:50:56': 'VMware',
-            '08:00:27': 'VirtualBox',
-            '00:0C:29': 'VMware',
-            '00:1B:21': 'Intel',
-            '00:23:AB': 'Apple',
-            '28:CF:E9': 'Apple',
-            '3C:07:54': 'Apple',
-            '00:26:BB': 'Apple',
-            'B8:E8:56': 'Apple',
-            '00:1F:F3': 'Apple',
-            '00:25:00': 'Apple',
-            '00:03:93': 'Apple',
-            '00:D0:B7': 'Intel',
-            '00:AA:00': 'Intel',
-            '00:02:B3': 'Intel',
-            '00:13:02': 'Intel',
-            '00:15:00': 'Intel',
-            '00:16:76': 'Intel',
-            '00:19:D1': 'Intel',
-            '00:1B:77': 'Intel',
-            '00:1C:BF': 'Intel',
-            '00:1E:64': 'Intel',
-            '00:1F:3B': 'Intel',
-            '00:21:5C': 'Intel',
-            '00:22:FB': 'Intel',
-            '00:24:D6': 'Intel',
-            '00:26:C6': 'Intel',
-            '00:27:10': 'Intel'
-        }
-        
-        oui = mac[:8].upper()
-        return oui_dict.get(oui, 'Unknown')
-    
-    def detect_security(self, packet):
-        """Detect security protocols from beacon frame"""
-        security_info = {
-            'type': 'Open',
-            'encryption': 'None',
-            'cipher': 'None',
-            'authentication': 'None',
-            'wps_enabled': False
-        }
-        
-        try:
-            # Check capability info for privacy bit
-            if packet[Dot11Beacon].cap & 0x0010:
-                security_info['encryption'] = 'Encrypted'
-            
-            # Parse information elements
-            elt = packet[Dot11Elt]
-            while elt:
-                if elt.ID == 48:  # RSN Information Element (WPA2/WPA3)
-                    security_info.update(self.parse_rsn_ie(elt.info))
-                elif elt.ID == 221:  # Vendor Specific
-                    if len(elt.info) >= 4:
-                        if elt.info[:4] == b'\x00\x50\xf2\x01':  # WPA IE
-                            security_info.update(self.parse_wpa_ie(elt.info))
-                        elif elt.info[:4] == b'\x00\x50\xf2\x04':  # WPS IE
-                            security_info['wps_enabled'] = True
-                
-                elt = elt.payload if hasattr(elt, 'payload') and isinstance(elt.payload, Dot11Elt) else None
-            
-            # Determine security type
-            if security_info['encryption'] == 'None':
-                security_info['type'] = 'Open'
-            elif 'WPA3' in security_info.get('authentication', ''):
-                security_info['type'] = 'WPA3'
-            elif 'WPA2' in security_info.get('authentication', ''):
-                security_info['type'] = 'WPA2'
-            elif 'WPA' in security_info.get('authentication', ''):
-                security_info['type'] = 'WPA'
-            elif security_info['encryption'] == 'Encrypted':
-                security_info['type'] = 'WEP'
-        
-        except Exception as e:
-            print(f"Security detection error: {e}")
-        
-        return security_info
-    
-    def parse_rsn_ie(self, rsn_data):
-        """Parse RSN Information Element"""
-        security_info = {'authentication': 'WPA2'}
-        try:
-            # Basic parsing - this is simplified
-            if len(rsn_data) >= 8:
-                # Check for SAE (WPA3)
-                if b'\x00\x0f\xac\x08' in rsn_data:
-                    security_info['authentication'] = 'WPA3-SAE'
-                elif b'\x00\x0f\xac\x02' in rsn_data:
-                    security_info['authentication'] = 'WPA2-PSK'
-                elif b'\x00\x0f\xac\x01' in rsn_data:
-                    security_info['authentication'] = 'WPA2-Enterprise'
-                
-                # Check cipher
-                if b'\x00\x0f\xac\x04' in rsn_data:
-                    security_info['cipher'] = 'CCMP'
-                elif b'\x00\x0f\xac\x02' in rsn_data:
-                    security_info['cipher'] = 'TKIP'
-        except:
+            with lock:
+                total_probes += 1
+                if client_mac not in probes:
+                    probes[client_mac] = {
+                        "ssids": set(),
+                        "count": 0,
+                        "last_seen": now,
+                        "signal": sig,
+                    }
+                p = probes[client_mac]
+                p["count"] += 1
+                p["last_seen"] = now
+                if probe_ssid:
+                    p["ssids"].add(probe_ssid)
+                # Signal averaging (rolling)
+                p["signal"] = (p["signal"] * 0.7) + (sig * 0.3)
+        except Exception:
             pass
-        return security_info
-    
-    def parse_wpa_ie(self, wpa_data):
-        """Parse WPA Information Element"""
-        security_info = {'authentication': 'WPA'}
+        return
+
+    # --- Beacons / Probe Responses: discover APs ---
+    if not pkt.haslayer(Dot11Beacon) and not pkt.haslayer(Dot11ProbeResp):
+        return
+
+    try:
+        bssid = (pkt[Dot11].addr2 or "").upper()
+        if not bssid or bssid == "FF:FF:FF:FF:FF:FF":
+            return
+
+        # SSID
         try:
-            if len(wpa_data) >= 8:
-                if b'\x00\x50\xf2\x02' in wpa_data:
-                    security_info['authentication'] = 'WPA-PSK'
-                elif b'\x00\x50\xf2\x01' in wpa_data:
-                    security_info['authentication'] = 'WPA-Enterprise'
-                
-                if b'\x00\x50\xf2\x04' in wpa_data:
-                    security_info['cipher'] = 'CCMP'
-                elif b'\x00\x50\xf2\x02' in wpa_data:
-                    security_info['cipher'] = 'TKIP'
-        except:
-            pass
-        return security_info
-    
-    def packet_handler(self, packet):
-        """Process captured 802.11 frames"""
-        try:
-            if packet.haslayer(Dot11Beacon):
-                self.process_beacon(packet)
-            elif packet.haslayer(Dot11ProbeResp):
-                self.process_probe_response(packet)
-        except Exception as e:
-            print(f"Packet processing error: {e}")
-    
-    def process_beacon(self, packet):
-        """Process beacon frame"""
-        try:
-            bssid = packet[Dot11].addr3
-            
-            # Get SSID
+            ssid = pkt[Dot11Elt].info.decode("utf-8", errors="replace")
+        except Exception:
             ssid = ""
-            if packet.haslayer(Dot11Elt):
-                ssid = packet[Dot11Elt].info.decode('utf-8', errors='ignore')
-            
-            # Skip if we've already seen this network recently
-            if bssid in self.networks:
-                self.networks[bssid]['last_seen'] = datetime.now().isoformat()
-                return
-            
-            # Get channel
-            channel = self.current_channel
-            if packet.haslayer(Dot11Elt):
-                elt = packet[Dot11Elt]
-                while elt:
-                    if elt.ID == 3:  # DS Parameter Set
-                        if len(elt.info) >= 1:
-                            channel = ord(elt.info[:1])
-                        break
-                    elt = elt.payload if hasattr(elt, 'payload') and isinstance(elt.payload, Dot11Elt) else None
-            
-            # Get signal strength
-            signal_strength = None
-            if hasattr(packet, 'dBm_AntSignal'):
-                signal_strength = packet.dBm_AntSignal
-            
-            # Detect security
-            security = self.detect_security(packet)
-            
-            # Get vendor
-            vendor = self.get_vendor_from_mac(bssid)
-            
-            # Store network information
-            network_info = {
-                'ssid': ssid,
-                'bssid': bssid,
-                'channel': channel,
-                'frequency': self.channel_to_frequency(channel),
-                'security': security,
-                'signal_strength': signal_strength,
-                'vendor': vendor,
-                'first_seen': datetime.now().isoformat(),
-                'last_seen': datetime.now().isoformat(),
-                'gps_coordinates': self.gps_data.copy() if self.gps_data else None
-            }
-            
-            self.networks[bssid] = network_info
-            self.total_networks += 1
-            
-            # Store in database
-            self.store_network_in_db(network_info)
-            
-            # Log and print discovery
-            self.log(f"New network discovered: {ssid} ({bssid}) - {security['type']} - Channel {channel}")
-            print(f"New network: {ssid} ({bssid}) - {security['type']} - Channel {channel}")
-            
-        except Exception as e:
-            self.log(f"Beacon processing error: {e}")
-            print(f"Beacon processing error: {e}")
-    
-    def process_probe_response(self, packet):
-        """Process probe response frame"""
-        # Similar to beacon processing but for probe responses
-        self.process_beacon(packet)
-    
-    def channel_to_frequency(self, channel):
-        """Convert channel number to frequency"""
-        if 1 <= channel <= 13:
-            return 2412 + (channel - 1) * 5
-        elif channel == 14:
-            return 2484
-        elif 36 <= channel <= 165:
-            return 5000 + channel * 5
-        else:
-            return 0
-    
-    def store_network_in_db(self, network_info):
-        """Store network information in database"""
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            
-            # Insert or update network
-            cursor.execute('''
-                INSERT OR REPLACE INTO networks 
-                (ssid, bssid, channel, frequency, security_type, encryption, cipher, 
-                 authentication, wps_enabled, signal_strength, first_seen, last_seen, vendor)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                network_info['ssid'],
-                network_info['bssid'],
-                network_info['channel'],
-                network_info['frequency'],
-                network_info['security']['type'],
-                network_info['security']['encryption'],
-                network_info['security']['cipher'],
-                network_info['security']['authentication'],
-                network_info['security']['wps_enabled'],
-                network_info['signal_strength'],
-                network_info['first_seen'],
-                network_info['last_seen'],
-                network_info['vendor']
-            ))
-            
-            # Get network ID
-            network_id = cursor.lastrowid
-            
-            # Store GPS coordinates if available
-            if network_info['gps_coordinates']:
-                gps = network_info['gps_coordinates']
-                cursor.execute('''
-                    INSERT INTO locations 
-                    (network_id, latitude, longitude, altitude, timestamp)
-                    VALUES (?, ?, ?, ?, ?)
-                ''', (
-                    network_id,
-                    gps['latitude'],
-                    gps['longitude'],
-                    gps['altitude'],
-                    gps['timestamp']
-                ))
-            
-            conn.commit()
-            conn.close()
-        except Exception as e:
-            print(f"Database storage error: {e}")
-    
-    def update_lcd_display(self):
-        """Update LCD display - EXACT copy of example_show_buttons.py draw() function"""
-        if not self.lcd_ready or not self.lcd_running:
-            return
-        
-        try:
-            # Build status text - compact 8-line format
-            lines = [
-                "WARDRIVING",
-                f"Networks: {self.total_networks}"
-            ]
-            
-            # GPS status with real-time updates (compact)
-            if self.gps_data and 'latitude' in self.gps_data:
-                lat = self.gps_data['latitude']
-                lon = self.gps_data['longitude']
-                speed = self.gps_data.get('speed', 0)
-                
-                # Show coordinates (4 decimal places = ~10m accuracy)
-                lines.append(f"GPS: {lat:.4f},{lon:.4f}")
-                
-                # Show speed and channel on same line to save space
-                if speed and speed > 0.2:  # Moving faster than 0.2 m/s
-                    speed_mph = speed * 2.237  # Convert m/s to mph
-                    if speed_mph < 1.0:
-                        lines.append(f"Ch{self.current_channel} Walking")
-                    else:
-                        lines.append(f"Ch{self.current_channel} {speed_mph:.0f}mph")
-                else:
-                    lines.append(f"Ch{self.current_channel} Stationary")
-            else:
-                lines.append("GPS: No fix")
-                lines.append(f"Ch{self.current_channel} No GPS")
-            
-            # Status and interface combined
-            status = "SCANNING" if self.running else "STOPPED"
-            if self.monitor_interface:
-                lines.append(f"{status} ({self.monitor_interface})")
-            else:
-                lines.append(f"{status} (No IF)")
-            
-            # Additional wardriving info (using our 3 extra lines)
-            # Line 1: Security breakdown
-            if hasattr(self, 'networks') and self.networks:
-                open_count = sum(1 for n in self.networks.values() if n['security']['type'] == 'Open')
-                wpa_count = sum(1 for n in self.networks.values() if 'WPA' in n['security']['type'])
-                lines.append(f"Open:{open_count} WPA:{wpa_count}")
-            else:
-                lines.append("Open:0 WPA:0")
-            
-            # Line 2: GPS quality info
-            if self.gps_data:
-                # Show time since last GPS update
-                try:
-                    gps_time = datetime.fromisoformat(self.gps_data['timestamp'])
-                    time_diff = (datetime.now() - gps_time).total_seconds()
-                    if time_diff < 5:
-                        lines.append("GPS: Fresh")
-                    else:
-                        lines.append(f"GPS: {time_diff:.0f}s old")
-                except:
-                    lines.append("GPS: Active")
-            else:
-                lines.append("GPS: No data")
-            
-            # Line 3: Session stats
-            if hasattr(self, 'networks') and self.networks:
-                # Count networks with GPS coordinates (ready for Wigle)
-                gps_networks = sum(1 for n in self.networks.values() if n.get('gps_coordinates'))
-                lines.append(f"Wigle ready: {gps_networks}")
-            else:
-                lines.append("Wigle ready: 0")
-            
-            # Controls
-            lines.append("[KEY1] Start/Stop")
-            lines.append("[KEY2] Exit")
-            
-            # EXACT COPY of example_show_buttons.py draw() function
-            img = Image.new("RGB", (self.WIDTH, self.HEIGHT), "black")
-            d = ScaledDraw(img)
-            
-            # Display multiple lines
-            y = 2
-            for i, line in enumerate(lines):
-                if y > 113:  # Don't overflow (128 - 15)
-                    break
-                
-                # Draw centred text
-                d.text((64, y), line, font=self.font, fill="#00FF00", anchor="mm")
-                y += 12
-            
-            # Push image to LCD (EXACT from example_show_buttons.py)
-            self.LCD.LCD_ShowImage(img, 0, 0)
-            
-        except Exception as e:
-            self.log(f"LCD display update ERROR: {e}")
-            print(f"LCD error: {e}")
-            import traceback
-            self.log(f"LCD update traceback: {traceback.format_exc()}")
-    
-    def export_data(self):
-        """Export collected data in multiple formats including Wigle"""
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        
-        # Export JSON
-        self.export_json(f"{self.loot_dir}/scan_{timestamp}.json")
-        
-        # Export CSV
-        self.export_csv(f"{self.loot_dir}/scan_{timestamp}.csv")
-        
-        # Export KML
-        self.export_kml(f"{self.loot_dir}/scan_{timestamp}.kml")
-        
-        # Export Wigle-compatible CSV
-        self.export_wigle_csv(f"{self.loot_dir}/wigle_{timestamp}.csv")
-        
-        print(f"Data exported to {self.loot_dir}/scan_{timestamp}.*")
-        print(f"Wigle upload file: {self.loot_dir}/wigle_{timestamp}.csv")
-    
-    def export_json(self, filename):
-        """Export data as JSON"""
-        try:
-            export_data = {
-                'scan_info': {
-                    'start_time': datetime.now().isoformat(),
-                    'total_networks': self.total_networks,
-                    'gps_enabled': self.gps_ready
-                },
-                'networks': list(self.networks.values())
-            }
-            
-            with open(filename, 'w') as f:
-                json.dump(export_data, f, indent=2)
-        except Exception as e:
-            print(f"JSON export error: {e}")
-    
-    def export_csv(self, filename):
-        """Export data as CSV"""
-        try:
-            import csv
-            with open(filename, 'w', newline='') as f:
-                writer = csv.writer(f)
-                writer.writerow(['SSID', 'BSSID', 'Security', 'Channel', 'Signal', 'Latitude', 'Longitude', 'FirstSeen', 'LastSeen'])
-                
-                for network in self.networks.values():
-                    gps = network.get('gps_coordinates', {})
-                    writer.writerow([
-                        network['ssid'],
-                        network['bssid'],
-                        network['security']['type'],
-                        network['channel'],
-                        network['signal_strength'],
-                        gps.get('latitude', ''),
-                        gps.get('longitude', ''),
-                        network['first_seen'],
-                        network['last_seen']
-                    ])
-        except Exception as e:
-            print(f"CSV export error: {e}")
-    
-    def export_kml(self, filename):
-        """Export data as KML for Google Earth"""
-        try:
-            kml_content = '''<?xml version="1.0" encoding="UTF-8"?>
-<kml xmlns="http://www.opengis.net/kml/2.2">
-  <Document>
-    <name>RaspyJack Wardriving Results</name>
-'''
-            
-            for network in self.networks.values():
-                if network.get('gps_coordinates'):
-                    gps = network['gps_coordinates']
-                    kml_content += f'''
-    <Placemark>
-      <name>{network['ssid']}</name>
-      <description>
-        BSSID: {network['bssid']}
-        Security: {network['security']['type']}
-        Channel: {network['channel']}
-        Signal: {network['signal_strength']} dBm
-        Vendor: {network['vendor']}
-      </description>
-      <Point>
-        <coordinates>{gps['longitude']},{gps['latitude']},0</coordinates>
-      </Point>
-    </Placemark>'''
-            
-            kml_content += '''
-  </Document>
-</kml>'''
-            
-            with open(filename, 'w') as f:
-                f.write(kml_content)
-        except Exception as e:
-            print(f"KML export error: {e}")
-    
-    def export_wigle_csv(self, filename):
-        """Export data in Wigle-compatible CSV format for upload to wigle.net"""
-        try:
-            self.log(f"Exporting Wigle-compatible CSV to {filename}")
-            
-            with open(filename, 'w', newline='') as f:
-                writer = csv.writer(f)
-                
-                # Wigle CSV header format (required fields)
-                writer.writerow([
-                    'WigleWifi-1.4',
-                    'appRelease=RaspyJack-1.0.2',
-                    'model=RaspberryPi',
-                    'release=RaspyJack Wardriving',
-                    f'device=RaspyJack-{datetime.now().strftime("%Y%m%d")}',
-                    'display=RaspyJack',
-                    'board=RaspberryPi',
-                    'brand=RaspyJack'
-                ])
-                
-                # Column headers (Wigle format)
-                writer.writerow([
-                    'MAC',              # BSSID of the network
-                    'SSID',             # Network name
-                    'AuthMode',         # Security type
-                    'FirstSeen',        # When we first detected it
-                    'Channel',          # WiFi channel
-                    'RSSI',             # Signal strength
-                    'CurrentLatitude',  # OUR GPS latitude (where we detected it from)
-                    'CurrentLongitude', # OUR GPS longitude (where we detected it from)
-                    'AltitudeMeters',   # OUR GPS altitude
-                    'AccuracyMeters',   # OUR GPS accuracy
-                    'Type'              # Network type (always WIFI)
-                ])
-                
-                # Export each network
-                for network in self.networks.values():
-                    if network.get('gps_coordinates'):
-                        gps = network['gps_coordinates']
-                        
-                        # Convert security type to Wigle format
-                        auth_mode = self.convert_security_to_wigle(network['security'])
-                        
-                        # Convert timestamp to Wigle format (ISO 8601)
-                        first_seen = network['first_seen']
-                        if 'T' not in first_seen:
-                            # Convert from our format to ISO 8601
-                            try:
-                                dt = datetime.fromisoformat(first_seen)
-                                first_seen = dt.strftime('%Y-%m-%dT%H:%M:%S.000Z')
-                            except:
-                                first_seen = datetime.now().strftime('%Y-%m-%dT%H:%M:%S.000Z')
-                        
-                        writer.writerow([
-                            network['bssid'],                    # MAC - The network's BSSID
-                            network['ssid'],                     # SSID - The network's name
-                            auth_mode,                           # AuthMode - The network's security
-                            first_seen,                          # FirstSeen - When we detected it
-                            network['channel'],                  # Channel - The network's channel
-                            network['signal_strength'] or -50,  # RSSI - Signal strength we received
-                            gps['latitude'],                     # CurrentLatitude - OUR location when we detected it
-                            gps['longitude'],                    # CurrentLongitude - OUR location when we detected it
-                            gps.get('altitude', 0) or 0,        # AltitudeMeters - OUR altitude
-                            10,                                  # AccuracyMeters - OUR GPS accuracy
-                            'WIFI'                               # Type - Always WIFI
-                        ])
-            
-            networks_exported = len([n for n in self.networks.values() if n.get('gps_coordinates')])
-            self.log(f"Wigle CSV export completed: {networks_exported} networks with GPS data")
-            print(f"Wigle CSV exported: {networks_exported} networks")
-            
-        except Exception as e:
-            self.log(f"Wigle CSV export error: {e}")
-            print(f"Wigle CSV export error: {e}")
-    
-    def convert_security_to_wigle(self, security):
-        """Convert our security format to Wigle AuthMode format"""
-        security_type = security.get('type', 'Open').upper()
-        
-        # Wigle AuthMode mappings
-        if security_type == 'OPEN':
-            return '[ESS]'
-        elif security_type == 'WEP':
-            return '[WEP][ESS]'
-        elif security_type == 'WPA':
-            return '[WPA-PSK-TKIP][ESS]'
-        elif security_type == 'WPA2':
-            auth = security.get('authentication', '').upper()
-            cipher = security.get('cipher', '').upper()
-            
-            if 'PSK' in auth and 'CCMP' in cipher:
-                return '[WPA2-PSK-CCMP][ESS]'
-            elif 'PSK' in auth:
-                return '[WPA2-PSK-TKIP][ESS]'
-            elif 'ENTERPRISE' in auth:
-                return '[WPA2-EAP-CCMP][ESS]'
-            else:
-                return '[WPA2-PSK-CCMP][ESS]'  # Default
-        elif security_type == 'WPA3':
-            return '[WPA3-SAE-CCMP][ESS]'
-        else:
-            return '[ESS]'  # Default to open
-    
-    def start_scan(self):
-        """Start wardriving scan - reuse existing monitor interface if available"""
-        if self.running:
-            return
-        
-        if not SCAPY_AVAILABLE:
-            print("Scapy not available - cannot start scan")
-            return
-        
-        # Check if we already have a monitor interface from previous scan
-        if self.monitor_interface:
-            self.log(f"Reusing existing monitor interface: {self.monitor_interface}")
-            print(f"Reusing monitor interface: {self.monitor_interface}")
-        else:
-            # Auto-detect which interface supports monitor mode
-            print("Detecting monitor-capable WiFi interface...", flush=True)
-            iface = getattr(self, '_preselected_iface', None) or self._find_monitor_capable_interface()
-            if not iface:
-                print("No WiFi interfaces found")
-                return
-            self.interface = iface
-            print(f"Using interface: {self.interface}")
-            
-            # Setup monitor mode
-            self.monitor_interface = self.setup_monitor_mode(self.interface)
-            if not self.monitor_interface:
-                print("Failed to setup monitor mode")
-                return
-            
-            print(f"Monitor mode enabled on {self.monitor_interface}")
-        
-        # Start scanning
-        self.running = True
-        self.log("Starting wardriving scan...")
-        
-        # Start threads
-        self.channel_thread = threading.Thread(target=self.channel_hopper)
-        self.channel_thread.daemon = True
-        self.channel_thread.start()
-        
-        # GPS updater thread is now started during GPS initialization, not here
-        if GPS_AVAILABLE and self.gps_ready:
-            self.log("GPS updater already running from initialization")
-            print("GPS tracking already active - coordinates updating continuously")
-        
-        # Start packet capture
-        self.scan_thread = threading.Thread(target=self.packet_capture)
-        self.scan_thread.daemon = True
-        self.scan_thread.start()
-        
-        self.log("Wardriving scan started successfully")
-        print("Wardriving scan started")
-        print("Looking for WiFi networks... (this may take a moment)")
-        print("Make sure you're in an area with WiFi networks nearby")
-    
-    def packet_capture(self):
-        """Enhanced packet capture with debugging"""
-        try:
-            print(f"Starting packet capture on {self.monitor_interface}")
-            
-            # Verify interface
-            result = subprocess.run(['iw', 'dev', self.monitor_interface, 'info'],
-                                  capture_output=True, text=True)
-            print(f"Interface check: {result.stdout[:100]}")
+        if not ssid:
+            ssid = "<hidden>"
 
-            if "type monitor" not in result.stdout:
-                print("ERROR: Interface not in monitor mode!")
-                return
-            
-            # Test capture first
-            print("Testing packet capture (5 seconds)...")
-            test_packets = sniff(iface=self.monitor_interface, timeout=5, count=5)
-            print(f"Test captured {len(test_packets)} packets")
-            
-            if len(test_packets) == 0:
-                print("WARNING: No packets in test capture")
-                # Try without filter
-                print("Trying capture without filter...")
-                test_packets2 = sniff(iface=self.monitor_interface, timeout=3, count=3)
-                print(f"Unfiltered test: {len(test_packets2)} packets")
-            
-            # Main capture loop
-            print("Starting main packet capture...")
-            packet_count = 0
-            
-            def packet_processor(packet):
-                nonlocal packet_count
-                packet_count += 1
-                if packet_count % 100 == 0:
-                    print(f"Processed {packet_count} packets")
-                self.packet_handler(packet)
-            
-            # Capture with management frame filter
-            sniff(iface=self.monitor_interface,
-                  prn=packet_processor,
-                  filter="type mgt",
-                  stop_filter=lambda x: not self.running,
-                  store=0)
-                  
-        except Exception as e:
-            print(f"Packet capture error: {e}")
-            import traceback
-            traceback.print_exc()
-    
-    def stop_scan(self):
-        """Stop wardriving scan without killing the interface"""
-        if not self.running:
-            return
-        
-        self.log("Stopping wardriving scan...")
-        print("Stopping wardriving scan...")
-        self.running = False
-        
-        # Wait for threads to finish
-        if self.scan_thread and self.scan_thread.is_alive():
-            self.scan_thread.join(timeout=2)
-        
-        if self.channel_thread and self.channel_thread.is_alive():
-            self.channel_thread.join(timeout=2)
-        
-        if self.gps_thread and self.gps_thread.is_alive():
-            self.gps_thread.join(timeout=2)
-        
-        # DON'T stop monitor mode - keep interface ready for next scan
-        # Just log that we're keeping it active
-        if self.monitor_interface:
-            self.log(f"Keeping {self.monitor_interface} in monitor mode for next scan")
-            print(f"Interface {self.monitor_interface} remains in monitor mode")
-        
-        # Export data ONLY when stopping scan (not during cleanup)
-        if self.networks and not getattr(self, 'cleanup_in_progress', False):
-            self.export_data()
-        
-        self.log("Wardriving scan stopped - interface preserved")
-        print("Wardriving scan stopped")
-    
-    def cleanup(self):
-        """Comprehensive cleanup with proper thread shutdown - run only once"""
-        # Prevent multiple cleanup runs
-        if getattr(self, 'cleanup_in_progress', False):
-            self.log("Cleanup already in progress, skipping duplicate")
-            return
-        
-        self.cleanup_in_progress = True
-        
+        # Signal
+        sig = getattr(pkt, "dBm_AntSignal", -99)
+
+        # Channel from DS Parameter Set IE
+        channel = 0
         try:
-            self.log("Starting comprehensive cleanup...")
-            
-            # FIRST: Stop LCD update loop to prevent GPIO conflicts
-            self.log("Stopping LCD update loop...")
-            self.lcd_running = False
-            time.sleep(2)  # Give LCD thread time to stop
-            
-            # Stop all scanning activities (without exporting again)
-            self.stop_scan()
-            
-            # Kill any remaining processes (like deauth.py does)
-            self.log("Killing any remaining processes...")
-            subprocess.run(['pkill', '-f', 'airodump-ng'], capture_output=True)
-            subprocess.run(['pkill', '-f', 'aireplay-ng'], capture_output=True)
-            subprocess.run(['pkill', '-f', 'airmon-ng'], capture_output=True)
-            
-            # Stop monitor mode and restore interface (like deauth.py)
-            if self.monitor_interface:
-                self.log(f"Final cleanup: stopping monitor mode on {self.monitor_interface}")
-                self.stop_monitor_mode(self.monitor_interface)
-                self.monitor_interface = None
-            
-            # Try to restart NetworkManager (like deauth.py does)
-            self.log("Attempting to restart NetworkManager...")
-            try:
-                subprocess.run(['systemctl', 'start', 'NetworkManager'], 
-                             capture_output=True, timeout=10)
-                self.log("NetworkManager restart attempted")
-            except Exception as e:
-                self.log(f"NetworkManager restart failed: {e}")
-            
-            # Clear LCD display (like deauth.py does) - AFTER stopping LCD thread
-            if LCD_AVAILABLE and hasattr(self, 'lcd_ready') and self.lcd_ready:
-                try:
-                    self.LCD.LCD_Clear()
-                    self.log("LCD cleared")
-                except Exception as e:
-                    self.log(f"LCD clear failed: {e}")
-            
-            # Clean up GPIO (like deauth.py does) - LAST step
-            if LCD_AVAILABLE and hasattr(self, 'gpio_ready') and self.gpio_ready:
-                try:
-                    GPIO.cleanup()
-                    self.log("GPIO cleaned up")
-                    print("GPIO cleaned up")
-                except Exception as e:
-                    self.log(f"GPIO cleanup failed: {e}")
-            
-            # NO EXPORT HERE - data was already exported when scan stopped
-            if hasattr(self, 'networks') and self.networks:
-                self.log(f"Cleanup complete - {len(self.networks)} networks were already exported")
+            elt = pkt.getlayer(Dot11Elt)
+            while elt:
+                if elt.ID == 3 and elt.info:
+                    channel = elt.info[0]
+                    break
+                elt = elt.payload.getlayer(Dot11Elt)
+        except Exception:
+            pass
+        if channel == 0:
+            channel = current_channel
+
+        # Security
+        sec = _parse_security(pkt)
+
+        # Vendor
+        vendor = _get_vendor(bssid)
+
+        now = datetime.now().isoformat()
+
+        with lock:
+            total_beacons += 1
+            gps_snap = dict(gps_data) if gps_data else None
+
+            if bssid not in networks:
+                networks[bssid] = {
+                    "ssid": ssid,
+                    "bssid": bssid,
+                    "channel": channel,
+                    "signal": sig,
+                    "_sig_sum": sig,
+                    "_sig_count": 1,
+                    "security": sec["security"],
+                    "cipher": sec["cipher"],
+                    "auth": sec["auth"],
+                    "wps": sec["wps"],
+                    "vendor": vendor,
+                    "first_seen": now,
+                    "last_seen": now,
+                    "gps": gps_snap,
+                    "beacon_count": 1,
+                }
             else:
-                self.log("No networks found during session")
-                
-            self.log("Comprehensive cleanup completed successfully")
-            
-        except Exception as e:
-            self.log(f"Cleanup error: {e}")
-            print(f"Cleanup error: {e}")
-            # Continue cleanup even if there are errors
+                net = networks[bssid]
+                net["last_seen"] = now
+                net["beacon_count"] += 1
+                # Signal averaging (rolling average)
+                net["_sig_sum"] += sig
+                net["_sig_count"] += 1
+                net["signal"] = int(net["_sig_sum"] / net["_sig_count"])
+                # Update best GPS (prefer strongest signal position)
+                if gps_snap:
+                    if not net["gps"] or sig > net["signal"]:
+                        net["gps"] = gps_snap
+                if ssid != "<hidden>" and net["ssid"] == "<hidden>":
+                    net["ssid"] = ssid
+
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Channel hoppers
+# ---------------------------------------------------------------------------
+
+
+def _channel_hopper_24(iface):
+    """Hop 2.4GHz channels on iface."""
+    while not _shutdown.is_set() and _scanning.is_set():
+        for ch in CHANNELS_24:
+            if _shutdown.is_set() or not _scanning.is_set():
+                return
+            global current_channel
+            subprocess.run(
+                ["sudo", "iw", "dev", iface, "set", "channel", str(ch)],
+                capture_output=True, timeout=3,
+            )
+            with lock:
+                current_channel = ch
+            if _shutdown.wait(timeout=DWELL_24):
+                return
+
+
+def _channel_hopper_5(iface):
+    """Hop 5GHz channels on iface."""
+    while not _shutdown.is_set() and _scanning.is_set():
+        for ch in CHANNELS_5:
+            if _shutdown.is_set() or not _scanning.is_set():
+                return
+            r = subprocess.run(
+                ["sudo", "iw", "dev", iface, "set", "channel", str(ch)],
+                capture_output=True, timeout=3,
+            )
+            if r.returncode != 0:
+                continue
+            if _shutdown.wait(timeout=DWELL_5):
+                return
+
+
+def _channel_hopper_all(iface):
+    """Hop all channels on single iface."""
+    while not _shutdown.is_set() and _scanning.is_set():
+        for ch in CHANNELS_24:
+            if _shutdown.is_set() or not _scanning.is_set():
+                return
+            global current_channel
+            subprocess.run(
+                ["sudo", "iw", "dev", iface, "set", "channel", str(ch)],
+                capture_output=True, timeout=3,
+            )
+            with lock:
+                current_channel = ch
+            if _shutdown.wait(timeout=DWELL_24):
+                return
+        for ch in CHANNELS_5:
+            if _shutdown.is_set() or not _scanning.is_set():
+                return
+            subprocess.run(
+                ["sudo", "iw", "dev", iface, "set", "channel", str(ch)],
+                capture_output=True, timeout=3,
+            )
+            if _shutdown.wait(timeout=DWELL_5):
+                return
+
+
+def _channel_hopper_split(iface, channels):
+    """Hop a specific set of channels on iface (for N-card split)."""
+    while not _shutdown.is_set() and _scanning.is_set():
+        for ch in channels:
+            if _shutdown.is_set() or not _scanning.is_set():
+                return
+            global current_channel
+            r = subprocess.run(
+                ["sudo", "iw", "dev", iface, "set", "channel", str(ch)],
+                capture_output=True, timeout=3,
+            )
+            if r.returncode != 0:
+                continue
+            with lock:
+                current_channel = ch
+            dwell = DWELL_5 if ch > 14 else DWELL_24
+            if _shutdown.wait(timeout=dwell):
+                return
+
+
+def _sniffer(iface):
+    """Sniff on monitor interface."""
+    try:
+        scapy_sniff(
+            iface=iface,
+            prn=_packet_handler,
+            stop_filter=lambda _: _shutdown.is_set() or not _scanning.is_set(),
+            store=0,
+        )
+    except Exception:
+        pass
+
+
+def _iw_scanner(iface):
+    """Bulk AP discovery via 'iw dev scan' in managed mode.
+
+    Runs alongside monitor mode sniffing. The firmware handles channel
+    scanning internally (faster than hopping), catching APs with slow
+    beacon intervals that the monitor sniffer might miss.
+    """
+    while not _shutdown.is_set() and _scanning.is_set():
+        try:
+            r = subprocess.run(
+                ["sudo", "iw", "dev", iface, "scan", "-u"],
+                capture_output=True, text=True, timeout=15,
+            )
+            if r.returncode != 0:
+                # Interface might be in monitor mode or busy
+                if _shutdown.wait(timeout=10):
+                    break
+                continue
+
+            _parse_iw_scan(r.stdout)
+        except Exception:
+            pass
+
+        # Wait 10s between scans
+        if _shutdown.wait(timeout=10):
+            break
+
+
+def _parse_iw_scan(output):
+    """Parse 'iw dev scan' output and merge into networks dict."""
+    global total_beacons
+
+    bssid = None
+    ssid = ""
+    channel = 0
+    signal = -99
+    security = "Open"
+    cipher = ""
+    wps = False
+
+    now = datetime.now().isoformat()
+
+    for line in output.splitlines():
+        line = line.strip()
+
+        if line.startswith("BSS "):
+            # Save previous AP
+            if bssid:
+                _merge_iw_network(bssid, ssid, channel, signal, security,
+                                  cipher, wps, now)
+            # New AP
+            parts = line.split()
+            bssid = parts[1].split("(")[0].upper() if len(parts) > 1 else None
+            ssid = ""
+            channel = 0
+            signal = -99
+            security = "Open"
+            cipher = ""
+            wps = False
+
+        elif line.startswith("SSID:"):
+            ssid = line[5:].strip()
+        elif line.startswith("signal:"):
             try:
-                if LCD_AVAILABLE:
-                    GPIO.cleanup()
-            except:
+                signal = int(float(line.split(":")[1].strip().split()[0]))
+            except Exception:
                 pass
-    
-    def run_interactive(self):
-        """Run interactive wardriving session"""
-        print("RaspyJack Wardriving Scanner")
-        print("===========================")
-        
-        # Start LCD display update thread
-        if LCD_AVAILABLE and self.lcd_ready:
-            self.log("Starting LCD display thread...")
-            display_thread = threading.Thread(target=self.lcd_update_loop)
-            display_thread.daemon = True
-            display_thread.start()
-            self.log("LCD display thread started - running in LCD mode")
-            
-            print("LCD Mode - Use hardware buttons:")
-            print("  KEY1 - Start/Stop scan")
-            print("  KEY2 - Exit")
-            print("  KEY3 - Export data")
-            print("\nPress Ctrl+C to exit")
-            
-            # Simple LCD mode loop - just keep the program running
+        elif line.startswith("DS Parameter set: channel"):
             try:
-                while True:
-                    try:
-                        self.handle_gpio_input()
-                    except Exception as e:
-                        self.log(f"GPIO error: {e}")
-                    time.sleep(0.1)
-            except KeyboardInterrupt:
-                print("\nShutting down...")
+                channel = int(line.split("channel")[1].strip())
+            except Exception:
+                pass
+        elif line.startswith("* primary channel:"):
+            try:
+                channel = int(line.split(":")[1].strip())
+            except Exception:
+                pass
+        elif "WPA:" in line:
+            if security == "Open":
+                security = "WPA"
+        elif "RSN:" in line:
+            security = "WPA2-PSK"
+        elif "SAE" in line:
+            security = "WPA3-SAE"
+        elif "CCMP" in line:
+            cipher = "CCMP"
+        elif "TKIP" in line and not cipher:
+            cipher = "TKIP"
+        elif "WPS" in line:
+            wps = True
+        elif "Privacy" in line or "privacy" in line:
+            if security == "Open":
+                security = "WEP"
+
+    # Save last AP
+    if bssid:
+        _merge_iw_network(bssid, ssid, channel, signal, security,
+                          cipher, wps, now)
+
+
+def _merge_iw_network(bssid, ssid, channel, signal, security,
+                       cipher, wps, now):
+    """Merge iw scan result into networks dict."""
+    global total_beacons
+    if not bssid or bssid == "FF:FF:FF:FF:FF:FF":
+        return
+    if not ssid:
+        ssid = "<hidden>"
+
+    vendor = _get_vendor(bssid)
+
+    with lock:
+        total_beacons += 1
+        gps_snap = dict(gps_data) if gps_data else None
+
+        if bssid not in networks:
+            networks[bssid] = {
+                "ssid": ssid,
+                "bssid": bssid,
+                "channel": channel,
+                "signal": signal,
+                "_sig_sum": signal,
+                "_sig_count": 1,
+                "security": security,
+                "cipher": cipher,
+                "auth": "",
+                "wps": wps,
+                "vendor": vendor,
+                "first_seen": now,
+                "last_seen": now,
+                "gps": gps_snap,
+                "beacon_count": 1,
+            }
         else:
-            self.log("Running in console mode")
-            print("Console Mode - Use keyboard commands:")
-            print("  s - Start/Stop scan")
-            print("  e - Export data") 
-            print("  q - Quit")
-            
-            # Check if we're in an interactive environment
-            import sys
-            if not sys.stdin.isatty():
-                print("Non-interactive environment detected - starting scan automatically...")
-                print("Press Ctrl+C to stop scanning")
-                self.start_scan()
-                try:
-                    while True:
-                        time.sleep(1)
-                except KeyboardInterrupt:
-                    print("\nStopping scan...")
-                    self.stop_scan()
-                    return
-            
-            # Interactive console mode loop
-            while True:
-                try:
-                    cmd = input("\nCommand: ").lower().strip()
-                    if cmd == 's':
-                        if self.running:
-                            self.stop_scan()
-                        else:
-                            self.start_scan()
-                    elif cmd == 'e':
-                        self.export_data()
-                    elif cmd == 'q':
-                        break
-                    else:
-                        print("Invalid command")
-                except (EOFError, KeyboardInterrupt):
-                    print("\nExiting...")
-                    break
-        
-        # Cleanup
-        self.log("Shutting down wardriving scanner...")
-        self.stop_scan()
-    
-    def lcd_update_loop(self):
-        """LCD update loop with proper error handling and shutdown control"""
-        self.log("Starting LCD update loop thread")
-        loop_count = 0
-        
-        try:
-            while self.lcd_running:  # Check our control flag
-                loop_count += 1
-                try:
-                    if self.lcd_running:  # Double-check before LCD operations
-                        self.update_lcd_display()
-                    
-                    # Log every 30 seconds to show it's working
-                    if loop_count % 30 == 1:
-                        self.log(f"LCD update loop running (iteration {loop_count})")
-                        
-                except Exception as e:
-                    self.log(f"LCD update loop ERROR: {e}")
-                    import traceback
-                    self.log(f"LCD loop traceback: {traceback.format_exc()}")
-                    # Continue running even if there's an error
-                
-                time.sleep(1)
-                
-        except Exception as e:
-            self.log(f"LCD update loop CRASHED: {e}")
-            import traceback
-            self.log(f"LCD loop crash traceback: {traceback.format_exc()}")
-        
-        self.log("LCD update loop stopped")
-    
-    def handle_gpio_input(self):
-        """Improved GPIO button handling with proper debouncing"""
-        if not LCD_AVAILABLE or not hasattr(self, 'gpio_ready') or not self.gpio_ready:
-            return
-        
-        try:
-            btn = get_button({"KEY1": 21, "KEY2": 20, "KEY3": 16}, GPIO)
-            if not btn:
-                return
+            net = networks[bssid]
+            net["last_seen"] = now
+            net["beacon_count"] += 1
+            net["_sig_sum"] += signal
+            net["_sig_count"] += 1
+            net["signal"] = int(net["_sig_sum"] / net["_sig_count"])
+            if gps_snap and not net["gps"]:
+                net["gps"] = gps_snap
+            if ssid != "<hidden>" and net["ssid"] == "<hidden>":
+                net["ssid"] = ssid
 
-            if btn == "KEY1":
-                print("KEY1 pressed - toggling scan")
-                if self.running:
-                    self.stop_scan()
-                else:
-                    self.start_scan()
 
-                # Debounce physical hold/repeat
-                if GPIO.input(21) == 0:
-                    timeout = time.time() + 2
-                    while GPIO.input(21) == 0 and time.time() < timeout:
-                        time.sleep(0.05)
-                time.sleep(0.2)
-                return
+# ---------------------------------------------------------------------------
+# Database
+# ---------------------------------------------------------------------------
 
-            if btn == "KEY2":
-                # For virtual input, exit immediately (no hold needed).
-                if GPIO.input(20) != 0:
-                    print("KEY2 pressed - exiting (WebUI)")
-                    self.cleanup()
-                    sys.exit(0)
 
-                # For physical KEY2, keep hold-to-exit safety behavior.
-                print("KEY2 pressed - Hold for 2 seconds to exit")
-                self.log("Exit button pressed - checking hold duration")
-                hold_start = time.time()
-                while GPIO.input(20) == 0:
-                    hold_duration = time.time() - hold_start
-                    if hold_duration >= 2.0:
-                        print("KEY2 held - Exiting wardriving scanner")
-                        self.log("Exit confirmed - shutting down")
-                        self.cleanup()
-                        sys.exit(0)
-                    time.sleep(0.05)
+def _init_db():
+    os.makedirs(LOOT_DIR, exist_ok=True)
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("""CREATE TABLE IF NOT EXISTS networks (
+        bssid TEXT PRIMARY KEY, ssid TEXT, channel INTEGER,
+        signal INTEGER, security TEXT, cipher TEXT, auth TEXT,
+        wps BOOLEAN, vendor TEXT, first_seen TEXT, last_seen TEXT,
+        lat REAL, lon REAL, alt REAL, beacon_count INTEGER)""")
+    conn.commit()
+    conn.close()
 
-                hold_duration = time.time() - hold_start
-                if hold_duration < 2.0:
-                    print(f"KEY2 released too quickly ({hold_duration:.1f}s) - Hold for 2s to exit")
-                    self.log(f"Exit cancelled - held for only {hold_duration:.1f}s")
-                time.sleep(0.2)
-                return
 
-            if btn == "KEY3":
-                print("KEY3 pressed - export data")
-                self.export_data()
-                if GPIO.input(16) == 0:
-                    while GPIO.input(16) == 0:
-                        time.sleep(0.05)
-                time.sleep(0.2)
-                return
-        
-        except Exception as e:
-            print(f"GPIO handling error: {e}")
+def _save_to_db():
+    """Save all networks to SQLite."""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        with lock:
+            nets = dict(networks)
+        for bssid, n in nets.items():
+            gps = n.get("gps")
+            lat = gps["lat"] if gps else None
+            lon = gps["lon"] if gps else None
+            alt = gps.get("alt") if gps else None
+            c.execute("""INSERT OR REPLACE INTO networks
+                (bssid, ssid, channel, signal, security, cipher, auth,
+                 wps, vendor, first_seen, last_seen, lat, lon, alt, beacon_count)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (bssid, n["ssid"], n["channel"], n["signal"],
+                 n["security"], n["cipher"], n["auth"], n["wps"],
+                 n["vendor"], n["first_seen"], n["last_seen"],
+                 lat, lon, alt, n["beacon_count"]))
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Export
+# ---------------------------------------------------------------------------
+
+
+def _security_to_wigle(sec, cipher, auth):
+    """Convert security to Wigle AuthMode format."""
+    if sec == "Open":
+        return "[ESS]"
+    if sec == "WEP":
+        return "[WEP][ESS]"
+    if sec == "WPA3-SAE":
+        return f"[WPA3-SAE-{cipher or 'CCMP'}][ESS]"
+    if sec == "WPA2-EAP":
+        return f"[WPA2-EAP-{cipher or 'CCMP'}][ESS]"
+    if "WPA2" in sec:
+        return f"[WPA2-PSK-{cipher or 'CCMP'}][ESS]"
+    if "WPA" in sec:
+        return f"[WPA-PSK-{cipher or 'TKIP'}][ESS]"
+    return f"[{sec}][ESS]"
+
+
+def _ch_to_freq(ch):
+    if 1 <= ch <= 13:
+        return 2407 + ch * 5
+    if ch == 14:
+        return 2484
+    if 36 <= ch <= 165:
+        return 5000 + ch * 5
+    return 0
+
+
+def _export_all():
+    """Export to Wigle CSV, JSON, KML. Returns list of created files."""
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    os.makedirs(LOOT_DIR, exist_ok=True)
+    files = []
+
+    with lock:
+        nets = dict(networks)
+
+    if not nets:
+        return files
+
+    # Save DB first
+    _save_to_db()
+
+    # --- Wigle CSV ---
+    wigle_path = os.path.join(LOOT_DIR, f"wigle_{ts}.csv")
+    try:
+        with open(wigle_path, "w", newline="") as f:
+            f.write("WigleWifi-1.4,appRelease=RaspyJack-v2,model=RaspberryPi,"
+                    "release=2.0,device=RaspyJack,display=LCD144,"
+                    "board=RaspberryPi,brand=7h30th3r0n3\n")
+            writer = csv.writer(f)
+            writer.writerow([
+                "MAC", "SSID", "AuthMode", "FirstSeen", "Channel", "RSSI",
+                "CurrentLatitude", "CurrentLongitude", "AltitudeMeters",
+                "AccuracyMeters", "Type",
+            ])
+            for bssid, n in nets.items():
+                gps = n.get("gps")
+                if not gps:
+                    continue
+                auth_mode = _security_to_wigle(
+                    n["security"], n["cipher"], n["auth"])
+                writer.writerow([
+                    bssid, n["ssid"], auth_mode, n["first_seen"],
+                    n["channel"], n["signal"],
+                    f"{gps['lat']:.6f}", f"{gps['lon']:.6f}",
+                    f"{gps.get('alt', 0):.1f}", "10", "WIFI",
+                ])
+        files.append(wigle_path)
+    except Exception:
+        pass
+
+    # --- JSON ---
+    json_path = os.path.join(LOOT_DIR, f"scan_{ts}.json")
+    try:
+        export = {
+            "scan_info": {
+                "timestamp": ts,
+                "total_networks": len(nets),
+                "wigle_ready": sum(1 for n in nets.values() if n.get("gps")),
+            },
+            "networks": list(nets.values()),
+        }
+        with open(json_path, "w") as f:
+            json.dump(export, f, indent=2)
+        files.append(json_path)
+    except Exception:
+        pass
+
+    # --- KML ---
+    kml_path = os.path.join(LOOT_DIR, f"scan_{ts}.kml")
+    try:
+        kml = ['<?xml version="1.0" encoding="UTF-8"?>',
+               '<kml xmlns="http://www.opengis.net/kml/2.2">',
+               '<Document><name>RaspyJack Wardriving</name>']
+        for bssid, n in nets.items():
+            gps = n.get("gps")
+            if not gps:
+                continue
+            kml.append(f'<Placemark><name>{n["ssid"]}</name>')
+            kml.append(f'<description>BSSID:{bssid} Sec:{n["security"]} '
+                       f'Ch:{n["channel"]} Sig:{n["signal"]}dBm</description>')
+            kml.append(f'<Point><coordinates>{gps["lon"]:.6f},'
+                       f'{gps["lat"]:.6f},{gps.get("alt", 0):.0f}'
+                       f'</coordinates></Point></Placemark>')
+        kml.append('</Document></kml>')
+        with open(kml_path, "w") as f:
+            f.write("\n".join(kml))
+        files.append(kml_path)
+    except Exception:
+        pass
+
+    return files
+
+
+# ---------------------------------------------------------------------------
+# LCD Drawing
+# ---------------------------------------------------------------------------
+
+
+def _signal_bar(sig):
+    """Convert dBm to 0-4 bar level."""
+    if sig >= -50:
+        return 4
+    if sig >= -60:
+        return 3
+    if sig >= -70:
+        return 2
+    if sig >= -80:
+        return 1
+    return 0
+
+
+def _draw_signal_bars(d, x, y, level):
+    """Draw mini signal bars."""
+    for i in range(4):
+        h = 3 + i * 2
+        color = "#00FF00" if i < level else "#222"
+        d.rectangle((x + i * 4, y + 10 - h, x + i * 4 + 2, y + 10), fill=color)
+
+
+def _sec_color(sec):
+    if sec == "Open":
+        return "#FF0000"
+    if sec == "WEP":
+        return "#FF8800"
+    if "WPA3" in sec:
+        return "#00FF00"
+    if "WPA2" in sec:
+        return "#00CCFF"
+    if "WPA" in sec:
+        return "#FFAA00"
+    return "#888"
+
+
+def _draw_live(lcd, font, font_sm):
+    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+    d = ScaledDraw(img)
+
+    with lock:
+        net_count = len(networks)
+        cli_count = len(probes)
+        beacons = total_beacons
+        ch = current_channel
+        gps_snap = dict(gps_data) if gps_data else None
+        # Get 6 most recent/strongest
+        recent = sorted(networks.values(),
+                        key=lambda n: n["signal"], reverse=True)[:6]
+
+    scanning = _scanning.is_set()
+    dm = dual_mode
+
+    # Header
+    d.rectangle((0, 0, 127, 12), fill="#111")
+    d.text((2, 1), "WARDRIVING", font=font_sm, fill="#00CCFF")
+    status = "SCAN" if scanning else "IDLE"
+    mode = "2x" if dm else "1x"
+    d.text((70, 1), f"{status} {mode}", font=font_sm, fill="#00FF00" if scanning else "#666")
+    d.ellipse((120, 3, 126, 9), fill="#00FF00" if scanning else "#444")
+
+    # Stats bar line 1: AP + CLI + CH
+    d.text((2, 14), f"AP:{net_count}", font=font_sm, fill="#00FF00")
+    d.text((36, 14), f"CLI:{cli_count}", font=font_sm, fill="#00CCFF")
+    d.text((72, 14), f"CH:{ch}", font=font_sm, fill="#FFAA00")
+    # Stats bar line 2: GPS
+    gps_txt = f"GPS:{gps_snap['lat']:.4f},{gps_snap['lon']:.4f}" if gps_snap else "GPS: No fix"
+    gps_col = "#00FF00" if gps_snap else "#FF4444"
+    d.text((2, 24), gps_txt, font=font_sm, fill=gps_col)
+
+    # Network list
+    y = 36
+    d.line([(0, 34), (127, 34)], fill="#333")
+    if not recent:
+        d.text((10, 55), "No networks yet", font=font_sm, fill="#444")
+    else:
+        for n in recent:
+            ssid = n["ssid"][:14]
+            sig = n["signal"]
+            sec = n["security"]
+
+            d.text((2, y), ssid, font=font_sm, fill="#FFFFFF")
+            _draw_signal_bars(d, 88, y, _signal_bar(sig))
+            d.text((105, y), f"{sig}", font=font_sm, fill="#888")
+            # Security dot
+            d.ellipse((82, y + 3, 86, y + 7), fill=_sec_color(sec))
+            y += 14
+            if y > 110:
+                break
+
+    # Footer
+    d.rectangle((0, 116, 127, 127), fill="#111")
+    d.text((2, 117), "OK:Scan K1:View K2:Exp", font=font_sm, fill="#888")
+    lcd.LCD_ShowImage(img, 0, 0)
+
+
+def _draw_gps(lcd, font, font_sm):
+    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+    d = ScaledDraw(img)
+
+    d.rectangle((0, 0, 127, 12), fill="#111")
+    d.text((2, 1), "GPS STATUS", font=font_sm, fill="#FFAA00")
+
+    with lock:
+        gps_snap = dict(gps_data) if gps_data else None
+
+    y = 16
+    if not gps_snap:
+        if not GPSD_OK:
+            d.text((4, 40), "gpsd-py3 not installed", font=font_sm, fill="#FF4444")
+            d.text((4, 55), "pip3 install gpsd-py3", font=font_sm, fill="#888")
+        elif not gps_ready:
+            d.text((4, 40), "GPS not detected", font=font_sm, fill="#FF4444")
+            d.text((4, 55), "Check USB GPS module", font=font_sm, fill="#888")
+        else:
+            d.text((4, 40), "Waiting for GPS fix", font=font_sm, fill="#FFAA00")
+            d.text((4, 55), "Move to clear sky", font=font_sm, fill="#888")
+    else:
+        lat = gps_snap["lat"]
+        lon = gps_snap["lon"]
+        alt = gps_snap.get("alt", 0)
+        speed = gps_snap.get("speed", 0)
+        sats = gps_snap.get("sats", 0)
+        mode = gps_snap.get("mode", 0)
+        age = time.time() - gps_snap.get("ts", time.time())
+
+        fix_type = f"{mode}D" if mode >= 2 else "No fix"
+        d.text((4, y), f"Fix: {fix_type}", font=font_sm, fill="#00FF00")
+        y += 14
+        d.text((4, y), f"Lat: {lat:.6f}", font=font_sm, fill="#FFFFFF")
+        y += 12
+        d.text((4, y), f"Lon: {lon:.6f}", font=font_sm, fill="#FFFFFF")
+        y += 12
+        d.text((4, y), f"Alt: {alt:.1f}m", font=font_sm, fill="#888")
+        y += 14
+        # Speed in km/h
+        speed_kmh = speed * 3.6 if speed else 0
+        if speed_kmh < 2:
+            mvt = "Stationary"
+            mvt_col = "#888"
+        elif speed_kmh < 8:
+            mvt = "Walking"
+            mvt_col = "#00CCFF"
+        elif speed_kmh < 30:
+            mvt = "Cycling"
+            mvt_col = "#FFAA00"
+        else:
+            mvt = "Driving"
+            mvt_col = "#FF4444"
+        d.text((4, y), f"Speed: {speed_kmh:.1f} km/h", font=font_sm, fill=mvt_col)
+        d.text((90, y), mvt, font=font_sm, fill=mvt_col)
+        y += 14
+        d.text((4, y), f"Sats: {sats}", font=font_sm, fill="#FFAA00")
+        age_txt = f"{age:.0f}s ago" if age < 60 else "old"
+        d.text((60, y), age_txt, font=font_sm, fill="#666")
+
+    d.rectangle((0, 116, 127, 127), fill="#111")
+    d.text((2, 117), "K1:View K3:Exit", font=font_sm, fill="#888")
+    lcd.LCD_ShowImage(img, 0, 0)
+
+
+def _draw_stats(lcd, font, font_sm):
+    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+    d = ScaledDraw(img)
+
+    d.rectangle((0, 0, 127, 12), fill="#111")
+    d.text((2, 1), "STATISTICS", font=font_sm, fill="#FF00FF")
+
+    with lock:
+        nets = list(networks.values())
+        cli_count = len(probes)
+        probe_count = total_probes
+        gps_snap = dict(gps_data) if gps_data else None
+
+    total = len(nets)
+    wigle_ready = sum(1 for n in nets if n.get("gps"))
+
+    # Security breakdown
+    sec_count = Counter(n["security"] for n in nets)
+    y = 16
+    d.text((2, y), f"AP:{total} CLI:{cli_count} Wigle:{wigle_ready}", font=font_sm, fill="#FFFFFF")
+    y += 14
+
+    # Security bars
+    for sec_name in ["Open", "WEP", "WPA", "WPA2-PSK", "WPA2-EAP", "WPA3-SAE"]:
+        count = sec_count.get(sec_name, 0)
+        if count == 0 and sec_name not in ("Open", "WPA2-PSK"):
+            continue
+        pct = count / max(total, 1)
+        label = sec_name[:8]
+        d.text((2, y), f"{label}", font=font_sm, fill=_sec_color(sec_name))
+        bar_w = int(50 * pct)
+        if bar_w > 0:
+            d.rectangle((52, y + 1, 52 + bar_w, y + 8), fill=_sec_color(sec_name))
+        d.text((106, y), f"{count}", font=font_sm, fill="#888")
+        y += 11
+        if y > 105:
+            break
+
+    # Channel distribution (mini heatmap)
+    if total > 0 and y < 100:
+        y += 2
+        ch_count = Counter(n["channel"] for n in nets)
+        max_ch = max(ch_count.values()) if ch_count else 1
+        d.text((2, y), "CH:", font=font_sm, fill="#666")
+        for i, ch in enumerate(CHANNELS_24):
+            x = 20 + i * 8
+            cnt = ch_count.get(ch, 0)
+            h = max(1, int(cnt / max_ch * 10)) if cnt > 0 else 0
+            color = "#00FF00" if cnt > max_ch * 0.5 else "#FFAA00" if cnt > 0 else "#181818"
+            if h > 0:
+                d.rectangle((x, y + 10 - h, x + 6, y + 10), fill=color)
+
+    d.rectangle((0, 116, 127, 127), fill="#111")
+    d.text((2, 117), "K1:View K2:Export K3:X", font=font_sm, fill="#888")
+    lcd.LCD_ShowImage(img, 0, 0)
+
+
+def _draw_channels(lcd, font, font_sm):
+    """Dashboard: AP count per channel with bar chart."""
+    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+    d = ScaledDraw(img)
+
+    d.rectangle((0, 0, 127, 12), fill="#111")
+    d.text((2, 1), "CHANNELS", font=font_sm, fill="#FFAA00")
+
+    with lock:
+        nets = list(networks.values())
+
+    ch_count = Counter(n["channel"] for n in nets)
+    total = len(nets)
+
+    d.text((80, 1), f"AP:{total}", font=font_sm, fill="#00FF00")
+
+    # --- 2.4 GHz bar chart ---
+    d.text((2, 15), "2.4 GHz", font=font_sm, fill="#00CCFF")
+    bar_top = 27
+    bar_h_max = 30
+    max_24 = max((ch_count.get(ch, 0) for ch in CHANNELS_24), default=1) or 1
+    cell_w = 9
+
+    for i, ch in enumerate(CHANNELS_24):
+        x = 2 + i * cell_w
+        cnt = ch_count.get(ch, 0)
+        bh = max(1, int(cnt / max_24 * bar_h_max)) if cnt > 0 else 0
+
+        if cnt > max_24 * 0.6:
+            color = "#00FF00"
+        elif cnt > 0:
+            color = "#FFAA00"
+        else:
+            color = "#181818"
+
+        if bh > 0:
+            d.rectangle((x, bar_top + bar_h_max - bh,
+                          x + cell_w - 2, bar_top + bar_h_max), fill=color)
+
+        # Channel number
+        ch_color = "#FFFFFF" if cnt > 0 else "#333"
+        d.text((x, bar_top + bar_h_max + 2), str(ch), font=font_sm, fill=ch_color)
+
+        # Count on top of bar
+        if cnt > 0:
+            d.text((x, bar_top + bar_h_max - bh - 9), str(cnt),
+                   font=font_sm, fill=color)
+
+    # --- 5 GHz bar chart ---
+    y5 = 72
+    d.line([(0, y5 - 2), (127, y5 - 2)], fill="#333")
+    d.text((2, y5), "5 GHz", font=font_sm, fill="#FF00FF")
+
+    # Only show channels that have APs or are in the common set
+    ch5_active = [ch for ch in CHANNELS_5 if ch_count.get(ch, 0) > 0]
+    ch5_show = CHANNELS_5[:8] if not ch5_active else sorted(
+        set(CHANNELS_5[:8]) | set(ch5_active))[:13]
+
+    max_5 = max((ch_count.get(ch, 0) for ch in ch5_show), default=1) or 1
+    bar_top_5 = y5 + 10
+    bar_h_5 = 18
+    n5 = len(ch5_show)
+    cell_w_5 = max(6, min(9, 124 // max(n5, 1)))
+
+    for i, ch in enumerate(ch5_show):
+        x = 2 + i * cell_w_5
+        if x + cell_w_5 > 127:
+            break
+        cnt = ch_count.get(ch, 0)
+        bh = max(1, int(cnt / max_5 * bar_h_5)) if cnt > 0 else 0
+
+        color = "#FF00FF" if cnt > max_5 * 0.3 else "#662266" if cnt > 0 else "#181818"
+
+        if bh > 0:
+            d.rectangle((x, bar_top_5 + bar_h_5 - bh,
+                          x + cell_w_5 - 2, bar_top_5 + bar_h_5), fill=color)
+
+        ch_color = "#FFFFFF" if cnt > 0 else "#333"
+        # Short channel label (remove leading digits for compactness)
+        ch_label = str(ch) if ch < 100 else str(ch)[-2:]
+        d.text((x, bar_top_5 + bar_h_5 + 1), ch_label, font=font_sm, fill=ch_color)
+
+    d.rectangle((0, 116, 127, 127), fill="#111")
+    d.text((2, 117), "K1:View K2:Export K3:X", font=font_sm, fill="#888")
+    lcd.LCD_ShowImage(img, 0, 0)
+
+
+def _draw_networks(lcd, font, font_sm, scroll_pos, sort):
+    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+    d = ScaledDraw(img)
+
+    sort_names = ["Signal", "Name", "Security"]
+    d.rectangle((0, 0, 127, 12), fill="#111")
+    d.text((2, 1), f"NETWORKS [{sort_names[sort]}]", font=font_sm, fill="#00FF00")
+
+    with lock:
+        nets = list(networks.values())
+
+    # Sort
+    if sort == 0:
+        nets.sort(key=lambda n: n["signal"], reverse=True)
+    elif sort == 1:
+        nets.sort(key=lambda n: n["ssid"].lower())
+    elif sort == 2:
+        sec_order = {"Open": 0, "WEP": 1, "WPA": 2, "WPA2-PSK": 3,
+                     "WPA2-EAP": 4, "WPA3-SAE": 5}
+        nets.sort(key=lambda n: sec_order.get(n["security"], 3))
+
+    if not nets:
+        d.text((10, 55), "No networks", font=font_sm, fill="#444")
+    else:
+        visible = nets[scroll_pos:scroll_pos + 8]
+        y = 14
+        for n in visible:
+            ssid = n["ssid"][:13]
+            sig = n["signal"]
+            sec = n["security"][:5]
+            ch = n["channel"]
+            has_gps = "*" if n.get("gps") else " "
+
+            d.text((2, y), f"{has_gps}{ssid}", font=font_sm, fill="#FFFFFF")
+            d.text((82, y), sec[:5], font=font_sm, fill=_sec_color(n["security"]))
+            d.text((112, y), f"{sig}", font=font_sm, fill="#888")
+            y += 12
+
+    # Scroll indicator
+    if len(nets) > 8:
+        d.text((120, 14), "^", font=font_sm, fill="#444" if scroll_pos > 0 else "#111")
+        d.text((120, 108), "v", font=font_sm,
+               fill="#444" if scroll_pos + 8 < len(nets) else "#111")
+
+    d.rectangle((0, 116, 127, 127), fill="#111")
+    d.text((2, 117), "U/D:Scrl L/R:Sort K1:Vw", font=font_sm, fill="#888")
+    lcd.LCD_ShowImage(img, 0, 0)
+
+
+def _draw_export(lcd, font, font_sm, export_files):
+    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+    d = ScaledDraw(img)
+
+    d.rectangle((0, 0, 127, 12), fill="#111")
+    d.text((2, 1), "EXPORT", font=font_sm, fill="#FFAA00")
+
+    with lock:
+        nets = list(networks.values())
+
+    total = len(nets)
+    wigle_ready = sum(1 for n in nets if n.get("gps"))
+
+    y = 16
+    d.text((4, y), f"Networks: {total}", font=font_sm, fill="#FFFFFF")
+    y += 12
+    d.text((4, y), f"With GPS: {wigle_ready}", font=font_sm, fill="#00FF00")
+    y += 12
+    d.text((4, y), f"No GPS: {total - wigle_ready}", font=font_sm, fill="#FF4444")
+    y += 16
+
+    if export_files:
+        d.text((4, y), "Last export:", font=font_sm, fill="#888")
+        y += 12
+        for f in export_files[-3:]:
+            name = os.path.basename(f)[:22]
+            d.text((4, y), name, font=font_sm, fill="#00CCFF")
+            y += 11
+    else:
+        d.text((4, y), "No exports yet", font=font_sm, fill="#666")
+        y += 12
+        d.text((4, y), "Press KEY2 to export", font=font_sm, fill="#888")
+
+    # Files in loot dir
+    try:
+        existing = [f for f in os.listdir(LOOT_DIR) if f.endswith((".csv", ".json", ".kml"))]
+        d.text((4, 100), f"Files: {len(existing)} in loot", font=font_sm, fill="#666")
+    except Exception:
+        pass
+
+    d.rectangle((0, 116, 127, 127), fill="#111")
+    d.text((2, 117), "K2:Export K1:View K3:X", font=font_sm, fill="#888")
+    lcd.LCD_ShowImage(img, 0, 0)
+
+
+# ---------------------------------------------------------------------------
+# Auto-save (continuous Wigle CSV update)
+# ---------------------------------------------------------------------------
+
+_wigle_path = os.path.join(LOOT_DIR, "wardriving_live.csv")
+
+
+def _autosave_thread():
+    """Background thread: save Wigle CSV every AUTOSAVE_INTERVAL seconds."""
+    while not _shutdown.is_set():
+        if _shutdown.wait(timeout=AUTOSAVE_INTERVAL):
+            break
+        if _scanning.is_set():
+            _auto_save_wigle()
+            _save_to_db()
+    # Final save on shutdown
+    _auto_save_wigle()
+    _save_to_db()
+
+
+def _auto_save_wigle():
+    """Overwrite live Wigle CSV with current data."""
+    with lock:
+        nets = dict(networks)
+    if not nets:
+        return
+    try:
+        with open(_wigle_path, "w", newline="") as f:
+            f.write("WigleWifi-1.4,appRelease=RaspyJack-v2,model=RaspberryPi,"
+                    "release=2.0,device=RaspyJack,display=LCD144,"
+                    "board=RaspberryPi,brand=7h30th3r0n3\n")
+            writer = csv.writer(f)
+            writer.writerow([
+                "MAC", "SSID", "AuthMode", "FirstSeen", "Channel", "RSSI",
+                "CurrentLatitude", "CurrentLongitude", "AltitudeMeters",
+                "AccuracyMeters", "Type",
+            ])
+            for bssid, n in nets.items():
+                gps = n.get("gps")
+                lat = f"{gps['lat']:.6f}" if gps else ""
+                lon = f"{gps['lon']:.6f}" if gps else ""
+                alt = f"{gps.get('alt', 0):.1f}" if gps else ""
+                auth_mode = _security_to_wigle(
+                    n["security"], n["cipher"], n["auth"])
+                writer.writerow([
+                    bssid, n["ssid"], auth_mode, n["first_seen"],
+                    n["channel"], n["signal"], lat, lon, alt, "10", "WIFI",
+                ])
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
 
 def main():
-    """Main function"""
+    global view_idx, scroll, sort_mode, dual_mode
+
+    os.makedirs(LOOT_DIR, exist_ok=True)
+
+    GPIO.setmode(GPIO.BCM)
+    for pin in PINS.values():
+        GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+
+    LCD_Config.GPIO_Init()
+    lcd = LCD_1in44.LCD()
+    lcd.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
+    lcd.LCD_Clear()
+    font = scaled_font(10)
+    font_sm = scaled_font(8)
+
+    if not SCAPY_OK:
+        img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+        d = ScaledDraw(img)
+        d.text((4, 50), "scapy not found!", font=font, fill="#FF0000")
+        lcd.LCD_ShowImage(img, 0, 0)
+        time.sleep(3)
+        GPIO.cleanup()
+        return 1
+
+    _init_db()
+
+    # Start GPS thread
+    gps_thread = threading.Thread(target=_gps_updater, daemon=True)
+    gps_thread.start()
+
+    # Show splash
+    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+    d = ScaledDraw(img)
+    d.text((20, 25), "WARDRIVING", font=font, fill="#00CCFF")
+    d.text((10, 45), "WiFi Network Scanner", font=font_sm, fill="#888")
+    d.text((10, 65), "GPS + Multi-card", font=font_sm, fill="#888")
+    d.text((10, 80), "Wigle Compatible", font=font_sm, fill="#00FF00")
+    d.text((10, 100), "OK = Start", font=font_sm, fill="#666")
+    lcd.LCD_ShowImage(img, 0, 0)
+    time.sleep(1.5)
+
+    export_files = []
+    threads = []
+
+    # Start autosave thread (independent, survives even if main loop lags)
+    threading.Thread(target=_autosave_thread, daemon=True).start()
+
     try:
-        scanner = WardrivingScanner()
-        if LCD_AVAILABLE and hasattr(scanner, 'LCD') and hasattr(scanner, 'font'):
-            pins = {"UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
-                    "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16}
-            iface = _select_interface(scanner.LCD, scanner.font, pins, GPIO, iface_type="wifi")
-            if iface:
-                scanner._preselected_iface = iface
-        scanner.run_interactive()
-    except KeyboardInterrupt:
-        print("\nExiting...")
-    except Exception as e:
-        print(f"Error: {e}")
-        import traceback
-        traceback.print_exc()
+        while not _shutdown.is_set():
+            btn = get_button(PINS, GPIO)
+
+            # KEY3 = exit
+            if btn == "KEY3":
+                break
+
+            # OK = toggle scan
+            if btn == "OK":
+                if not _scanning.is_set():
+                    # Find monitor-capable USB interfaces
+                    ifaces = _find_monitor_interfaces()
+
+                    _scanning.set()
+                    global scan_start_time
+                    scan_start_time = time.time()
+                    mon_ifaces.clear()
+
+                    if ifaces:
+                        # Setup monitor mode on ALL USB cards
+                        img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+                        d = ScaledDraw(img)
+                        d.text((4, 40), f"Monitor mode...", font=font, fill="#FFAA00")
+                        d.text((4, 60), f"{len(ifaces)} card(s) found", font=font_sm, fill="#888")
+                        lcd.LCD_ShowImage(img, 0, 0)
+
+                        for iface in ifaces:
+                            mon = _monitor_up(iface)
+                            if mon:
+                                mon_ifaces.append(mon)
+
+                        if mon_ifaces:
+                            dual_mode = len(mon_ifaces) >= 2
+                            n_cards = len(mon_ifaces)
+
+                            # Start a sniffer on each card
+                            for iface in mon_ifaces:
+                                t = threading.Thread(target=_sniffer, args=(iface,), daemon=True)
+                                t.start()
+                                threads.append(t)
+
+                            # Detect 5GHz support per card
+                            cards_5g = []
+                            cards_24_only = []
+                            for iface in mon_ifaces:
+                                r = subprocess.run(
+                                    ["sudo", "iw", "dev", iface, "set", "channel", "36"],
+                                    capture_output=True, timeout=3)
+                                if r.returncode == 0:
+                                    cards_5g.append(iface)
+                                    # Reset back to ch1
+                                    subprocess.run(
+                                        ["sudo", "iw", "dev", iface, "set", "channel", "1"],
+                                        capture_output=True, timeout=3)
+                                else:
+                                    cards_24_only.append(iface)
+
+                            # Split 2.4GHz channels across all cards
+                            all_24_cards = cards_24_only + cards_5g
+                            n_24 = len(all_24_cards)
+                            for idx, iface in enumerate(all_24_cards):
+                                ch_list = [CHANNELS_24[i] for i in range(idx, len(CHANNELS_24), n_24)]
+                                t = threading.Thread(
+                                    target=_channel_hopper_split,
+                                    args=(iface, ch_list),
+                                    daemon=True)
+                                t.start()
+                                threads.append(t)
+
+                            # Split 5GHz channels across 5G-capable cards only
+                            if cards_5g:
+                                n_5g = len(cards_5g)
+                                for idx, iface in enumerate(cards_5g):
+                                    ch_list = [CHANNELS_5[i] for i in range(idx, len(CHANNELS_5), n_5g)]
+                                    t = threading.Thread(
+                                        target=_channel_hopper_split,
+                                        args=(iface, ch_list),
+                                        daemon=True)
+                                    t.start()
+                                    threads.append(t)
+
+                    # Always start iw scan on wlan0 (works with or without USB cards)
+                    # In scan-only mode: wlan0 alone does bulk discovery
+                    # In dual/monitor mode: wlan0 adds bulk discovery on top
+                    if os.path.isdir("/sys/class/net/wlan0/wireless"):
+                        t = threading.Thread(target=_iw_scanner,
+                                             args=("wlan0",), daemon=True)
+                        t.start()
+                        threads.append(t)
+
+                    if not mon_ifaces:
+                        # No USB cards — scan-only mode with wlan0
+                        img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+                        d = ScaledDraw(img)
+                        d.text((4, 35), "Scan mode (wlan0)", font=font, fill="#FFAA00")
+                        d.text((4, 55), "No monitor card", font=font_sm, fill="#888")
+                        d.text((4, 70), "Using iw scan", font=font_sm, fill="#888")
+                        lcd.LCD_ShowImage(img, 0, 0)
+                        time.sleep(1.5)
+
+                else:
+                    # Stop scan
+                    _scanning.clear()
+                    time.sleep(0.5)
+                    _save_to_db()
+
+                time.sleep(0.3)
+
+            # KEY1 = cycle views
+            elif btn == "KEY1":
+                view_idx = (view_idx + 1) % len(VIEWS)
+                scroll = 0
+                time.sleep(0.25)
+
+            # KEY2 = export
+            elif btn == "KEY2":
+                img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+                d = ScaledDraw(img)
+                d.text((4, 50), "Exporting...", font=font, fill="#FFAA00")
+                lcd.LCD_ShowImage(img, 0, 0)
+                export_files = _export_all()
+                if export_files:
+                    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+                    d = ScaledDraw(img)
+                    d.text((4, 40), f"Exported!", font=font, fill="#00FF00")
+                    d.text((4, 60), f"{len(export_files)} files", font=font_sm, fill="#888")
+                    lcd.LCD_ShowImage(img, 0, 0)
+                else:
+                    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+                    d = ScaledDraw(img)
+                    d.text((4, 50), "Nothing to export", font=font, fill="#FF4444")
+                    lcd.LCD_ShowImage(img, 0, 0)
+                time.sleep(1.5)
+
+            # UP/DOWN = scroll (networks view)
+            elif btn == "UP":
+                scroll = max(0, scroll - 1)
+                time.sleep(0.12)
+            elif btn == "DOWN":
+                with lock:
+                    max_s = max(0, len(networks) - 8)
+                scroll = min(max_s, scroll + 1)
+                time.sleep(0.12)
+
+            # LEFT/RIGHT = sort (networks view)
+            elif btn == "LEFT" or btn == "RIGHT":
+                sort_mode = (sort_mode + 1) % 3
+                time.sleep(0.2)
+
+            # Draw current view
+            current_view = VIEWS[view_idx]
+            if current_view == "live":
+                _draw_live(lcd, font, font_sm)
+            elif current_view == "gps":
+                _draw_gps(lcd, font, font_sm)
+            elif current_view == "channels":
+                _draw_channels(lcd, font, font_sm)
+            elif current_view == "stats":
+                _draw_stats(lcd, font, font_sm)
+            elif current_view == "networks":
+                _draw_networks(lcd, font, font_sm, scroll, sort_mode)
+            elif current_view == "export":
+                _draw_export(lcd, font, font_sm, export_files)
+
+            time.sleep(0.05)
+
     finally:
-        # Cleanup
+        _shutdown.set()
+        _scanning.clear()
+        # Show exit screen
         try:
-            if 'scanner' in locals():
-                scanner.cleanup()
-        except:
+            img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+            d = ScaledDraw(img)
+            d.text((10, 40), "Saving data...", font=font, fill="#FFAA00")
+            lcd.LCD_ShowImage(img, 0, 0)
+        except Exception:
             pass
+        _save_to_db()
+        _auto_save_wigle()
+        for iface in mon_ifaces:
+            _monitor_down(iface)
+        subprocess.run(["sudo", "systemctl", "restart", "NetworkManager"],
+                       capture_output=True, timeout=10)
+        try:
+            lcd.LCD_Clear()
+        except Exception:
+            pass
+        GPIO.cleanup()
+
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

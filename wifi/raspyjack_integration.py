@@ -142,7 +142,7 @@ def get_available_interfaces():
                               capture_output=True, check=False)
         if result.returncode == 0:
             interfaces.append('eth0')
-    except:
+    except Exception:
         pass
     
     # Add WiFi interfaces
@@ -216,7 +216,7 @@ def get_best_interface(prefer_wifi=False, bypass_checks=False):
                 pref_file = "/root/Raspyjack/wifi/interface_preferences.json"
                 if os.path.exists(pref_file):
                     os.remove(pref_file)
-            except:
+            except Exception:
                 pass
     
     # Check current system default route
@@ -414,7 +414,7 @@ def get_nmap_target_network(interface=None):
         for line in result.stdout.split('\n'):
             if 'inet ' in line:
                 return line.split()[1]  # Return CIDR notation
-    except:
+    except Exception:
         pass
     
     return None
@@ -533,7 +533,7 @@ def backup_routing_config():
                                           capture_output=True, text=True, check=False)
                 if iface_info.returncode == 0:
                     backup_data["interfaces"][interface] = iface_info.stdout
-            except:
+            except Exception:
                 pass
         
         with open(backup_file, 'w') as f:
@@ -620,7 +620,7 @@ def update_dns_for_interface(interface):
                 for line in resolved_result.stdout.split('\n'):
                     if 'DNS Servers:' in line:
                         dns_servers.extend(line.split(':')[1].strip().split())
-        except:
+        except Exception:
             pass
         
         # Fallback: use interface gateway as DNS
@@ -862,7 +862,7 @@ def ensure_interface_default(interface):
         if status_result.returncode != 0 or 'state UP' not in status_result.stdout:
             print(f"❌ Interface {interface} is not up")
             return False
-    except:
+    except Exception:
         print(f"❌ Interface {interface} check failed")
         return False
     
@@ -934,7 +934,7 @@ def show_routing_status():
             for line in dns_content.split('\n'):
                 if line.startswith('nameserver'):
                     print(f"   {line}")
-    except:
+    except Exception:
         print("   Unable to read DNS config")
     
     print("="*60)
@@ -959,7 +959,7 @@ def select_and_activate_interface(interface=None, interactive=False):
                 else:
                     print("❌ Invalid selection")
                     return False
-            except:
+            except (ValueError, IndexError):
                 print("❌ Invalid input")
                 return False
         else:

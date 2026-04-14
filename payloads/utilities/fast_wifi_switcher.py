@@ -94,7 +94,7 @@ class FastWiFiSwitcher:
         """Get current interface quickly."""
         try:
             return get_current_raspyjack_interface()
-        except:
+        except Exception:
             return "unknown"
     
     def show_fast(self, line1, line2="", line3="", line4="", color="white"):
@@ -130,7 +130,7 @@ class FastWiFiSwitcher:
                             ip = line.split('inet ')[1].split('/')[0]
                             return {'up': True, 'ip': ip}
             return {'up': False, 'ip': None}
-        except:
+        except Exception:
             return {'up': False, 'ip': None}
     
     def switch_interface_fast(self, target_interface):
@@ -287,7 +287,7 @@ class FastWiFiSwitcher:
             time.sleep(0.5)
             self.lcd.LCD_Clear()
             GPIO.cleanup()
-        except:
+        except Exception:
             pass
 
 def main():

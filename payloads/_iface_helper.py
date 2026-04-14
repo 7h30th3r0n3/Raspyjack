@@ -56,8 +56,22 @@ def _is_onboard_wifi(iface):
     return _get_driver(iface) == "brcmfmac"
 
 
+# Drivers known to support monitor+injection but not reporting it via nl80211
+_KNOWN_MONITOR_DRIVERS = {
+    "rtl88XXau", "rtl8812au", "rtl8821au", "rtl88x2bu",
+    "rtl8188eus", "rtl8187", "rt2800usb", "ath9k_htc",
+    "mt76x2u", "mt76x0u", "mt7921u", "rtl8814au",
+    "rtl8192cu", "mt7601u",
+}
+
+
 def _supports_mode(iface, mode="AP"):
-    """Check if a WiFi interface supports a given mode (AP, monitor, etc.)."""
+    """Check if a WiFi interface supports a given mode (AP, monitor, etc.).
+
+    For monitor mode: first checks iw phy info, then falls back to
+    driver name matching for known-good drivers that don't report
+    capabilities correctly via nl80211 (common with out-of-tree Realtek).
+    """
     try:
         phy_link = os.path.realpath(f"/sys/class/net/{iface}/phy80211")
         phy_name = os.path.basename(phy_link)
@@ -65,9 +79,18 @@ def _supports_mode(iface, mode="AP"):
             ["iw", "phy", phy_name, "info"],
             capture_output=True, text=True, timeout=5,
         )
-        return f"* {mode}" in r.stdout
+        if f"* {mode}" in r.stdout:
+            return True
     except Exception:
-        return False
+        pass
+
+    # Fallback for monitor mode: check driver name against known-good list
+    if mode == "monitor":
+        driver = _get_driver(iface)
+        if driver in _KNOWN_MONITOR_DRIVERS:
+            return True
+
+    return False
 
 
 def _get_ip(iface):
@@ -159,7 +182,8 @@ def list_interfaces(iface_type="any"):
 # LCD selector
 # ---------------------------------------------------------------------------
 
-def select_interface(lcd, font, pins, gpio, iface_type="any", title=None):
+def select_interface(lcd, font, pins, gpio, iface_type="any", title=None,
+                     require_monitor=False):
     """
     Detect interfaces and let the user pick one on LCD.
 
@@ -173,11 +197,19 @@ def select_interface(lcd, font, pins, gpio, iface_type="any", title=None):
         gpio      -- RPi.GPIO module
         iface_type -- "wifi", "eth", or "any"
         title     -- optional custom header text
+        require_monitor -- if True, only show interfaces that support monitor mode
     """
     ifaces = list_interfaces(iface_type)
 
+    if require_monitor:
+        ifaces = [i for i in ifaces if i.get("supports_monitor")]
+
     if not ifaces:
-        _show_message(lcd, font, "No interface found!", "#FF4444")
+        if require_monitor:
+            _show_message(lcd, font, "No monitor iface!", "#FF4444")
+            _show_message(lcd, font, "Need USB WiFi dongle", "#FFAA00")
+        else:
+            _show_message(lcd, font, "No interface found!", "#FF4444")
         return None
 
     # Auto-select if only one

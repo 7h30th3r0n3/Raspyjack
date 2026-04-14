@@ -30,7 +30,7 @@ try:
     from PIL import Image, ImageDraw, ImageFont
     import RPi.GPIO as GPIO
     LCD_AVAILABLE = True
-except:
+except Exception:
     LCD_AVAILABLE = False
 
 class WiFiManager:
@@ -63,7 +63,7 @@ class WiFiManager:
         try:
             with open(self.log_file, 'a') as f:
                 f.write(log_msg + "\n")
-        except:
+        except Exception:
             pass
     
     def detect_wifi_interfaces(self):
