@@ -24,18 +24,15 @@ Loot: /root/Raspyjack/loot/Gobuster/
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import re
-import tempfile
 import signal
 import shutil
 import subprocess
 import sys
 import threading
 import time
-import traceback
 from datetime import datetime
 
 sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..", "..")))
@@ -49,88 +46,6 @@ from payloads._input_helper import get_button
 from payloads._keyboard_helper import lcd_keyboard
 
 log = logging.getLogger(__name__)
-
-# region agent log
-_AGENT_DBG_HINTED = False
-
-
-def _agent_rj_root() -> str:
-    """RaspyJack install dir (parent of payloads/)."""
-    here = os.path.dirname(os.path.abspath(__file__))
-    return os.path.normpath(os.path.join(here, "..", "..", ".."))
-
-
-def _agent_dbg(hypothesis_id: str, location: str, message: str, data: dict | None = None) -> None:
-    global _AGENT_DBG_HINTED
-    rec = {
-        "sessionId": "98bb65",
-        "hypothesisId": hypothesis_id,
-        "location": location,
-        "message": message,
-        "data": data or {},
-        "timestamp": int(time.time() * 1000),
-    }
-    line = json.dumps(rec, ensure_ascii=False) + "\n"
-    here = os.path.dirname(os.path.abspath(__file__))
-    rj = _agent_rj_root()
-    primary = os.path.join(rj, "loot", "Gobuster", "debug-98bb65.log")
-    paths = (
-        primary,
-        os.path.join(here, "debug-98bb65.log"),
-        os.path.join(tempfile.gettempdir(), "debug-98bb65.log"),
-        "/tmp/debug-98bb65.log",
-        os.path.join(rj, "debug-98bb65.log"),
-        os.path.normpath(os.path.join(here, "..", "..", "..", "..", "debug-98bb65.log")),
-    )
-    ok_any = False
-    last_err = ""
-    for p in paths:
-        try:
-            d = os.path.dirname(p)
-            if d:
-                os.makedirs(d, exist_ok=True)
-            with open(p, "a", encoding="utf-8") as fh:
-                fh.write(line)
-            ok_any = True
-            if not _AGENT_DBG_HINTED:
-                _AGENT_DBG_HINTED = True
-                sys.stderr.write(
-                    "[gobuster_dir] DEBUG NDJSON session=98bb65 install="
-                    + rj
-                    + " log="
-                    + primary
-                    + " alt="
-                    + os.path.join(here, "debug-98bb65.log")
-                    + "\n"
-                )
-                sys.stderr.flush()
-        except OSError as exc:
-            last_err = repr(exc)
-            continue
-    if not ok_any:
-        try:
-            pl = os.path.join(rj, "loot", "payload.log")
-            with open(pl, "a", encoding="utf-8", errors="replace") as fh:
-                fh.write(
-                    "\n## gobuster_dir agent_98bb65 ALL_NDJSON_WRITES_FAILED "
-                    + time.strftime("%Y-%m-%d %H:%M:%S")
-                    + " last_err="
-                    + (last_err[:200] if last_err else "?")
-                    + "\n"
-                )
-        except OSError:
-            pass
-        try:
-            sys.stderr.write(
-                "[gobuster_dir] agent_98bb65: could not write NDJSON; "
-                "marker appended to loot/payload.log if possible. install="
-                + rj
-                + "\n"
-            )
-            sys.stderr.flush()
-        except OSError:
-            pass
-# endregion agent log
 
 # ---------------------------------------------------------------------------
 # Pins / constants
@@ -207,9 +122,6 @@ FONT = None  # type: ignore[assignment]
 
 def _init_hardware() -> None:
     global LCD, WIDTH, HEIGHT, FONT
-    # region agent log
-    _agent_dbg("H1", "gobuster_dir:_init_hardware:entry", "init start", {})
-    # endregion agent log
     GPIO.setmode(GPIO.BCM)
     GPIO.setwarnings(False)
     for pin in PINS.values():
@@ -226,19 +138,6 @@ def _init_hardware() -> None:
     # Must match lcd.width/height for LCD_ShowImage (H2).
     WIDTH = int(lcd.width)
     HEIGHT = int(lcd.height)
-    # region agent log
-    _agent_dbg(
-        "H2",
-        "gobuster_dir:_init_hardware:sizes",
-        "buffer vs lcd",
-        {
-            "WIDTH": WIDTH,
-            "HEIGHT": HEIGHT,
-            "LCD_WIDTH": int(LCD_1in44.LCD_WIDTH),
-            "LCD_HEIGHT": int(LCD_1in44.LCD_HEIGHT),
-        },
-    )
-    # endregion agent log
     FONT = scaled_font()
     try:
         os.makedirs(LOOT_DIR, exist_ok=True)
@@ -495,13 +394,7 @@ def _stdout_reader(
 
 
 def main() -> None:
-    # region agent log
-    _agent_dbg("H1", "gobuster_dir:main:entry", "main()", {})
-    # endregion agent log
     gobuster_exe = _find_gobuster()
-    # region agent log
-    _agent_dbg("H1", "gobuster_dir:main:gobuster", "which", {"exe": gobuster_exe or ""})
-    # endregion agent log
     if not gobuster_exe:
         _init_hardware()
         _run_gobuster_missing_loop()
@@ -535,25 +428,11 @@ def main() -> None:
             if mode == "idle":
                 wl_path, wl_label = _wordlist_resolve(wl_preset)
                 label = wl_label + ("!" if not wl_path else "")
-                try:
-                    _draw_idle(url, label, THREAD_OPTIONS[thread_idx], skip_tls)
-                except Exception as exc:  # noqa: BLE001
-                    # region agent log
-                    _agent_dbg(
-                        "H5",
-                        "gobuster_dir:main:_draw_idle",
-                        type(exc).__name__,
-                        {"err": str(exc)[:300]},
-                    )
-                    # endregion agent log
-                    raise
+                _draw_idle(url, label, THREAD_OPTIONS[thread_idx], skip_tls)
 
                 if btn == "KEY3":
                     break
                 if btn == "KEY1":
-                    # region agent log
-                    _agent_dbg("H3", "gobuster_dir:main:before_keyboard", "KEY1", {"url_len": len(url)})
-                    # endregion agent log
                     entered = lcd_keyboard(
                         LCD,
                         FONT,
@@ -564,14 +443,6 @@ def main() -> None:
                         charset="url",
                         max_len=120,
                     )
-                    # region agent log
-                    _agent_dbg(
-                        "H3",
-                        "gobuster_dir:main:after_keyboard",
-                        "keyboard returned",
-                        {"entered_is_none": entered is None, "entered_len": len(entered or "")},
-                    )
-                    # endregion agent log
                     normalized = _normalize_url_input(entered or "")
                     if normalized:
                         url = normalized
@@ -611,14 +482,6 @@ def main() -> None:
                             bufsize=1,
                             preexec_fn=os.setsid,
                         )
-                        # region agent log
-                        _agent_dbg(
-                            "H4",
-                            "gobuster_dir:main:popen_ok",
-                            "scan started",
-                            {"pid": proc.pid, "cmd0": active_cmd[0] if active_cmd else ""},
-                        )
-                        # endregion agent log
                     except OSError as exc:
                         _draw_error(f"spawn failed|{exc}"[:120])
                         time.sleep(ERROR_SCREEN_LONG_PAUSE_S)
@@ -704,31 +567,6 @@ def main() -> None:
 if __name__ == "__main__":
     logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
     try:
-        sys.stderr.write(
-            "[gobuster_dir] boot session=98bb65 install="
-            + _agent_rj_root()
-            + " argv0="
-            + (sys.argv[0] if sys.argv else "")
-            + "\n"
-        )
-        sys.stderr.flush()
-    except OSError:
-        pass
-    try:
-        # region agent log
-        _agent_dbg("H1", "gobuster_dir:__main__", "process start", {"argv": sys.argv[:3]})
-        # endregion agent log
         main()
-        # region agent log
-        _agent_dbg("H1", "gobuster_dir:__main__", "main returned normally", {})
-        # endregion agent log
-    except Exception as exc:
-        # region agent log
-        _agent_dbg(
-            "H_FATAL",
-            "gobuster_dir:__main__:except",
-            type(exc).__name__,
-            {"err": str(exc)[:800], "tb": traceback.format_exc()[-6000:]},
-        )
-        # endregion agent log
+    except Exception:
         raise
