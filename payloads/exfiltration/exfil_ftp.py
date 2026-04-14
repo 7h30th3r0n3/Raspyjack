@@ -249,6 +249,7 @@ def _handle_ftp_client(conn, addr, anon, username, password):
     authenticated = anon
     data_sock = None
     pasv_sock = None
+    data_addr = None   # for PORT/EPRT active mode
 
     def _send(msg):
         try:
@@ -311,7 +312,10 @@ def _handle_ftp_client(conn, addr, anon, username, password):
                 _send("215 UNIX Type: L8")
 
             elif cmd == "FEAT":
-                _send("211-Features:\r\n PASV\r\n UTF8\r\n211 End")
+                _send("211-Features:\r\n PASV\r\n EPSV\r\n UTF8\r\n MLSD\r\n SIZE\r\n211 End")
+
+            elif cmd == "OPTS":
+                _send("200 OK")
 
             elif cmd == "PWD":
                 rel = "/" + os.path.relpath(cwd, LOOT_ROOT)
@@ -336,6 +340,32 @@ def _handle_ftp_client(conn, addr, anon, username, password):
             elif cmd == "TYPE":
                 _send("200 Type set")
 
+            elif cmd == "PORT":
+                # Active mode: client tells us where to connect
+                # Format: PORT h1,h2,h3,h4,p1,p2
+                try:
+                    nums = [int(x) for x in arg.split(",")]
+                    port_ip = f"{nums[0]}.{nums[1]}.{nums[2]}.{nums[3]}"
+                    port_port = nums[4] * 256 + nums[5]
+                    # Store for next data transfer
+                    data_addr = (port_ip, port_port)
+                    _send("200 PORT command successful")
+                except Exception:
+                    data_addr = None
+                    _send("501 Syntax error in PORT")
+
+            elif cmd == "EPRT":
+                # Extended PORT: EPRT |proto|ip|port|
+                try:
+                    parts_e = arg.split("|")
+                    port_ip = parts_e[2]
+                    port_port = int(parts_e[3])
+                    data_addr = (port_ip, port_port)
+                    _send("200 EPRT command successful")
+                except Exception:
+                    data_addr = None
+                    _send("501 Syntax error in EPRT")
+
             elif cmd == "PASV":
                 if pasv_sock:
                     pasv_sock.close()
@@ -348,28 +378,55 @@ def _handle_ftp_client(conn, addr, anon, username, password):
                 p_port = pasv_sock.getsockname()[1]
                 p1 = p_port >> 8
                 p2 = p_port & 0xFF
+                data_addr = None  # PASV overrides PORT
                 _send(f"227 Entering Passive Mode ({p_ip},{p1},{p2})")
 
-            elif cmd == "LIST":
-                if not pasv_sock:
-                    _send("425 Use PASV first")
+            elif cmd == "EPSV":
+                if pasv_sock:
+                    pasv_sock.close()
+                pasv_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                pasv_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                pasv_sock.bind(("0.0.0.0", 0))
+                pasv_sock.listen(1)
+                pasv_sock.settimeout(10)
+                p_port = pasv_sock.getsockname()[1]
+                _send(f"229 Entering Extended Passive Mode (|||{p_port}|)")
+
+            elif cmd in ("LIST", "NLST", "MLSD"):
+                if not pasv_sock and not data_addr:
+                    _send("425 Use PASV or PORT first")
                     continue
                 _send("150 Opening data connection")
                 try:
-                    data_sock, _ = pasv_sock.accept()
+                    if pasv_sock:
+                        data_sock, _ = pasv_sock.accept()
+                    else:
+                        data_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                        data_sock.settimeout(10)
+                        data_sock.connect(data_addr)
                     listing = ""
-                    target = _safe_path(arg) if arg else cwd
+                    target = _safe_path(arg) if arg and not arg.startswith("-") else cwd
                     if target and os.path.isdir(target):
                         for entry in sorted(os.listdir(target)):
                             epath = os.path.join(target, entry)
-                            if os.path.isdir(epath):
-                                listing += f"drwxr-xr-x 1 ftp ftp 0 Jan 01 00:00 {entry}\r\n"
+                            if cmd == "NLST":
+                                listing += f"{entry}\r\n"
+                            elif cmd == "MLSD":
+                                if os.path.isdir(epath):
+                                    listing += f"type=dir;modify=20260101000000; {entry}\r\n"
+                                else:
+                                    sz = os.path.getsize(epath)
+                                    listing += f"type=file;size={sz};modify=20260101000000; {entry}\r\n"
                             else:
-                                sz = os.path.getsize(epath)
-                                listing += f"-rw-r--r-- 1 ftp ftp {sz} Jan 01 00:00 {entry}\r\n"
+                                if os.path.isdir(epath):
+                                    listing += f"drwxr-xr-x 1 ftp ftp 0 Jan 01 00:00 {entry}\r\n"
+                                else:
+                                    sz = os.path.getsize(epath)
+                                    listing += f"-rw-r--r-- 1 ftp ftp {sz} Jan 01 00:00 {entry}\r\n"
                     data_sock.sendall(listing.encode())
                     data_sock.close()
                     data_sock = None
+                    data_addr = None
                     _send("226 Transfer complete")
                 except Exception:
                     _send("426 Connection closed")
@@ -379,12 +436,17 @@ def _handle_ftp_client(conn, addr, anon, username, password):
                 if not target or not os.path.isfile(target):
                     _send("550 File not found")
                     continue
-                if not pasv_sock:
-                    _send("425 Use PASV first")
+                if not pasv_sock and not data_addr:
+                    _send("425 Use PASV or PORT first")
                     continue
                 _send("150 Opening data connection")
                 try:
-                    data_sock, _ = pasv_sock.accept()
+                    if pasv_sock:
+                        data_sock, _ = pasv_sock.accept()
+                    else:
+                        data_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                        data_sock.settimeout(10)
+                        data_sock.connect(data_addr)
                     with open(target, "rb") as f:
                         while True:
                             chunk = f.read(8192)
@@ -393,6 +455,7 @@ def _handle_ftp_client(conn, addr, anon, username, password):
                             data_sock.sendall(chunk)
                     data_sock.close()
                     data_sock = None
+                    data_addr = None
                     _send("226 Transfer complete")
                     _inc("downloads")
                     _add_log(f"DL: {os.path.basename(target)}")

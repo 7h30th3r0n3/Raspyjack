@@ -574,7 +574,10 @@ class Installer:
         entry = self.entry
 
         self._p(2, "Checking module...")
-        if self._driver_loaded(d["driver"]):
+        driver_name = d["driver"]
+
+        # Check if already loaded
+        if self._driver_loaded(driver_name):
             self._p(40, "Already loaded")
             iface = self._wait_iface(d["vid"], d["pid"], 5)
             if iface:
@@ -582,6 +585,19 @@ class Installer:
                 self.success = True
                 self._p(100, f"Ready: {iface}")
                 return True
+
+        # Check if .ko exists on disk but not loaded — just modprobe it
+        # Also check common alternate names (88XXau for rtl8812au, etc.)
+        alt_names = [driver_name, driver_name.replace("rtl", ""),
+                     "88XXau", "rtl88XXau"]
+        for name in alt_names:
+            if self._driver_installed(name):
+                self._p(10, f"Found {name}, loading...")
+                log(f"Driver {name} found on disk, loading")
+                self._modprobe(name)
+                iface = self._wait_iface(d["vid"], d["pid"], 10)
+                if iface:
+                    return self._done(iface)
 
         self._p(5, "apt update...")
         self._cmd(["apt-get", "update", "-qq"], timeout=120)
@@ -623,15 +639,26 @@ class Installer:
                 if iface:
                     return self._done(iface)
 
-        # 4. Fallback modprobe VID:PID
-        self._p(30, "Auto modprobe...")
-        self._cmd(["modprobe", f"usb:v{d['vid'].upper()}p{d['pid'].upper()}"],
-                  timeout=10, ok_err=True)
-        iface = self._wait_iface(d["vid"], d["pid"], 10)
+        # 4. Fallback: try driver name from DB, then modalias probe
+        driver_name = entry.get("driver", d.get("driver", ""))
+        if driver_name and driver_name != "unknown":
+            self._p(30, f"modprobe {driver_name}...")
+            ok, out = self._cmd(["modprobe", driver_name], timeout=15)
+            if not ok:
+                log(f"modprobe {driver_name} failed: {out[:200]}")
+            iface = self._wait_iface(d["vid"], d["pid"], 10)
+            if iface:
+                return self._done(iface)
+
+        # 5. Last resort: unbind/rebind USB device to trigger kernel auto-probe
+        self._p(40, "USB re-probe...")
+        self._usb_reprobe(d["vid"], d["pid"])
+        iface = self._wait_iface(d["vid"], d["pid"], 15)
         if iface:
             return self._done(iface)
 
-        self._p(0, "FAILED")
+        self._p(0, "FAILED - check log")
+        log(f"All install methods failed for {d['key']} ({driver_name})")
         return False
 
     def _done(self, iface: str) -> bool:
@@ -660,14 +687,38 @@ class Installer:
             return False, str(e)
 
     def _driver_loaded(self, driver: str) -> bool:
+        """Check if driver module is loaded in kernel."""
         try:
             out = subprocess.check_output(["lsmod"], text=True, timeout=5)
             return driver.replace("-", "_") in out
         except Exception:
             return False
 
+    def _driver_installed(self, driver: str) -> bool:
+        """Check if driver .ko exists on disk (even if not loaded)."""
+        try:
+            uname = subprocess.check_output(["uname", "-r"],
+                                             text=True, timeout=5).strip()
+            mod_dir = f"/lib/modules/{uname}"
+            # Search for the module file
+            r = subprocess.run(
+                ["find", mod_dir, "-name", f"{driver}*", "-name", "*.ko*"],
+                capture_output=True, text=True, timeout=10)
+            return bool(r.stdout.strip())
+        except Exception:
+            return False
+
     def _modprobe(self, driver: str):
-        self._cmd(["modprobe", driver], timeout=15, ok_err=True)
+        ok, out = self._cmd(["modprobe", driver], timeout=15)
+        if not ok:
+            log(f"modprobe {driver} failed: {out[:200]}")
+            # Try removing conflicting module first, then reload
+            self._cmd(["modprobe", "-r", driver], timeout=10, ok_err=True)
+            ok, out = self._cmd(["modprobe", driver], timeout=15)
+            if not ok:
+                log(f"modprobe {driver} retry failed: {out[:200]}")
+                return
+        log(f"modprobe {driver} OK")
         # Persist across reboots
         conf_file = f"/etc/modules-load.d/rj_{driver}.conf"
         try:
@@ -685,8 +736,15 @@ class Installer:
 
     def _build_deps(self):
         uname = subprocess.check_output(["uname", "-r"], text=True).strip()
-        self._apt(["dkms", "build-essential", f"linux-headers-{uname}",
-                   "git", "bc", "libelf-dev"])
+        # Install base build tools first (always available)
+        self._apt(["build-essential", "git", "bc", "libelf-dev"])
+        # linux-headers: try standard name, then raspberrypi-kernel-headers
+        ok = self._apt([f"linux-headers-{uname}"])
+        if not ok:
+            log(f"linux-headers-{uname} not found, trying raspberrypi-kernel-headers")
+            self._apt(["raspberrypi-kernel-headers"])
+        # DKMS (may fail on minimal installs, not fatal)
+        self._apt(["dkms"])
 
     def _add_kali_repo(self):
         list_file = "/etc/apt/sources.list.d/kali-rolling.list"
@@ -711,20 +769,97 @@ class Installer:
         ok, _ = self._cmd(["git", "clone", "--depth=1", repo_url, build_dir],
                           timeout=120)
         if not ok:
+            log(f"git clone failed for {repo_url}")
             return False
-        self._p(55, "DKMS install...")
-        ok, _ = self._cmd(
-            ["bash", "-c",
-             f"cd {build_dir} && dkms add . && dkms build . && dkms install ."],
-            timeout=300)
-        if ok:
-            return True
+
+        # Check if dkms.conf exists before trying DKMS
+        dkms_conf = os.path.join(build_dir, "dkms.conf")
+        if os.path.isfile(dkms_conf):
+            self._p(55, "DKMS install...")
+            # Extract version from dkms.conf for proper dkms add
+            version = "1.0"
+            try:
+                with open(dkms_conf) as f:
+                    for line in f:
+                        if line.strip().startswith("PACKAGE_VERSION"):
+                            version = line.split("=")[1].strip().strip('"')
+                            break
+            except Exception:
+                pass
+            ok, out = self._cmd(
+                ["bash", "-c",
+                 f"cd {build_dir} && dkms add . 2>/dev/null; "
+                 f"dkms build {driver}/{version} && "
+                 f"dkms install {driver}/{version}"],
+                timeout=600)
+            if ok:
+                return True
+            log(f"DKMS failed: {out[:300]}")
+
+        # Fallback: make install (works for aircrack-ng repos)
         self._p(60, "make install...")
-        ok, _ = self._cmd(
+        ok, out = self._cmd(
             ["bash", "-c",
-             f"cd {build_dir} && make -j$(nproc) 2>&1 | tail -5 && make install"],
-            timeout=300)
+             f"cd {build_dir} && "
+             f"make -j$(nproc) KVER=$(uname -r) 2>&1 | tail -20 && "
+             f"make install KVER=$(uname -r)"],
+            timeout=600)
+        if not ok:
+            log(f"make install failed: {out[:300]}")
         return ok
+
+    def _usb_reprobe(self, vid: str, pid: str):
+        """Unbind and rebind USB device to trigger kernel auto-probe.
+
+        Uses shell commands with sudo for reliable sysfs writes.
+        Falls back to udevadm trigger if direct sysfs fails.
+        """
+        # Find the USB device path
+        target_dev = None
+        try:
+            for usb_dev in os.listdir("/sys/bus/usb/devices"):
+                dev_path = f"/sys/bus/usb/devices/{usb_dev}"
+                v = _read_sysfs(os.path.join(dev_path, "idVendor")).lower()
+                p = _read_sysfs(os.path.join(dev_path, "idProduct")).lower()
+                if v == vid and p == pid:
+                    target_dev = usb_dev
+                    break
+        except Exception as e:
+            log(f"USB scan failed: {e}")
+
+        if not target_dev:
+            log(f"USB device {vid}:{pid} not found in sysfs")
+            # Fallback: trigger udev for all USB
+            self._cmd(["udevadm", "trigger", "--subsystem-match=usb"],
+                      timeout=10, ok_err=True)
+            self._cmd(["udevadm", "settle", "--timeout=5"],
+                      timeout=10, ok_err=True)
+            return
+
+        log(f"Found USB device: {target_dev}")
+
+        # Method 1: authorize off/on (safest, doesn't need driver info)
+        auth_path = f"/sys/bus/usb/devices/{target_dev}/authorized"
+        if os.path.exists(auth_path):
+            ok1, _ = self._cmd(
+                ["bash", "-c", f"echo 0 > {auth_path}"],
+                timeout=5, ok_err=True)
+            time.sleep(1)
+            ok2, _ = self._cmd(
+                ["bash", "-c", f"echo 1 > {auth_path}"],
+                timeout=5, ok_err=True)
+            if ok1 and ok2:
+                log(f"USB re-authorized {target_dev}")
+                return
+
+        # Method 2: udevadm trigger on this specific device
+        self._cmd(
+            ["udevadm", "trigger", "--action=change",
+             f"--sysname-match={target_dev}"],
+            timeout=10, ok_err=True)
+        self._cmd(["udevadm", "settle", "--timeout=5"],
+                  timeout=10, ok_err=True)
+        log(f"udevadm triggered for {target_dev}")
 
     def _wait_iface(self, vid: str, pid: str, timeout: int = 20) -> str | None:
         deadline = time.monotonic() + timeout
@@ -741,18 +876,79 @@ class Installer:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def test_monitor_mode(iface: str) -> bool:
+    """Test if interface supports monitor mode.
+
+    Tries iw first (in-kernel drivers), then airmon-ng (out-of-tree
+    Realtek drivers like rtl88XXau that don't support iw set type).
+    """
+    # Method 1: iw set type monitor (works for in-kernel drivers)
     try:
-        subprocess.run(["ip", "link", "set", iface, "down"],              capture_output=True, timeout=5)
-        subprocess.run(["iw", "dev", iface, "set", "type", "monitor"],    capture_output=True, timeout=5)
-        subprocess.run(["ip", "link", "set", iface, "up"],                capture_output=True, timeout=5)
-        out = subprocess.check_output(["iw", "dev", iface, "info"], text=True, timeout=5)
-        ok  = "type monitor" in out
-        subprocess.run(["ip", "link", "set", iface, "down"],              capture_output=True, timeout=5)
-        subprocess.run(["iw", "dev", iface, "set", "type", "managed"],    capture_output=True, timeout=5)
-        subprocess.run(["ip", "link", "set", iface, "up"],                capture_output=True, timeout=5)
-        return ok
+        subprocess.run(["ip", "link", "set", iface, "down"],
+                       capture_output=True, timeout=5)
+        subprocess.run(["iw", "dev", iface, "set", "type", "monitor"],
+                       capture_output=True, timeout=5)
+        subprocess.run(["ip", "link", "set", iface, "up"],
+                       capture_output=True, timeout=5)
+        out = subprocess.check_output(["iw", "dev", iface, "info"],
+                                       text=True, timeout=5)
+        if "type monitor" in out:
+            # Restore managed mode
+            subprocess.run(["ip", "link", "set", iface, "down"],
+                           capture_output=True, timeout=5)
+            subprocess.run(["iw", "dev", iface, "set", "type", "managed"],
+                           capture_output=True, timeout=5)
+            subprocess.run(["ip", "link", "set", iface, "up"],
+                           capture_output=True, timeout=5)
+            return True
     except Exception:
-        return False
+        pass
+
+    # Method 2: airmon-ng (works for Realtek out-of-tree drivers)
+    try:
+        subprocess.run(["ip", "link", "set", iface, "down"],
+                       capture_output=True, timeout=5)
+        subprocess.run(["ip", "link", "set", iface, "up"],
+                       capture_output=True, timeout=5)
+        r = subprocess.run(["airmon-ng", "start", iface],
+                           capture_output=True, text=True, timeout=15)
+        # Check if monitor interface exists
+        for mon_name in (f"{iface}mon", iface):
+            try:
+                out = subprocess.check_output(["iw", "dev", mon_name, "info"],
+                                               text=True, timeout=5)
+                if "type monitor" in out:
+                    # Restore
+                    subprocess.run(["airmon-ng", "stop", mon_name],
+                                   capture_output=True, timeout=10)
+                    subprocess.run(["ip", "link", "set", iface, "up"],
+                                   capture_output=True, timeout=5)
+                    return True
+            except Exception:
+                pass
+        # Restore in case airmon-ng changed things
+        subprocess.run(["airmon-ng", "stop", f"{iface}mon"],
+                       capture_output=True, timeout=10)
+        subprocess.run(["ip", "link", "set", iface, "up"],
+                       capture_output=True, timeout=5)
+    except Exception:
+        pass
+
+    # Method 3: known driver check (driver is known to support monitor)
+    try:
+        drv = os.path.basename(
+            os.path.realpath(f"/sys/class/net/{iface}/device/driver"))
+        known_monitor = {
+            "rtl88XXau", "rtl8812au", "rtl8821au", "rtl88x2bu",
+            "rtl8188eus", "rtl8187", "rt2800usb", "ath9k_htc",
+            "mt76x2u", "mt76x0u", "mt7921u", "rtl8814au",
+        }
+        if drv in known_monitor:
+            log(f"Driver {drv} known to support monitor mode")
+            return True
+    except Exception:
+        pass
+
+    return False
 
 
 # ══════════════════════════════════════════════════════════════════════════════

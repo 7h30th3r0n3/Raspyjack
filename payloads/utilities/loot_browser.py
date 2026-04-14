@@ -239,6 +239,11 @@ def main():
     last_press = 0.0
     visible = 7
 
+    # Wait for button release from menu (prevents ghost OK press)
+    time.sleep(0.3)
+    while get_button(PINS, GPIO) is not None:
+        time.sleep(0.05)
+
     try:
         while True:
             btn = get_button(PINS, GPIO)
@@ -291,6 +296,10 @@ def main():
                     scroll_offset_preview = 0
                     h_offset = 0
                     max_display = 8
+                    # Debounce: wait for OK release before entering preview
+                    time.sleep(0.2)
+                    while get_button(PINS, GPIO) is not None:
+                        time.sleep(0.05)
                     while True:
                         visible_lines = lines[scroll_offset_preview:scroll_offset_preview+max_display]
                         _draw_preview(LCD, entry["path"], visible_lines, h_offset)
@@ -303,9 +312,7 @@ def main():
                             h_offset += 10
                         elif btn_preview == "LEFT":
                             h_offset = max(0, h_offset - 10)
-                        elif btn_preview == "KEY3":
-                            break
-                        elif btn_preview:
+                        elif btn_preview == "KEY3" or btn_preview == "OK":
                             break
                         time.sleep(0.05)
 
