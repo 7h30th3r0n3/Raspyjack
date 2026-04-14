@@ -30,12 +30,16 @@ def _ensure_auth_db() -> None:
     Ragnar's web app instantiates AuthManager at import time. If the auth DB
     file exists but is empty or partially created, the import path can spam
     `no such table: auth`. We normalize the DB up front.
+
+    Uses BEGIN IMMEDIATE to prevent race conditions when multiple Ragnar
+    processes start simultaneously.
     """
     datadir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
     os.makedirs(datadir, exist_ok=True)
     auth_db_path = os.path.join(datadir, "ragnar_auth.db")
-    conn = sqlite3.connect(auth_db_path)
+    conn = sqlite3.connect(auth_db_path, timeout=10)
     try:
+        conn.execute("BEGIN IMMEDIATE")
         cursor = conn.cursor()
         cursor.execute(
             """
@@ -77,6 +81,11 @@ def _ensure_auth_db() -> None:
 
 
 def _main() -> int:
+    # Prevent Ragnar from initializing the e-paper display (EPD) hardware.
+    # RaspyJack uses the same SPI bus for its LCD; EPD init clobbers it and
+    # causes a white screen.
+    os.environ.setdefault("RAGNAR_PAGER_MODE", "1")
+
     from env_manager import load_env
 
     load_env()
@@ -127,8 +136,15 @@ def _main() -> int:
             lambda sig, frame: handle_exit(sig, frame, ragnar_thread, web_thread),
         )
 
+        # Monitor thread health instead of bare sleep loop
         while True:
-            time.sleep(1)
+            if not ragnar_thread.is_alive():
+                logger.error("Ragnar main thread died unexpectedly, exiting")
+                break
+            if not web_thread.is_alive():
+                logger.error("Ragnar web thread died unexpectedly, exiting")
+                break
+            time.sleep(2)
 
     except Exception as exc:
         logger.error(f"Raspyjack Ragnar launcher failed: {exc}")

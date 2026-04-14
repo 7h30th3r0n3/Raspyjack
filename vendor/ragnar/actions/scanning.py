@@ -2034,7 +2034,7 @@ class NetworkScanner:
                     import subprocess
                     result = subprocess.run(['iwgetid', '-r'], capture_output=True, text=True, timeout=5)
                     current_ssid = result.stdout.strip() if result.returncode == 0 else "unknown_network"
-                except:
+                except Exception:
                     current_ssid = "unknown_network"
                 
                 data_dir = os.path.join(self.currentdir, 'data', 'network_data')

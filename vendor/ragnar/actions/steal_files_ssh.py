@@ -272,7 +272,7 @@ class StealFilesSSH:
             try:
                 if sftp:
                     sftp.close()
-            except:
+            except Exception:
                 pass
             return False
 

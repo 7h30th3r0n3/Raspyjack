@@ -2694,7 +2694,7 @@ def is_ap_client_request():
         client_ip = request.environ.get('REMOTE_ADDR', '')
         # Check if request is from AP network (192.168.4.x)
         return client_ip.startswith('192.168.4.') and client_ip != '192.168.4.1'
-    except:
+    except Exception:
         return False
 
 
@@ -4903,7 +4903,7 @@ def get_logs():
                     timestamp_str = log_line[:19]
                     from datetime import datetime
                     return datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S')
-            except:
+            except Exception:
                 pass
             return datetime.min
         
@@ -4911,7 +4911,7 @@ def get_logs():
         try:
             from datetime import datetime
             all_logs.sort(key=extract_timestamp)
-        except:
+        except Exception:
             pass  # If sorting fails, keep original order
         
         # Limit to last 200 entries to avoid overwhelming the UI
@@ -5187,7 +5187,7 @@ def attack_logs():
                     
                     if file_date < cutoff_date:
                         continue
-                except:
+                except Exception:
                     continue
                 
                 log_path = os.path.join(attack_log_dir, log_file)
@@ -6824,7 +6824,7 @@ def check_updates():
                 check=True
             )
             current_commit = current_result.stdout.strip()
-        except:
+        except Exception:
             current_commit = "Unable to fetch current commit"
         
         # Get latest commit info
@@ -6837,7 +6837,7 @@ def check_updates():
                 check=True
             )
             latest_commit = result.stdout.strip()
-        except:
+        except Exception:
             latest_commit = "Unable to fetch latest commit"
 
         # Collect local working tree state so the UI can warn about conflicts/stashes
@@ -8238,7 +8238,7 @@ def scan_wifi_networks():
                     'warning': 'Live scan failed, showing known networks only',
                     'manual_entry_available': True
                 })
-        except:
+        except Exception:
             pass
         
         return jsonify({
@@ -10269,7 +10269,7 @@ def legacy_network_data():
                     last_seen_display = last_seen_dt.strftime('%m-%d %H:%M')
                 else:
                     last_seen_display = 'Unknown'
-            except:
+            except Exception:
                 last_seen_display = 'Unknown'
             
             html += f'''
@@ -12491,7 +12491,7 @@ def get_system_status_api():
                         temperature_data[f"{name}_{entry.label}"] = entry.current
             else:
                 temperature_data = {}
-        except:
+        except Exception:
             temperature_data = {}
         
         # Battery (PiSugar UPS - only if connected)

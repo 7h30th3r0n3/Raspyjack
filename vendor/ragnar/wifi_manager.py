@@ -796,7 +796,7 @@ class WiFiManager:
                 with open('/var/log/ragnar_failsafe.log', 'a') as f:
                     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                     f.write(f"{timestamp} - Failsafe reboot triggered: {self.no_connection_cycles} consecutive connection failures\n")
-            except:
+            except Exception:
                 pass
             
             # Clean shutdown of services
@@ -816,7 +816,7 @@ class WiFiManager:
             # Try alternative reboot method
             try:
                 subprocess.run(['sudo', 'systemctl', 'reboot'], timeout=5)
-            except:
+            except Exception:
                 pass
 
 
@@ -1663,7 +1663,7 @@ class WiFiManager:
                     if net['ssid'] == ssid:
                         signal_strength = net.get('signal')
                         break
-            except:
+            except Exception:
                 pass
             
             if result.returncode == 0:
@@ -1740,7 +1740,7 @@ class WiFiManager:
                         network_profile_existed=profile_exists,
                         from_ap_mode=self.ap_mode_active
                     )
-                except:
+                except Exception:
                     pass
             return False
         except Exception as e:
@@ -1756,7 +1756,7 @@ class WiFiManager:
                         network_profile_existed=profile_exists,
                         from_ap_mode=self.ap_mode_active
                     )
-                except:
+                except Exception:
                     pass
             return False
 
@@ -2316,7 +2316,7 @@ port=0
                 subprocess.run(['sudo', 'systemctl', 'stop', 'dnsmasq'], 
                              capture_output=True, check=False)
                 self.ap_logger.debug("Stopped system dnsmasq service")
-            except:
+            except Exception:
                 pass
             
             # Kill any existing dnsmasq processes on our interface
@@ -2324,7 +2324,7 @@ port=0
                 subprocess.run(['sudo', 'pkill', '-f', f'dnsmasq.*{self.ap_interface}'], 
                              capture_output=True, check=False)
                 self.ap_logger.debug("Killed existing dnsmasq processes")
-            except:
+            except Exception:
                 pass
             
             # Wait a moment for cleanup
@@ -2472,7 +2472,7 @@ port=0
                 try:
                     if os.path.exists(config_file):
                         os.remove(config_file)
-                except:
+                except Exception:
                     pass
                     
         except Exception as e:

@@ -56,6 +56,15 @@ logger = Logger(name="db_manager.py", level=logging.INFO)
 class DatabaseManager:
     """
     Thread-safe SQLite database manager for Ragnar host/network data.
+
+    This class handles all database operations including:
+    - Schema creation and migrations
+    - CRUD operations for hosts
+    - Ping failure tracking
+    - Status management (alive/degraded/dead)
+    - CSV migration and backward compatibility
+    """
+
     ACTION_STATUS_COLUMNS = {
         'ssh_connector',
         'rdp_connector',
@@ -70,16 +79,15 @@ class DatabaseManager:
         'steal_files_telnet',
         'steal_data_sql',
         'nmap_vuln_scanner',
-        'scanner_status'
+        'scanner_status',
     }
 
-    This class handles all database operations including:
-    - Schema creation and migrations
-    - CRUD operations for hosts
-    - Ping failure tracking
-    - Status management (alive/degraded/dead)
-    - CSV migration and backward compatibility
-    """
+    # All columns allowed in dynamic UPDATE/INSERT queries (superset of action columns)
+    ALLOWED_HOST_COLUMNS = ACTION_STATUS_COLUMNS | {
+        'ip', 'hostname', 'vendor', 'ports', 'services', 'vulnerabilities',
+        'first_seen', 'last_seen', 'last_ping_success', 'failed_ping_count',
+        'status', 'alive_count', 'network_profile', 'notes', 'updated_at',
+    }
     
     def __init__(self, db_path: str = None, currentdir: str = None, data_root: str = None):
         """
@@ -735,14 +743,9 @@ class DatabaseManager:
                         update_fields.append("vulnerabilities = ?")
                         update_values.append(vulnerabilities)
                     
-                    # Handle additional kwargs
+                    # Handle additional kwargs — only allow known columns
                     for key, value in kwargs.items():
-                        if key in ['alive_count', 'network_profile', 'scanner_status',
-                                  'ssh_connector', 'rdp_connector', 'ftp_connector',
-                                  'smb_connector', 'telnet_connector', 'sql_connector',
-                                  'steal_files_ssh', 'steal_files_rdp', 'steal_files_ftp',
-                                  'steal_files_smb', 'steal_files_telnet', 'steal_data_sql',
-                                  'nmap_vuln_scanner', 'notes', 'status', 'failed_ping_count']:
+                        if key in self.ALLOWED_HOST_COLUMNS:
                             update_fields.append(f"{key} = ?")
                             update_values.append(value)
                     

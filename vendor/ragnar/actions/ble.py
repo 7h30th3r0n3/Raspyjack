@@ -710,7 +710,7 @@ try:
                 addr = parts[1]
                 name = parts[2] if len(parts) > 2 else 'Unknown Device'
                 print(f"{addr}|{name}")
-except:
+except Exception:
     pass
 
 proc.kill()
@@ -1311,7 +1311,7 @@ proc.kill()
                 try:
                     for line in proc.stdout:
                         output_queue.put(line)
-                except:
+                except Exception:
                     pass
             
             reader_thread = threading.Thread(target=read_output, daemon=True)
@@ -1419,7 +1419,7 @@ proc.kill()
                                     'from_scan': True,
                                     'discovery_method': 'interactive-scan'
                                 }
-                except:
+                except Exception:
                     break
             
             # Stop scan
@@ -1435,7 +1435,7 @@ proc.kill()
             # Wait for process to finish
             try:
                 proc.wait(timeout=2)
-            except:
+            except Exception:
                 proc.kill()
             
             self.logger.info(f"Interactive scan complete: found {len(devices)} devices")
@@ -1445,7 +1445,7 @@ proc.kill()
             self.logger.error(f"Error in interactive scan: {e}", exc_info=True)
             try:
                 proc.kill()
-            except:
+            except Exception:
                 pass
             return {}
     

@@ -51,13 +51,13 @@ except ImportError as e:
     def get_interface_ip(interface):
         try:
             return subprocess.check_output(f"ip addr show dev {interface} | awk '/inet / {{ print $2 }}'", shell=True).decode().strip().split('/')[0]
-        except:
+        except Exception:
             return None
     def get_nmap_target_network(interface=None):
         try:
             iface = interface or "eth0"
             return subprocess.check_output(f"ip -4 addr show {iface} | awk '/inet / {{ print $2 }}'", shell=True).decode().strip()
-        except:
+        except Exception:
             return None
     def get_mitm_interface():
         return "eth0"
@@ -67,7 +67,7 @@ except ImportError as e:
         try:
             iface = interface or "eth0"
             return subprocess.check_output(f"ip -4 addr show {iface} | awk '/inet / {{split($2, a, \"/\"); print a[1]}}'", shell=True).decode().strip()
-        except:
+        except Exception:
             return None
     def set_raspyjack_interface(interface):
         print(f"⚠️  WiFi integration not available - cannot switch to {interface}")
@@ -733,7 +733,7 @@ def LoadConfig():
             PINS = _apply_flip(PINS)
         try:
             color.LoadDictonary(data["COLORS"])
-        except:
+        except Exception:
             pass
         GPIO.setmode(GPIO.BCM)
         for item in PINS:
@@ -3396,7 +3396,7 @@ def show_interface_info():
                 status = wifi_manager.get_connection_status(current_interface)
                 if status["ssid"]:
                     info_lines.insert(2, f"SSID: {status['ssid']}")
-            except:
+            except Exception:
                 pass
 
         GetMenuString(info_lines)

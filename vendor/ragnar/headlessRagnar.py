@@ -23,7 +23,8 @@ from logger import Logger
 from wifi_manager import WiFiManager
 from env_manager import load_env
 
-logger = Logger(name="hbp0.py", level=logging.DEBUG)
+_log_level = logging.DEBUG if os.environ.get("RAGNAR_DEBUG") else logging.INFO
+logger = Logger(name="hbp0.py", level=_log_level)
 
 
 class Ragnar:

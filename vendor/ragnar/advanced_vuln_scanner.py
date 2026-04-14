@@ -1653,7 +1653,7 @@ class AdvancedVulnScanner:
             error_body = ""
             try:
                 error_body = e.read().decode('utf-8', errors='replace')
-            except:
+            except Exception:
                 pass
             logger.error(f"ZAP API HTTP error: {e.code} - {e.reason}. Endpoint: {endpoint}. Response: {error_body[:500]}")
 
@@ -1674,7 +1674,7 @@ class AdvancedVulnScanner:
         try:
             error_json = json.loads(error_body)
             error_detail = error_json.get('message', '') or error_json.get('error', '')
-        except:
+        except Exception:
             error_detail = error_body[:200] if error_body else ""
 
         # Check for common 500 error causes
@@ -4718,7 +4718,7 @@ class AdvancedVulnScanner:
                                     'contextName': context_name,
                                     'regex': ms_domain
                                 })
-                            except:
+                            except Exception:
                                 pass  # Best effort to add MS domains
                 except Exception as e:
                     logger.warning(f"Could not add URL to context: {e}")
@@ -5190,7 +5190,7 @@ class AdvancedVulnScanner:
                         users = users_resp.get('usersList', [])
                         context_auth['users_configured'] = len(users) > 0
                         context_auth['user_count'] = len(users)
-                    except:
+                    except Exception:
                         context_auth['users_configured'] = False
                         context_auth['user_count'] = 0
 

@@ -168,7 +168,7 @@ class ResourceMonitor:
             # Get thread count (current process)
             try:
                 thread_count = psutil.Process().num_threads()
-            except:
+            except Exception:
                 thread_count = 0
 
             status = {

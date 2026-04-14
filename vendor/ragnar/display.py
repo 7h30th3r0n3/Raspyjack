@@ -640,7 +640,7 @@ class Display:
                     ssid = result.stdout.strip()
                     logger.debug(f"[STATUS] WiFi connected via iwgetid: SSID={ssid}")
                     return f"WiFi: {ssid}"
-            except:
+            except Exception:
                 pass
             
             # Method 2: Check if we have network connectivity (WiFi without SSID)
@@ -650,7 +650,7 @@ class Display:
                 if result.returncode == 0 and 'via' in result.stdout:
                     logger.debug(f"[STATUS] WiFi connected via ip route check")
                     return "WiFi: Connected"
-            except:
+            except Exception:
                 pass
             
             # Method 3: Check for wlan interface with IP
@@ -663,7 +663,7 @@ class Display:
                         if ('wlan' in line and 'state UP' in line) or ('inet ' in line and 'scope global' in line and ('wlan' in result.stdout)):
                             logger.debug(f"[STATUS] WiFi connected via interface check")
                             return "WiFi: Connected"
-            except:
+            except Exception:
                 pass
             
             # SECONDARY: Try to get status from WiFi manager (if available in same process)
@@ -711,7 +711,7 @@ class Display:
                             return "AP: No clients"
                     else:
                         return "AP: Active"
-                except:
+                except Exception:
                     return "AP: Active"
             
             logger.debug(f"[STATUS] WiFi not detected by any method")

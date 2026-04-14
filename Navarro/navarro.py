@@ -734,9 +734,9 @@ def mastodon(username):
                 
         except requests.exceptions.Timeout:
             continue
-        except:
+        except Exception:
             continue
-    
+
     rate_limiter.record_request("mastodon")
     return CheckResult.NOT_FOUND
 
@@ -757,7 +757,7 @@ def bluesky(username):
             if r.status_code == 200 and (username in r.text or "Posts" in r.text):
                 rate_limiter.record_request("bluesky")
                 return CheckResult.FOUND
-        except:
+        except Exception:
             continue
     
     rate_limiter.record_request("bluesky")
@@ -835,7 +835,7 @@ def youtube(username):
                 if any(marker in text for marker in channel_markers):
                     rate_limiter.record_request("youtube")
                     return CheckResult.FOUND
-        except:
+        except Exception:
             continue
     
     rate_limiter.record_request("youtube")

@@ -1074,7 +1074,7 @@ class LiveCamDetector(WardrivingScanner):
             # Larger font for "CLOUD"
             try:
                 header_font = scaled_font(size=12)
-            except:
+            except Exception:
                 header_font = self.font
             d.text((64, 6), "LIVE CAM", font=header_font, fill="#FFFFFF", anchor="mm")
             

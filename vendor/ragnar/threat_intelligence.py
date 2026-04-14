@@ -971,7 +971,7 @@ class DynamicRiskCalculator:
                         last_seen = datetime.fromisoformat(context.last_seen.replace('Z', '+00:00'))
                         if datetime.now() - last_seen.replace(tzinfo=None) < timedelta(days=30):
                             base_score += 1.0
-                    except:
+                    except Exception:
                         pass
             
             # Cap at 10.0

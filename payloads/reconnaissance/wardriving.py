@@ -447,7 +447,7 @@ class WardrivingScanner:
                     interface = line.strip().split()[-1]
                     interfaces.append(interface)
             return interfaces
-        except:
+        except Exception:
             return []
 
     def _is_onboard_wifi_iface(self, iface):
@@ -876,7 +876,7 @@ class WardrivingScanner:
                     security_info['cipher'] = 'CCMP'
                 elif b'\x00\x0f\xac\x02' in rsn_data:
                     security_info['cipher'] = 'TKIP'
-        except:
+        except Exception:
             pass
         return security_info
     
@@ -894,7 +894,7 @@ class WardrivingScanner:
                     security_info['cipher'] = 'CCMP'
                 elif b'\x00\x50\xf2\x02' in wpa_data:
                     security_info['cipher'] = 'TKIP'
-        except:
+        except Exception:
             pass
         return security_info
     
@@ -1100,7 +1100,7 @@ class WardrivingScanner:
                         lines.append("GPS: Fresh")
                     else:
                         lines.append(f"GPS: {time_diff:.0f}s old")
-                except:
+                except Exception:
                     lines.append("GPS: Active")
             else:
                 lines.append("GPS: No data")
@@ -1286,7 +1286,7 @@ class WardrivingScanner:
                             try:
                                 dt = datetime.fromisoformat(first_seen)
                                 first_seen = dt.strftime('%Y-%m-%dT%H:%M:%S.000Z')
-                            except:
+                            except Exception:
                                 first_seen = datetime.now().strftime('%Y-%m-%dT%H:%M:%S.000Z')
                         
                         writer.writerow([
@@ -1548,7 +1548,7 @@ class WardrivingScanner:
             try:
                 if LCD_AVAILABLE:
                     GPIO.cleanup()
-            except:
+            except Exception:
                 pass
     
     def run_interactive(self):
@@ -1741,7 +1741,7 @@ def main():
         try:
             if 'scanner' in locals():
                 scanner.cleanup()
-        except:
+        except Exception:
             pass
 
 if __name__ == "__main__":

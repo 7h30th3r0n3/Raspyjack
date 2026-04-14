@@ -249,7 +249,7 @@ class AIService:
 
         try:
             return result.output_text.strip()
-        except:
+        except Exception:
             return None
     # ===================================================================
     #   NETWORK SUMMARY
