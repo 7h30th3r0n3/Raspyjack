@@ -352,7 +352,8 @@
                 " glasses_counter": "👓",
                 " pcap_analyzer": "",
                 " payload_updater": "",
-                " card_tester": ""
+                " card_tester": "",
+                " whisperpair": ""
         },
         "fallbacks": {
                 "__scan__": "",
