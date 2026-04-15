@@ -42,7 +42,7 @@ import LCD_1in44
 import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
-from payloads._input_helper import get_button
+from payloads._input_helper import get_button, open_remote_text_session, get_remote_text_event, close_remote_text_session
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -416,6 +416,49 @@ def _draw_iplist_view(lcd, font_obj):
 
     lcd.LCD_ShowImage(img, 0, 0)
 
+
+def _start_query(ip_str):
+    global querying
+    if querying:
+        return False
+    if not re.match(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$", ip_str):
+        return False
+    querying = True
+    threading.Thread(target=_query_thread, args=(ip_str,), daemon=True).start()
+    return True
+
+
+def _apply_remote_ip_event(remote_event):
+    global ip_buffer, cursor_pos, status_msg
+
+    special = str(remote_event.get("special") or "")
+    if special == "BACKSPACE":
+        if ip_buffer:
+            ip_buffer = ip_buffer[:-1]
+            cursor_pos = len(ip_buffer)
+        return
+
+    if special == "ENTER":
+        ip = ip_buffer.strip()
+        if not _start_query(ip):
+            with lock:
+                status_msg = "Invalid IP format"
+        return
+
+    if special == "ESCAPE":
+        return
+
+    key_value = str(remote_event.get("key") or "")
+    if not key_value:
+        return
+
+    filtered = "".join(ch for ch in key_value if ch in IP_CHARS)
+    if not filtered:
+        return
+
+    ip_buffer = (ip_buffer + filtered)[:15]
+    cursor_pos = len(ip_buffer)
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -434,6 +477,7 @@ def main():
     lcd.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
     lcd.LCD_Clear()
     font_obj = scaled_font()
+    remote_session_id = None
 
     try:
         # Auto-detect public IP
@@ -453,6 +497,22 @@ def main():
                 status_msg = "Enter IP manually"
 
         while _running:
+            if current_view == VIEW_INPUT and remote_session_id is None:
+                remote_session_id = open_remote_text_session(
+                    title="SHODAN IP",
+                    default=ip_buffer,
+                    charset="ip",
+                    max_len=15,
+                )
+            elif current_view != VIEW_INPUT and remote_session_id is not None:
+                close_remote_text_session(remote_session_id)
+                remote_session_id = None
+
+            if current_view == VIEW_INPUT and remote_session_id is not None:
+                remote_event = get_remote_text_event(remote_session_id)
+                if remote_event:
+                    _apply_remote_ip_event(remote_event)
+
             btn = get_button(PINS, GPIO)
 
             if btn == "KEY3":
@@ -480,12 +540,7 @@ def main():
                     time.sleep(0.2)
                 elif btn == "OK" and not querying:
                     ip = ip_buffer.strip()
-                    if re.match(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$", ip):
-                        querying = True
-                        threading.Thread(
-                            target=_query_thread, args=(ip,), daemon=True
-                        ).start()
-                    else:
+                    if not _start_query(ip):
                         with lock:
                             status_msg = "Invalid IP format"
                     time.sleep(0.3)
@@ -559,10 +614,7 @@ def main():
                             target_ip = ip_list[ip_selected]
                             ip_buffer = target_ip
                             cursor_pos = len(target_ip)
-                            querying = True
-                            threading.Thread(
-                                target=_query_thread, args=(target_ip,), daemon=True
-                            ).start()
+                            _start_query(target_ip)
                     time.sleep(0.3)
 
             # Draw current view
@@ -577,6 +629,8 @@ def main():
 
     finally:
         _running = False
+        if remote_session_id is not None:
+            close_remote_text_session(remote_session_id)
         time.sleep(0.3)
         try:
             lcd.LCD_Clear()
