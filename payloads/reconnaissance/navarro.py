@@ -215,22 +215,26 @@ def draw_result_detail(user: str, platform: str, url: str, idx: int, total: int)
     d.text((2, 2), f"{platform}  {idx+1}/{total}", font=font_small, fill="#00FF00")
     d.line([(0, 14), (WIDTH, 14)], fill="#202020")
 
-    # Try to render a QR code on the right (64x64). If unavailable, use full width for text
-    text_right = 124
+    text_left = 2
+    text_right = WIDTH - 4
+    qr_size = 64
+    qr_top = 20
+    qr_gap = 4
     if qrcode is not None:
         try:
             qr = qrcode.QRCode(version=None, box_size=2, border=1)
             qr.add_data(url)
             qr.make(fit=True)
             qr_img = qr.make_image(fill_color="black", back_color="white").convert("RGB")
-            qr_img = qr_img.resize((64, 64))
-            img.paste(qr_img, (62, 20))
-            text_right = WIDTH - 64 - 6  # leave gap before QR
+            qr_img = qr_img.resize((qr_size, qr_size))
+            qr_x = WIDTH - qr_size - 2
+            img.paste(qr_img, (qr_x, qr_top))
+            text_right = qr_x - qr_gap
         except Exception:
-            text_right = 124
+            text_right = WIDTH - 4
 
     # wrap url text within the available area
-    max_w = max(20, text_right - 2)
+    max_w = max(20, text_right - text_left)
     words = [url]
     lines: list[str] = []
     while words:
@@ -251,7 +255,7 @@ def draw_result_detail(user: str, platform: str, url: str, idx: int, total: int)
             break
     y = 20
     for line in lines:
-        d.text((2, y), line, font=font_small, fill="#FFFFFF")
+        d.text((text_left, y), line, font=font_small, fill="#FFFFFF")
         y += 12
     d.line([(0, 116), (WIDTH, 116)], fill="#202020")
     d.text((2, 118), "LR=Prev/Next  K3 Back", font=font_small, fill="#999999")
