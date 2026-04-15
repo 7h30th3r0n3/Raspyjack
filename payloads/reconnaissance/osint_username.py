@@ -38,7 +38,7 @@ import LCD_1in44
 import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
-from payloads._input_helper import get_button
+from payloads._input_helper import get_button, open_remote_text_session, get_remote_text_event, close_remote_text_session
 from payloads._keyboard_helper import lcd_keyboard
 
 # ---------------------------------------------------------------------------
@@ -248,6 +248,60 @@ def _draw_input_screen(lcd, font_obj, username_chars, char_idx, uppercase):
     lcd.LCD_ShowImage(img, 0, 0)
 
 
+def _prompt_username(lcd, font_obj, initial=""):
+    username = initial
+    remote_session_id = open_remote_text_session(
+        title="OSINT USERNAME",
+        default=initial,
+        charset="full",
+        max_len=64,
+    )
+
+    try:
+        while _running:
+            _draw_header(ScaledDraw(Image.new("RGB", (1, 1), "black")), font_obj, "")
+            img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+            d = ScaledDraw(img)
+            _draw_header(d, font_obj, "OSINT USERNAME")
+            d.text((2, 22), "Username:", font=font_obj, fill="#888")
+            d.rectangle((2, 36, 125, 50), outline="#333")
+            d.text((4, 38), (username[-18:] if username else "_"), font=font_obj, fill="#00FF00")
+            d.text((2, 66), "Cardputer keyboard:", font=font_obj, fill="#666")
+            d.text((2, 78), "type + Enter", font=font_obj, fill="#666")
+            d.text((2, 94), "OK:start LEFT:del", font=font_obj, fill="#666")
+            _draw_footer(d, font_obj, f"Len:{len(username)} K3:Exit")
+            lcd.LCD_ShowImage(img, 0, 0)
+
+            remote_event = get_remote_text_event(remote_session_id)
+            if remote_event:
+                special = str(remote_event.get("special") or "")
+                if special == "ESCAPE":
+                    return None
+                if special == "BACKSPACE":
+                    if username:
+                        username = username[:-1]
+                elif special == "ENTER":
+                    return username.strip()
+                else:
+                    key_value = str(remote_event.get("key") or "")
+                    if key_value:
+                        username = (username + key_value)[:64]
+
+            btn = get_button(PINS, GPIO)
+            if btn == "KEY3":
+                return None
+            if btn == "LEFT":
+                if username:
+                    username = username[:-1]
+                time.sleep(DEBOUNCE)
+            elif btn == "OK":
+                return username.strip()
+
+            time.sleep(0.05)
+    finally:
+        close_remote_text_session(remote_session_id)
+
+
 def _draw_results_screen(lcd, font_obj, scroll):
     """Draw the scrollable results list."""
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
@@ -318,7 +372,7 @@ def main():
                 break
 
             if mode == "input":
-                result = lcd_keyboard(lcd, font_obj, PINS, GPIO, title="OSINT USERNAME")
+                result = _prompt_username(lcd, font_obj)
                 if result is None:
                     break
                 uname = result.strip()
