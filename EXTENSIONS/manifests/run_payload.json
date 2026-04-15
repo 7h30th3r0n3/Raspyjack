@@ -1,0 +1,35 @@
+{
+  "id": "run_payload",
+  "name": "RUN_PAYLOAD",
+  "summary": "Dispatch a selected payload after trigger and preflight extensions succeed.",
+  "stage": "dispatch",
+  "inspired_by": "hak5/bashbunny runpayload.sh",
+  "compatible_payload_tags": [
+    "bluetooth",
+    "wifi",
+    "network",
+    "ui",
+    "utility",
+    "trigger"
+  ],
+  "parameters": [
+    {
+      "name": "payload_id",
+      "type": "string",
+      "required": true,
+      "description": "Identifier of the payload to execute."
+    },
+    {
+      "name": "selector_mode",
+      "type": "enum:auto|manual|policy",
+      "required": false,
+      "description": "How the payload is chosen in multi-payload flows."
+    },
+    {
+      "name": "cooldown_seconds",
+      "type": "integer",
+      "required": false,
+      "description": "Optional cooldown to avoid repeated immediate launches."
+    }
+  ]
+}
