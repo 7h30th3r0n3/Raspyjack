@@ -6,6 +6,8 @@ Reads flip setting from gui_conf.json to swap controls when flipped.
 
 import os
 import json
+import time
+import uuid
 
 try:
     import rj_input
@@ -39,6 +41,8 @@ _CONF_PATHS = [
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "gui_conf.json"),
     "/root/Raspyjack/gui_conf.json",
 ]
+_TEXT_SESSION_FILE = os.environ.get("RJ_TEXT_SESSION_FILE", "/dev/shm/rj_text_session.json")
+_TEXT_SESSION_TIMEOUT = float(os.environ.get("RJ_TEXT_SESSION_TIMEOUT", "30"))
 
 
 def _is_flip_enabled():
@@ -104,6 +108,77 @@ def get_held_buttons():
     if _is_flip_enabled():
         return {_FLIP_MAP.get(b, b) for b in mapped}
     return mapped
+
+
+def _write_text_session(payload):
+    directory = os.path.dirname(_TEXT_SESSION_FILE)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    temp_path = f"{_TEXT_SESSION_FILE}.tmp.{os.getpid()}"
+    with open(temp_path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, separators=(",", ":"))
+    os.replace(temp_path, _TEXT_SESSION_FILE)
+
+
+def open_remote_text_session(title="Input", default="", charset="full", max_len=64):
+    session_id = uuid.uuid4().hex
+    payload = {
+        "active": True,
+        "session_id": session_id,
+        "title": str(title or "Input")[:32],
+        "default": str(default or "")[:128],
+        "charset": str(charset or "full"),
+        "max_len": int(max_len),
+        "started_at": time.time(),
+        "timeout": _TEXT_SESSION_TIMEOUT,
+    }
+    _write_text_session(payload)
+    if rj_input is not None:
+        try:
+            rj_input.flush_text_events()
+        except Exception:
+            pass
+    return session_id
+
+
+def close_remote_text_session(session_id=None):
+    current = {}
+    try:
+        if os.path.isfile(_TEXT_SESSION_FILE):
+            with open(_TEXT_SESSION_FILE, "r", encoding="utf-8") as handle:
+                current = json.load(handle) or {}
+    except Exception:
+        current = {}
+    if session_id and current.get("session_id") not in (None, session_id):
+        return
+    payload = {
+        "active": False,
+        "session_id": session_id or current.get("session_id", ""),
+        "closed_at": time.time(),
+    }
+    try:
+        _write_text_session(payload)
+    except Exception:
+        pass
+
+
+def get_remote_text_event(session_id=None):
+    if rj_input is None:
+        return None
+    for _ in range(4):
+        try:
+            event = rj_input.get_text_event()
+        except Exception:
+            return None
+        if not event:
+            return None
+        if not isinstance(event, dict):
+            continue
+        event_session = event.get("session_id")
+        if session_id and event_session and event_session != session_id:
+            continue
+        return event
+    return None
 
 
 def flush_input():

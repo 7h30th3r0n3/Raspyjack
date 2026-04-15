@@ -30,6 +30,7 @@ from payloads._display_helper import ScaledDraw, scaled_font
 
 # WebUI + GPIO input helper
 from payloads._input_helper import get_button
+from payloads._keyboard_helper import lcd_keyboard
 
 # Optional shared extension helpers.
 # Uncomment what you need for a given payload.
@@ -73,30 +74,36 @@ def draw(lines):
 
 
 def main():
-    try:
-        # Example gate usage before entering the interactive loop:
-        #
-        # REQUIRE_CAPABILITY("binary", "bluetoothctl")
-        # WAIT_FOR_PRESENT(
-        #     name="RJTRIG-A",
-        #     service_uuid="7f7b0001-2b7a-4e10-a6be-8e4f9d41c101",
-        #     timeout_seconds=30,
-        # )
-        #
-        # Example action chaining:
-        # RUN_PAYLOAD("utilities/trigger_marker.py", "template_demo")
+    typed_value = ""
+    draw(["Payload ready", "KEY1 = text", "KEY3 = exit"])
+    while True:
+        btn = get_button(PINS, GPIO)
+        if btn == "KEY3":
+            break
+        if btn == "KEY1":
+            result = lcd_keyboard(
+                LCD,
+                font,
+                PINS,
+                GPIO,
+                title="Example Input",
+                default=typed_value,
+                charset="full",
+                max_len=32,
+            )
+            if result is not None:
+                typed_value = result
+                draw(["Saved:", typed_value[-18:] or "<empty>", "KEY1 = edit", "KEY3 = exit"])
+            else:
+                draw(["Input cancelled", typed_value[-18:] or "<empty>", "KEY1 = text", "KEY3 = exit"])
+            time.sleep(0.1)
+            continue
+        if btn:
+            draw([f"Pressed: {btn}", typed_value[-18:] or "<empty>"])
+        time.sleep(0.05)
 
-        draw(["Payload ready", "KEY3 = exit"])
-        while True:
-            btn = get_button(PINS, GPIO)
-            if btn == "KEY3":
-                break
-            if btn:
-                draw([f"Pressed: {btn}"])
-            time.sleep(0.05)
-    finally:
-        LCD.LCD_Clear()
-        GPIO.cleanup()
+    LCD.LCD_Clear()
+    GPIO.cleanup()
 
 
 if __name__ == "__main__":
