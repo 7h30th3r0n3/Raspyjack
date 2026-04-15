@@ -3,6 +3,17 @@
 RaspyJack Payload Template (WebUI + GPIO compatible)
 ---------------------------------------------------
 Use this as a starting point for custom payloads.
+
+Optional extension API:
+
+- WAIT_FOR_PRESENT
+- WAIT_FOR_NOTPRESENT
+- REQUIRE_CAPABILITY
+- RUN_PAYLOAD
+
+Those helpers live in `EXTENSIONS.api` and can be used before or during the
+main payload loop. The default template behavior below stays interactive and
+keeps `KEY3` as the exit button.
 """
 
 import os
@@ -20,6 +31,16 @@ from payloads._display_helper import ScaledDraw, scaled_font
 # WebUI + GPIO input helper
 from payloads._input_helper import get_button
 from payloads._keyboard_helper import lcd_keyboard
+
+# Optional shared extension helpers.
+# Uncomment what you need for a given payload.
+#
+# from EXTENSIONS.api import (
+#     WAIT_FOR_PRESENT,
+#     WAIT_FOR_NOTPRESENT,
+#     REQUIRE_CAPABILITY,
+#     RUN_PAYLOAD,
+# )
 
 PINS = {
     "UP": 6,

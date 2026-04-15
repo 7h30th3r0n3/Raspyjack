@@ -1,0 +1,34 @@
+{
+  "id": "require_capability",
+  "name": "REQUIRE_CAPABILITY",
+  "summary": "Validate that required tooling, radio hardware, or services exist before a payload is launched.",
+  "stage": "preflight",
+  "inspired_by": "hak5/bashbunny requiretool.sh",
+  "compatible_payload_tags": [
+    "bluetooth",
+    "wifi",
+    "network",
+    "ui",
+    "utility"
+  ],
+  "parameters": [
+    {
+      "name": "capability_type",
+      "type": "enum:binary|service|interface|config",
+      "required": true,
+      "description": "Type of dependency to validate."
+    },
+    {
+      "name": "value",
+      "type": "string",
+      "required": true,
+      "description": "Dependency identifier, such as hciconfig, wlan1, or caddy."
+    },
+    {
+      "name": "failure_policy",
+      "type": "enum:fail_closed|warn_only",
+      "required": false,
+      "description": "Default is fail_closed to keep execution predictable."
+    }
+  ]
+}
