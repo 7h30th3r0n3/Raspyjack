@@ -1,0 +1,33 @@
+{
+  "id": "wait_for_present",
+  "name": "WAIT_FOR_PRESENT",
+  "summary": "Pause payload dispatch until a watched Bluetooth, Wi-Fi, or GPIO signal is present.",
+  "stage": "trigger",
+  "inspired_by": "hak5/bashbunny wait_for_present.sh",
+  "compatible_payload_tags": [
+    "bluetooth",
+    "wifi",
+    "gpio",
+    "trigger"
+  ],
+  "parameters": [
+    {
+      "name": "signal_type",
+      "type": "enum:bluetooth|wifi|gpio",
+      "required": true,
+      "description": "Signal family to monitor."
+    },
+    {
+      "name": "identifier",
+      "type": "string",
+      "required": true,
+      "description": "Name, MAC, SSID, or GPIO label to match."
+    },
+    {
+      "name": "timeout_seconds",
+      "type": "integer",
+      "required": false,
+      "description": "Optional upper bound before the trigger fails closed."
+    }
+  ]
+}

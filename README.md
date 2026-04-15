@@ -31,6 +31,7 @@ RaspyJack is for **authorized security testing, research, and education only**.
 - Loot collection + browsing
 - WebUI remote control dashboard
 - Payload IDE (browser editor + run flow)
+- `EXTENSIONS/` work area for reusable trigger and dispatch helpers
 - Vendored Ragnar port with native Raspyjack launcher
 - Responder / DNS spoof / ARP MITM / handshake hunter tooling integration
 - WiFi utilities + attack flows (deauth, evil twin, SSID injection, beacon flood)
@@ -310,6 +311,27 @@ finally:
     LCD.LCD_Clear()
     GPIO.cleanup()
 ```
+
+### Extensions
+
+Payloads can also import shared helpers from `EXTENSIONS.api` when they need a reusable gate or action.
+
+```python
+from EXTENSIONS.api import WAIT_FOR_PRESENT, REQUIRE_CAPABILITY
+
+try:
+    REQUIRE_CAPABILITY("binary", "bluetoothctl")
+    WAIT_FOR_PRESENT(name="TestRJ", timeout_seconds=30)
+    while True:
+        btn = get_button(PINS, GPIO)
+        if btn == "KEY3":
+            break
+finally:
+    LCD.LCD_Clear()
+    GPIO.cleanup()
+```
+
+These helpers do not change the display model. If a payload draws to the LCD, it should still use `ScaledDraw` and `scaled_font()` so the same code works on both supported screens.
 
 ---
 

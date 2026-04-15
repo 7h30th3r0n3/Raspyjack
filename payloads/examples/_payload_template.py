@@ -3,6 +3,17 @@
 RaspyJack Payload Template (WebUI + GPIO compatible)
 ---------------------------------------------------
 Use this as a starting point for custom payloads.
+
+Optional extension API:
+
+- WAIT_FOR_PRESENT
+- WAIT_FOR_NOTPRESENT
+- REQUIRE_CAPABILITY
+- RUN_PAYLOAD
+
+Those helpers live in `EXTENSIONS.api` and can be used before or during the
+main payload loop. The default template behavior below stays interactive and
+keeps `KEY3` as the exit button.
 """
 
 import os
@@ -19,6 +30,16 @@ from payloads._display_helper import ScaledDraw, scaled_font
 
 # WebUI + GPIO input helper
 from payloads._input_helper import get_button
+
+# Optional shared extension helpers.
+# Uncomment what you need for a given payload.
+#
+# from EXTENSIONS.api import (
+#     WAIT_FOR_PRESENT,
+#     WAIT_FOR_NOTPRESENT,
+#     REQUIRE_CAPABILITY,
+#     RUN_PAYLOAD,
+# )
 
 PINS = {
     "UP": 6,
@@ -52,17 +73,30 @@ def draw(lines):
 
 
 def main():
-    draw(["Payload ready", "KEY3 = exit"])
-    while True:
-        btn = get_button(PINS, GPIO)
-        if btn == "KEY3":
-            break
-        if btn:
-            draw([f"Pressed: {btn}"])
-        time.sleep(0.05)
+    try:
+        # Example gate usage before entering the interactive loop:
+        #
+        # REQUIRE_CAPABILITY("binary", "bluetoothctl")
+        # WAIT_FOR_PRESENT(
+        #     name="RJTRIG-A",
+        #     service_uuid="7f7b0001-2b7a-4e10-a6be-8e4f9d41c101",
+        #     timeout_seconds=30,
+        # )
+        #
+        # Example action chaining:
+        # RUN_PAYLOAD("utilities/trigger_marker.py", "template_demo")
 
-    LCD.LCD_Clear()
-    GPIO.cleanup()
+        draw(["Payload ready", "KEY3 = exit"])
+        while True:
+            btn = get_button(PINS, GPIO)
+            if btn == "KEY3":
+                break
+            if btn:
+                draw([f"Pressed: {btn}"])
+            time.sleep(0.05)
+    finally:
+        LCD.LCD_Clear()
+        GPIO.cleanup()
 
 
 if __name__ == "__main__":
