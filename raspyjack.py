@@ -154,8 +154,8 @@ CARDPUTER_FRAME_ENABLED = os.environ.get("RJ_CARDPUTER_FRAME_ENABLED", "1") != "
 CARDPUTER_FRAME_MODE = str(os.environ.get("RJ_CARDPUTER_FRAME_MODE", "stretch") or "stretch").strip().lower()
 CARDPUTER_FRAME_WIDTH = max(1, int(os.environ.get("RJ_CARDPUTER_FRAME_WIDTH", "240")))
 CARDPUTER_FRAME_HEIGHT = max(1, int(os.environ.get("RJ_CARDPUTER_FRAME_HEIGHT", "135")))
-CARDPUTER_FRAME_QUALITY = min(100, max(1, int(os.environ.get("RJ_CARDPUTER_FRAME_QUALITY", "56"))))
-CARDPUTER_FRAME_SUBSAMPLING = min(2, max(0, int(os.environ.get("RJ_CARDPUTER_FRAME_SUBSAMPLING", "2"))))
+CARDPUTER_FRAME_QUALITY = min(100, max(1, int(os.environ.get("RJ_CARDPUTER_FRAME_QUALITY", "60"))))
+CARDPUTER_FRAME_SUBSAMPLING = min(2, max(0, int(os.environ.get("RJ_CARDPUTER_FRAME_SUBSAMPLING", "0"))))
 try:
     _frame_fps = float(os.environ.get("RJ_FRAME_FPS", "10"))
     FRAME_MIRROR_INTERVAL = 1.0 / max(1.0, _frame_fps)
