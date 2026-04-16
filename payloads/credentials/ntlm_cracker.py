@@ -58,7 +58,7 @@ font = scaled_font()
 # ---------------------------------------------------------------------------
 JOHN_BIN = "/usr/sbin/john"
 DEFAULT_WORDLIST = "/usr/share/john/password.lst"
-CUSTOM_WORDLIST = "/root/Raspyjack/loot/wordlists/custom.txt"
+WORDLIST_DIR = "/root/Raspyjack/loot/wordlists"
 RESPONDER_LOG_DIR = "/root/Raspyjack/Responder/logs"
 RELAY_LOOT_DIR = "/root/Raspyjack/loot/NTLMRelay"
 LOOT_DIR = "/root/Raspyjack/loot/CrackedNTLM"
@@ -67,10 +67,31 @@ ROW_H = 12
 
 ATTACK_MODES = [
     {"name": "Quick", "desc": "Default wordlist"},
-    {"name": "Custom", "desc": "Custom wordlist"},
+    {"name": "Wordlist", "desc": "Select wordlist"},
     {"name": "Incremental", "desc": "Brute-force"},
     {"name": "Rules", "desc": "Wordlist + rules"},
 ]
+
+# Selected wordlist (set by user in Wordlist mode)
+_selected_wordlist = DEFAULT_WORDLIST
+
+
+def _list_wordlists():
+    """List available wordlist files."""
+    wlists = []
+    # Default john wordlist
+    if os.path.isfile(DEFAULT_WORDLIST):
+        wlists.append({"path": DEFAULT_WORDLIST, "name": "john default",
+                        "size": os.path.getsize(DEFAULT_WORDLIST)})
+    # All .txt files in wordlist dir
+    if os.path.isdir(WORDLIST_DIR):
+        for f in sorted(os.listdir(WORDLIST_DIR)):
+            if f.endswith(".txt"):
+                fp = os.path.join(WORDLIST_DIR, f)
+                sz = os.path.getsize(fp)
+                if sz > 0:
+                    wlists.append({"path": fp, "name": f, "size": sz})
+    return wlists
 
 # ---------------------------------------------------------------------------
 # Shared state (immutable swap pattern via lock)
@@ -172,15 +193,15 @@ def _build_john_cmd(hashfile, fmt, mode_name):
     if mode_name == "Quick":
         return base + [f"--wordlist={DEFAULT_WORDLIST}", hashfile]
 
-    if mode_name == "Custom":
-        wordlist = CUSTOM_WORDLIST if os.path.isfile(CUSTOM_WORDLIST) else DEFAULT_WORDLIST
-        return base + [f"--wordlist={wordlist}", hashfile]
+    if mode_name == "Wordlist":
+        return base + [f"--wordlist={_selected_wordlist}", hashfile]
 
     if mode_name == "Incremental":
         return base + ["--incremental", hashfile]
 
     if mode_name == "Rules":
-        return base + [f"--wordlist={DEFAULT_WORDLIST}", "--rules", hashfile]
+        wl = _selected_wordlist if os.path.isfile(_selected_wordlist) else DEFAULT_WORDLIST
+        return base + [f"--wordlist={wl}", "--rules", hashfile]
 
     return base + [f"--wordlist={DEFAULT_WORDLIST}", hashfile]
 
@@ -209,9 +230,13 @@ def _crack_thread(hashfile, fmt, mode_name):
         )
         _john_proc = proc
 
-        # Pattern for cracked passwords in john output
-        # Typical: "password  (username)"
-        crack_re = re.compile(r"^(.+?)\s+\((.+?)\)\s*$")
+        # John jumbo output format for cracked passwords:
+        # "PASSWORD         (USERNAME)"
+        # Must have at least 1 char password, spaces, then (username)
+        # Exclude john status/info lines that contain known keywords
+        crack_re = re.compile(r"^(.+?)\s{2,}\((.+?)\)\s*$")
+        skip_words = {"loaded", "will run", "press", "session", "proceeding",
+                      "using default", "cost", "guesses", "remaining"}
 
         while _running:
             line = proc.stdout.readline()
@@ -224,16 +249,41 @@ def _crack_thread(hashfile, fmt, mode_name):
             with lock:
                 elapsed_secs = int(time.time() - start_time)
 
+            # Skip john info/status lines
+            if any(w in line.lower() for w in skip_words):
+                continue
+
             match = crack_re.match(line)
             if match:
                 password = match.group(1).strip()
+                username = match.group(2).strip()
                 with lock:
                     cracked_count += 1
                     last_cracked = password
-                    all_cracked.append(f"{match.group(2)}:{password}")
+                    all_cracked.append(f"{username}:{password}")
                     status_msg = f"Cracked! {cracked_count} found"
 
         proc.wait(timeout=5)
+
+        # Also run --show to catch any results from pot file
+        try:
+            show_result = subprocess.run(
+                [JOHN_BIN, "--show", f"--format={fmt}", hashfile],
+                capture_output=True, text=True, timeout=10)
+            for line in show_result.stdout.splitlines():
+                if ":" in line and "password hash" not in line.lower():
+                    parts = line.split(":")
+                    if len(parts) >= 2:
+                        username = parts[0]
+                        password = parts[1]
+                        entry = f"{username}:{password}"
+                        with lock:
+                            if entry not in all_cracked and password:
+                                all_cracked.append(entry)
+                                cracked_count = len(all_cracked)
+                                last_cracked = password
+        except Exception:
+            pass
 
     except Exception as exc:
         with lock:
@@ -427,8 +477,16 @@ def _draw_cracking_view():
     d.text((2, 48), f"Cracked: {count}", font=font, fill="#FFAA00")
 
     if last:
-        d.text((2, 66), "Last found:", font=font, fill="#888")
-        d.text((2, 78), last[:22], font=font, fill="#00FF00")
+        d.text((2, 62), "Last found:", font=font, fill="#888")
+        d.text((2, 74), last[:22], font=font, fill="#00FF00")
+        # Show all cracked so far
+        with lock:
+            cracked_list = list(all_cracked)
+        if cracked_list:
+            y = 88
+            for entry in cracked_list[:2]:
+                d.text((2, y), entry[:22], font=font, fill="#FFAA00")
+                y += 12
     else:
         d.text((2, 66), "Waiting for results...", font=font, fill="#666")
 
@@ -573,6 +631,16 @@ def main():
                 if btn == "OK" and selected_file:
                     with lock:
                         mode_name = ATTACK_MODES[selected_idx]["name"]
+
+                    # Wordlist mode: show wordlist picker first
+                    if mode_name == "Wordlist":
+                        phase = "wordlists"
+                        with lock:
+                            scroll_pos = 0
+                            selected_idx = 0
+                        time.sleep(0.3)
+                        continue
+
                     phase = "cracking"
                     with lock:
                         scroll_pos = 0
@@ -592,6 +660,59 @@ def main():
                     time.sleep(0.15)
 
                 _draw_modes_view()
+
+            # --- Wordlist selection ---
+            elif phase == "wordlists":
+                wlists = _list_wordlists()
+                if btn == "KEY3":
+                    phase = "modes"
+                    with lock:
+                        selected_idx = 0
+                    time.sleep(0.3)
+                elif btn == "OK" and wlists:
+                    global _selected_wordlist
+                    _selected_wordlist = wlists[selected_idx]["path"]
+                    phase = "cracking"
+                    with lock:
+                        scroll_pos = 0
+                    threading.Thread(
+                        target=_crack_thread,
+                        args=(selected_file["path"], selected_file["fmt"], "Wordlist"),
+                        daemon=True,
+                    ).start()
+                    time.sleep(0.3)
+                elif btn == "UP":
+                    selected_idx = max(0, selected_idx - 1)
+                    time.sleep(0.15)
+                elif btn == "DOWN":
+                    selected_idx = min(selected_idx + 1, len(wlists) - 1)
+                    time.sleep(0.15)
+
+                # Draw wordlist picker (scrollable)
+                img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+                d = ScaledDraw(img)
+                d.rectangle((0, 0, 127, 12), fill="#111")
+                d.text((2, 1), f"WORDLISTS ({len(wlists)})", font=font, fill="#00CCFF")
+                if not wlists:
+                    d.text((4, 50), "No wordlists found", font=font, fill="#FF4444")
+                else:
+                    # Scroll offset based on cursor
+                    wl_scroll = max(0, selected_idx - ROWS_VISIBLE + 1)
+                    visible = wlists[wl_scroll:wl_scroll + ROWS_VISIBLE]
+                    y = 15
+                    for i, wl in enumerate(visible):
+                        real_idx = wl_scroll + i
+                        prefix = ">" if real_idx == selected_idx else " "
+                        name = wl["name"][:16]
+                        sz = wl["size"]
+                        sz_str = f"{sz//1024}K" if sz > 1024 else f"{sz}B"
+                        col = "#00FF00" if real_idx == selected_idx else "#CCCCCC"
+                        d.text((2, y), f"{prefix}{name}", font=font, fill=col)
+                        d.text((100, y), sz_str, font=font, fill="#888")
+                        y += ROW_H
+                d.rectangle((0, 116, 127, 127), fill="#111")
+                d.text((2, 117), "OK:Select K3:Back", font=font, fill="#888")
+                LCD.LCD_ShowImage(img, 0, 0)
 
             # --- Cracking / results phase ---
             elif phase in ("cracking", "results"):

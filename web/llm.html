@@ -1,0 +1,852 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RaspyJack AI</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      color-scheme: dark;
+      --rj-bg-0: #05060a;
+      --rj-bg-1: #07090f;
+      --rj-bg-2: #0f1b2d;
+      --rj-surface: rgba(15, 23, 42, 0.42);
+      --rj-surface-strong: rgba(15, 23, 42, 0.62);
+      --rj-border: rgba(148, 163, 184, 0.2);
+      --rj-border-strong: rgba(148, 163, 184, 0.32);
+      --rj-text: #e2e8f0;
+      --rj-text-muted: #94a3b8;
+      --rj-accent: #10b981;
+      --rj-accent-soft: rgba(16, 185, 129, 0.16);
+      --rj-danger: #f43f5e;
+      --rj-radius: 12px;
+      --rj-shadow: 0 12px 30px rgba(2, 6, 23, 0.35);
+      --rj-glow: 0 0 24px rgba(16, 185, 129, 0.12);
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'Space Grotesk', Inter, ui-sans-serif, system-ui, sans-serif;
+      background: radial-gradient(1200px 800px at 50% -10%, var(--rj-bg-2) 0%, var(--rj-bg-1) 55%, var(--rj-bg-0) 100%);
+      color: var(--rj-text);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Header */
+    header {
+      padding: 12px 20px;
+      border-bottom: 1px solid var(--rj-border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: var(--rj-surface);
+      backdrop-filter: blur(12px);
+    }
+
+    header .logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    header .logo i { color: var(--rj-accent); font-size: 18px; }
+    header h1 { font-size: 16px; font-weight: 600; }
+    header .back-link {
+      color: var(--rj-text-muted);
+      text-decoration: none;
+      font-size: 13px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 12px;
+      border: 1px solid var(--rj-border);
+      border-radius: 8px;
+      transition: all 0.2s;
+    }
+    header .back-link:hover {
+      color: var(--rj-text);
+      border-color: var(--rj-border-strong);
+      background: var(--rj-surface-strong);
+    }
+
+    .controls {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    #status {
+      font-size: 13px;
+      color: var(--rj-text-muted);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    #status .dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: #555;
+      transition: background 0.3s;
+    }
+    #status .dot.loading { background: #f59e0b; animation: pulse 1s infinite; }
+    #status .dot.ready { background: var(--rj-accent); }
+    #status .dot.error { background: var(--rj-danger); }
+
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+    .icon-btn {
+      background: none;
+      border: 1px solid var(--rj-border);
+      color: var(--rj-text-muted);
+      cursor: pointer;
+      font-size: 16px;
+      padding: 6px 10px;
+      border-radius: 8px;
+      transition: all 0.2s;
+    }
+    .icon-btn:hover {
+      color: var(--rj-text);
+      border-color: var(--rj-border-strong);
+      background: var(--rj-surface-strong);
+    }
+
+    /* Settings panel */
+    #settings {
+      display: none;
+      padding: 14px 20px;
+      border-bottom: 1px solid var(--rj-border);
+      background: var(--rj-surface);
+      backdrop-filter: blur(8px);
+      gap: 14px;
+    }
+    #settings.visible {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    #settings label {
+      font-size: 12px;
+      color: var(--rj-text-muted);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    #settings select, #settings input[type="number"] {
+      background: var(--rj-bg-1);
+      border: 1px solid var(--rj-border);
+      border-radius: 6px;
+      color: var(--rj-text);
+      padding: 5px 10px;
+      font-size: 12px;
+      font-family: inherit;
+    }
+    #settings select:focus, #settings input:focus { border-color: var(--rj-accent); outline: none; }
+
+    .btn {
+      padding: 6px 14px;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .btn-accent { background: var(--rj-accent); }
+    .btn-accent:hover { background: #0d9668; }
+    .btn-danger { background: var(--rj-danger); }
+    .btn-danger:hover { background: #e11d48; }
+
+    /* Progress */
+    #progress-container {
+      display: none;
+      padding: 10px 20px;
+      border-bottom: 1px solid var(--rj-border);
+    }
+    #progress-container.visible { display: block; }
+    #progress-bar-outer {
+      width: 100%; height: 4px;
+      background: var(--rj-border);
+      border-radius: 2px;
+      overflow: hidden;
+    }
+    #progress-bar {
+      height: 100%;
+      background: var(--rj-accent);
+      border-radius: 2px;
+      width: 0%;
+      transition: width 0.3s;
+    }
+    #progress-text { font-size: 12px; color: var(--rj-text-muted); margin-top: 6px; }
+
+    /* Chat */
+    #chat {
+      flex: 1;
+      overflow-y: auto;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    #chat::-webkit-scrollbar { width: 6px; }
+    #chat::-webkit-scrollbar-track { background: transparent; }
+    #chat::-webkit-scrollbar-thumb { background: var(--rj-border); border-radius: 3px; }
+
+    .message {
+      max-width: 80%;
+      padding: 14px 18px;
+      border-radius: var(--rj-radius);
+      font-size: 14px;
+      line-height: 1.7;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+    }
+    .message.user {
+      align-self: flex-end;
+      background: rgba(16, 185, 129, 0.12);
+      border: 1px solid rgba(16, 185, 129, 0.2);
+      border-bottom-right-radius: 4px;
+    }
+    .message.assistant {
+      align-self: flex-start;
+      background: var(--rj-surface);
+      border: 1px solid var(--rj-border);
+      border-bottom-left-radius: 4px;
+    }
+    .message .role {
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--rj-text-muted);
+      margin-bottom: 6px;
+    }
+    .message.user .role { color: var(--rj-accent); }
+
+    /* Welcome */
+    #welcome {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      flex: 1;
+      text-align: center;
+      color: var(--rj-text-muted);
+      gap: 14px;
+      padding: 40px;
+    }
+    #welcome .icon { font-size: 48px; color: var(--rj-accent); opacity: 0.3; margin-bottom: 8px; }
+    #welcome h2 { font-size: 22px; color: var(--rj-text); font-weight: 600; }
+    #welcome p { font-size: 14px; max-width: 500px; line-height: 1.6; }
+
+    .model-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 10px;
+      margin-top: 12px;
+      max-width: 600px;
+    }
+    .model-card {
+      background: var(--rj-surface);
+      border: 1px solid var(--rj-border);
+      border-radius: 10px;
+      padding: 12px;
+      text-align: left;
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .model-card:hover {
+      border-color: var(--rj-accent);
+      box-shadow: var(--rj-glow);
+    }
+    .model-card .name { font-weight: 600; color: var(--rj-text); font-size: 13px; }
+    .model-card .meta { color: var(--rj-text-muted); margin-top: 4px; }
+    .model-card .cached { color: var(--rj-accent); font-size: 11px; margin-top: 4px; }
+
+    /* Input */
+    #input-area {
+      padding: 16px 20px;
+      border-top: 1px solid var(--rj-border);
+      display: flex;
+      gap: 10px;
+      background: var(--rj-surface);
+      backdrop-filter: blur(8px);
+    }
+    #input {
+      flex: 1;
+      padding: 12px 16px;
+      background: var(--rj-bg-1);
+      border: 1px solid var(--rj-border);
+      border-radius: 10px;
+      color: var(--rj-text);
+      font-size: 14px;
+      font-family: inherit;
+      resize: none;
+      outline: none;
+      max-height: 120px;
+    }
+    #input:focus { border-color: var(--rj-accent); box-shadow: 0 0 0 3px var(--rj-accent-soft); }
+    #input::placeholder { color: var(--rj-text-muted); }
+    #send {
+      padding: 12px 24px;
+      background: var(--rj-accent);
+      color: white;
+      border: none;
+      border-radius: 10px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      align-self: flex-end;
+    }
+    #send:hover { background: #0d9668; box-shadow: var(--rj-glow); }
+    #send:disabled { opacity: 0.3; cursor: not-allowed; box-shadow: none; }
+
+    #stats {
+      font-size: 11px;
+      color: var(--rj-text-muted);
+      text-align: center;
+      padding: 4px;
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    #no-webgpu {
+      display: none;
+      background: rgba(244, 63, 94, 0.1);
+      border: 1px solid rgba(244, 63, 94, 0.3);
+      color: #fca5a5;
+      padding: 18px 22px;
+      margin: 20px;
+      border-radius: var(--rj-radius);
+      font-size: 14px;
+      line-height: 1.6;
+    }
+    #no-webgpu.visible { display: block; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="logo">
+      <i class="fa-solid fa-robot"></i>
+      <h1>RaspyJack AI</h1>
+    </div>
+    <div class="controls">
+      <div id="status">
+        <span class="dot" id="status-dot"></span>
+        <span id="status-text">Not loaded</span>
+      </div>
+      <button class="icon-btn" onclick="resetChat()" title="New conversation"><i class="fa-solid fa-rotate-right"></i></button>
+      <button class="icon-btn" onclick="toggleSettings()" title="Settings"><i class="fa-solid fa-gear"></i></button>
+      <a href="./" class="back-link"><i class="fa-solid fa-arrow-left"></i> Back to WebUI</a>
+    </div>
+  </header>
+
+  <div id="settings">
+    <label>
+      Model
+      <select id="model-select">
+        <option value="Phi-3.5-mini-instruct-q4f16_1-MLC-1k" selected>Phi-3.5 Mini 3.8B (~2.5 GB)</option>
+        <option value="Llama-3.2-3B-Instruct-q4f16_1-MLC">Llama 3.2 3B (~2.3 GB)</option>
+        <option value="Llama-3.2-1B-Instruct-q4f16_1-MLC">Llama 3.2 1B (~0.9 GB)</option>
+        <option value="SmolLM2-1.7B-Instruct-q4f16_1-MLC">SmolLM2 1.7B (~1.8 GB)</option>
+        <option value="Qwen2.5-1.5B-Instruct-q4f16_1-MLC">Qwen2.5 1.5B (~1.6 GB)</option>
+      </select>
+    </label>
+    <label>
+      Max tokens
+      <input type="number" id="max-tokens" value="1024" min="64" max="4096" step="64">
+    </label>
+    <label>
+      Temperature
+      <input type="number" id="temperature" value="0.7" min="0" max="2" step="0.1">
+    </label>
+    <button class="btn btn-accent" onclick="loadModel()">
+      <i class="fa-solid fa-download"></i> Load model
+    </button>
+    <button class="btn btn-danger" onclick="clearCache()">
+      <i class="fa-solid fa-trash"></i> Clear cache
+    </button>
+    <div style="width:100%;margin-top:8px;">
+      <label style="display:block;margin-bottom:4px;">
+        System Prompt
+        <button class="btn" style="background:var(--rj-border);margin-left:8px;font-size:10px;" onclick="resetPrompt()">Reset default</button>
+      </label>
+      <textarea id="system-prompt" rows="4" style="width:100%;padding:8px 12px;background:var(--rj-bg-1);border:1px solid var(--rj-border);border-radius:6px;color:var(--rj-text);font-size:12px;font-family:inherit;resize:vertical;outline:none;"></textarea>
+      <button class="btn btn-accent" onclick="savePrompt()" style="margin-top:4px;">
+        <i class="fa-solid fa-floppy-disk"></i> Save prompt
+      </button>
+    </div>
+  </div>
+
+  <div id="progress-container">
+    <div id="progress-bar-outer"><div id="progress-bar"></div></div>
+    <div id="progress-text"></div>
+  </div>
+
+  <div id="no-webgpu">
+    <strong><i class="fa-solid fa-triangle-exclamation"></i> WebGPU not available</strong><br><br>
+    The AI assistant requires WebGPU to run models locally in your browser.<br>
+    <ul style="margin-top:8px;padding-left:20px;">
+      <li><strong>Chrome 113+</strong> or <strong>Edge 113+</strong> required</li>
+      <li>Enable <code>chrome://flags/#enable-unsafe-webgpu</code> if needed</li>
+      <li>A compatible GPU with up-to-date drivers</li>
+    </ul>
+  </div>
+
+  <div id="chat">
+    <div id="welcome">
+      <div class="icon"><i class="fa-solid fa-brain"></i></div>
+      <h2>Local AI Assistant</h2>
+      <p>Runs 100% in your browser via WebGPU. No data is sent to any server. The model runs entirely on your GPU.</p>
+      <p style="font-size:12px;">Click <strong><i class="fa-solid fa-gear"></i></strong> to select a model, or pick one below:</p>
+      <div class="model-grid" id="model-grid"></div>
+    </div>
+  </div>
+
+  <div id="stats"></div>
+
+  <!-- Loot file picker modal -->
+  <div id="loot-modal" style="display:none;position:fixed;inset:0;z-index:100;background:rgba(0,0,0,0.7);backdrop-filter:blur(4px);display:none;align-items:center;justify-content:center;">
+    <div style="background:var(--rj-bg-1);border:1px solid var(--rj-border);border-radius:var(--rj-radius);width:90%;max-width:500px;max-height:70vh;display:flex;flex-direction:column;box-shadow:var(--rj-shadow);">
+      <div style="padding:14px 18px;border-bottom:1px solid var(--rj-border);display:flex;justify-content:space-between;align-items:center;">
+        <span style="font-weight:600;font-size:14px;"><i class="fa-solid fa-folder-open" style="color:var(--rj-accent);margin-right:8px;"></i>Loot Files</span>
+        <button class="icon-btn" onclick="closeLootModal()"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div id="loot-path" style="padding:6px 18px;font-size:11px;color:var(--rj-text-muted);font-family:'JetBrains Mono',monospace;border-bottom:1px solid var(--rj-border);">/root/Raspyjack/loot</div>
+      <div id="loot-list" style="flex:1;overflow-y:auto;padding:8px;"></div>
+    </div>
+  </div>
+
+  <div id="input-area">
+    <button id="attach-btn" class="icon-btn" onclick="openLootModal()" title="Attach loot file" disabled style="align-self:flex-end;">
+      <i class="fa-solid fa-paperclip"></i>
+    </button>
+    <textarea id="input" rows="1" placeholder="Ask anything..." disabled></textarea>
+    <button id="send" onclick="sendMessage()" disabled><i class="fa-solid fa-paper-plane"></i> Send</button>
+  </div>
+
+  <script type="module">
+    // Auth check - redirect to main WebUI login if not authenticated
+    const AUTH_KEY = 'rj.authToken';
+    const authToken = sessionStorage.getItem(AUTH_KEY) || localStorage.getItem(AUTH_KEY) || '';
+
+    async function checkAuth() {
+      try {
+        const headers = {};
+        if (authToken) headers['Authorization'] = 'Bearer ' + authToken;
+        const res = await fetch('/api/auth/me', {
+          cache: 'no-store',
+          credentials: 'include',
+          headers,
+        });
+        if (!res.ok) return false;
+        const data = await res.json();
+        return data && data.authenticated;
+      } catch { return false; }
+    }
+
+    const authed = await checkAuth();
+    if (!authed) {
+      document.body.innerHTML = `
+        <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;gap:16px;">
+          <i class="fa-solid fa-lock" style="font-size:48px;color:var(--rj-danger);"></i>
+          <h2 style="color:var(--rj-text);">Authentication Required</h2>
+          <p style="color:var(--rj-text-muted);">Please log in through the WebUI first.</p>
+          <a href="./" style="color:var(--rj-accent);text-decoration:none;padding:10px 20px;border:1px solid var(--rj-accent);border-radius:8px;">Go to WebUI</a>
+        </div>`;
+      throw new Error('Not authenticated');
+    }
+
+    // Patch fetch to include auth headers for API calls
+    const _origFetch = window.fetch;
+    window.fetch = (url, opts = {}) => {
+      if (typeof url === 'string' && url.startsWith('/api/')) {
+        opts.credentials = 'include';
+        opts.headers = { ...(opts.headers || {}), 'Authorization': 'Bearer ' + authToken };
+      }
+      return _origFetch(url, opts);
+    };
+
+    import * as webllm from "https://esm.run/@mlc-ai/web-llm";
+
+    let engine = null;
+    let conversationHistory = [];
+    let isGenerating = false;
+    let stopRequested = false;
+
+    const DEFAULT_SYSTEM_PROMPT = `RaspyJackLLM is for experienced users in the field of red teaming and cybersecurity, providing advanced and highly technical guidance. It specializes in detailed explanations of complex Linux commands, sophisticated techniques using Kali Linux tools, and nuanced strategies for penetration testing. RaspyJackLLM is designed to assist in conducting advanced penetration tests, offering expert-level instructions, insights into complex scenarios, and advice on employing advanced tools and methodologies. It upholds ethical hacking principles, focusing on legal and responsible penetration testing practices. RaspyJackLLM will use technical jargon and advanced language suitable for professionals, and will only simplify explanations when specifically requested. In ambiguous or unclear situations, it will seek clarification to provide the most accurate and relevant advice. Its personality is that of a seasoned cybersecurity expert, making it a reliable resource for professionals seeking in-depth technical knowledge. I want each request to be answered with a line of code, a command or a technique to perform the request. The goal is to have technical help and a guide which allows the user to launch the different attacks via command lines, kali linux program and script to perform its penetration test. If the user gives the return of a command analyzes the response and proposes a continuation for the next step to take.`;
+
+    // Load custom prompt from localStorage or use default
+    let SYSTEM_PROMPT = localStorage.getItem("rj_llm_prompt") || DEFAULT_SYSTEM_PROMPT;
+
+    const MODELS = [
+      { id: "Phi-3.5-mini-instruct-q4f16_1-MLC-1k", name: "Phi-3.5 Mini", params: "3.8B", vram: "~2.5 GB", desc: "Best quality, code + multilingual" },
+      { id: "Llama-3.2-3B-Instruct-q4f16_1-MLC", name: "Llama 3.2", params: "3B", vram: "~2.3 GB", desc: "Great conversation" },
+      { id: "Llama-3.2-1B-Instruct-q4f16_1-MLC", name: "Llama 3.2", params: "1B", vram: "~0.9 GB", desc: "Lightweight, fast" },
+      { id: "SmolLM2-1.7B-Instruct-q4f16_1-MLC", name: "SmolLM2", params: "1.7B", vram: "~1.8 GB", desc: "Good size/quality ratio" },
+      { id: "Qwen2.5-1.5B-Instruct-q4f16_1-MLC", name: "Qwen2.5", params: "1.5B", vram: "~1.6 GB", desc: "Code + math" },
+    ];
+
+    const chatEl = document.getElementById("chat");
+    const welcomeEl = document.getElementById("welcome");
+    const inputEl = document.getElementById("input");
+    const sendBtn = document.getElementById("send");
+    const statusDot = document.getElementById("status-dot");
+    const statusText = document.getElementById("status-text");
+    const progressContainer = document.getElementById("progress-container");
+    const progressBar = document.getElementById("progress-bar");
+    const progressTextEl = document.getElementById("progress-text");
+    const statsEl = document.getElementById("stats");
+    const noWebGPUEl = document.getElementById("no-webgpu");
+    const modelGrid = document.getElementById("model-grid");
+
+    // -----------------------------------------------------------------------
+    // Loot file browser - uses /api/loot/list and /api/loot/view
+    // -----------------------------------------------------------------------
+    let lootCurrentPath = "";  // relative to loot root, "" = root
+
+    async function listLootDir(relPath) {
+      try {
+        const resp = await fetch(`/api/loot/list?path=${encodeURIComponent(relPath)}`);
+        if (!resp.ok) return [];
+        const data = await resp.json();
+        return data.items || [];
+      } catch { return []; }
+    }
+
+    async function readLootFile(relPath) {
+      try {
+        const resp = await fetch(`/api/loot/view?path=${encodeURIComponent(relPath)}`);
+        if (!resp.ok) return "(Failed to read file)";
+        const data = await resp.json();
+        return data.content || "";
+      } catch { return "(Failed to read file)"; }
+    }
+
+    window.openLootModal = async () => {
+      lootCurrentPath = "";
+      document.getElementById("loot-modal").style.display = "flex";
+      await renderLootList();
+    };
+
+    window.closeLootModal = () => {
+      document.getElementById("loot-modal").style.display = "none";
+    };
+
+    async function renderLootList() {
+      const listEl = document.getElementById("loot-list");
+      const pathEl = document.getElementById("loot-path");
+      pathEl.textContent = "/loot/" + lootCurrentPath;
+      listEl.innerHTML = '<div style="padding:20px;text-align:center;color:var(--rj-text-muted);"><i class="fa-solid fa-spinner fa-spin"></i> Loading...</div>';
+
+      const items = await listLootDir(lootCurrentPath);
+      listEl.innerHTML = "";
+
+      // Back button
+      if (lootCurrentPath) {
+        const back = document.createElement("div");
+        back.innerHTML = '<i class="fa-solid fa-arrow-left" style="color:var(--rj-accent);margin-right:8px;"></i> ..';
+        back.style.cssText = "padding:10px 12px;cursor:pointer;border-radius:8px;font-size:13px;";
+        back.onmouseover = () => back.style.background = "var(--rj-surface-strong)";
+        back.onmouseout = () => back.style.background = "transparent";
+        back.onclick = () => {
+          const parts = lootCurrentPath.split("/");
+          parts.pop();
+          lootCurrentPath = parts.join("/");
+          renderLootList();
+        };
+        listEl.appendChild(back);
+      }
+
+      if (items.length === 0) {
+        listEl.innerHTML += '<div style="padding:20px;text-align:center;color:var(--rj-text-muted);font-size:13px;">Empty directory</div>';
+        return;
+      }
+
+      for (const item of items) {
+        const el = document.createElement("div");
+        const isDir = item.type === "dir";
+        const isText = !isDir && /\.(txt|log|csv|json|xml|conf|cfg|ini|md|py|sh|html|yml|yaml)$/i.test(item.name);
+        const icon = isDir ? "fa-folder" : isText ? "fa-file-lines" : "fa-file";
+        const iconColor = isDir ? "#FFAA00" : isText ? "var(--rj-accent)" : "var(--rj-text-muted)";
+        const sizeStr = isDir ? "" : item.size > 1024 ? `${(item.size/1024).toFixed(0)}K` : `${item.size}B`;
+
+        el.innerHTML = `
+          <i class="fa-solid ${icon}" style="color:${iconColor};margin-right:10px;width:16px;text-align:center;"></i>
+          <span style="flex:1;">${item.name}</span>
+          <span style="font-size:11px;color:var(--rj-text-muted);font-family:'JetBrains Mono',monospace;">${sizeStr}</span>
+        `;
+        el.style.cssText = "padding:10px 12px;cursor:pointer;border-radius:8px;font-size:13px;display:flex;align-items:center;";
+        el.onmouseover = () => el.style.background = "var(--rj-surface-strong)";
+        el.onmouseout = () => el.style.background = "transparent";
+
+        const relPath = lootCurrentPath ? lootCurrentPath + "/" + item.name : item.name;
+
+        if (isDir) {
+          el.onclick = () => { lootCurrentPath = relPath; renderLootList(); };
+        } else if (isText) {
+          el.onclick = async () => {
+            el.querySelector("i").className = "fa-solid fa-spinner fa-spin";
+            const content = await readLootFile(relPath);
+            closeLootModal();
+            const msg = `Analyze this file (${item.name}):\n\`\`\`\n${content}\n\`\`\``;
+            inputEl.value = msg;
+            inputEl.style.height = "auto";
+            inputEl.style.height = Math.min(inputEl.scrollHeight, 120) + "px";
+            inputEl.focus();
+          };
+        } else {
+          el.style.opacity = "0.4";
+          el.style.cursor = "default";
+          el.title = "Binary file - not supported";
+        }
+
+        listEl.appendChild(el);
+      }
+    }
+
+    // Build model cards with cache detection
+    async function buildModelGrid() {
+      // Detect cached models via Cache API + IndexedDB
+      let cachedModels = new Set();
+      try {
+        const cacheNames = await caches.keys();
+        for (const name of cacheNames) {
+          const cache = await caches.open(name);
+          const keys = await cache.keys();
+          for (const req of keys) {
+            const url = req.url || "";
+            for (const m of MODELS) {
+              if (url.includes(m.id)) cachedModels.add(m.id);
+            }
+          }
+        }
+      } catch {}
+      // Also check IndexedDB for webllm cache
+      try {
+        const dbs = await indexedDB.databases();
+        for (const db of dbs) {
+          if (db.name) {
+            for (const m of MODELS) {
+              if (db.name.includes(m.id)) cachedModels.add(m.id);
+            }
+          }
+        }
+      } catch {}
+
+      for (const m of MODELS) {
+        const isCached = cachedModels.has(m.id);
+        const card = document.createElement("div");
+        card.className = "model-card";
+        if (isCached) card.style.borderColor = "var(--rj-accent)";
+        card.innerHTML = `
+          <div class="name">${m.name} ${m.params}</div>
+          <div class="meta">${m.vram} - ${m.desc}</div>
+          ${isCached
+            ? '<div class="cached"><i class="fa-solid fa-circle-check"></i> Cached - instant load</div>'
+            : '<div style="color:var(--rj-text-muted);font-size:11px;margin-top:4px;"><i class="fa-solid fa-download"></i> Requires download</div>'}
+        `;
+        card.onclick = () => {
+          document.getElementById("model-select").value = m.id;
+          loadModel();
+        };
+        modelGrid.appendChild(card);
+      }
+    }
+
+    function setStatus(state, text) {
+      statusDot.className = "dot " + state;
+      statusText.textContent = text;
+    }
+
+    function setInputEnabled(enabled) {
+      inputEl.disabled = !enabled;
+      document.getElementById("attach-btn").disabled = !enabled;
+      if (enabled) {
+        sendBtn.innerHTML = '<i class="fa-solid fa-paper-plane"></i> Send';
+        sendBtn.disabled = false;
+        sendBtn.onclick = window.sendMessage;
+        sendBtn.style.background = "var(--rj-accent)";
+      }
+    }
+
+    function showStopButton() {
+      sendBtn.innerHTML = '<i class="fa-solid fa-stop"></i> Stop';
+      sendBtn.disabled = false;
+      sendBtn.onclick = window.stopGeneration;
+      sendBtn.style.background = "var(--rj-danger)";
+    }
+
+    window.stopGeneration = () => {
+      stopRequested = true;
+      if (engine) {
+        try { engine.interruptGenerate(); } catch {}
+      }
+    };
+
+    function addMessage(role, content) {
+      if (welcomeEl && welcomeEl.parentNode) welcomeEl.remove();
+      const msgEl = document.createElement("div");
+      msgEl.className = "message " + role;
+      const roleLabel = document.createElement("div");
+      roleLabel.className = "role";
+      roleLabel.textContent = role === "user" ? "You" : "RaspyJack AI";
+      const contentEl = document.createElement("div");
+      contentEl.className = "content";
+      contentEl.textContent = content;
+      msgEl.appendChild(roleLabel);
+      msgEl.appendChild(contentEl);
+      chatEl.appendChild(msgEl);
+      chatEl.scrollTop = chatEl.scrollHeight;
+      return contentEl;
+    }
+
+    function initConversation() {
+      conversationHistory = [{ role: "system", content: SYSTEM_PROMPT }];
+    }
+
+    async function checkWebGPU() {
+      if (!navigator.gpu) return false;
+      try { return (await navigator.gpu.requestAdapter()) !== null; }
+      catch { return false; }
+    }
+
+    window.toggleSettings = () => {
+      const el = document.getElementById("settings");
+      el.classList.toggle("visible");
+      if (el.classList.contains("visible")) {
+        document.getElementById("system-prompt").value = SYSTEM_PROMPT;
+      }
+    };
+
+    window.savePrompt = () => {
+      const val = document.getElementById("system-prompt").value.trim();
+      if (val) {
+        SYSTEM_PROMPT = val;
+        localStorage.setItem("rj_llm_prompt", val);
+        initConversation();
+        alert("System prompt saved!");
+      }
+    };
+
+    window.resetPrompt = () => {
+      SYSTEM_PROMPT = DEFAULT_SYSTEM_PROMPT;
+      localStorage.removeItem("rj_llm_prompt");
+      document.getElementById("system-prompt").value = DEFAULT_SYSTEM_PROMPT;
+      initConversation();
+      alert("Prompt reset to default.");
+    };
+
+    window.resetChat = () => {
+      if (!engine) return;
+      chatEl.innerHTML = "";
+      initConversation();
+      statsEl.textContent = "";
+    };
+
+    window.clearCache = async () => {
+      try {
+        for (const name of await caches.keys()) await caches.delete(name);
+        for (const db of await indexedDB.databases()) if (db.name) indexedDB.deleteDatabase(db.name);
+        alert("Cache cleared. The page will reload.");
+        location.reload();
+      } catch (err) { alert("Error: " + err.message); }
+    };
+
+    window.loadModel = async () => {
+      const modelId = document.getElementById("model-select").value;
+      setStatus("loading", "Loading model...");
+      progressContainer.classList.add("visible");
+      progressBar.style.width = "0%";
+      progressTextEl.textContent = "Initializing WebGPU...";
+
+      try {
+        engine = await webllm.CreateMLCEngine(modelId, {
+          initProgressCallback: (report) => {
+            progressTextEl.textContent = report.text;
+            if (report.progress !== undefined)
+              progressBar.style.width = Math.round(report.progress * 100) + "%";
+          },
+        });
+        progressContainer.classList.remove("visible");
+        setStatus("ready", "Ready - " + modelId.split("-q")[0]);
+        setInputEnabled(true);
+        inputEl.focus();
+        initConversation();
+      } catch (err) {
+        progressContainer.classList.remove("visible");
+        setStatus("error", "Error: " + err.message);
+      }
+    };
+
+    window.sendMessage = async () => {
+      const text = inputEl.value.trim();
+      if (!text || !engine || isGenerating) return;
+      isGenerating = true;
+      stopRequested = false;
+      inputEl.disabled = true;
+      inputEl.value = "";
+      inputEl.style.height = "auto";
+      showStopButton();
+
+      addMessage("user", text);
+      conversationHistory.push({ role: "user", content: text });
+
+      const contentEl = addMessage("assistant", "");
+      let fullResponse = "";
+      const startTime = performance.now();
+      const maxTokens = parseInt(document.getElementById("max-tokens").value, 10);
+      const temperature = parseFloat(document.getElementById("temperature").value);
+
+      try {
+        const chunks = await engine.chat.completions.create({
+          messages: conversationHistory,
+          stream: true,
+          temperature,
+          max_tokens: maxTokens,
+        });
+        for await (const chunk of chunks) {
+          if (stopRequested) break;
+          fullResponse += chunk.choices[0]?.delta?.content || "";
+          contentEl.textContent = fullResponse;
+          chatEl.scrollTop = chatEl.scrollHeight;
+        }
+        const elapsed = (performance.now() - startTime) / 1000;
+        const stats = await engine.runtimeStatsText();
+        const stopLabel = stopRequested ? " (stopped)" : "";
+        statsEl.textContent = stats + " | " + elapsed.toFixed(1) + "s" + stopLabel;
+        if (fullResponse) {
+          conversationHistory.push({ role: "assistant", content: fullResponse });
+        }
+      } catch (err) {
+        if (!stopRequested) contentEl.textContent = "Error: " + err.message;
+      }
+      isGenerating = false;
+      stopRequested = false;
+      setInputEnabled(true);
+      inputEl.focus();
+    };
+
+    inputEl.addEventListener("input", () => {
+      inputEl.style.height = "auto";
+      inputEl.style.height = Math.min(inputEl.scrollHeight, 120) + "px";
+    });
+    inputEl.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); window.sendMessage(); }
+    });
+
+    checkWebGPU().then(ok => {
+      if (!ok) { noWebGPUEl.classList.add("visible"); setStatus("error", "WebGPU not available"); }
+    });
+
+    buildModelGrid();
+  </script>
+</body>
+</html>
