@@ -329,6 +329,42 @@
       line-height: 1.6;
     }
     #no-webgpu.visible { display: block; }
+
+    /* Mobile responsive */
+    @media (max-width: 640px) {
+      header {
+        padding: 8px 12px;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      header h1 { font-size: 14px; }
+      header .back-link { display: none; }
+      .controls { gap: 6px; }
+      #status-text { display: none; }
+
+      #settings { padding: 10px 12px; gap: 8px; }
+      #settings label { font-size: 11px; }
+      #settings select { max-width: 140px; }
+      #settings textarea { font-size: 11px; }
+
+      #chat { padding: 12px; gap: 12px; }
+      .message { max-width: 95%; padding: 10px 12px; font-size: 13px; }
+
+      #welcome { padding: 20px; }
+      #welcome h2 { font-size: 18px; }
+      #welcome p { font-size: 12px; }
+      .model-grid { grid-template-columns: 1fr; }
+      .model-card { padding: 10px; }
+
+      #input-area { padding: 10px 12px; gap: 6px; }
+      #input { padding: 10px 12px; font-size: 13px; }
+      #send { padding: 10px 16px; font-size: 13px; }
+
+      #stats { font-size: 10px; }
+
+      /* Loot modal mobile */
+      #loot-modal > div { width: 95%; max-height: 80vh; }
+    }
   </style>
 </head>
 <body>
