@@ -31,6 +31,7 @@ import time
 import numpy as np
 import os
 import json
+from PIL import Image as PILImage, ImageOps
 
 # ---------------------------------------------------------------------------
 # Display type detection from gui_conf.json
@@ -87,12 +88,47 @@ def S(v):
 # WebUI frame mirror (used by device_server.py)
 _FRAME_MIRROR_PATH = os.environ.get("RJ_FRAME_PATH", "/dev/shm/raspyjack_last.jpg")
 _FRAME_MIRROR_ENABLED = os.environ.get("RJ_FRAME_MIRROR", "1") != "0"
+_CARDPUTER_FRAME_PATH = os.environ.get("RJ_CARDPUTER_FRAME_PATH", "/dev/shm/raspyjack_cardputer.jpg")
+_CARDPUTER_FRAME_ENABLED = os.environ.get("RJ_CARDPUTER_FRAME_ENABLED", "1") != "0"
+_CARDPUTER_FRAME_MODE = str(os.environ.get("RJ_CARDPUTER_FRAME_MODE", "stretch") or "stretch").strip().lower()
+_CARDPUTER_FRAME_WIDTH = max(1, int(os.environ.get("RJ_CARDPUTER_FRAME_WIDTH", "240")))
+_CARDPUTER_FRAME_HEIGHT = max(1, int(os.environ.get("RJ_CARDPUTER_FRAME_HEIGHT", "135")))
+_CARDPUTER_FRAME_QUALITY = min(100, max(1, int(os.environ.get("RJ_CARDPUTER_FRAME_QUALITY", "76"))))
 try:
     _frame_fps = float(os.environ.get("RJ_FRAME_FPS", "10"))
     _FRAME_MIRROR_INTERVAL = 1.0 / max(1.0, _frame_fps)
 except Exception:
     _FRAME_MIRROR_INTERVAL = 0.1
 _last_frame_save = 0.0
+
+try:
+    _resampling_lanczos = PILImage.Resampling.LANCZOS
+except AttributeError:
+    _resampling_lanczos = PILImage.LANCZOS
+
+
+def _build_cardputer_frame(src_image):
+    if _CARDPUTER_FRAME_MODE == "stretch":
+        return src_image.resize((_CARDPUTER_FRAME_WIDTH, _CARDPUTER_FRAME_HEIGHT), _resampling_lanczos)
+    if _CARDPUTER_FRAME_MODE == "contain":
+        return ImageOps.contain(src_image, (_CARDPUTER_FRAME_WIDTH, _CARDPUTER_FRAME_HEIGHT), _resampling_lanczos)
+    return ImageOps.fit(src_image, (_CARDPUTER_FRAME_WIDTH, _CARDPUTER_FRAME_HEIGHT), _resampling_lanczos)
+
+
+def _save_cardputer_frame(src_image):
+    if not _CARDPUTER_FRAME_ENABLED:
+        return
+    try:
+        cardputer_frame = _build_cardputer_frame(src_image)
+        if cardputer_frame.size != (_CARDPUTER_FRAME_WIDTH, _CARDPUTER_FRAME_HEIGHT):
+            canvas = PILImage.new("RGB", (_CARDPUTER_FRAME_WIDTH, _CARDPUTER_FRAME_HEIGHT), "black")
+            offset_x = max(0, (_CARDPUTER_FRAME_WIDTH - cardputer_frame.width) // 2)
+            offset_y = max(0, (_CARDPUTER_FRAME_HEIGHT - cardputer_frame.height) // 2)
+            canvas.paste(cardputer_frame, (offset_x, offset_y))
+            cardputer_frame = canvas
+        cardputer_frame.save(_CARDPUTER_FRAME_PATH, "JPEG", quality=_CARDPUTER_FRAME_QUALITY, subsampling=0)
+    except Exception:
+        pass
 
 #scanning method
 L2R_U2D = 1
@@ -501,13 +537,15 @@ class LCD:
         GPIO.output(LCD_Config.LCD_DC_PIN, GPIO.HIGH)
         for i in range(0,len(pix),4096):
             LCD_Config.SPI_Write_Byte(pix[i:i+4096])
-        # Mirror the LCD frame for WebUI (throttled)
-        if _FRAME_MIRROR_ENABLED:
+        # Mirror the LCD frame for remote clients (throttled)
+        if _FRAME_MIRROR_ENABLED or _CARDPUTER_FRAME_ENABLED:
             global _last_frame_save
             try:
                 now = time.monotonic()
                 if (now - _last_frame_save) >= _FRAME_MIRROR_INTERVAL:
-                    Image.save(_FRAME_MIRROR_PATH, "JPEG", quality=80)
+                    if _FRAME_MIRROR_ENABLED:
+                        Image.save(_FRAME_MIRROR_PATH, "JPEG", quality=80)
+                    _save_cardputer_frame(Image)
                     _last_frame_save = now
             except Exception:
                 pass

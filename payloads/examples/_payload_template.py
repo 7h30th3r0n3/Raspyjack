@@ -3,6 +3,17 @@
 RaspyJack Payload Template (WebUI + GPIO compatible)
 ---------------------------------------------------
 Use this as a starting point for custom payloads.
+
+Optional extension API:
+
+- WAIT_FOR_PRESENT
+- WAIT_FOR_NOTPRESENT
+- REQUIRE_CAPABILITY
+- RUN_PAYLOAD
+
+Those helpers live in `EXTENSIONS.api` and can be used before or during the
+main payload loop. The default template behavior below stays interactive and
+keeps `KEY3` as the exit button.
 """
 
 import os
@@ -19,6 +30,17 @@ from payloads._display_helper import ScaledDraw, scaled_font
 
 # WebUI + GPIO input helper
 from payloads._input_helper import get_button
+from payloads._keyboard_helper import lcd_keyboard
+
+# Optional shared extension helpers.
+# Uncomment what you need for a given payload.
+#
+# from EXTENSIONS.api import (
+#     WAIT_FOR_PRESENT,
+#     WAIT_FOR_NOTPRESENT,
+#     REQUIRE_CAPABILITY,
+#     RUN_PAYLOAD,
+# )
 
 PINS = {
     "UP": 6,
@@ -52,13 +74,32 @@ def draw(lines):
 
 
 def main():
-    draw(["Payload ready", "KEY3 = exit"])
+    typed_value = ""
+    draw(["Payload ready", "KEY1 = text", "KEY3 = exit"])
     while True:
         btn = get_button(PINS, GPIO)
         if btn == "KEY3":
             break
+        if btn == "KEY1":
+            result = lcd_keyboard(
+                LCD,
+                font,
+                PINS,
+                GPIO,
+                title="Example Input",
+                default=typed_value,
+                charset="full",
+                max_len=32,
+            )
+            if result is not None:
+                typed_value = result
+                draw(["Saved:", typed_value[-18:] or "<empty>", "KEY1 = edit", "KEY3 = exit"])
+            else:
+                draw(["Input cancelled", typed_value[-18:] or "<empty>", "KEY1 = text", "KEY3 = exit"])
+            time.sleep(0.1)
+            continue
         if btn:
-            draw([f"Pressed: {btn}"])
+            draw([f"Pressed: {btn}", typed_value[-18:] or "<empty>"])
         time.sleep(0.05)
 
     LCD.LCD_Clear()

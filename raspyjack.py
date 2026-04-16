@@ -11,7 +11,7 @@ from scapy.all import ARP, Ether, srp
 from datetime import datetime
 import threading, smbus, time, pyudev, serial, struct, json
 from subprocess import STDOUT, check_output
-from PIL import Image, ImageDraw, ImageFont, ImageColor, ImageSequence
+from PIL import Image, ImageDraw, ImageFont, ImageColor, ImageSequence, ImageOps
 import LCD_Config
 import LCD_1in44
 import RPi.GPIO as GPIO
@@ -84,7 +84,7 @@ _debounce_seconds = 0.10
 _button_down_since = 0.0
 _repeat_delay = 0.25
 _repeat_interval = 0.08
-_double_click_window = 0.35
+_double_click_window = 0.6
 LOCK_PIN_PBKDF2_ROUNDS = 40000
 LOCK_SCREEN_STATIC_SECONDS = 1.2
 LOCK_MODE_PIN = "pin"
@@ -149,17 +149,70 @@ _lock_screensaver_cache = {
 # WebUI frame mirror (used by device_server.py)
 FRAME_MIRROR_PATH = os.environ.get("RJ_FRAME_PATH", "/dev/shm/raspyjack_last.jpg")
 FRAME_MIRROR_ENABLED = os.environ.get("RJ_FRAME_MIRROR", "1") != "0"
+CARDPUTER_FRAME_PATH = os.environ.get("RJ_CARDPUTER_FRAME_PATH", "/dev/shm/raspyjack_cardputer.jpg")
+CARDPUTER_FRAME_ENABLED = os.environ.get("RJ_CARDPUTER_FRAME_ENABLED", "1") != "0"
+CARDPUTER_FRAME_MODE = str(os.environ.get("RJ_CARDPUTER_FRAME_MODE", "stretch") or "stretch").strip().lower()
+CARDPUTER_FRAME_WIDTH = max(1, int(os.environ.get("RJ_CARDPUTER_FRAME_WIDTH", "240")))
+CARDPUTER_FRAME_HEIGHT = max(1, int(os.environ.get("RJ_CARDPUTER_FRAME_HEIGHT", "135")))
+CARDPUTER_FRAME_QUALITY = min(100, max(1, int(os.environ.get("RJ_CARDPUTER_FRAME_QUALITY", "56"))))
+CARDPUTER_FRAME_SUBSAMPLING = min(2, max(0, int(os.environ.get("RJ_CARDPUTER_FRAME_SUBSAMPLING", "2"))))
 try:
     _frame_fps = float(os.environ.get("RJ_FRAME_FPS", "10"))
     FRAME_MIRROR_INTERVAL = 1.0 / max(1.0, _frame_fps)
 except Exception:
     FRAME_MIRROR_INTERVAL = 0.1
+try:
+    _cardputer_frame_fps = float(os.environ.get("RJ_CARDPUTER_FRAME_FPS", "6"))
+    CARDPUTER_FRAME_INTERVAL = 1.0 / max(1.0, _cardputer_frame_fps)
+except Exception:
+    CARDPUTER_FRAME_INTERVAL = 1.0 / 6.0
+
+try:
+    _resampling_lanczos = Image.Resampling.LANCZOS
+except AttributeError:
+    _resampling_lanczos = Image.LANCZOS
+
+
+def _build_cardputer_frame(src_image):
+    if CARDPUTER_FRAME_MODE == "stretch":
+        return src_image.resize((CARDPUTER_FRAME_WIDTH, CARDPUTER_FRAME_HEIGHT), _resampling_lanczos)
+    if CARDPUTER_FRAME_MODE == "contain":
+        return ImageOps.contain(src_image, (CARDPUTER_FRAME_WIDTH, CARDPUTER_FRAME_HEIGHT), _resampling_lanczos)
+    return ImageOps.fit(src_image, (CARDPUTER_FRAME_WIDTH, CARDPUTER_FRAME_HEIGHT), _resampling_lanczos)
+
+
+def _save_cardputer_frame(src_image):
+    if not CARDPUTER_FRAME_ENABLED:
+        return
+    try:
+        cardputer_frame = _build_cardputer_frame(src_image)
+        if cardputer_frame.size != (CARDPUTER_FRAME_WIDTH, CARDPUTER_FRAME_HEIGHT):
+            canvas = Image.new("RGB", (CARDPUTER_FRAME_WIDTH, CARDPUTER_FRAME_HEIGHT), "black")
+            offset_x = max(0, (CARDPUTER_FRAME_WIDTH - cardputer_frame.width) // 2)
+            offset_y = max(0, (CARDPUTER_FRAME_HEIGHT - cardputer_frame.height) // 2)
+            canvas.paste(cardputer_frame, (offset_x, offset_y))
+            cardputer_frame = canvas
+        cardputer_frame.save(
+            CARDPUTER_FRAME_PATH,
+            "JPEG",
+            quality=CARDPUTER_FRAME_QUALITY,
+            subsampling=CARDPUTER_FRAME_SUBSAMPLING,
+        )
+    except Exception:
+        pass
 
 def _set_last_button(name, ts):
     global _last_button, _last_button_time, _button_down_since
     _last_button = name
     _last_button_time = ts
     _button_down_since = ts
+
+
+def _log_virtual_consume(stage, button):
+    try:
+        print(f"[virtual_consume] {stage}: {button}", flush=True)
+    except Exception:
+        pass
 
 # https://www.waveshare.com/wiki/File:1.44inch-LCD-HAT-Code.7z
 
@@ -200,25 +253,36 @@ def mark_display_dirty():
 def _display_loop():
     global _display_dirty
     last_frame_save = 0.0
+    last_cardputer_frame_save = 0.0
     while not _stop_evt.is_set():
         if not screen_lock.is_set() and _display_dirty:
             mirror_image = None
+            save_webui_frame = False
+            save_cardputer_frame = False
             try:
                 draw_lock.acquire()
                 LCD.LCD_ShowImage(image, 0, 0)
                 _display_dirty = False
-                if FRAME_MIRROR_ENABLED:
+                if FRAME_MIRROR_ENABLED or CARDPUTER_FRAME_ENABLED:
                     now = time.monotonic()
-                    if (now - last_frame_save) >= FRAME_MIRROR_INTERVAL:
+                    save_webui_frame = FRAME_MIRROR_ENABLED and (now - last_frame_save) >= FRAME_MIRROR_INTERVAL
+                    save_cardputer_frame = CARDPUTER_FRAME_ENABLED and (now - last_cardputer_frame_save) >= CARDPUTER_FRAME_INTERVAL
+                    if save_webui_frame or save_cardputer_frame:
                         mirror_image = image.copy()
+                    if save_webui_frame:
                         last_frame_save = now
+                    if save_cardputer_frame:
+                        last_cardputer_frame_save = now
             finally:
                 draw_lock.release()
             if mirror_image is not None:
-                try:
-                    mirror_image.save(FRAME_MIRROR_PATH, "JPEG", quality=80)
-                except Exception:
-                    pass
+                if save_webui_frame:
+                    try:
+                        mirror_image.save(FRAME_MIRROR_PATH, "JPEG", quality=80)
+                    except Exception:
+                        pass
+                if save_cardputer_frame:
+                    _save_cardputer_frame(mirror_image)
         time.sleep(0.1)
 
 def start_background_loops():
@@ -359,6 +423,7 @@ def getButton():
         # 1) virtual buttons from Web UI
         v = rj_input.get_virtual_button()
         if v:
+            _log_virtual_consume("getButton", v)
             _mark_user_activity()
             return v
         pressed = None
@@ -561,6 +626,7 @@ def _handle_main_menu_key3_double_click() -> bool:
             pass
         virtual_button = rj_input.get_virtual_button()
         if virtual_button == "KEY3_PIN":
+            _log_virtual_consume("main_menu_key3_double_click", virtual_button)
             _mark_user_activity()
             if _lock_has_secret():
                 lock_device("Locked")
@@ -1001,6 +1067,7 @@ def _draw_lock_screensaver_frame(frame: Image.Image) -> None:
 def _get_fresh_lock_button() -> str | None:
     virtual_button = rj_input.get_virtual_button()
     if virtual_button:
+        _log_virtual_consume("fresh_lock", virtual_button)
         _mark_user_activity()
         return virtual_button
     try:
@@ -1016,6 +1083,7 @@ def _get_fresh_lock_button() -> str | None:
 def _get_sequence_lock_button(held_buttons: set[str]) -> tuple[str | None, set[str]]:
     virtual_button = rj_input.get_virtual_button()
     if virtual_button:
+        _log_virtual_consume("sequence_lock", virtual_button)
         _mark_user_activity()
         return virtual_button, held_buttons
 

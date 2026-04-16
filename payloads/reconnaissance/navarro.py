@@ -32,7 +32,12 @@ import RPi.GPIO as GPIO
 import LCD_1in44
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
-from payloads._input_helper import get_button
+from payloads import _input_helper as _input_helper
+
+get_button = _input_helper.get_button
+open_remote_text_session = getattr(_input_helper, "open_remote_text_session", lambda **_kwargs: None)
+get_remote_text_event = getattr(_input_helper, "get_remote_text_event", lambda *_args, **_kwargs: None)
+close_remote_text_session = getattr(_input_helper, "close_remote_text_session", lambda *_args, **_kwargs: None)
 try:
     import qrcode 
 except Exception:
@@ -535,67 +540,88 @@ def keyboard_input(initial: str) -> str:
     last_rep_t = 0.0
     REPEAT_DELAY = 0.30
     REPEAT_RATE = 0.07
-    while APP_RUNNING:
-        page_name, grid = KB_PAGES[page_idx]
-        draw_keyboard(buf, grid, gx, gy, page_name)
-        btn = first_pressed()
-        now = time.time()
-        if repeat_btn in ("UP", "DOWN", "LEFT", "RIGHT") and GPIO.input(PINS[repeat_btn]) == 0:
-            if now - first_press_t >= REPEAT_DELAY and now - last_rep_t >= REPEAT_RATE:
-                if repeat_btn == "UP":
+    remote_session_id = open_remote_text_session(title="NAVARRO USER", default=initial, charset="full", max_len=64)
+    try:
+        while APP_RUNNING:
+            page_name, grid = KB_PAGES[page_idx]
+            draw_keyboard(buf, grid, gx, gy, page_name)
+
+            remote_event = get_remote_text_event(remote_session_id)
+            if remote_event:
+                print(f"[navarro:text] {remote_event}", flush=True)
+                special = str(remote_event.get("special") or "")
+                if special == "ESCAPE":
+                    return initial
+                if special == "BACKSPACE":
+                    if buf:
+                        buf = buf[:-1]
+                elif special == "ENTER":
+                    return buf
+                else:
+                    key_value = str(remote_event.get("key") or "")
+                    if key_value:
+                        buf += key_value
+
+            btn = first_pressed()
+            now = time.time()
+            if repeat_btn in ("UP", "DOWN", "LEFT", "RIGHT") and GPIO.input(PINS[repeat_btn]) == 0:
+                if now - first_press_t >= REPEAT_DELAY and now - last_rep_t >= REPEAT_RATE:
+                    if repeat_btn == "UP":
+                        gy = max(0, gy - 1)
+                    elif repeat_btn == "DOWN":
+                        gy = min(len(grid) - 1, gy + 1)
+                    elif repeat_btn == "LEFT":
+                        gx = max(0, gx - 1)
+                    elif repeat_btn == "RIGHT":
+                        gx = min(len(grid[gy]) - 1, gx + 1)
+                    last_rep_t = now
+                    continue
+            else:
+                repeat_btn = None
+            if not btn:
+                time.sleep(0.02)
+                continue
+            if btn == "KEY3":
+                wait_release(btn)
+                return initial
+            if btn == "KEY2":
+                page_idx = (page_idx + 1) % len(KB_PAGES)
+                wait_release(btn)
+                continue
+            if btn in ("UP", "DOWN", "LEFT", "RIGHT"):
+                if btn == "UP":
                     gy = max(0, gy - 1)
-                elif repeat_btn == "DOWN":
+                elif btn == "DOWN":
                     gy = min(len(grid) - 1, gy + 1)
-                elif repeat_btn == "LEFT":
+                elif btn == "LEFT":
                     gx = max(0, gx - 1)
-                elif repeat_btn == "RIGHT":
+                elif btn == "RIGHT":
                     gx = min(len(grid[gy]) - 1, gx + 1)
+                repeat_btn = btn
+                first_press_t = now
                 last_rep_t = now
                 continue
-        else:
-            repeat_btn = None
-        if not btn:
-            time.sleep(0.02)
-            continue
-        if btn == "KEY3":
-            wait_release(btn)
-            return initial
-        if btn == "KEY2":
-            page_idx = (page_idx + 1) % len(KB_PAGES)
-            wait_release(btn)
-            continue
-        if btn in ("UP", "DOWN", "LEFT", "RIGHT"):
-            if btn == "UP":
-                gy = max(0, gy - 1)
-            elif btn == "DOWN":
-                gy = min(len(grid) - 1, gy + 1)
-            elif btn == "LEFT":
-                gx = max(0, gx - 1)
-            elif btn == "RIGHT":
-                gx = min(len(grid[gy]) - 1, gx + 1)
-            repeat_btn = btn
-            first_press_t = now
-            last_rep_t = now
-            continue
-        elif btn == "KEY1":
-            if buf:
-                buf = buf[:-1]
-            wait_release(btn)
-            continue
-        elif btn == "OK":
-            key = grid[gy][gx]
-            if key == "←":
+            elif btn == "KEY1":
                 if buf:
                     buf = buf[:-1]
-            elif key == "Enter":
                 wait_release(btn)
-                return buf
-            else:
-                buf += key
+                continue
+            elif btn == "OK":
+                key = grid[gy][gx]
+                if key == "←":
+                    if buf:
+                        buf = buf[:-1]
+                elif key == "Enter":
+                    wait_release(btn)
+                    return buf
+                else:
+                    buf += key
+                wait_release(btn)
+                continue
             wait_release(btn)
-            continue
-        wait_release(btn)
-    return buf
+        return buf
+    finally:
+        close_remote_text_session(remote_session_id)
 
 
 if __name__ == "__main__":

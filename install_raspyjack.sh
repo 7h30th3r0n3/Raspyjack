@@ -108,6 +108,7 @@ PACKAGES=(
   python3-evdev \
   libglib2.0-dev python3-bluez bluez \
   fonts-dejavu-core nmap ncat tcpdump tshark arp-scan dsniff ettercap-text-only php procps \
+  gobuster dirb \
   aircrack-ng wireless-tools wpasupplicant iw \
   hostapd dnsmasq-base sshpass bridge-utils john autossh reaver ebtables \
   firmware-linux-nonfree firmware-realtek firmware-atheros \
@@ -137,6 +138,62 @@ if ((${#to_install[@]})); then
 else
   info "All packages already installed & up‑to‑date."
 fi
+
+# ───── 2‑a1 ▸ Gobuster wordlists: dirb + DirBuster (OWASP) → loot ─────
+step "Copying directory wordlists for Gobuster …"
+WL_DST="/root/Raspyjack/loot/wordlists"
+mkdir -p "$WL_DST"
+mkdir -p "$WL_DST/dirbuster"
+
+# dirb (Debian package) → loot root
+for wl in common.txt small.txt; do
+  if [ -f "/usr/share/dirb/wordlists/$wl" ]; then
+    sudo cp -f "/usr/share/dirb/wordlists/$wl" "$WL_DST/$wl" \
+      && info "Installed loot/wordlists/$wl (from dirb)" \
+      || warn "Could not copy $wl to loot/wordlists"
+  else
+    warn "dirb wordlist missing: /usr/share/dirb/wordlists/$wl (install dirb package)"
+  fi
+done
+
+# DirBuster: optional apt only if the package exists (Kali etc.); skip failed installs on Pi OS
+step "DirBuster wordlists …"
+if apt-cache show dirbuster >/dev/null 2>&1; then
+  if sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends dirbuster 2>/dev/null; then
+    if [ -d /usr/share/dirbuster/wordlists ]; then
+      sudo cp -f /usr/share/dirbuster/wordlists/*.txt "$WL_DST/dirbuster/" 2>/dev/null \
+        && info "Copied DirBuster wordlists from apt package" \
+        || warn "dirbuster installed but copy to loot failed"
+    fi
+  else
+    warn "dirbuster package listed but install failed — will download lists"
+  fi
+else
+  info "Package dirbuster not in APT (normal on Raspberry Pi OS) — fetching OWASP lists"
+fi
+
+# OWASP DirBuster-style lists (dirbuster-ng mirror, same classic filenames)
+DB_BASE="https://raw.githubusercontent.com/digination/dirbuster-ng/master/wordlists"
+_fetch_db_wl() {
+  local f="$1"
+  local dest="$WL_DST/dirbuster/$f"
+  local tmp="${dest}.part"
+  if sudo wget -q -O "$tmp" "$DB_BASE/$f" 2>/dev/null \
+    || sudo curl -fsSL -o "$tmp" "$DB_BASE/$f" 2>/dev/null; then
+    sudo mv -f "$tmp" "$dest"
+    info "DirBuster wordlist: loot/wordlists/dirbuster/$f"
+  else
+    sudo rm -f "$tmp"
+    warn "Could not download DirBuster wordlist: $f (check network)"
+  fi
+}
+# Keep this aligned with gobuster_dir.py presets (DB:small/common/big/ext).
+for dbf in small.txt common.txt big.txt extensions_common.txt; do
+  _fetch_db_wl "$dbf"
+done
+
+command -v gobuster >/dev/null 2>&1 && info "gobuster: $(gobuster version 2>/dev/null | head -1 || echo ok)" \
+  || warn "gobuster not on PATH — check apt install"
 
 # ───── 2‑a2 ▸ pip packages not available via APT ─────────────────
 step "Installing Python packages via pip …"
