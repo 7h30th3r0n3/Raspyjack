@@ -108,7 +108,6 @@ PACKAGES=(
   python3-evdev \
   libglib2.0-dev python3-bluez bluez \
   fonts-dejavu-core nmap ncat tcpdump tshark arp-scan dsniff ettercap-text-only php procps \
-  gobuster dirb \
   aircrack-ng wireless-tools wpasupplicant iw \
   hostapd dnsmasq-base sshpass bridge-utils john autossh reaver ebtables \
   firmware-linux-nonfree firmware-realtek firmware-atheros \
@@ -121,11 +120,17 @@ if ! sudo apt-get update -qq 2>&1 | grep -q "^E:"; then
   info "APT repositories OK"
 else
   warn "APT key issue detected, attempting fix..."
-  # Fix Kali key if present
+  # Fix Kali key if present (compatible Bookworm + Trixie)
   if [ -f /etc/apt/sources.list.d/kali-rolling.list ]; then
-    sudo wget -q -O /etc/apt/trusted.gpg.d/kali-archive-keyring.asc https://archive.kali.org/archive-key.asc 2>/dev/null \
+    sudo wget -q -O /usr/share/keyrings/kali-archive-keyring.gpg https://archive.kali.org/archive-key.asc 2>/dev/null \
       && info "Kali GPG key installed" \
       || warn "Could not fetch Kali GPG key"
+    # Ensure signed-by is set (required for Trixie/sqv)
+    if ! grep -q "signed-by" /etc/apt/sources.list.d/kali-rolling.list 2>/dev/null; then
+      echo "deb [signed-by=/usr/share/keyrings/kali-archive-keyring.gpg] http://http.kali.org/kali kali-rolling main contrib non-free non-free-firmware" \
+        | sudo tee /etc/apt/sources.list.d/kali-rolling.list >/dev/null
+      info "Kali repo updated with signed-by"
+    fi
   fi
   sudo apt-get update -qq || warn "APT update had errors, continuing..."
 fi
@@ -139,74 +144,11 @@ else
   info "All packages already installed & up‑to‑date."
 fi
 
-# ───── 2‑a1 ▸ Gobuster wordlists: dirb + DirBuster (OWASP) → loot ─────
-step "Copying directory wordlists for Gobuster …"
-WL_DST="/root/Raspyjack/loot/wordlists"
-mkdir -p "$WL_DST"
-mkdir -p "$WL_DST/dirbuster"
-
-# dirb (Debian package) → loot root
-for wl in common.txt small.txt; do
-  if [ -f "/usr/share/dirb/wordlists/$wl" ]; then
-    sudo cp -f "/usr/share/dirb/wordlists/$wl" "$WL_DST/$wl" \
-      && info "Installed loot/wordlists/$wl (from dirb)" \
-      || warn "Could not copy $wl to loot/wordlists"
-  else
-    warn "dirb wordlist missing: /usr/share/dirb/wordlists/$wl (install dirb package)"
-  fi
-done
-
-# DirBuster: optional apt only if the package exists (Kali etc.); skip failed installs on Pi OS
-step "DirBuster wordlists …"
-if apt-cache show dirbuster >/dev/null 2>&1; then
-  if sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends dirbuster 2>/dev/null; then
-    if [ -d /usr/share/dirbuster/wordlists ]; then
-      sudo cp -f /usr/share/dirbuster/wordlists/*.txt "$WL_DST/dirbuster/" 2>/dev/null \
-        && info "Copied DirBuster wordlists from apt package" \
-        || warn "dirbuster installed but copy to loot failed"
-    fi
-  else
-    warn "dirbuster package listed but install failed — will download lists"
-  fi
-else
-  info "Package dirbuster not in APT (normal on Raspberry Pi OS) — fetching OWASP lists"
-fi
-
-# OWASP DirBuster-style lists (dirbuster-ng mirror, same classic filenames)
-DB_BASE="https://raw.githubusercontent.com/digination/dirbuster-ng/master/wordlists"
-_fetch_db_wl() {
-  local f="$1"
-  local dest="$WL_DST/dirbuster/$f"
-  local tmp="${dest}.part"
-  if sudo wget -q -O "$tmp" "$DB_BASE/$f" 2>/dev/null \
-    || sudo curl -fsSL -o "$tmp" "$DB_BASE/$f" 2>/dev/null; then
-    sudo mv -f "$tmp" "$dest"
-    info "DirBuster wordlist: loot/wordlists/dirbuster/$f"
-  else
-    sudo rm -f "$tmp"
-    warn "Could not download DirBuster wordlist: $f (check network)"
-  fi
-}
-# Keep this aligned with gobuster_dir.py presets (DB:small/common/big/ext).
-for dbf in small.txt common.txt big.txt extensions_common.txt; do
-  _fetch_db_wl "$dbf"
-done
-
-command -v gobuster >/dev/null 2>&1 && info "gobuster: $(gobuster version 2>/dev/null | head -1 || echo ok)" \
-  || warn "gobuster not on PATH — check apt install"
-
 # ───── 2‑a2 ▸ pip packages not available via APT ─────────────────
 step "Installing Python packages via pip …"
 sudo pip3 install --break-system-packages smbus2 2>/dev/null \
   || sudo pip3 install smbus2 2>/dev/null \
   || warn "smbus2 pip install failed – i2c_scanner payload may not work"
-
-# Ragnar port web/runtime dependencies
-if [[ -x /root/Raspyjack/scripts/install_ragnar_port.sh ]]; then
-  step "Installing vendored Ragnar dependencies …"
-  /root/Raspyjack/scripts/install_ragnar_port.sh \
-    || warn "Ragnar dependency helper failed – Ragnar payload may not work until fixed"
-fi
 
 
 # Disable hostapd/dnsmasq auto-start (only used on-demand by payloads)
@@ -584,38 +526,45 @@ if [ "$TLS_SETUP_OK" -eq 1 ]; then
 
   sudo tee /usr/local/sbin/raspyjack-caddy-autoconfig.sh >/dev/null <<'SCRIPT'
 #!/usr/bin/env bash
-# RaspyJack: auto-detect local IPv4 addresses and regenerate Caddyfile
-# Skips Tailscale interfaces to avoid port 443 conflict with tailscale serve
+# RaspyJack: generate Caddyfile + long-lived self-signed cert
+# Binds on 0.0.0.0 — works on any network without reconfiguration
 set -euo pipefail
 
-HOSTS=""
-BIND_IP=""
-for iface in $(ls /sys/class/net/); do
-  case "$iface" in lo|docker*|veth*|br-*|tailscale*) continue ;; esac
-  IP=$(ip -4 -o addr show "$iface" 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -n1)
-  if [ -n "$IP" ]; then
-    if [ -z "$HOSTS" ]; then
-      HOSTS="$IP"
-      BIND_IP="$IP"
-    else
-      HOSTS="$HOSTS, $IP"
-    fi
-  fi
-done
+CERT_DIR=/etc/caddy/certs
+CERT=$CERT_DIR/raspyjack.crt
+KEY=$CERT_DIR/raspyjack.key
 
-if [ -z "$HOSTS" ]; then
-  HOSTS="localhost"
-  BIND_IP="127.0.0.1"
+# Generate 10-year self-signed cert covering all common private IPs
+# Only regenerate if cert doesn't exist or is older than 1 year
+if [ ! -f "$CERT" ] || [ ! -f "$KEY" ] || \
+   [ "$(find "$CERT" -mtime +365 2>/dev/null)" ]; then
+  mkdir -p "$CERT_DIR"
+
+  # Collect all current IPs for SAN
+  SAN="IP:127.0.0.1,IP:0.0.0.0,DNS:raspyjack,DNS:raspyjack.local,DNS:localhost"
+  for iface in $(ls /sys/class/net/); do
+    case "$iface" in lo|docker*|veth*|br-*) continue ;; esac
+    IP=$(ip -4 -o addr show "$iface" 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -n1)
+    [ -n "$IP" ] && SAN="$SAN,IP:$IP"
+  done
+
+  openssl req -x509 -nodes -days 3650 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
+    -keyout "$KEY" -out "$CERT" \
+    -subj "/CN=RaspyJack" \
+    -addext "subjectAltName=$SAN" 2>/dev/null
+
+  chown caddy:caddy "$KEY" 2>/dev/null || true
+  echo "[raspyjack-caddy] Generated new TLS cert with SAN: $SAN"
 fi
 
 cat > /etc/caddy/Caddyfile <<EOF
 {
     auto_https disable_redirects
-    default_bind ${BIND_IP}
+    default_bind 0.0.0.0
 }
 
-https://${HOSTS} {
-    tls internal
+:443 {
+    tls $CERT $KEY
 
     @ws path /ws*
     reverse_proxy @ws 127.0.0.1:8765 {
@@ -631,7 +580,7 @@ https://${HOSTS} {
 EOF
 
 systemctl reload caddy 2>/dev/null || systemctl restart caddy
-echo "[raspyjack-caddy] Bound to ${BIND_IP}, hosts: ${HOSTS}"
+echo "[raspyjack-caddy] Bound to 0.0.0.0 (all interfaces)"
 SCRIPT
   sudo chmod +x /usr/local/sbin/raspyjack-caddy-autoconfig.sh
 
