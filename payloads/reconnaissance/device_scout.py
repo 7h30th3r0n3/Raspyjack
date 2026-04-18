@@ -50,6 +50,13 @@ try:
 except ImportError:
     SCAPY_OK = False
 
+try:
+    import asyncio
+    from bleak import BleakScanner
+    BLEAK_OK = True
+except ImportError:
+    BLEAK_OK = False
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -280,37 +287,44 @@ def _iw_scan_worker():
 
 
 def _ble_worker(hci="hci0"):
-    """BLE scan using btmgmt find — subprocess.run batch capture."""
+    """BLE scan using bleak (same approach as ble_scanner payload)."""
+    if not BLEAK_OK:
+        return
+
+    # Restart bluetoothd for clean discovery state
+    subprocess.run(["systemctl", "restart", "bluetooth"],
+                   capture_output=True, timeout=5)
+    time.sleep(1)
+
     while running:
         try:
-            idx = hci.replace("hci", "")
-            r = subprocess.run(
-                ["sudo", "/usr/bin/btmgmt", "--index", idx, "find"],
-                capture_output=True, text=True, timeout=12)
+            loop = asyncio.new_event_loop()
+            discovered = loop.run_until_complete(
+                BleakScanner.discover(timeout=5))
+            loop.close()
 
-            for line in r.stdout.splitlines():
+            for d in discovered:
                 if not running:
                     break
-                if "dev_found:" not in line:
+                mac = (d.address or "").upper()
+                if not mac:
                     continue
-                parts = line.split()
-                try:
-                    mac_idx = parts.index("dev_found:") + 1
-                    mac = parts[mac_idx].upper()
-                except (ValueError, IndexError):
-                    continue
-                rssi = -99
-                try:
-                    rssi_idx = parts.index("rssi") + 1
-                    rssi = int(parts[rssi_idx])
-                except (ValueError, IndexError):
-                    pass
-                dev_type = "BT" if "BR/EDR" in line else "BLE"
+                name = d.name or ""
+                # rssi location varies by bleak version
+                rssi = getattr(d, "rssi", None)
+                if rssi is None:
+                    try:
+                        rssi = d.details.get("props", {}).get("RSSI", -99)
+                    except Exception:
+                        rssi = -99
+
                 tracker = ""
+                name_lower = name.lower()
                 for key, tname in TRACKER_NAMES.items():
-                    if key in line.lower():
+                    if key in name_lower:
                         tracker = tname
-                _add_device(mac, dev_type, rssi, tracker=tracker)
+
+                _add_device(mac, "BLE", rssi, name, tracker)
         except Exception:
             pass
         for _ in range(20):
@@ -366,10 +380,6 @@ def start_all():
     if running:
         return
 
-    # Kill any orphan btmgmt from previous runs
-    subprocess.run(["/usr/bin/killall", "btmgmt"],
-                   capture_output=True, timeout=3)
-    time.sleep(0.3)
 
     running = True
     scan_start = time.time()
@@ -397,12 +407,11 @@ def start_all():
     if os.path.isdir("/sys/class/net/wlan0/wireless"):
         threading.Thread(target=_iw_scan_worker, daemon=True).start()
 
-    # BLE
-    hci_list = _find_all_hci()
+    # BLE via bleak (same as ble_scanner — works reliably)
     hci_ifaces.clear()
-    hci_ifaces.extend(hci_list)
-    for hci in hci_list:
-        threading.Thread(target=_ble_worker, args=(hci,), daemon=True).start()
+    if BLEAK_OK:
+        hci_ifaces.append("bleak")
+        threading.Thread(target=_ble_worker, daemon=True).start()
 
     threading.Thread(target=_persist_worker, daemon=True).start()
 
@@ -411,22 +420,6 @@ def stop_all():
     global running
     running = False
     time.sleep(0.5)
-    # Kill orphan btmgmt + reset HCI
-    try:
-        subprocess.run(["/usr/bin/killall", "btmgmt"],
-                       capture_output=True, timeout=3)
-    except Exception:
-        pass
-    try:
-        subprocess.run(["/usr/bin/hciconfig", "hci0", "down"],
-                       capture_output=True, timeout=3)
-        subprocess.run(["/usr/bin/hciconfig", "hci0", "up"],
-                       capture_output=True, timeout=3)
-    except Exception:
-        pass
-    # Kill orphan btmgmt
-    subprocess.run(["/usr/bin/killall", "btmgmt"],
-                   capture_output=True, timeout=3)
 
 
 # ---------------------------------------------------------------------------
