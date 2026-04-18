@@ -1593,20 +1593,29 @@ def main():
     finally:
         _shutdown.set()
         _scanning.clear()
-        # Show exit screen
-        try:
-            img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-            d = ScaledDraw(img)
-            d.text((10, 40), "Saving data...", font=font, fill="#FFAA00")
-            lcd.LCD_ShowImage(img, 0, 0)
-        except Exception:
-            pass
+
+        def _exit_msg(text):
+            try:
+                img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+                d = ScaledDraw(img)
+                d.text((10, 55), text, font=font_sm, fill="#FFAA00")
+                lcd.LCD_ShowImage(img, 0, 0)
+            except Exception:
+                pass
+
+        _exit_msg("Saving data...")
         _save_to_db()
         _auto_save_wigle()
-        for iface in mon_ifaces:
-            _monitor_down(iface)
-        subprocess.run(["sudo", "systemctl", "restart", "NetworkManager"],
+
+        if mon_ifaces:
+            _exit_msg("Restoring WiFi...")
+            for iface in mon_ifaces:
+                _monitor_down(iface)
+
+        _exit_msg("Restarting network...")
+        subprocess.run(["systemctl", "restart", "NetworkManager"],
                        capture_output=True, timeout=10)
+
         try:
             lcd.LCD_Clear()
         except Exception:

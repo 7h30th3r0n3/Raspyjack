@@ -159,20 +159,20 @@ def _add_device(mac, dev_type, rssi, name="", tracker=""):
 
 def _monitor_up(iface):
     for cmd in [
-        ["sudo", "ip", "link", "set", iface, "down"],
-        ["sudo", "iw", iface, "set", "monitor", "none"],
-        ["sudo", "ip", "link", "set", iface, "up"],
+        ["/usr/bin/ip", "link", "set", iface, "down"],
+        ["/usr/sbin/iw", iface, "set", "monitor", "none"],
+        ["/usr/bin/ip", "link", "set", iface, "up"],
     ]:
         subprocess.run(cmd, capture_output=True, timeout=5)
     time.sleep(0.3)
-    r = subprocess.run(["iw", "dev", iface, "info"],
+    r = subprocess.run(["/usr/sbin/iw", "dev", iface, "info"],
                        capture_output=True, text=True, timeout=5)
     if "type monitor" in r.stdout:
         return iface
-    subprocess.run(["sudo", "airmon-ng", "start", iface],
+    subprocess.run(["airmon-ng", "start", iface],
                    capture_output=True, timeout=15)
     for name in (f"{iface}mon", iface):
-        r = subprocess.run(["iw", "dev", name, "info"],
+        r = subprocess.run(["/usr/sbin/iw", "dev", name, "info"],
                            capture_output=True, text=True, timeout=5)
         if "type monitor" in r.stdout:
             return name
@@ -183,12 +183,12 @@ def _monitor_down(iface):
     if not iface:
         return
     base = iface.replace("mon", "")
-    subprocess.run(["sudo", "airmon-ng", "stop", iface],
+    subprocess.run(["airmon-ng", "stop", iface],
                    capture_output=True, timeout=10)
     for cmd in [
-        ["sudo", "ip", "link", "set", base, "down"],
-        ["sudo", "iw", base, "set", "type", "managed"],
-        ["sudo", "ip", "link", "set", base, "up"],
+        ["/usr/bin/ip", "link", "set", base, "down"],
+        ["/usr/sbin/iw", base, "set", "type", "managed"],
+        ["/usr/bin/ip", "link", "set", base, "up"],
     ]:
         subprocess.run(cmd, capture_output=True, timeout=5)
 
@@ -230,7 +230,7 @@ def _hop_worker(iface, channels):
     while running:
         ch = channels[idx % len(channels)]
         r = subprocess.run(
-            ["sudo", "iw", "dev", iface, "set", "channel", str(ch)],
+            ["/usr/sbin/iw", "dev", iface, "set", "channel", str(ch)],
             capture_output=True, timeout=3)
         if r.returncode == 0:
             cur_ch = ch
@@ -242,7 +242,7 @@ def _iw_scan_worker():
     while running:
         try:
             r = subprocess.run(
-                ["sudo", "iw", "dev", "wlan0", "scan", "-u"],
+                ["/usr/sbin/iw", "dev", "wlan0", "scan", "-u"],
                 capture_output=True, text=True, timeout=15)
             if r.returncode == 0:
                 cur_mac = None
@@ -280,20 +280,17 @@ def _iw_scan_worker():
 
 
 def _ble_worker(hci="hci0"):
-    """BLE scan using btmgmt find — reads output line by line in real-time."""
+    """BLE scan using btmgmt find — subprocess.run batch capture."""
     while running:
         try:
             idx = hci.replace("hci", "")
-            proc = subprocess.Popen(
-                ["sudo", "btmgmt", "--index", idx, "find"],
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                text=True)
+            r = subprocess.run(
+                ["sudo", "/usr/bin/btmgmt", "--index", idx, "find"],
+                capture_output=True, text=True, timeout=12)
 
-            deadline = time.time() + 10
-            for line in iter(proc.stdout.readline, ""):
-                if not running or time.time() > deadline:
+            for line in r.stdout.splitlines():
+                if not running:
                     break
-                line = line.strip()
                 if "dev_found:" not in line:
                     continue
                 parts = line.split()
@@ -314,15 +311,6 @@ def _ble_worker(hci="hci0"):
                     if key in line.lower():
                         tracker = tname
                 _add_device(mac, dev_type, rssi, tracker=tracker)
-
-            try:
-                proc.terminate()
-                proc.wait(timeout=3)
-            except Exception:
-                try:
-                    proc.kill()
-                except Exception:
-                    pass
         except Exception:
             pass
         for _ in range(20):
@@ -337,7 +325,7 @@ def _find_all_hci():
     if os.path.isdir(bt_path):
         for name in sorted(os.listdir(bt_path)):
             if name.startswith("hci"):
-                subprocess.run(["sudo", "hciconfig", name, "up"],
+                subprocess.run(["/usr/bin/hciconfig", name, "up"],
                                capture_output=True, timeout=5)
                 result.append(name)
     return result
@@ -377,6 +365,12 @@ def start_all():
     global running, scan_start
     if running:
         return
+
+    # Kill any orphan btmgmt from previous runs
+    subprocess.run(["/usr/bin/killall", "btmgmt"],
+                   capture_output=True, timeout=3)
+    time.sleep(0.3)
+
     running = True
     scan_start = time.time()
 
@@ -417,6 +411,22 @@ def stop_all():
     global running
     running = False
     time.sleep(0.5)
+    # Kill orphan btmgmt + reset HCI
+    try:
+        subprocess.run(["/usr/bin/killall", "btmgmt"],
+                       capture_output=True, timeout=3)
+    except Exception:
+        pass
+    try:
+        subprocess.run(["/usr/bin/hciconfig", "hci0", "down"],
+                       capture_output=True, timeout=3)
+        subprocess.run(["/usr/bin/hciconfig", "hci0", "up"],
+                       capture_output=True, timeout=3)
+    except Exception:
+        pass
+    # Kill orphan btmgmt
+    subprocess.run(["/usr/bin/killall", "btmgmt"],
+                   capture_output=True, timeout=3)
 
 
 # ---------------------------------------------------------------------------

@@ -216,14 +216,29 @@ def _log_virtual_consume(stage, button):
 
 # https://www.waveshare.com/wiki/File:1.44inch-LCD-HAT-Code.7z
 
+_wifi_connected = False
+
+def _check_wifi():
+    """Check if wlan0 is connected to a WiFi network."""
+    global _wifi_connected
+    try:
+        r = subprocess.run(["iwgetid", "-r"], capture_output=True, text=True, timeout=3)
+        _wifi_connected = bool(r.stdout.strip())
+    except Exception:
+        _wifi_connected = False
+
 def _stats_loop():
     global _status_text, _temp_c
+    _wifi_tick = 4  # starts at 4 so first iteration triggers check immediately
     while not _stop_evt.is_set():
         if screen_lock.is_set():
             time.sleep(0.5)
             continue
         try:
             _temp_c = temp()
+            _wifi_tick += 1
+            if _wifi_tick % 5 == 0:
+                _check_wifi()
             status = ""
             if subprocess.call(['pgrep', 'nmap'], stdout=subprocess.DEVNULL) == 0:
                 status = "(Scan in progress)"
@@ -828,9 +843,16 @@ def ToggleFlip():
 def _draw_toolbar():
     try:
         draw.line([(0, S(4)), (_SCR_W, S(4))], fill="#222", width=S(10))
-        draw.text((0, 0), f"{_temp_c:.0f} °C ", fill="WHITE", font=font)
+        draw.text((0, S(-2)), f"{_temp_c:.0f} °C ", fill="WHITE", font=font)
         if _status_text:
-            draw.text((S(30), 0), _status_text, fill="WHITE", font=font)
+            draw.text((S(30), S(-2)), _status_text, fill="WHITE", font=font)
+        # WiFi icon at top right when connected
+        if _wifi_connected:
+            try:
+                _tb_icon = ImageFont.truetype('/usr/share/fonts/truetype/fontawesome/fa-solid-900.ttf', S(8))
+                draw.text((_SCR_W - S(10), S(0)), "\uf1eb", fill="WHITE", font=_tb_icon)
+            except Exception:
+                draw.text((_SCR_W - S(8), S(0)), "W", fill="WHITE", font=font)
         mark_display_dirty()
     except Exception:
         pass

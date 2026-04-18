@@ -353,7 +353,8 @@
                 " pcap_analyzer": "",
                 " payload_updater": "",
                 " card_tester": "",
-                " whisperpair": ""
+                " whisperpair": "",
+                " gps_config": ""
         },
         "fallbacks": {
                 "__scan__": "",
