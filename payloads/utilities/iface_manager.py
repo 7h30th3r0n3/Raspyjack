@@ -279,12 +279,34 @@ def _set_monitor(iface):
 
 def _set_managed(iface):
     """Switch WiFi interface back to managed mode."""
-    base = iface.replace("mon", "")
+    base = iface[:-3] if iface.endswith("mon") else iface
     _run(["sudo", "airmon-ng", "stop", iface], timeout=10)
     _run(["sudo", "ip", "link", "set", base, "down"])
     _run(["sudo", "iw", base, "set", "type", "managed"])
     _run(["sudo", "ip", "link", "set", base, "up"])
+    _run(["sudo", "nmcli", "device", "set", base, "managed", "yes"], timeout=5)
     return f"{base} -> Managed"
+
+
+def _restore_network():
+    """Re-manage all WiFi interfaces + restart NetworkManager.
+
+    Fixes broken state after payloads that kill wpa_supplicant or
+    set interfaces to unmanaged.
+    """
+    # Re-manage all WiFi interfaces
+    try:
+        for name in sorted(os.listdir("/sys/class/net")):
+            if os.path.isdir(f"/sys/class/net/{name}/wireless"):
+                _run(["sudo", "nmcli", "device", "set", name, "managed", "yes"], timeout=5)
+    except Exception:
+        pass
+    # Unblock rfkill
+    _run(["sudo", "rfkill", "unblock", "wifi"], timeout=3)
+    # Restart NetworkManager + wpa_supplicant
+    _run(["sudo", "systemctl", "restart", "NetworkManager"], timeout=10)
+    _run(["sudo", "systemctl", "restart", "wpa_supplicant"], timeout=10)
+    return "Network restored"
 
 
 def _rfkill_toggle(iface_info):
@@ -338,12 +360,19 @@ def _get_actions(iface_info):
 
     if itype == "wifi":
         mode = iface_info["mode"]
-        if mode != "Monitor" and iface_info["supports_mon"]:
+        # wlan0 onboard (brcmfmac) cannot do monitor/injection
+        is_onboard = iface_info.get("driver") == "brcmfmac"
+        if mode != "Monitor" and iface_info["supports_mon"] and not is_onboard:
             actions.append(("Enable Monitor", lambda: _set_monitor(name)))
         if mode == "Monitor":
             actions.append(("Disable Monitor", lambda: _set_managed(name)))
         if iface_info["supports_ap"] and mode != "Master":
             actions.append(("(AP via payload)", lambda: "Use evil_twin/captive_portal"))
+
+        # NM re-manage
+        actions.append(("NM Re-manage", lambda: (
+            _run(["sudo", "nmcli", "device", "set", name, "managed", "yes"], timeout=5),
+            f"{name} re-managed")[1]))
 
         if iface_info["rfkill_soft"]:
             actions.append(("RF Unblock", lambda: _rfkill_toggle(iface_info)))
@@ -351,6 +380,7 @@ def _get_actions(iface_info):
             actions.append(("RF Block", lambda: _rfkill_toggle(iface_info)))
 
     actions.append(("Unblock ALL RF", lambda: _rfkill_unblock_all()))
+    actions.append(("Restore Network", lambda: _restore_network()))
 
     return actions
 
