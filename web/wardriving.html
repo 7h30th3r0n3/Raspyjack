@@ -37,6 +37,11 @@
     #panelHead { padding:6px 8px; font-size:11px; color:var(--accent); border-bottom:1px solid var(--border); display:flex; justify-content:space-between; }
     #panelHead span { color:#555; font-weight:400; }
     #searchBox { margin:3px 5px; padding:3px 6px; background:#0a1020; border:1px solid var(--border); color:#ccc; border-radius:3px; font-size:10px; width:calc(100% - 10px); }
+    #filterBar { padding:3px 5px; display:flex; flex-wrap:wrap; gap:3px; border-bottom:1px solid var(--border); }
+    #filterBar select { background:#0a1020; color:#aaa; border:1px solid var(--border); padding:1px 4px; border-radius:3px; font-size:9px; }
+    #filterBar .fb { background:none; border:1px solid #1a2844; color:#666; padding:1px 5px; border-radius:3px; font-size:9px; cursor:pointer; }
+    #filterBar .fb:hover { color:#fff; border-color:#333; }
+    #filterBar .fb.on { border-color:var(--accent); color:var(--accent); }
     #apList { flex:1; overflow-y:auto; font-family:'Courier New',monospace; font-size:10px; }
     #apList::-webkit-scrollbar { width:3px; }
     #apList::-webkit-scrollbar-thumb { background:#222; border-radius:2px; }
@@ -131,7 +136,31 @@
   <div id="map"></div>
   <div id="panel">
     <div id="panelHead">Networks <span id="pCount"></span></div>
-    <input id="searchBox" type="text" placeholder="Search..." oninput="renderPanel()">
+    <input id="searchBox" type="text" placeholder="Search SSID / MAC..." oninput="applyFilters()">
+    <div id="filterBar">
+      <select id="fAuth" onchange="applyFilters()">
+        <option value="">All Auth</option>
+        <option value="OPEN">Open</option>
+        <option value="WEP">WEP</option>
+        <option value="WPA">WPA</option>
+        <option value="WPA2">WPA2</option>
+        <option value="WPA3">WPA3</option>
+      </select>
+      <select id="fSignal" onchange="applyFilters()">
+        <option value="">All Signal</option>
+        <option value="-50">Strong (>-50)</option>
+        <option value="-70">Medium (>-70)</option>
+        <option value="-85">Weak (>-85)</option>
+        <option value="-100">Very Weak</option>
+      </select>
+      <select id="fCh" onchange="applyFilters()">
+        <option value="">All Ch</option>
+        <option value="2g">2.4GHz</option>
+        <option value="5g">5GHz</option>
+      </select>
+      <button class="fb" id="fGps" onclick="toggleFilter('fGps')" title="GPS only">GPS</button>
+      <button class="fb" id="fHidden" onclick="toggleFilter('fHidden')" title="Hidden SSIDs">Hidden</button>
+    </div>
     <div id="apList"></div>
   </div>
   <div id="toggleBtn" onclick="togglePanel()"><i class="fa-solid fa-chevron-right"></i></div>
@@ -327,7 +356,8 @@ function dominantColor(cl) {
 
 // --- Render map with clustering ---
 function renderMap(visibleNets) {
-  const nets = visibleNets || allNets;
+  const raw = visibleNets || allNets;
+  const nets = visibleNets ? raw : getFiltered(raw);
   markersLayer.clearLayers();
   routeLayer.clearLayers();
   const gpsNets = nets.filter(n => n.hasGps);
@@ -416,7 +446,7 @@ map.on('zoomend', function() {
 });
 
 function renderStats(nets) {
-  const src = nets || allNets;
+  const src = nets || getFiltered(allNets);
   document.getElementById('sT').textContent = src.length;
   document.getElementById('sG').textContent = src.filter(n=>n.hasGps).length;
   document.getElementById('sO').textContent = src.filter(n=>secInfo(n.auth).label==='OPEN').length;
@@ -424,17 +454,49 @@ function renderStats(nets) {
   document.getElementById('s3').textContent = src.filter(n=>n.auth.includes('WPA3')).length;
 }
 
+function toggleFilter(id) {
+  document.getElementById(id).classList.toggle('on');
+  applyFilters();
+}
+
+function getFiltered(src) {
+  let filtered = [...src];
+  const q = document.getElementById('searchBox').value.toLowerCase();
+  const fAuth = document.getElementById('fAuth').value;
+  const fSignal = document.getElementById('fSignal').value;
+  const fCh = document.getElementById('fCh').value;
+  const fGps = document.getElementById('fGps').classList.contains('on');
+  const fHidden = document.getElementById('fHidden').classList.contains('on');
+
+  if (q) filtered = filtered.filter(n => (n.ssid||'').toLowerCase().includes(q) || n.mac.toLowerCase().includes(q));
+  if (fAuth) filtered = filtered.filter(n => secInfo(n.auth).label === fAuth);
+  if (fSignal) {
+    const min = parseInt(fSignal);
+    filtered = filtered.filter(n => (parseInt(n.rssi)||-99) >= min);
+  }
+  if (fCh === '2g') filtered = filtered.filter(n => { const c=parseInt(n.channel); return c>=1&&c<=14; });
+  if (fCh === '5g') filtered = filtered.filter(n => { const c=parseInt(n.channel); return c>=36; });
+  if (fGps) filtered = filtered.filter(n => n.hasGps);
+  if (fHidden) filtered = filtered.filter(n => !n.ssid || n.ssid.trim()==='');
+
+  return filtered;
+}
+
+function applyFilters() {
+  renderPanel();
+  renderMap();
+  renderStats();
+}
+
 function renderPanel(nets) {
   const src = nets || allNets;
-  const q = document.getElementById('searchBox').value.toLowerCase();
-  let filtered = [...src];
-  if (q) filtered = filtered.filter(n => (n.ssid||'').toLowerCase().includes(q) || n.mac.toLowerCase().includes(q));
+  const filtered = getFiltered(src);
   filtered.sort((a,b) => {
     if (a.hasGps&&!b.hasGps) return -1;
     if (!a.hasGps&&b.hasGps) return 1;
     return (parseInt(b.rssi)||-99) - (parseInt(a.rssi)||-99);
   });
-  document.getElementById('pCount').textContent = `(${filtered.length})`;
+  document.getElementById('pCount').textContent = `(${filtered.length}/${src.length})`;
   const el = document.getElementById('apList');
   const max = Math.min(filtered.length, 300);
   let html = '';
