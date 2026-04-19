@@ -28,7 +28,10 @@ Loot: /root/Raspyjack/loot/GPS/
 import os
 import sys
 import time
+import math
 import threading
+import urllib.request
+from io import BytesIO
 from datetime import datetime
 
 sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..", "..")))
@@ -36,16 +39,16 @@ sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..", "..")))
 import RPi.GPIO as GPIO
 import LCD_1in44
 import LCD_Config
-from PIL import Image, ImageDraw, ImageFont
-from payloads._display_helper import ScaledDraw, scaled_font
+from PIL import Image, ImageDraw, ImageFont, ImageEnhance
+from payloads._display_helper import ScaledDraw, scaled_font, S
 from payloads._input_helper import get_button
 
 try:
-    import serial
-    SERIAL_OK = True
+    import gpsd as gpsd_mod
+    GPSD_OK = True
 except ImportError:
-    serial = None
-    SERIAL_OK = False
+    gpsd_mod = None
+    GPSD_OK = False
 
 PINS = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
@@ -60,8 +63,6 @@ LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
 WIDTH, HEIGHT = LCD.width, LCD.height
 font = scaled_font()
 
-SERIAL_PORTS = ["/dev/ttyUSB0", "/dev/serial0", "/dev/ttyAMA0"]
-BAUD_RATE = 9600
 LOOT_DIR = "/root/Raspyjack/loot/GPS"
 DEBOUNCE = 0.22
 
@@ -69,7 +70,6 @@ lock = threading.Lock()
 _running = True
 
 class GPSFix:
-    """Immutable-style GPS fix snapshot."""
     __slots__ = (
         "latitude", "longitude", "altitude", "speed_knots",
         "satellites", "fix_quality", "utc_time", "valid",
@@ -86,144 +86,98 @@ class GPSFix:
         self.valid = False
 
 current_fix = GPSFix()
-log_entries = []      # list of (timestamp, lat, lon, alt, speed)
+log_entries = []
 logging_active = False
 status_msg = "Searching..."
-serial_port = None
+_sats_used = 0
+_sats_visible = 0
 
-def _nmea_checksum_ok(sentence):
-    """Validate NMEA checksum."""
-    if "*" not in sentence:
-        return False
-    body, chk = sentence.rsplit("*", 1)
-    body = body.lstrip("$")
-    try:
-        expected = int(chk[:2], 16)
-    except ValueError:
-        return False
-    calc = 0
-    for ch in body:
-        calc ^= ord(ch)
-    return calc == expected
 
-def _parse_coord(raw, direction):
-    """Convert NMEA coordinate (DDMM.MMMM) to decimal degrees."""
-    if not raw or not direction:
-        return 0.0
-    try:
-        dot = raw.index(".")
-        degrees = int(raw[:dot - 2])
-        minutes = float(raw[dot - 2:])
-        dec = degrees + minutes / 60.0
-        if direction in ("S", "W"):
-            dec = -dec
-        return round(dec, 6)
-    except (ValueError, IndexError):
-        return 0.0
+def _sat_poller():
+    """Poll gpsd JSON socket for satellite counts."""
+    global _sats_used, _sats_visible
+    import socket as _sock
+    import json as _j
+    while _running:
+        try:
+            s = _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM)
+            s.settimeout(5)
+            s.connect(("127.0.0.1", 2947))
+            s.sendall(b'?WATCH={"enable":true,"json":true}\n')
+            buf = ""
+            while _running:
+                data = s.recv(4096).decode("utf-8", errors="ignore")
+                if not data:
+                    break
+                buf += data
+                while "\n" in buf:
+                    line, buf = buf.split("\n", 1)
+                    if '"class":"SKY"' not in line:
+                        continue
+                    try:
+                        sky = _j.loads(line)
+                        n = sky.get("nSat", -1)
+                        if n < 0:
+                            continue
+                        _sats_visible = n
+                        u = sky.get("uSat", 0)
+                        if u == 0 and "satellites" in sky:
+                            u = sum(1 for sat in sky["satellites"] if sat.get("used"))
+                        _sats_used = u
+                    except Exception:
+                        pass
+            s.close()
+        except Exception:
+            pass
+        time.sleep(3)
 
-def _parse_gpgga(parts):
-    """Parse $GPGGA sentence fields."""
-    fix = GPSFix()
-    try:
-        fix.utc_time = parts[1][:6] if len(parts) > 1 else ""
-        fix.latitude = _parse_coord(parts[2], parts[3]) if len(parts) > 3 else 0.0
-        fix.longitude = _parse_coord(parts[4], parts[5]) if len(parts) > 5 else 0.0
-        fix.fix_quality = int(parts[6]) if len(parts) > 6 and parts[6] else 0
-        fix.satellites = int(parts[7]) if len(parts) > 7 and parts[7] else 0
-        fix.altitude = float(parts[9]) if len(parts) > 9 and parts[9] else 0.0
-        fix.valid = fix.fix_quality > 0
-    except (ValueError, IndexError):
-        pass
-    return fix
-
-def _parse_gprmc(parts, existing_fix):
-    """Parse $GPRMC sentence and merge speed into existing fix."""
-    try:
-        speed = float(parts[7]) if len(parts) > 7 and parts[7] else 0.0
-        new_fix = GPSFix()
-        for attr in ("latitude", "longitude", "altitude", "satellites",
-                      "fix_quality", "utc_time", "valid"):
-            setattr(new_fix, attr, getattr(existing_fix, attr))
-        new_fix.speed_knots = speed
-        return new_fix
-    except (ValueError, IndexError):
-        return existing_fix
-
-def _find_serial():
-    """Find a working serial GPS port."""
-    for port in SERIAL_PORTS:
-        if os.path.exists(port):
-            try:
-                s = serial.Serial(port, BAUD_RATE, timeout=2)
-                line = s.readline().decode("ascii", errors="ignore")
-                if "$" in line:
-                    return s
-                s.close()
-            except (serial.SerialException, OSError):
-                continue
-    return None
 
 def _reader_thread():
-    """Read NMEA sentences and update GPS fix."""
-    global current_fix, status_msg, serial_port, log_entries, logging_active
+    """Poll gpsd for position updates."""
+    global current_fix, status_msg, log_entries, logging_active
 
-    ser = _find_serial()
-    if ser is None:
+    try:
+        gpsd_mod.connect()
+    except Exception:
         with lock:
-            status_msg = "No GPS found"
+            status_msg = "gpsd connect failed"
         return
 
     with lock:
-        serial_port = ser
-        status_msg = "Connected"
+        status_msg = "Connected to gpsd"
 
-    try:
-        while _running:
-            try:
-                raw = ser.readline().decode("ascii", errors="ignore").strip()
-            except (serial.SerialException, OSError):
-                with lock:
-                    status_msg = "Serial error"
-                break
+    threading.Thread(target=_sat_poller, daemon=True).start()
 
-            if not raw.startswith("$"):
-                continue
-            if not _nmea_checksum_ok(raw):
-                continue
-
-            parts = raw.split(",")
-            sentence_type = parts[0]
-
-            with lock:
-                if sentence_type in ("$GPGGA", "$GNGGA"):
-                    new_fix = _parse_gpgga(parts)
-                    new_fix.speed_knots = current_fix.speed_knots
-                    current_fix = new_fix
-                    if new_fix.valid:
-                        status_msg = f"Fix: {new_fix.satellites} sats"
-                    else:
-                        status_msg = f"No fix ({new_fix.satellites} sats)"
-
-                elif sentence_type in ("$GPRMC", "$GNRMC"):
-                    current_fix = _parse_gprmc(parts, current_fix)
-
-                # Log if active and valid
-                if logging_active and current_fix.valid:
-                    ts = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
-                    entry = (
-                        ts,
-                        current_fix.latitude,
-                        current_fix.longitude,
-                        current_fix.altitude,
-                        current_fix.speed_knots,
-                    )
-                    log_entries = log_entries + [entry]  # immutable append
-
-    finally:
+    while _running:
         try:
-            ser.close()
+            pkt = gpsd_mod.get_current()
+            fix = GPSFix()
+            if hasattr(pkt, 'mode') and pkt.mode >= 2:
+                fix.latitude = pkt.lat
+                fix.longitude = pkt.lon
+                fix.altitude = pkt.alt if pkt.mode >= 3 else 0.0
+                fix.speed_knots = getattr(pkt, 'hspeed', 0) / 1.852
+                fix.satellites = _sats_used
+                fix.fix_quality = pkt.mode
+                fix.valid = True
+                with lock:
+                    current_fix = fix
+                    status_msg = f"Fix {pkt.mode}D: {_sats_used}/{_sats_visible} sats"
+                    if logging_active:
+                        ts = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+                        log_entries = log_entries + [(
+                            ts, fix.latitude, fix.longitude,
+                            fix.altitude, fix.speed_knots,
+                        )]
+            else:
+                with lock:
+                    fix.satellites = _sats_visible
+                    current_fix = fix
+                    status_msg = f"No fix ({_sats_visible} sats)"
         except Exception:
             pass
+
+        time.sleep(1)
 
 def _export_csv(entries):
     """Write log entries to CSV."""
@@ -291,28 +245,162 @@ def _draw_coords(lcd, fix, logging, entries, scr, status):
     d.text((2, 117), "OK:log K1:mode K2:gpx", font=font, fill="#666")
     lcd.LCD_ShowImage(img, 0, 0)
 
-def _draw_grid(lcd, fix, entries):
-    """Simple map grid showing recent positions."""
-    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ScaledDraw(img)
-    d.rectangle((0, 0, 127, 12), fill="#111")
-    d.text((2, 1), "GPS MAP GRID", font=font, fill="#00ccff")
-    cx, cy, gs = 64, 68, 50
-    for i in range(-gs, gs + 1, 25):
-        d.line((cx + i, cy - gs, cx + i, cy + gs), fill="#222")
-        d.line((cx - gs, cy + i, cx + gs, cy + i), fill="#222")
-    if entries and fix.valid:
-        scale = 50000
-        for e in entries[-30:]:
-            dx = int((e[2] - fix.longitude) * scale)
-            dy = -int((e[1] - fix.latitude) * scale)
-            d.point((cx + max(-gs, min(gs, dx)), cy + max(-gs, min(gs, dy))), fill="#00ff00")
-        d.rectangle((cx - 2, cy - 2, cx + 2, cy + 2), fill="#ff2222")
-    else:
-        d.text((20, 60), "No data", font=font, fill="#666")
-    d.text((2, 110), f"Pts: {len(entries)}", font=font, fill="#888")
-    d.rectangle((0, 116, 127, 127), fill="#111")
-    d.text((2, 117), "OK:log K1:mode K2:gpx", font=font, fill="#666")
+# ---------------------------------------------------------------------------
+# OSM tile map view
+# ---------------------------------------------------------------------------
+
+_TILE_CACHE = "/root/Raspyjack/loot/GPS/.tilecache"
+_TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+_map_bg_img = None
+_map_bg_bbox = None
+
+
+def _lat_to_merc(lat):
+    lat = max(-85.0, min(85.0, lat))
+    return math.log(math.tan(math.pi / 4 + math.radians(lat) / 2))
+
+
+def _fetch_tile(z, x, y):
+    os.makedirs(_TILE_CACHE, exist_ok=True)
+    cache_path = os.path.join(_TILE_CACHE, f"{z}_{x}_{y}.png")
+    if os.path.isfile(cache_path):
+        try:
+            return Image.open(cache_path).convert("RGB")
+        except Exception:
+            pass
+    try:
+        req = urllib.request.Request(_TILE_URL.format(z=z, x=x, y=y),
+                                     headers={"User-Agent": "RaspyJack/1.0"})
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            data = resp.read()
+        with open(cache_path, "wb") as f:
+            f.write(data)
+        return Image.open(BytesIO(data)).convert("RGB")
+    except Exception:
+        return None
+
+
+def _build_map(lat, lon, w, h):
+    """Download 3x3 tile grid centered on position. Returns (image, bbox)."""
+    z = 16
+    n = 2 ** z
+    xc = int((lon + 180.0) / 360.0 * n)
+    lat_r = math.radians(max(-85, min(85, lat)))
+    yc = int((1.0 - math.log(math.tan(lat_r) + 1.0 / math.cos(lat_r)) / math.pi) / 2.0 * n)
+
+    big = Image.new("RGB", (3 * 256, 3 * 256), (10, 14, 20))
+    for dx in range(-1, 2):
+        for dy in range(-1, 2):
+            tile = _fetch_tile(z, xc + dx, yc + dy)
+            if tile:
+                big.paste(tile, ((dx + 1) * 256, (dy + 1) * 256))
+
+    nw_lon = (xc - 1) / n * 360.0 - 180.0
+    se_lon = (xc + 2) / n * 360.0 - 180.0
+    nw_lat = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * (yc - 1) / n))))
+    se_lat = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * (yc + 2) / n))))
+
+    nw_merc = _lat_to_merc(nw_lat)
+    se_merc = _lat_to_merc(se_lat)
+
+    darkened = ImageEnhance.Brightness(big).enhance(0.5)
+    resized = darkened.resize((w, h), Image.LANCZOS)
+    return resized, (nw_merc, se_merc, nw_lon, se_lon)
+
+
+def _project(lat, lon, bbox, w, h):
+    nw_merc, se_merc, nw_lon, se_lon = bbox
+    merc_span = nw_merc - se_merc
+    lon_span = se_lon - nw_lon
+    if merc_span == 0 or lon_span == 0:
+        return w // 2, h // 2
+    x = int((lon - nw_lon) / lon_span * w)
+    y = int((nw_merc - _lat_to_merc(lat)) / merc_span * h)
+    return x, y
+
+
+def _draw_map(lcd, fix, entries, is_logging):
+    global _map_bg_img, _map_bg_bbox
+
+    if not fix.valid:
+        img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+        d = ScaledDraw(img)
+        d.rectangle((0, 0, 127, 12), fill="#111")
+        d.text((2, 1), "GPS MAP", font=font, fill="#00ccff")
+        d.text((10, 55), "Waiting for GPS fix", font=font, fill="#ff4444")
+        d.rectangle((0, 116, 127, 127), fill="#111")
+        d.text((2, 117), "OK:log K1:mode K2:gpx", font=font, fill="#666")
+        lcd.LCD_ShowImage(img, 0, 0)
+        return
+
+    # Load or reload tiles when near edge
+    need_load = _map_bg_img is None or _map_bg_bbox is None
+    if not need_load:
+        cx, cy = _project(fix.latitude, fix.longitude, _map_bg_bbox, WIDTH, HEIGHT)
+        margin = WIDTH // 5
+        if cx < margin or cx > WIDTH - margin or cy < margin or cy > HEIGHT - margin:
+            need_load = True
+
+    if need_load:
+        loading = Image.new("RGB", (WIDTH, HEIGHT), "black")
+        ld = ScaledDraw(loading)
+        ld.rectangle((0, 0, 127, 12), fill="#111")
+        ld.text((2, 1), "GPS MAP", font=font, fill="#00ccff")
+        ld.text((10, 50), "Loading tiles...", font=font, fill="#ffaa00")
+        ld.text((10, 65), f"{fix.latitude:.4f}, {fix.longitude:.4f}", font=font, fill="#666")
+        lcd.LCD_ShowImage(loading, 0, 0)
+        try:
+            _map_bg_img, _map_bg_bbox = _build_map(fix.latitude, fix.longitude, WIDTH, HEIGHT)
+        except Exception:
+            _map_bg_img = None
+            _map_bg_bbox = None
+
+    if _map_bg_img is None or _map_bg_bbox is None:
+        img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+        d = ScaledDraw(img)
+        d.text((10, 55), "Map unavailable", font=font, fill="#ff4444")
+        lcd.LCD_ShowImage(img, 0, 0)
+        return
+
+    img = _map_bg_img.copy()
+    d = ImageDraw.Draw(img)
+
+    # Draw track
+    if len(entries) >= 2:
+        pts = [_project(e[1], e[2], _map_bg_bbox, WIDTH, HEIGHT) for e in entries]
+        for i in range(len(pts) - 1):
+            x1, y1 = pts[i]
+            x2, y2 = pts[i + 1]
+            if (-10 <= x1 <= WIDTH + 10 and -10 <= y1 <= HEIGHT + 10) or \
+               (-10 <= x2 <= WIDTH + 10 and -10 <= y2 <= HEIGHT + 10):
+                ratio = i / max(1, len(pts) - 1)
+                r = int(100 * (1 - ratio))
+                g = int(100 * ratio)
+                d.line([(x1, y1), (x2, y2)], fill=(r, g, 80), width=2)
+
+    # Draw trail dots
+    for e in entries[-50:]:
+        x, y = _project(e[1], e[2], _map_bg_bbox, WIDTH, HEIGHT)
+        if 0 <= x <= WIDTH and 0 <= y <= HEIGHT:
+            d.ellipse([x - 1, y - 1, x + 1, y + 1], fill="#00ff00")
+
+    # Current position
+    cx, cy = _project(fix.latitude, fix.longitude, _map_bg_bbox, WIDTH, HEIGHT)
+    d.line([(cx - 6, cy), (cx + 6, cy)], fill="#ffffff", width=1)
+    d.line([(cx, cy - 6), (cx, cy + 6)], fill="#ffffff", width=1)
+    d.ellipse([cx - 4, cy - 4, cx + 4, cy + 4], outline="#ff2222" if is_logging else "#00ccff", width=1)
+
+    # Header overlay
+    s = max(1, S(1))
+    d.rectangle([(0, 0), (WIDTH, 12 * s)], fill="#111111")
+    d.text((2 * s, 1 * s), "GPS MAP", font=font, fill="#00ccff")
+    spd = fix.speed_knots * 1.852
+    d.text((50 * s, 1 * s), f"{spd:.0f}km/h {fix.satellites}sat {len(entries)}pts", font=font, fill="#888")
+
+    # Recording indicator
+    if is_logging:
+        d.ellipse([WIDTH - 8 * s, 3 * s, WIDTH - 4 * s, 7 * s], fill="#ff2222")
+
     lcd.LCD_ShowImage(img, 0, 0)
 
 def _draw_log(lcd, entries, scr):
@@ -339,16 +427,16 @@ def _draw_log(lcd, entries, scr):
     d.text((2, 117), "^v:scroll K1:mode", font=font, fill="#666")
     lcd.LCD_ShowImage(img, 0, 0)
 
-DISPLAY_MODES = ["coords", "grid", "log"]
+DISPLAY_MODES = ["coords", "map", "log"]
 
 def main():
     global _running, logging_active, log_entries, status_msg
 
-    if not SERIAL_OK:
+    if not GPSD_OK:
         img = Image.new("RGB", (WIDTH, HEIGHT), "black")
         d = ScaledDraw(img)
-        d.text((4, 50), "pyserial not found!", font=font, fill="#ff0000")
-        d.text((4, 65), "pip install pyserial", font=font, fill="#888")
+        d.text((4, 50), "gpsd module missing!", font=font, fill="#ff0000")
+        d.text((4, 65), "pip install gpsd-py3", font=font, fill="#888")
         LCD.LCD_ShowImage(img, 0, 0)
         time.sleep(3)
         LCD.LCD_Clear()
@@ -413,8 +501,8 @@ def main():
             mode = DISPLAY_MODES[mode_idx]
             if mode == "coords":
                 _draw_coords(LCD, fix_snap, is_logging, entries_snap, scroll, st)
-            elif mode == "grid":
-                _draw_grid(LCD, fix_snap, entries_snap)
+            elif mode == "map":
+                _draw_map(LCD, fix_snap, entries_snap, is_logging)
             elif mode == "log":
                 _draw_log(LCD, entries_snap, scroll)
 
@@ -422,14 +510,8 @@ def main():
 
     finally:
         _running = False
-        # Save any remaining log
         if log_entries:
             _export_csv(log_entries)
-        if serial_port is not None:
-            try:
-                serial_port.close()
-            except Exception:
-                pass
         try:
             LCD.LCD_Clear()
         except Exception:

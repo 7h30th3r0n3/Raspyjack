@@ -35,6 +35,7 @@ import mimetypes
 import os
 import secrets
 import shutil
+import socket
 import subprocess
 import threading
 import time
@@ -997,6 +998,21 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
             self._handle_system_restart_ui()
             return
 
+        if parsed.path == "/api/wardriving/start":
+            query = parse_qs(parsed.query or "")
+            if not _auth_ok(self, query):
+                _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
+                return
+            self._handle_wardriving_start()
+            return
+        if parsed.path == "/api/wardriving/stop":
+            query = parse_qs(parsed.query or "")
+            if not _auth_ok(self, query):
+                _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
+                return
+            self._handle_wardriving_stop()
+            return
+
         if parsed.path in ("/api/payloads/start", "/api/payloads/run"):
             query = parse_qs(parsed.query or "")
             if not _auth_ok(self, query):
@@ -1530,6 +1546,43 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
         else:
             self.send_response(404)
             self.end_headers()
+
+    def _handle_wardriving_start(self) -> None:
+        """Start wardriving payload via the payload request mechanism."""
+        try:
+            if PAYLOAD_STATE_PATH.exists():
+                raw = PAYLOAD_STATE_PATH.read_text(encoding="utf-8")
+                pdata = json.loads(raw) if raw else {}
+                if pdata.get("running"):
+                    _json_response(self, {"ok": True, "status": "already_running", "path": pdata.get("path")})
+                    return
+            request_path = Path("/dev/shm/rj_payload_request.json")
+            request_path.write_text(json.dumps({
+                "action": "start",
+                "path": "reconnaissance/wardriving.py",
+                "args": ["--auto"],
+            }))
+            _json_response(self, {"ok": True, "status": "starting"})
+        except Exception as exc:
+            _json_response(self, {"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+
+    def _handle_wardriving_stop(self) -> None:
+        """Stop the currently running payload by sending KEY3 via rj_input socket."""
+        try:
+            sock_path = "/dev/shm/rj_input.sock"
+            if not os.path.exists(sock_path):
+                _json_response(self, {"ok": False, "error": "input socket not found"})
+                return
+            s = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+            try:
+                s.sendto(json.dumps({"button": "KEY3", "state": "press"}).encode(), sock_path)
+                time.sleep(0.15)
+                s.sendto(json.dumps({"button": "KEY3", "state": "release"}).encode(), sock_path)
+            finally:
+                s.close()
+            _json_response(self, {"ok": True, "status": "stopping"})
+        except Exception as exc:
+            _json_response(self, {"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
 
     def _handle_system_status(self) -> None:
         try:

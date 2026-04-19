@@ -43,8 +43,11 @@ sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..", "..")))
 import RPi.GPIO as GPIO
 import LCD_1in44
 import LCD_Config
-from PIL import Image
-from payloads._display_helper import ScaledDraw, scaled_font
+import math
+import urllib.request
+from io import BytesIO
+from PIL import Image, ImageDraw, ImageEnhance
+from payloads._display_helper import ScaledDraw, scaled_font, S
 from payloads._input_helper import get_button
 from payloads._iface_helper import list_interfaces
 
@@ -82,8 +85,9 @@ CHANNELS_5 = [36, 40, 44, 48, 52, 56, 60, 64,
 DWELL_24 = 0.3       # 300ms like Kismet (was 800ms)
 DWELL_5 = 0.4        # slightly longer for DFS channels
 
-VIEWS = ["live", "gps", "channels", "stats", "networks", "export"]
+VIEWS = ["live", "map", "gps", "channels", "stats", "networks", "export"]
 AUTOSAVE_INTERVAL = 20   # auto-save Wigle CSV every 20 seconds
+AUTO_MODE = "--auto" in sys.argv
 
 # Known monitor drivers (from _iface_helper)
 KNOWN_MONITOR_DRIVERS = {
@@ -191,6 +195,50 @@ def _start_gpsd():
         return False
 
 
+_gps_sats_used = 0
+_gps_sats_visible = 0
+
+
+def _gpsd_sat_poller():
+    """Poll gpsd JSON socket for satellite counts (SKY messages)."""
+    global _gps_sats_used, _gps_sats_visible
+    import socket as _sock
+    import json as _j
+    while not _shutdown.is_set():
+        try:
+            s = _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM)
+            s.settimeout(5)
+            s.connect(("127.0.0.1", 2947))
+            s.sendall(b'?WATCH={"enable":true,"json":true}\n')
+            buf = ""
+            while not _shutdown.is_set():
+                data = s.recv(4096).decode("utf-8", errors="ignore")
+                if not data:
+                    break
+                buf += data
+                while "\n" in buf:
+                    line, buf = buf.split("\n", 1)
+                    if '"class":"SKY"' not in line:
+                        continue
+                    try:
+                        sky = _j.loads(line)
+                        n = sky.get("nSat", -1)
+                        if n < 0:
+                            continue
+                        _gps_sats_visible = n
+                        u = sky.get("uSat", 0)
+                        if u == 0 and "satellites" in sky:
+                            u = sum(1 for sat in sky["satellites"] if sat.get("used"))
+                        _gps_sats_used = u
+                    except Exception:
+                        pass
+            s.close()
+        except Exception:
+            pass
+        if _shutdown.wait(timeout=3):
+            break
+
+
 def _gps_updater():
     """Background thread: poll gpsd for position updates."""
     global gps_data, gps_ready
@@ -206,6 +254,7 @@ def _gps_updater():
         return
 
     gps_ready = True
+    threading.Thread(target=_gpsd_sat_poller, daemon=True).start()
 
     while not _shutdown.is_set():
         try:
@@ -217,7 +266,8 @@ def _gps_updater():
                         "lon": pkt.lon,
                         "alt": pkt.alt if pkt.mode >= 3 else 0,
                         "speed": getattr(pkt, 'hspeed', 0),
-                        "sats": getattr(pkt, 'sats', 0),
+                        "sats": _gps_sats_used,
+                        "sats_visible": _gps_sats_visible,
                         "mode": pkt.mode,
                         "ts": time.time(),
                     }
@@ -1273,6 +1323,201 @@ def _draw_networks(lcd, font, font_sm, scroll_pos, sort):
     lcd.LCD_ShowImage(img, 0, 0)
 
 
+# ---------------------------------------------------------------------------
+# Live map view — tile download + real-time AP plotting
+# ---------------------------------------------------------------------------
+
+_MAP_TILE_CACHE = "/root/Raspyjack/loot/wardriving/.tilecache"
+_MAP_TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+_map_bg = None
+_map_bbox = None
+
+
+def _lat_to_merc(lat):
+    lat = max(-85.0, min(85.0, lat))
+    return math.log(math.tan(math.pi / 4 + math.radians(lat) / 2))
+
+
+def _fetch_map_tile(z, x, y):
+    os.makedirs(_MAP_TILE_CACHE, exist_ok=True)
+    cache_path = os.path.join(_MAP_TILE_CACHE, f"{z}_{x}_{y}.png")
+    if os.path.isfile(cache_path):
+        try:
+            return Image.open(cache_path).convert("RGB")
+        except Exception:
+            pass
+    url = _MAP_TILE_URL.format(z=z, x=x, y=y)
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "RaspyJack/1.0"})
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            data = resp.read()
+        with open(cache_path, "wb") as f:
+            f.write(data)
+        return Image.open(BytesIO(data)).convert("RGB")
+    except Exception:
+        return None
+
+
+def _build_map_bg(lat, lon, width, height):
+    """Build a background map centered on lat/lon. Returns (image, bbox)."""
+    z = 15
+    n = 2 ** z
+    x_center = int((lon + 180.0) / 360.0 * n)
+    lat_rad = math.radians(max(-85, min(85, lat)))
+    y_center = int((1.0 - math.log(math.tan(lat_rad) + 1.0 / math.cos(lat_rad)) / math.pi) / 2.0 * n)
+
+    # Fetch 3x3 grid centered on current position
+    big = Image.new("RGB", (3 * 256, 3 * 256), (10, 14, 20))
+    for dx in range(-1, 2):
+        for dy in range(-1, 2):
+            tile = _fetch_map_tile(z, x_center + dx, y_center + dy)
+            if tile:
+                big.paste(tile, ((dx + 1) * 256, (dy + 1) * 256))
+
+    # Compute geographic bounds of the 3x3 grid
+    nw_lon = (x_center - 1) / n * 360.0 - 180.0
+    se_lon = (x_center + 2) / n * 360.0 - 180.0
+    nw_lat = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * (y_center - 1) / n))))
+    se_lat = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * (y_center + 2) / n))))
+
+    nw_merc = _lat_to_merc(nw_lat)
+    se_merc = _lat_to_merc(se_lat)
+
+    darkened = ImageEnhance.Brightness(big).enhance(0.45)
+    resized = darkened.resize((width, height), Image.LANCZOS)
+
+    return resized, (nw_merc, se_merc, nw_lon, se_lon)
+
+
+def _map_project(lat, lon, bbox, width, height):
+    """Project lat/lon to pixel using Mercator."""
+    nw_merc, se_merc, nw_lon, se_lon = bbox
+    merc_span = nw_merc - se_merc
+    lon_span = se_lon - nw_lon
+    if merc_span == 0 or lon_span == 0:
+        return width // 2, height // 2
+    merc = _lat_to_merc(lat)
+    x = int((lon - nw_lon) / lon_span * width)
+    y = int((nw_merc - merc) / merc_span * height)
+    return x, y
+
+
+def _draw_map(lcd, font, font_sm):
+    global _map_bg, _map_bbox
+
+    with lock:
+        gps_snap = dict(gps_data) if gps_data else None
+        nets = list(networks.values())
+
+    scanning = _scanning.is_set()
+    net_count = len(nets)
+
+    # No GPS → show message
+    if not gps_snap:
+        img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+        d = ScaledDraw(img)
+        d.rectangle((0, 0, 127, 12), fill="#111")
+        d.text((2, 1), "MAP", font=font_sm, fill="#00CCFF")
+        d.text((70, 1), f"AP:{net_count}", font=font_sm, fill="#00FF00")
+        d.text((10, 55), "Waiting for GPS fix", font=font_sm, fill="#FF4444")
+        d.text((10, 70), "Move outdoors", font=font_sm, fill="#666")
+        d.rectangle((0, 116, 127, 127), fill="#111")
+        d.text((2, 117), "K1:View K3:Exit", font=font_sm, fill="#888")
+        lcd.LCD_ShowImage(img, 0, 0)
+        return
+
+    cur_lat = gps_snap["lat"]
+    cur_lon = gps_snap["lon"]
+
+    # Build or refresh background if we've moved significantly or first time
+    need_reload = _map_bg is None or _map_bbox is None
+    if not need_reload:
+        cx, cy = _map_project(cur_lat, cur_lon, _map_bbox, WIDTH, HEIGHT)
+        margin = WIDTH // 5
+        if cx < margin or cx > WIDTH - margin or cy < margin or cy > HEIGHT - margin:
+            need_reload = True
+    if need_reload:
+        _loading = Image.new("RGB", (WIDTH, HEIGHT), "black")
+        _ld = ScaledDraw(_loading)
+        _ld.rectangle((0, 0, 127, 12), fill="#111")
+        _ld.text((2, 1), "MAP", font=font_sm, fill="#00CCFF")
+        _ld.text((10, 50), "Loading tiles...", font=font_sm, fill="#FFAA00")
+        _ld.text((10, 65), f"{cur_lat:.4f}, {cur_lon:.4f}", font=font_sm, fill="#666")
+        lcd.LCD_ShowImage(_loading, 0, 0)
+        try:
+            _map_bg, _map_bbox = _build_map_bg(cur_lat, cur_lon, WIDTH, HEIGHT)
+        except Exception:
+            _map_bg = None
+            _map_bbox = None
+
+    if _map_bg is not None and _map_bbox is not None:
+        img = _map_bg.copy()
+        d = ImageDraw.Draw(img)
+
+        # Draw GPS APs
+        gps_nets = [n for n in nets if n.get("gps")]
+        gps_nets.sort(key=lambda n: n.get("first_seen", ""))
+
+        # Route line
+        if len(gps_nets) >= 2:
+            pts = [_map_project(n["gps"]["lat"], n["gps"]["lon"], _map_bbox, WIDTH, HEIGHT) for n in gps_nets]
+            for i in range(len(pts) - 1):
+                x1, y1 = pts[i]
+                x2, y2 = pts[i + 1]
+                if (-10 <= x1 <= WIDTH + 10 and -10 <= y1 <= HEIGHT + 10) or \
+                   (-10 <= x2 <= WIDTH + 10 and -10 <= y2 <= HEIGHT + 10):
+                    ratio = i / max(1, len(pts) - 1)
+                    r = int(100 * (1 - ratio))
+                    g = int(100 * ratio)
+                    d.line([(x1, y1), (x2, y2)], fill=(r, g, 60), width=1)
+
+        # AP dots
+        for n in gps_nets:
+            x, y = _map_project(n["gps"]["lat"], n["gps"]["lon"], _map_bbox, WIDTH, HEIGHT)
+            if x < -5 or x > WIDTH + 5 or y < -5 or y > HEIGHT + 5:
+                continue
+            sec = n.get("security", "")
+            if "WPA3" in sec:
+                color = "#00ff88"
+            elif "WPA2" in sec:
+                color = "#00ccff"
+            elif "WPA" in sec:
+                color = "#ffaa00"
+            elif "WEP" in sec:
+                color = "#ff8800"
+            elif "OPEN" in sec or "OPN" in sec:
+                color = "#ff3333"
+            else:
+                color = "#888"
+            d.ellipse([x - 2, y - 2, x + 2, y + 2], fill=color)
+
+        # Current position — pulsing cross
+        cx, cy = _map_project(cur_lat, cur_lon, _map_bbox, WIDTH, HEIGHT)
+        d.line([(cx - 5, cy), (cx + 5, cy)], fill="#ffffff", width=1)
+        d.line([(cx, cy - 5), (cx, cy + 5)], fill="#ffffff", width=1)
+        d.ellipse([cx - 3, cy - 3, cx + 3, cy + 3], outline="#00FF00", width=1)
+
+        # Header overlay
+        s = S(1)
+        d.rectangle([(0, 0), (WIDTH, 12 * s)], fill=(0, 0, 0, 180))
+        d.text((2 * s, 1 * s), "MAP", font=font_sm, fill="#00CCFF")
+        st = "SCAN" if scanning else "IDLE"
+        d.text((30 * s, 1 * s), f"{st} AP:{net_count} GPS:{len(gps_nets)}", font=font_sm,
+               fill="#00FF00" if scanning else "#666")
+
+        lcd.LCD_ShowImage(img, 0, 0)
+    else:
+        # Fallback: no tiles
+        img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+        d = ScaledDraw(img)
+        d.rectangle((0, 0, 127, 12), fill="#111")
+        d.text((2, 1), "MAP", font=font_sm, fill="#00CCFF")
+        d.text((10, 50), "Map loading...", font=font_sm, fill="#FFAA00")
+        d.rectangle((0, 116, 127, 127), fill="#111")
+        d.text((2, 117), "K1:View K3:Exit", font=font_sm, fill="#888")
+        lcd.LCD_ShowImage(img, 0, 0)
+
+
 def _draw_export(lcd, font, font_sm, export_files):
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
     d = ScaledDraw(img)
@@ -1465,25 +1710,32 @@ def main():
     gps_thread.start()
 
     # Show splash
-    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ScaledDraw(img)
-    d.text((20, 25), "WARDRIVING", font=font, fill="#00CCFF")
-    d.text((10, 45), "WiFi Network Scanner", font=font_sm, fill="#888")
-    d.text((10, 65), "GPS + Multi-card", font=font_sm, fill="#888")
-    d.text((10, 80), "Wigle Compatible", font=font_sm, fill="#00FF00")
-    d.text((10, 100), "OK = Start", font=font_sm, fill="#666")
-    lcd.LCD_ShowImage(img, 0, 0)
-    time.sleep(1.5)
+    if not AUTO_MODE:
+        img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+        d = ScaledDraw(img)
+        d.text((20, 25), "WARDRIVING", font=font, fill="#00CCFF")
+        d.text((10, 45), "WiFi Network Scanner", font=font_sm, fill="#888")
+        d.text((10, 65), "GPS + Multi-card", font=font_sm, fill="#888")
+        d.text((10, 80), "Wigle Compatible", font=font_sm, fill="#00FF00")
+        d.text((10, 100), "OK = Start", font=font_sm, fill="#666")
+        lcd.LCD_ShowImage(img, 0, 0)
+        time.sleep(1.5)
 
     export_files = []
     threads = []
+    _auto_started = False
 
     # Start autosave thread (independent, survives even if main loop lags)
     threading.Thread(target=_autosave_thread, daemon=True).start()
 
     try:
         while not _shutdown.is_set():
-            btn = get_button(PINS, GPIO)
+            # Auto-mode: simulate OK press on first loop iteration
+            if AUTO_MODE and not _auto_started:
+                btn = "OK"
+                _auto_started = True
+            else:
+                btn = get_button(PINS, GPIO)
 
             # KEY3 = exit
             if btn == "KEY3":
@@ -1636,6 +1888,8 @@ def main():
             current_view = VIEWS[view_idx]
             if current_view == "live":
                 _draw_live(lcd, font, font_sm)
+            elif current_view == "map":
+                _draw_map(lcd, font, font_sm)
             elif current_view == "gps":
                 _draw_gps(lcd, font, font_sm)
             elif current_view == "channels":
