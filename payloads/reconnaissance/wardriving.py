@@ -85,7 +85,7 @@ CHANNELS_5 = [36, 40, 44, 48, 52, 56, 60, 64,
 DWELL_24 = 0.3       # 300ms like Kismet (was 800ms)
 DWELL_5 = 0.4        # slightly longer for DFS channels
 
-VIEWS = ["live", "map", "gps", "channels", "stats", "networks", "export"]
+VIEWS = ["live", "map", "gps", "cards", "channels", "stats", "networks", "export"]
 AUTOSAVE_INTERVAL = 20   # auto-save Wigle CSV every 20 seconds
 AUTO_MODE = "--auto" in sys.argv
 
@@ -142,6 +142,7 @@ total_probes = 0
 # Interfaces
 mon_ifaces = []        # list of active monitor interfaces
 dual_mode = False
+card_state = {}        # iface -> {channel, channels_24, channels_5, band, driver, packets}
 
 # UI
 view_idx = 0
@@ -625,6 +626,11 @@ def _channel_hopper_all(iface):
 
 def _channel_hopper_split(iface, channels):
     """Hop a specific set of channels on iface (for N-card split)."""
+    with lock:
+        if iface not in card_state:
+            card_state[iface] = {"channel": 0, "channels": channels, "packets": 0}
+        else:
+            card_state[iface]["channels"] = channels
     while not _shutdown.is_set() and _scanning.is_set():
         for ch in channels:
             if _shutdown.is_set() or not _scanning.is_set():
@@ -638,6 +644,8 @@ def _channel_hopper_split(iface, channels):
                 continue
             with lock:
                 current_channel = ch
+                if iface in card_state:
+                    card_state[iface]["channel"] = ch
             dwell = DWELL_5 if ch > 14 else DWELL_24
             if _shutdown.wait(timeout=dwell):
                 return
@@ -645,10 +653,15 @@ def _channel_hopper_split(iface, channels):
 
 def _sniffer(iface):
     """Sniff on monitor interface."""
+    def _counted_handler(pkt):
+        with lock:
+            if iface in card_state:
+                card_state[iface]["packets"] += 1
+        _packet_handler(pkt)
     try:
         scapy_sniff(
             iface=iface,
-            prn=_packet_handler,
+            prn=_counted_handler,
             stop_filter=lambda _: _shutdown.is_set() or not _scanning.is_set(),
             store=0,
         )
@@ -1184,6 +1197,88 @@ def _draw_stats(lcd, font, font_sm):
 
     d.rectangle((0, 116, 127, 127), fill="#111")
     d.text((2, 117), "K1:View K2:Export K3:X", font=font_sm, fill="#888")
+    lcd.LCD_ShowImage(img, 0, 0)
+
+
+def _draw_cards(lcd, font, font_sm, scroll_pos=0):
+    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+    d = ScaledDraw(img)
+
+    d.rectangle((0, 0, 127, 12), fill="#111")
+    d.text((2, 1), "CARDS", font=font_sm, fill="#FF00FF")
+
+    scanning = _scanning.is_set()
+    with lock:
+        cards = list(card_state.items())
+        n_aps = len(networks)
+
+    n_cards = len(cards)
+    d.text((50, 1), f"{'SCAN' if scanning else 'IDLE'} {n_cards}card", font=font_sm,
+           fill="#00FF00" if scanning else "#666")
+
+    if scroll_pos > 0 and n_cards > 0:
+        d.text((120, 1), "\u25b2", font=font_sm, fill="#555")
+
+    if not cards:
+        d.text((10, 50), "No cards active", font=font_sm, fill="#666")
+        d.text((10, 65), "Press OK to start", font=font_sm, fill="#444")
+    else:
+        y = 16
+        card_h = 34
+        max_visible = (100) // card_h
+        start = min(scroll_pos, max(0, n_cards - max_visible))
+
+        for i in range(start, n_cards):
+            if y > 108:
+                d.text((120, 110), "\u25bc", font=font_sm, fill="#555")
+                break
+            iface, st = cards[i]
+            ch = st.get("channel", 0)
+            band = st.get("band", "?")
+            driver = st.get("driver", "?")
+            pkts = st.get("packets", 0)
+            chs = st.get("channels", [])
+
+            short_name = iface[:10]
+            col = ["#00CCFF", "#00FF88", "#FFAA00", "#FF00FF"][i % 4]
+
+            # Card header
+            d.rectangle((0, y, 127, y + 10), fill="#0a0e18")
+            d.text((2, y), short_name, font=font_sm, fill=col)
+            d.text((68, y), f"CH:{ch}" if ch else "---", font=font_sm, fill="#fff")
+            d.text((100, y), band[:5], font=font_sm, fill="#888")
+            y += 12
+
+            # Channel assignments
+            if chs:
+                ch_24 = [c for c in chs if c <= 14]
+                ch_5 = [c for c in chs if c > 14]
+                parts = []
+                if ch_24:
+                    parts.append(f"2G:[{ch_24[0]}-{ch_24[-1]}]x{len(ch_24)}")
+                if ch_5:
+                    parts.append(f"5G:[{ch_5[0]}-{ch_5[-1]}]x{len(ch_5)}")
+                d.text((4, y), " ".join(parts), font=font_sm, fill="#555")
+            else:
+                d.text((4, y), driver[:20], font=font_sm, fill="#555")
+            y += 10
+
+            # Packets + channel progress bar
+            pkts_str = f"{pkts//1000}k" if pkts > 1000 else str(pkts)
+            d.text((4, y), f"pkts:{pkts_str}", font=font_sm, fill="#444")
+
+            if ch and scanning and chs:
+                bar_x = 60
+                bar_w = 67
+                pos = chs.index(ch) if ch in chs else 0
+                px = bar_x + int(pos / max(1, len(chs) - 1) * bar_w)
+                d.rectangle((bar_x, y + 1, bar_x + bar_w, y + 7), outline="#222")
+                d.rectangle((px - 1, y, px + 1, y + 8), fill=col)
+
+            y += 12
+
+    d.rectangle((0, 116, 127, 127), fill="#111")
+    d.text((2, 117), f"AP:{n_aps} ^v:Scrl K1:Vw", font=font_sm, fill="#888")
     lcd.LCD_ShowImage(img, 0, 0)
 
 
@@ -1792,6 +1887,16 @@ def main():
                                 else:
                                     cards_24_only.append(iface)
 
+                            # Init card state for the cards view
+                            for iface in mon_ifaces:
+                                band = "2.4+5" if iface in cards_5g else "2.4"
+                                drv = _get_driver(iface.replace("mon", ""))
+                                card_state[iface] = {
+                                    "channel": 0, "channels": [],
+                                    "band": band, "driver": drv or "?",
+                                    "packets": 0, "5g": iface in cards_5g,
+                                }
+
                             # Split 2.4GHz channels across all cards
                             all_24_cards = cards_24_only + cards_5g
                             n_24 = len(all_24_cards)
@@ -1817,9 +1922,11 @@ def main():
                                     threads.append(t)
 
                     # Always start iw scan on wlan0 (works with or without USB cards)
-                    # In scan-only mode: wlan0 alone does bulk discovery
-                    # In dual/monitor mode: wlan0 adds bulk discovery on top
                     if os.path.isdir("/sys/class/net/wlan0/wireless"):
+                        card_state["wlan0"] = {
+                            "channel": 0, "channels": [], "band": "iw scan",
+                            "driver": "brcmfmac", "packets": 0, "5g": False,
+                        }
                         t = threading.Thread(target=_iw_scanner,
                                              args=("wlan0",), daemon=True)
                         t.start()
@@ -1892,6 +1999,8 @@ def main():
                 _draw_map(lcd, font, font_sm)
             elif current_view == "gps":
                 _draw_gps(lcd, font, font_sm)
+            elif current_view == "cards":
+                _draw_cards(lcd, font, font_sm, scroll)
             elif current_view == "channels":
                 _draw_channels(lcd, font, font_sm)
             elif current_view == "stats":
