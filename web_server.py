@@ -112,7 +112,7 @@ TOKEN = _load_shared_token()
 AUTH_SECRET = _load_or_create_auth_secret()
 
 # WebUI only listens on these interfaces — wlan1+ are for attacks/monitor mode
-WEBUI_INTERFACES = ["eth0", "eth1","wlan0", "tailscale0"]
+WEBUI_INTERFACES = ["eth0", "eth1", "wlan0", "tailscale0"]
 
 
 def _get_interface_ip(interface: str) -> str | None:
@@ -897,6 +897,7 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
             or parsed.path.startswith("/api/system/")
             or parsed.path.startswith("/api/settings/")
             or parsed.path.startswith("/api/auth/")
+            or parsed.path.startswith("/api/wardriving/")
         ):
             query = parse_qs(parsed.query or "")
             if parsed.path == "/api/auth/bootstrap-status":
@@ -935,6 +936,16 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
             if parsed.path == "/api/loot/nmap":
                 self._handle_loot_nmap(query)
                 return
+            if parsed.path == "/api/wardriving/sessions":
+                self._handle_wardriving_sessions()
+                return
+            if parsed.path == "/api/wardriving/live":
+                self._handle_wardriving_live()
+                return
+            if parsed.path == "/api/wardriving/session":
+                self._handle_wardriving_session(query)
+                return
+
             if parsed.path == "/api/system/status":
                 self._handle_system_status()
                 return
@@ -1463,6 +1474,62 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
             _json_response(self, {"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
         except Exception as exc:
             _json_response(self, {"error": f"parse error: {exc}"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+
+    # ── Wardriving API ────────────────────────────────────────────
+    def _handle_wardriving_sessions(self) -> None:
+        """List all wardriving session files."""
+        sessions_dir = "/root/Raspyjack/loot/wardriving/sessions"
+        loot_dir = "/root/Raspyjack/loot/wardriving"
+        result = []
+        # Session files
+        if os.path.isdir(sessions_dir):
+            for f in sorted(os.listdir(sessions_dir), reverse=True):
+                if f.endswith("_wigle.csv"):
+                    result.append({
+                        "name": f.replace("_wigle.csv", ""),
+                        "path": os.path.join(sessions_dir, f),
+                        "size": os.path.getsize(os.path.join(sessions_dir, f)),
+                    })
+        # Also include legacy live file
+        live = os.path.join(loot_dir, "wardriving_live.csv")
+        if os.path.isfile(live):
+            result.insert(0, {
+                "name": "Live (current)",
+                "path": live,
+                "size": os.path.getsize(live),
+            })
+        _json_response(self, result)
+
+    def _handle_wardriving_live(self) -> None:
+        """Serve the live wardriving CSV."""
+        path = "/root/Raspyjack/loot/wardriving/wardriving_live.csv"
+        if os.path.isfile(path):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/csv")
+            self.end_headers()
+            with open(path, "rb") as f:
+                self.wfile.write(f.read())
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def _handle_wardriving_session(self, query: dict) -> None:
+        """Serve a specific session CSV file."""
+        path = query.get("path", [""])[0]
+        # Security: only allow files in the wardriving loot dir
+        if not path or not path.startswith("/root/Raspyjack/loot/wardriving/"):
+            self.send_response(403)
+            self.end_headers()
+            return
+        if os.path.isfile(path):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/csv")
+            self.end_headers()
+            with open(path, "rb") as f:
+                self.wfile.write(f.read())
+        else:
+            self.send_response(404)
+            self.end_headers()
 
     def _handle_system_status(self) -> None:
         try:
