@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RaspyJack Wardriving</title>
+  <link rel="stylesheet" href="./vendor/css/fontawesome.min.css">
+  <link rel="stylesheet" href="./vendor/leaflet/leaflet.css">
+  <style>
+    :root { color-scheme: dark; --bg: #05060a; --panel: #080c14; --border: #0f1a2a; --accent: #00ccff; --green: #00ff88; --red: #ff3333; --orange: #ff8800; --yellow: #ffaa00; }
+    * { margin:0; padding:0; box-sizing:border-box; }
+    body { font-family: 'Segoe UI',system-ui,sans-serif; background:var(--bg); color:#ccc; overflow:hidden; }
+
+    /* Top bar */
+    #topbar { height:36px; background:#0a0e1a; display:flex; align-items:center; padding:0 12px; gap:10px; border-bottom:1px solid var(--border); }
+    #topbar h1 { font-size:14px; color:var(--accent); white-space:nowrap; }
+    #topbar select { background:#111830; color:#aaa; border:1px solid #1a2844; padding:2px 6px; border-radius:4px; font-size:11px; max-width:170px; }
+    #topbar button { background:#111830; color:#888; border:1px solid #1a2844; padding:2px 8px; border-radius:4px; font-size:11px; cursor:pointer; }
+    #topbar button:hover { color:#fff; background:#1a2850; }
+    #topbar button.active { border-color:var(--accent); color:var(--accent); }
+    #topbar .spacer { flex:1; }
+    #topbar a { color:#555; font-size:11px; text-decoration:none; }
+    #liveDot { display:none; color:var(--green); font-size:8px; animation:pulse 1.5s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+    /* Main layout */
+    #main { display:flex; height:calc(100vh - 36px); position:relative; }
+    #map { flex:1; background:#060a10; }
+
+    /* Side panel */
+    #panel { width:260px; background:var(--panel); border-left:1px solid var(--border); display:flex; flex-direction:column; transition:width 0.25s ease; overflow:hidden; }
+    #panel.collapsed { width:0; border:none; }
+    #toggleBtn { position:absolute; right:260px; top:50%; transform:translateY(-50%); z-index:1000; background:#111830; border:1px solid #1a2844; border-right:none; color:#666; width:20px; height:44px; cursor:pointer; display:flex; align-items:center; justify-content:center; border-radius:6px 0 0 6px; font-size:10px; transition:right 0.25s ease; }
+    #toggleBtn:hover { color:#fff; background:#1a2850; }
+    #panel.collapsed ~ #toggleBtn { right:0; }
+
+    #panelHead { padding:6px 8px; font-size:11px; color:var(--accent); border-bottom:1px solid var(--border); display:flex; justify-content:space-between; }
+    #panelHead span { color:#555; font-weight:400; }
+    #searchBox { margin:3px 5px; padding:3px 6px; background:#0a1020; border:1px solid var(--border); color:#ccc; border-radius:3px; font-size:10px; width:calc(100% - 10px); }
+    #apList { flex:1; overflow-y:auto; font-family:'Courier New',monospace; font-size:10px; }
+    #apList::-webkit-scrollbar { width:3px; }
+    #apList::-webkit-scrollbar-thumb { background:#222; border-radius:2px; }
+
+    .ap { padding:3px 6px; border-bottom:1px solid #0a0e18; cursor:pointer; display:flex; align-items:center; gap:4px; }
+    .ap:hover { background:#0c1828; }
+    .ap .dot { width:6px; height:6px; border-radius:50%; flex-shrink:0; }
+    .ap .name { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#bbb; }
+    .ap .badge { font-size:8px; padding:1px 3px; border-radius:2px; flex-shrink:0; }
+    .ap .sig { color:#555; font-size:9px; width:28px; text-align:right; flex-shrink:0; }
+
+    .b-open { background:#2a0000; color:var(--red); }
+    .b-wep { background:#2a1800; color:var(--orange); }
+    .b-wpa { background:#2a2200; color:var(--yellow); }
+    .b-wpa2 { background:#001a2a; color:var(--accent); }
+    .b-wpa3 { background:#002a1a; color:var(--green); }
+
+    /* Legend */
+    #legend { position:absolute; bottom:20px; left:10px; z-index:1000; background:rgba(8,12,20,0.92); border:1px solid var(--border); border-radius:6px; padding:8px 10px; font-size:10px; }
+    #legend .row { display:flex; align-items:center; gap:6px; margin:2px 0; }
+    #legend .swatch { width:10px; height:10px; border-radius:50%; }
+    #legend .line { width:20px; height:2px; border-radius:1px; }
+    #legendToggle { position:absolute; bottom:20px; left:10px; z-index:999; background:#111830; border:1px solid #1a2844; color:#888; padding:3px 8px; border-radius:4px; font-size:10px; cursor:pointer; display:none; }
+
+    /* Stats overlay */
+    #statsOverlay { position:absolute; top:8px; left:10px; z-index:1000; background:rgba(8,12,20,0.88); border:1px solid var(--border); border-radius:6px; padding:5px 10px; font-size:10px; display:flex; gap:10px; }
+    #statsOverlay .s { color:#555; }
+    #statsOverlay .v { font-weight:600; }
+
+    .leaflet-popup-content-wrapper { background:rgba(10,16,30,0.95)!important; color:#ccc!important; border:1px solid #1a2844!important; border-radius:6px!important; }
+    .leaflet-popup-tip { background:rgba(10,16,30,0.95)!important; }
+
+    /* Subtle glow on markers only */
+    .leaflet-overlay-pane svg { filter: drop-shadow(0 0 2px rgba(0,204,255,0.25)); }
+  </style>
+</head>
+<body>
+
+<div id="topbar">
+  <h1><i class="fa-solid fa-satellite-dish"></i> Wardriving</h1>
+  <select id="sessionSel"></select>
+  <button onclick="loadSession()"><i class="fa-solid fa-rotate"></i></button>
+  <button id="btnLive" onclick="toggleLive()"><i class="fa-solid fa-tower-broadcast"></i> Live <i id="liveDot" class="fa-solid fa-circle"></i></button>
+  <div class="spacer"></div>
+  <a href="./index.html"><i class="fa-solid fa-arrow-left"></i> WebUI</a>
+</div>
+
+<div id="main">
+  <div id="map"></div>
+  <div id="panel">
+    <div id="panelHead">Networks <span id="pCount"></span></div>
+    <input id="searchBox" type="text" placeholder="Search..." oninput="renderPanel()">
+    <div id="apList"></div>
+  </div>
+  <div id="toggleBtn" onclick="togglePanel()"><i class="fa-solid fa-chevron-right"></i></div>
+
+  <div id="statsOverlay">
+    <span class="s">AP: <span class="v" id="sT" style="color:var(--accent)">0</span></span>
+    <span class="s">GPS: <span class="v" id="sG" style="color:var(--green)">0</span></span>
+    <span class="s">Open: <span class="v" id="sO" style="color:var(--red)">0</span></span>
+    <span class="s">WPA2: <span class="v" id="s2" style="color:var(--accent)">0</span></span>
+    <span class="s">WPA3: <span class="v" id="s3" style="color:var(--green)">0</span></span>
+  </div>
+
+  <div id="legend">
+    <div style="font-weight:600;color:var(--accent);margin-bottom:4px">Legend</div>
+    <div class="row"><div class="swatch" style="background:var(--red)"></div> Open</div>
+    <div class="row"><div class="swatch" style="background:var(--orange)"></div> WEP</div>
+    <div class="row"><div class="swatch" style="background:var(--yellow)"></div> WPA</div>
+    <div class="row"><div class="swatch" style="background:var(--accent)"></div> WPA2</div>
+    <div class="row"><div class="swatch" style="background:var(--green)"></div> WPA3</div>
+    <div style="margin-top:4px;border-top:1px solid #1a2844;padding-top:4px">
+      <div class="row"><div class="line" style="background:linear-gradient(90deg,#ff000066,#00ff8866)"></div> Route (time gradient)</div>
+      <div class="row"><div class="swatch" style="background:#fff;width:6px;height:6px"></div> GPS position</div>
+    </div>
+    <div style="margin-top:4px;color:#555;cursor:pointer" onclick="this.parentElement.style.display='none';document.getElementById('legendToggle').style.display='block'">
+      <i class="fa-solid fa-xmark"></i> close
+    </div>
+  </div>
+  <div id="legendToggle" onclick="document.getElementById('legend').style.display='block';this.style.display='none'">
+    <i class="fa-solid fa-map"></i> Legend
+  </div>
+</div>
+
+<script src="./vendor/leaflet/leaflet.js"></script>
+<script>
+L.Icon.Default.prototype.options.imagePath = './vendor/leaflet/';
+
+const map = L.map('map', {zoomControl: false}).setView([49.18, -0.37], 14);
+L.control.zoom({position:'topright'}).addTo(map);
+// Dark map with visible labels
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', {
+  attribution:'©CartoDB ©OSM', maxZoom:19, subdomains:'abcd',
+}).addTo(map);
+// Labels on top (rendered above markers for readability)
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', {
+  maxZoom:19, subdomains:'abcd', pane:'shadowPane',
+}).addTo(map);
+
+let markersLayer = L.layerGroup().addTo(map);
+let routeLayer = L.layerGroup().addTo(map);
+let allNets = [];
+let liveInterval = null;
+
+function secInfo(auth) {
+  if (!auth) return {cls:'b-wpa2',label:'?',color:'#888'};
+  if (auth.includes('WPA3')) return {cls:'b-wpa3',label:'WPA3',color:'#00ff88'};
+  if (auth.includes('WPA2')) return {cls:'b-wpa2',label:'WPA2',color:'#00ccff'};
+  if (auth.includes('WPA') && !auth.includes('WPA2')) return {cls:'b-wpa',label:'WPA',color:'#ffaa00'};
+  if (auth.includes('WEP')) return {cls:'b-wep',label:'WEP',color:'#ff8800'};
+  return {cls:'b-open',label:'OPEN',color:'#ff3333'};
+}
+
+function parseCSV(text) {
+  const lines = text.trim().split('\n');
+  if (lines.length < 3) return [];
+  const h = lines[1].split(',');
+  const g = k => h.indexOf(k);
+  const result = [];
+  for (let i = 2; i < lines.length; i++) {
+    const c = lines[i].split(',');
+    if (c.length < 7) continue;
+    const lat = parseFloat(c[g('CurrentLatitude')]);
+    const lon = parseFloat(c[g('CurrentLongitude')]);
+    const hasGps = !isNaN(lat) && !isNaN(lon) && !(lat===0&&lon===0);
+    result.push({
+      mac:c[g('MAC')]||'', ssid:c[g('SSID')]||'', auth:c[g('AuthMode')]||'',
+      channel:c[g('Channel')]||'', rssi:c[g('RSSI')]||'',
+      firstSeen:c[g('FirstSeen')]||'',
+      lat: hasGps?lat:null, lon: hasGps?lon:null, hasGps,
+    });
+  }
+  return result;
+}
+
+function renderMap() {
+  markersLayer.clearLayers();
+  routeLayer.clearLayers();
+  const gpsNets = allNets.filter(n => n.hasGps);
+  if (!gpsNets.length) return;
+
+  // Sort by time for route
+  const sorted = [...gpsNets].sort((a,b) => (a.firstSeen||'').localeCompare(b.firstSeen||''));
+
+  // Draw route as gradient polyline — glow effect with double line
+  if (sorted.length >= 2) {
+    for (let i = 0; i < sorted.length - 1; i++) {
+      const ratio = i / (sorted.length - 1);
+      const r = Math.round(255 * (1 - ratio));
+      const g = Math.round(255 * ratio);
+      const b = Math.round(100 + 100 * Math.sin(ratio * Math.PI));
+      const color = `rgb(${r},${g},${b})`;
+      const pts = [[sorted[i].lat, sorted[i].lon], [sorted[i+1].lat, sorted[i+1].lon]];
+      // Outer glow
+      L.polyline(pts, {color, weight: 6, opacity: 0.15}).addTo(routeLayer);
+      // Core line
+      L.polyline(pts, {color, weight: 2, opacity: 0.7}).addTo(routeLayer);
+    }
+  }
+
+  // Draw AP markers with glow ring
+  const bounds = [];
+  gpsNets.forEach((n, idx) => {
+    const {color} = secInfo(n.auth);
+    // Outer glow ring
+    L.circleMarker([n.lat, n.lon], {
+      radius: 12, fillColor: color, color: 'transparent',
+      weight: 0, fillOpacity: 0.1,
+    }).addTo(markersLayer);
+    // Core marker
+    const c = L.circleMarker([n.lat, n.lon], {
+      radius: 5, fillColor: color, color: color,
+      weight: 1, fillOpacity: 0.9,
+    });
+    c.bindPopup(`<div style="font-family:monospace;font-size:11px">
+      <b style="color:var(--accent)">${n.ssid||'(hidden)'}</b><br>
+      <span style="color:#666">${n.mac}</span><br>
+      <span style="color:${color}">${n.auth}</span><br>
+      CH:${n.channel} | ${n.rssi}dBm<br>
+      <span style="color:#555">${n.firstSeen}</span>
+    </div>`);
+    markersLayer.addLayer(c);
+    bounds.push([n.lat, n.lon]);
+  });
+
+  if (bounds.length) map.fitBounds(bounds, {padding:[30,30], maxZoom:16});
+}
+
+function renderStats() {
+  document.getElementById('sT').textContent = allNets.length;
+  document.getElementById('sG').textContent = allNets.filter(n=>n.hasGps).length;
+  document.getElementById('sO').textContent = allNets.filter(n=>{const s=secInfo(n.auth);return s.label==='OPEN'}).length;
+  document.getElementById('s2').textContent = allNets.filter(n=>n.auth.includes('WPA2')).length;
+  document.getElementById('s3').textContent = allNets.filter(n=>n.auth.includes('WPA3')).length;
+}
+
+function renderPanel() {
+  const q = document.getElementById('searchBox').value.toLowerCase();
+  let nets = [...allNets];
+  if (q) nets = nets.filter(n => (n.ssid||'').toLowerCase().includes(q) || n.mac.toLowerCase().includes(q));
+  nets.sort((a,b) => {
+    if (a.hasGps && !b.hasGps) return -1;
+    if (!a.hasGps && b.hasGps) return 1;
+    return (parseInt(b.rssi)||-99) - (parseInt(a.rssi)||-99);
+  });
+  document.getElementById('pCount').textContent = `(${nets.length})`;
+  const el = document.getElementById('apList');
+  const max = Math.min(nets.length, 300);
+  let html = '';
+  for (let i = 0; i < max; i++) {
+    const n = nets[i];
+    const {cls,label,color} = secInfo(n.auth);
+    html += `<div class="ap" onclick="focusAP(${i})" data-i="${i}">
+      <div class="dot" style="background:${n.hasGps?color:'#222'}"></div>
+      <div class="name">${n.ssid||'(hidden)'}</div>
+      <div class="badge ${cls}">${label}</div>
+      <div class="sig">${n.rssi}</div>
+    </div>`;
+  }
+  el.innerHTML = html;
+  window._panelNets = nets;
+}
+
+function focusAP(i) {
+  const n = window._panelNets[i];
+  if (!n || !n.hasGps) return;
+  map.setView([n.lat, n.lon], 18);
+  const flash = L.circleMarker([n.lat, n.lon], {
+    radius:18, fillColor:'#fff', color:secInfo(n.auth).color,
+    weight:2, fillOpacity:0.2,
+  }).addTo(map);
+  setTimeout(()=>map.removeLayer(flash), 2000);
+}
+
+function renderAll() { renderMap(); renderStats(); renderPanel(); }
+
+function togglePanel() {
+  const p = document.getElementById('panel');
+  const i = document.querySelector('#toggleBtn i');
+  p.classList.toggle('collapsed');
+  i.className = p.classList.contains('collapsed') ? 'fa-solid fa-chevron-left' : 'fa-solid fa-chevron-right';
+  setTimeout(()=>map.invalidateSize(), 300);
+}
+
+async function loadSessionList() {
+  try {
+    const r = await fetch('/api/wardriving/sessions', {credentials:'include'});
+    if (r.ok) {
+      const s = await r.json();
+      const sel = document.getElementById('sessionSel');
+      sel.innerHTML = '';
+      s.forEach((x,i) => {
+        const o = document.createElement('option');
+        o.value = x.path; o.textContent = x.name;
+        if (i===0) o.selected = true;
+        sel.appendChild(o);
+      });
+    }
+  } catch(e){}
+}
+
+async function loadSession() {
+  const path = document.getElementById('sessionSel').value;
+  if (!path) return;
+  try {
+    const r = await fetch(`/api/wardriving/session?path=${encodeURIComponent(path)}`, {credentials:'include'});
+    if (r.ok) { allNets = parseCSV(await r.text()); renderAll(); }
+  } catch(e){}
+}
+
+async function loadLive() {
+  try {
+    const r = await fetch('/api/wardriving/live', {credentials:'include'});
+    if (r.ok) {
+      const fresh = parseCSV(await r.text());
+      const m = new Map(allNets.map(n=>[n.mac,n]));
+      fresh.forEach(n=>m.set(n.mac,n));
+      allNets = [...m.values()];
+      renderAll();
+    }
+  } catch(e){}
+}
+
+function toggleLive() {
+  const btn = document.getElementById('btnLive');
+  const dot = document.getElementById('liveDot');
+  if (liveInterval) {
+    clearInterval(liveInterval); liveInterval=null;
+    btn.classList.remove('active'); dot.style.display='none';
+  } else {
+    loadLive();
+    liveInterval = setInterval(loadLive, 5000);
+    btn.classList.add('active'); dot.style.display='inline';
+  }
+}
+
+loadSessionList();
+setTimeout(loadSession, 500);
+</script>
+</body>
+</html>

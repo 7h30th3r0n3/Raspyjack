@@ -1319,33 +1319,78 @@ def _draw_export(lcd, font, font_sm, export_files):
 
 
 # ---------------------------------------------------------------------------
-# Auto-save (continuous Wigle CSV update)
+# Session management + Auto-save
 # ---------------------------------------------------------------------------
 
-_wigle_path = os.path.join(LOOT_DIR, "wardriving_live.csv")
+SESSION_DIR = os.path.join(LOOT_DIR, "sessions")
+_session_id = ""
+_session_wigle_path = ""
+_session_json_path = ""
+
+
+def _init_session():
+    """Create a new session with timestamped files."""
+    global _session_id, _session_wigle_path, _session_json_path
+    os.makedirs(SESSION_DIR, exist_ok=True)
+    _session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    _session_wigle_path = os.path.join(SESSION_DIR, f"session_{_session_id}_wigle.csv")
+    _session_json_path = os.path.join(SESSION_DIR, f"session_{_session_id}.json")
+    # Create session metadata
+    meta = {
+        "session_id": _session_id,
+        "start_time": datetime.now().isoformat(),
+        "device": "RaspyJack",
+        "networks": 0,
+        "wigle_ready": 0,
+    }
+    try:
+        with open(_session_json_path, "w") as f:
+            json.dump(meta, f, indent=2)
+    except Exception:
+        pass
 
 
 def _autosave_thread():
-    """Background thread: save Wigle CSV every AUTOSAVE_INTERVAL seconds."""
+    """Background thread: save session Wigle CSV + live CSV every AUTOSAVE_INTERVAL seconds."""
     while not _shutdown.is_set():
         if _shutdown.wait(timeout=AUTOSAVE_INTERVAL):
             break
         if _scanning.is_set():
             _auto_save_wigle()
             _save_to_db()
+            _save_session_meta()
     # Final save on shutdown
     _auto_save_wigle()
     _save_to_db()
+    _save_session_meta()
 
 
-def _auto_save_wigle():
-    """Overwrite live Wigle CSV with current data."""
+def _save_session_meta():
+    """Update session metadata JSON."""
+    if not _session_json_path:
+        return
     with lock:
         nets = dict(networks)
-    if not nets:
-        return
     try:
-        with open(_wigle_path, "w", newline="") as f:
+        meta = {
+            "session_id": _session_id,
+            "start_time": _session_id,
+            "end_time": datetime.now().isoformat(),
+            "device": "RaspyJack",
+            "networks": len(nets),
+            "wigle_ready": sum(1 for n in nets.values() if n.get("gps")),
+            "duration_seconds": int(time.time() - scan_start_time) if scan_start_time else 0,
+        }
+        with open(_session_json_path, "w") as f:
+            json.dump(meta, f, indent=2)
+    except Exception:
+        pass
+
+
+def _write_wigle_csv(path, nets):
+    """Write Wigle-format CSV to a given path."""
+    try:
+        with open(path, "w", newline="") as f:
             f.write("WigleWifi-1.4,appRelease=RaspyJack-v2,model=RaspberryPi,"
                     "release=2.0,device=RaspyJack,display=LCD144,"
                     "board=RaspberryPi,brand=7h30th3r0n3\n")
@@ -1368,6 +1413,19 @@ def _auto_save_wigle():
                 ])
     except Exception:
         pass
+
+
+def _auto_save_wigle():
+    """Save Wigle CSV to both session file and live file."""
+    with lock:
+        nets = dict(networks)
+    if not nets:
+        return
+    # Session file (persisted, one per launch)
+    if _session_wigle_path:
+        _write_wigle_csv(_session_wigle_path, nets)
+    # Live file (always overwritten, for quick access)
+    _write_wigle_csv(os.path.join(LOOT_DIR, "wardriving_live.csv"), nets)
 
 
 # ---------------------------------------------------------------------------
@@ -1440,6 +1498,7 @@ def main():
                     _scanning.set()
                     global scan_start_time
                     scan_start_time = time.time()
+                    _init_session()
                     mon_ifaces.clear()
 
                     if ifaces:
