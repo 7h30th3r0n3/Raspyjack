@@ -4455,6 +4455,9 @@ def _check_payload_request():
             data = json.load(f)
         os.remove(request_path)
         if data.get("action") == "start" and data.get("path"):
+            args = data.get("args", [])
+            if args:
+                return (str(data["path"]), *args)
             return str(data["path"])
     except Exception:
         pass

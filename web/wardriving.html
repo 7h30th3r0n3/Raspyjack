@@ -54,6 +54,18 @@
     .b-wpa2 { background:#001a2a; color:var(--accent); }
     .b-wpa3 { background:#002a1a; color:var(--green); }
 
+    /* Timeline bar */
+    #timeline { display:none; position:absolute; bottom:0; left:0; right:0; z-index:1001; height:44px; background:rgba(8,12,20,0.94); border-top:1px solid var(--border); padding:4px 12px; }
+    #timeline .tl-row { display:flex; align-items:center; gap:8px; height:100%; }
+    #timeline .tl-btn { background:none; border:1px solid #1a2844; color:#888; width:28px; height:28px; border-radius:50%; cursor:pointer; font-size:12px; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+    #timeline .tl-btn:hover { color:#fff; border-color:var(--accent); }
+    #timeline .tl-btn.active { color:var(--accent); border-color:var(--accent); }
+    #tlSlider { flex:1; -webkit-appearance:none; appearance:none; height:4px; background:#1a2844; border-radius:2px; outline:none; cursor:pointer; }
+    #tlSlider::-webkit-slider-thumb { -webkit-appearance:none; width:14px; height:14px; border-radius:50%; background:var(--accent); cursor:pointer; border:2px solid #0a0e1a; }
+    #tlTime { color:var(--accent); font-family:'Courier New',monospace; font-size:11px; white-space:nowrap; min-width:50px; text-align:center; }
+    #tlCount { color:#555; font-size:10px; white-space:nowrap; min-width:60px; }
+    #tlSpeed { background:#111830; color:#aaa; border:1px solid #1a2844; padding:1px 4px; border-radius:3px; font-size:10px; cursor:pointer; }
+
     /* Legend */
     #legend { position:absolute; bottom:20px; left:10px; z-index:1000; background:rgba(8,12,20,0.92); border:1px solid var(--border); border-radius:6px; padding:8px 10px; font-size:10px; }
     #legend .row { display:flex; align-items:center; gap:6px; margin:2px 0; }
@@ -71,6 +83,27 @@
 
     /* Subtle glow on markers only */
     .leaflet-overlay-pane svg { filter: drop-shadow(0 0 2px rgba(0,204,255,0.25)); }
+
+    /* AP Detail slide-out */
+    #apDetail {
+      position:absolute; left:0; top:36px; bottom:0; width:280px; z-index:1001;
+      background:rgba(6,10,16,0.96); border-right:1px solid var(--accent);
+      transform:translateX(-100%); transition:transform 0.25s ease;
+      overflow-y:auto; font-family:'Courier New',monospace;
+    }
+    #apDetail.open { transform:translateX(0); }
+    #apDetailClose {
+      position:absolute; top:8px; right:8px; color:#666; cursor:pointer;
+      font-size:14px; z-index:1;
+    }
+    #apDetailClose:hover { color:#fff; }
+    #apDetailContent { padding:14px; }
+    .detail-header { font-size:16px; color:var(--accent); margin-bottom:10px; word-break:break-all; }
+    .detail-row { display:flex; justify-content:space-between; padding:4px 0; border-bottom:1px solid #0a1020; font-size:11px; }
+    .detail-label { color:#555; }
+    .detail-val { color:#ccc; text-align:right; max-width:160px; word-break:break-all; }
+    .detail-sec { display:inline-block; padding:2px 8px; border-radius:4px; font-size:12px; font-weight:600; margin:6px 0; }
+    .detail-gps { margin-top:10px; padding:6px 8px; background:#0a1020; border-radius:4px; font-size:10px; color:#888; }
   </style>
 </head>
 <body>
@@ -80,6 +113,16 @@
   <select id="sessionSel"></select>
   <button onclick="loadSession()"><i class="fa-solid fa-rotate"></i></button>
   <button id="btnLive" onclick="toggleLive()"><i class="fa-solid fa-tower-broadcast"></i> Live <i id="liveDot" class="fa-solid fa-circle"></i></button>
+  <select id="themeSel" onchange="setTheme(this.value)" title="Map theme">
+    <option value="hacker">🌑 Stealth</option>
+    <option value="dark">🌃 Dark</option>
+    <option value="midnight">🔵 Midnight</option>
+    <option value="satellite">🛰️ Satellite</option>
+    <option value="topo">🏔️ Topo</option>
+    <option value="light">☀️ Light</option>
+    <option value="street">🗺️ Street</option>
+  </select>
+  <button id="btnReplay" onclick="toggleReplay()" title="Replay route"><i class="fa-solid fa-clock-rotate-left"></i> Replay</button>
   <div class="spacer"></div>
   <a href="./index.html"><i class="fa-solid fa-arrow-left"></i> WebUI</a>
 </div>
@@ -101,6 +144,12 @@
     <span class="s">WPA3: <span class="v" id="s3" style="color:var(--green)">0</span></span>
   </div>
 
+  <!-- AP Detail slide-out panel -->
+  <div id="apDetail">
+    <div id="apDetailClose" onclick="closeDetail()"><i class="fa-solid fa-xmark"></i></div>
+    <div id="apDetailContent"></div>
+  </div>
+
   <div id="legend">
     <div style="font-weight:600;color:var(--accent);margin-bottom:4px">Legend</div>
     <div class="row"><div class="swatch" style="background:var(--red)"></div> Open</div>
@@ -119,22 +168,87 @@
   <div id="legendToggle" onclick="document.getElementById('legend').style.display='block';this.style.display='none'">
     <i class="fa-solid fa-map"></i> Legend
   </div>
+
+  <div id="timeline">
+    <div class="tl-row">
+      <div class="tl-btn" id="tlPlay" onclick="tlTogglePlay()"><i class="fa-solid fa-play"></i></div>
+      <div class="tl-btn" onclick="tlReset()" title="Reset"><i class="fa-solid fa-backward-fast"></i></div>
+      <input type="range" id="tlSlider" min="0" max="100" value="0" oninput="tlSeek(this.value)">
+      <span id="tlTime">--:--</span>
+      <span id="tlCount">0 / 0</span>
+      <select id="tlSpeed" onchange="tlSetSpeed(this.value)" title="Speed">
+        <option value="0.5">0.5x</option>
+        <option value="1" selected>1x</option>
+        <option value="2">2x</option>
+        <option value="5">5x</option>
+        <option value="10">10x</option>
+        <option value="25">25x</option>
+      </select>
+      <div class="tl-btn" onclick="toggleReplay()" title="Close"><i class="fa-solid fa-xmark"></i></div>
+    </div>
+  </div>
 </div>
 
 <script src="./vendor/leaflet/leaflet.js"></script>
 <script>
 L.Icon.Default.prototype.options.imagePath = './vendor/leaflet/';
 
-const map = L.map('map', {zoomControl: false}).setView([49.18, -0.37], 14);
+const canvasRenderer = L.canvas({padding:0.5});
+const map = L.map('map', {zoomControl:false, preferCanvas:true}).setView([49.18,-0.37],14);
 L.control.zoom({position:'topright'}).addTo(map);
-// Dark map with visible labels
-L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', {
-  attribution:'©CartoDB ©OSM', maxZoom:19, subdomains:'abcd',
-}).addTo(map);
-// Labels on top (rendered above markers for readability)
-L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', {
-  maxZoom:19, subdomains:'abcd', pane:'shadowPane',
-}).addTo(map);
+
+const THEMES = {
+  hacker: {
+    layers: [
+      {url:'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', opts:{subdomains:'abcd', maxZoom:19, opacity:0.85}},
+      {url:'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', opts:{maxZoom:19, opacity:0.12}},
+    ],
+    bg:'#060a10', attr:'©CartoDB ©OSM',
+  },
+  dark: {
+    layers: [{url:'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', opts:{subdomains:'abcd', maxZoom:19, opacity:1}}],
+    bg:'#0a0a0a', attr:'©CartoDB ©OSM',
+  },
+  midnight: {
+    layers: [{url:'https://tiles.stadiamaps.com/tiles/alidade_smooth_dark/{z}/{x}/{y}{r}.png', opts:{maxZoom:20, opacity:1}}],
+    bg:'#0d1117', attr:'©Stadia ©OSM',
+  },
+  satellite: {
+    layers: [{url:'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', opts:{maxZoom:18, opacity:1}}],
+    bg:'#0a0a0a', attr:'©Esri',
+  },
+  topo: {
+    layers: [{url:'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', opts:{maxZoom:17, opacity:0.85}}],
+    bg:'#1a1a2e', attr:'©OpenTopoMap ©OSM',
+  },
+  light: {
+    layers: [{url:'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', opts:{subdomains:'abcd', maxZoom:19, opacity:1}}],
+    bg:'#e0e0e0', attr:'©CartoDB ©OSM',
+  },
+  street: {
+    layers: [{url:'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', opts:{maxZoom:19, opacity:1}}],
+    bg:'#f0f0f0', attr:'©OSM',
+  },
+};
+
+let tileLayers = [];
+function setTheme(name) {
+  const theme = THEMES[name];
+  if (!theme) return;
+  tileLayers.forEach(l => map.removeLayer(l));
+  tileLayers = [];
+  theme.layers.forEach(l => {
+    const tl = L.tileLayer(l.url, {...l.opts, attribution:theme.attr});
+    tl.addTo(map);
+    tileLayers.push(tl);
+  });
+  document.getElementById('map').style.background = theme.bg;
+  try { localStorage.setItem('wd_theme',name); } catch(e){}
+}
+
+const savedTheme = (function(){ try{return localStorage.getItem('wd_theme')}catch(e){return null} })() || 'hacker';
+document.getElementById('themeSel').value = savedTheme;
+setTheme(savedTheme);
 
 let markersLayer = L.layerGroup().addTo(map);
 let routeLayer = L.layerGroup().addTo(map);
@@ -145,7 +259,7 @@ function secInfo(auth) {
   if (!auth) return {cls:'b-wpa2',label:'?',color:'#888'};
   if (auth.includes('WPA3')) return {cls:'b-wpa3',label:'WPA3',color:'#00ff88'};
   if (auth.includes('WPA2')) return {cls:'b-wpa2',label:'WPA2',color:'#00ccff'};
-  if (auth.includes('WPA') && !auth.includes('WPA2')) return {cls:'b-wpa',label:'WPA',color:'#ffaa00'};
+  if (auth.includes('WPA')&&!auth.includes('WPA2')) return {cls:'b-wpa',label:'WPA',color:'#ffaa00'};
   if (auth.includes('WEP')) return {cls:'b-wep',label:'WEP',color:'#ff8800'};
   return {cls:'b-open',label:'OPEN',color:'#ff3333'};
 }
@@ -156,9 +270,9 @@ function parseCSV(text) {
   const h = lines[1].split(',');
   const g = k => h.indexOf(k);
   const result = [];
-  for (let i = 2; i < lines.length; i++) {
+  for (let i=2; i<lines.length; i++) {
     const c = lines[i].split(',');
-    if (c.length < 7) continue;
+    if (c.length<7) continue;
     const lat = parseFloat(c[g('CurrentLatitude')]);
     const lon = parseFloat(c[g('CurrentLongitude')]);
     const hasGps = !isNaN(lat) && !isNaN(lon) && !(lat===0&&lon===0);
@@ -166,88 +280,166 @@ function parseCSV(text) {
       mac:c[g('MAC')]||'', ssid:c[g('SSID')]||'', auth:c[g('AuthMode')]||'',
       channel:c[g('Channel')]||'', rssi:c[g('RSSI')]||'',
       firstSeen:c[g('FirstSeen')]||'',
-      lat: hasGps?lat:null, lon: hasGps?lon:null, hasGps,
+      lat:hasGps?lat:null, lon:hasGps?lon:null, hasGps,
     });
   }
   return result;
 }
 
-function renderMap() {
+// --- Clustering: grid-based at low zoom ---
+function clusterNets(nets, zoom) {
+  if (zoom >= 15) return null;
+  const gridSize = zoom <= 10 ? 0.01 : zoom <= 12 ? 0.004 : 0.002;
+  const clusters = new Map();
+  for (const n of nets) {
+    if (!n.hasGps) continue;
+    const gx = Math.floor(n.lat/gridSize);
+    const gy = Math.floor(n.lon/gridSize);
+    const key = gx+','+gy;
+    if (!clusters.has(key)) {
+      clusters.set(key, {lat:0,lon:0,count:0,open:0,wep:0,wpa:0,wpa2:0,wpa3:0});
+    }
+    const cl = clusters.get(key);
+    cl.lat += n.lat; cl.lon += n.lon; cl.count++;
+    const lb = secInfo(n.auth).label;
+    if (lb==='OPEN') cl.open++;
+    else if (lb==='WEP') cl.wep++;
+    else if (lb==='WPA') cl.wpa++;
+    else if (lb==='WPA2') cl.wpa2++;
+    else if (lb==='WPA3') cl.wpa3++;
+  }
+  const result = [];
+  for (const cl of clusters.values()) {
+    cl.lat /= cl.count; cl.lon /= cl.count;
+    result.push(cl);
+  }
+  return result;
+}
+
+function dominantColor(cl) {
+  const mx = Math.max(cl.wpa3,cl.wpa2,cl.wpa,cl.wep,cl.open);
+  if (mx===cl.open && cl.open>0) return '#ff3333';
+  if (mx===cl.wep && cl.wep>0) return '#ff8800';
+  if (mx===cl.wpa && cl.wpa>0) return '#ffaa00';
+  if (mx===cl.wpa3 && cl.wpa3>0) return '#00ff88';
+  return '#00ccff';
+}
+
+// --- Render map with clustering ---
+function renderMap(visibleNets) {
+  const nets = visibleNets || allNets;
   markersLayer.clearLayers();
   routeLayer.clearLayers();
-  const gpsNets = allNets.filter(n => n.hasGps);
+  const gpsNets = nets.filter(n => n.hasGps);
   if (!gpsNets.length) return;
 
-  // Sort by time for route
   const sorted = [...gpsNets].sort((a,b) => (a.firstSeen||'').localeCompare(b.firstSeen||''));
 
-  // Draw route as gradient polyline — glow effect with double line
+  // Route: batch segments by color groups to reduce polyline count
   if (sorted.length >= 2) {
-    for (let i = 0; i < sorted.length - 1; i++) {
-      const ratio = i / (sorted.length - 1);
-      const r = Math.round(255 * (1 - ratio));
-      const g = Math.round(255 * ratio);
-      const b = Math.round(100 + 100 * Math.sin(ratio * Math.PI));
+    const step = Math.max(1, Math.floor(sorted.length / 300));
+    for (let i=0; i<sorted.length-1; i+=step) {
+      const end = Math.min(i+step, sorted.length-1);
+      const ratio = i/(sorted.length-1);
+      const r = Math.round(255*(1-ratio));
+      const g = Math.round(255*ratio);
+      const b = Math.round(100+100*Math.sin(ratio*Math.PI));
       const color = `rgb(${r},${g},${b})`;
-      const pts = [[sorted[i].lat, sorted[i].lon], [sorted[i+1].lat, sorted[i+1].lon]];
-      // Outer glow
-      L.polyline(pts, {color, weight: 6, opacity: 0.15}).addTo(routeLayer);
-      // Core line
-      L.polyline(pts, {color, weight: 2, opacity: 0.7}).addTo(routeLayer);
+      const pts = [];
+      for (let j=i; j<=end; j++) pts.push([sorted[j].lat, sorted[j].lon]);
+      L.polyline(pts, {color, weight:6, opacity:0.15, renderer:canvasRenderer}).addTo(routeLayer);
+      L.polyline(pts, {color, weight:2, opacity:0.7, renderer:canvasRenderer}).addTo(routeLayer);
     }
   }
 
-  // Draw AP markers with glow ring
-  const bounds = [];
-  gpsNets.forEach((n, idx) => {
-    const {color} = secInfo(n.auth);
-    // Outer glow ring
-    L.circleMarker([n.lat, n.lon], {
-      radius: 12, fillColor: color, color: 'transparent',
-      weight: 0, fillOpacity: 0.1,
-    }).addTo(markersLayer);
-    // Core marker
-    const c = L.circleMarker([n.lat, n.lon], {
-      radius: 5, fillColor: color, color: color,
-      weight: 1, fillOpacity: 0.9,
-    });
-    c.bindPopup(`<div style="font-family:monospace;font-size:11px">
-      <b style="color:var(--accent)">${n.ssid||'(hidden)'}</b><br>
-      <span style="color:#666">${n.mac}</span><br>
-      <span style="color:${color}">${n.auth}</span><br>
-      CH:${n.channel} | ${n.rssi}dBm<br>
-      <span style="color:#555">${n.firstSeen}</span>
-    </div>`);
-    markersLayer.addLayer(c);
-    bounds.push([n.lat, n.lon]);
-  });
+  const zoom = map.getZoom();
+  const clusters = clusterNets(gpsNets, zoom);
 
+  if (clusters) {
+    // Clustered view
+    for (const cl of clusters) {
+      const color = dominantColor(cl);
+      const radius = Math.min(28, 8 + Math.sqrt(cl.count)*2);
+      const m = L.circleMarker([cl.lat,cl.lon], {
+        radius, fillColor:color, color, weight:1, fillOpacity:0.5, renderer:canvasRenderer,
+      });
+      m.bindPopup(`<div style="font-family:monospace;font-size:11px">
+        <b style="color:var(--accent)">${cl.count} networks</b><br>
+        <span style="color:#ff3333">Open:${cl.open}</span>
+        <span style="color:#ff8800"> WEP:${cl.wep}</span>
+        <span style="color:#ffaa00"> WPA:${cl.wpa}</span><br>
+        <span style="color:#00ccff">WPA2:${cl.wpa2}</span>
+        <span style="color:#00ff88"> WPA3:${cl.wpa3}</span>
+      </div>`);
+      markersLayer.addLayer(m);
+      // Count label
+      if (cl.count > 1) {
+        const icon = L.divIcon({
+          className:'', iconSize:[30,14],
+          html:`<div style="color:#fff;font-size:10px;font-weight:700;text-align:center;text-shadow:0 0 3px #000">${cl.count}</div>`,
+        });
+        L.marker([cl.lat,cl.lon],{icon,interactive:false}).addTo(markersLayer);
+      }
+    }
+  } else {
+    // Individual markers
+    const bounds = [];
+    for (const n of gpsNets) {
+      const {color} = secInfo(n.auth);
+      const c = L.circleMarker([n.lat,n.lon], {
+        radius:5, fillColor:color, color, weight:1, fillOpacity:0.9, renderer:canvasRenderer,
+      });
+      c.bindPopup(`<div style="font-family:monospace;font-size:11px">
+        <b style="color:var(--accent)">${n.ssid||'(hidden)'}</b><br>
+        <span style="color:#666">${n.mac}</span><br>
+        <span style="color:${color}">${n.auth}</span><br>
+        CH:${n.channel} | ${n.rssi}dBm<br>
+        <span style="color:#555">${n.firstSeen}</span>
+      </div>`);
+      markersLayer.addLayer(c);
+      bounds.push([n.lat,n.lon]);
+    }
+  }
+
+}
+
+function fitMapBounds() {
+  const gpsNets = allNets.filter(n => n.hasGps);
+  const bounds = gpsNets.map(n=>[n.lat,n.lon]);
   if (bounds.length) map.fitBounds(bounds, {padding:[30,30], maxZoom:16});
 }
 
-function renderStats() {
-  document.getElementById('sT').textContent = allNets.length;
-  document.getElementById('sG').textContent = allNets.filter(n=>n.hasGps).length;
-  document.getElementById('sO').textContent = allNets.filter(n=>{const s=secInfo(n.auth);return s.label==='OPEN'}).length;
-  document.getElementById('s2').textContent = allNets.filter(n=>n.auth.includes('WPA2')).length;
-  document.getElementById('s3').textContent = allNets.filter(n=>n.auth.includes('WPA3')).length;
+// Re-cluster on zoom change
+map.on('zoomend', function() {
+  if (replayActive) { tlSeek(document.getElementById('tlSlider').value); }
+  else { renderMap(); }
+});
+
+function renderStats(nets) {
+  const src = nets || allNets;
+  document.getElementById('sT').textContent = src.length;
+  document.getElementById('sG').textContent = src.filter(n=>n.hasGps).length;
+  document.getElementById('sO').textContent = src.filter(n=>secInfo(n.auth).label==='OPEN').length;
+  document.getElementById('s2').textContent = src.filter(n=>n.auth.includes('WPA2')).length;
+  document.getElementById('s3').textContent = src.filter(n=>n.auth.includes('WPA3')).length;
 }
 
-function renderPanel() {
+function renderPanel(nets) {
+  const src = nets || allNets;
   const q = document.getElementById('searchBox').value.toLowerCase();
-  let nets = [...allNets];
-  if (q) nets = nets.filter(n => (n.ssid||'').toLowerCase().includes(q) || n.mac.toLowerCase().includes(q));
-  nets.sort((a,b) => {
-    if (a.hasGps && !b.hasGps) return -1;
-    if (!a.hasGps && b.hasGps) return 1;
+  let filtered = [...src];
+  if (q) filtered = filtered.filter(n => (n.ssid||'').toLowerCase().includes(q) || n.mac.toLowerCase().includes(q));
+  filtered.sort((a,b) => {
+    if (a.hasGps&&!b.hasGps) return -1;
+    if (!a.hasGps&&b.hasGps) return 1;
     return (parseInt(b.rssi)||-99) - (parseInt(a.rssi)||-99);
   });
-  document.getElementById('pCount').textContent = `(${nets.length})`;
+  document.getElementById('pCount').textContent = `(${filtered.length})`;
   const el = document.getElementById('apList');
-  const max = Math.min(nets.length, 300);
+  const max = Math.min(filtered.length, 300);
   let html = '';
-  for (let i = 0; i < max; i++) {
-    const n = nets[i];
+  for (let i=0; i<max; i++) {
+    const n = filtered[i];
     const {cls,label,color} = secInfo(n.auth);
     html += `<div class="ap" onclick="focusAP(${i})" data-i="${i}">
       <div class="dot" style="background:${n.hasGps?color:'#222'}"></div>
@@ -257,30 +449,150 @@ function renderPanel() {
     </div>`;
   }
   el.innerHTML = html;
-  window._panelNets = nets;
+  window._panelNets = filtered;
 }
 
 function focusAP(i) {
   const n = window._panelNets[i];
-  if (!n || !n.hasGps) return;
-  map.setView([n.lat, n.lon], 18);
-  const flash = L.circleMarker([n.lat, n.lon], {
-    radius:18, fillColor:'#fff', color:secInfo(n.auth).color,
-    weight:2, fillOpacity:0.2,
-  }).addTo(map);
-  setTimeout(()=>map.removeLayer(flash), 2000);
+  if (!n) return;
+  if (n.hasGps) {
+    map.setView([n.lat,n.lon], 18);
+    const flash = L.circleMarker([n.lat,n.lon], {
+      radius:18, fillColor:'#fff', color:secInfo(n.auth).color,
+      weight:2, fillOpacity:0.2, renderer:canvasRenderer,
+    }).addTo(map);
+    setTimeout(()=>map.removeLayer(flash), 2000);
+  }
+  showDetail(n);
 }
 
-function renderAll() { renderMap(); renderStats(); renderPanel(); }
+function showDetail(n) {
+  const {cls,label,color} = secInfo(n.auth);
+  const rssiVal = parseInt(n.rssi)||-99;
+  const sigBars = Math.min(4, Math.max(0, Math.floor((rssiVal+90)/10)));
+  const bars = '\u2588'.repeat(sigBars)+'\u2591'.repeat(4-sigBars);
+  let html = '<div class="detail-header">'+(n.ssid||'(hidden)')+'</div>';
+  html += '<div class="detail-sec '+cls+'" style="color:'+color+';border:1px solid '+color+'">'+label+'</div>';
+  html += '<div class="detail-row"><span class="detail-label">MAC</span><span class="detail-val">'+n.mac+'</span></div>';
+  html += '<div class="detail-row"><span class="detail-label">Auth</span><span class="detail-val" style="color:'+color+'">'+n.auth+'</span></div>';
+  html += '<div class="detail-row"><span class="detail-label">Channel</span><span class="detail-val">'+n.channel+'</span></div>';
+  html += '<div class="detail-row"><span class="detail-label">Signal</span><span class="detail-val">'+n.rssi+' dBm <span style="color:'+color+';letter-spacing:-1px">'+bars+'</span></span></div>';
+  html += '<div class="detail-row"><span class="detail-label">First Seen</span><span class="detail-val">'+(n.firstSeen||'?')+'</span></div>';
+  if (n.hasGps) {
+    html += '<div class="detail-gps"><i class="fa-solid fa-location-dot" style="color:#00ff88"></i> '+n.lat.toFixed(6)+', '+n.lon.toFixed(6)+'</div>';
+  } else {
+    html += '<div class="detail-gps"><i class="fa-solid fa-location-dot" style="color:#333"></i> No GPS data</div>';
+  }
+  document.getElementById('apDetailContent').innerHTML = html;
+  document.getElementById('apDetail').classList.add('open');
+}
+
+function closeDetail() { document.getElementById('apDetail').classList.remove('open'); }
+
+function renderAll() { renderMap(); renderStats(); renderPanel(); fitMapBounds(); }
 
 function togglePanel() {
   const p = document.getElementById('panel');
-  const i = document.querySelector('#toggleBtn i');
+  const ic = document.querySelector('#toggleBtn i');
   p.classList.toggle('collapsed');
-  i.className = p.classList.contains('collapsed') ? 'fa-solid fa-chevron-left' : 'fa-solid fa-chevron-right';
+  ic.className = p.classList.contains('collapsed') ? 'fa-solid fa-chevron-left':'fa-solid fa-chevron-right';
   setTimeout(()=>map.invalidateSize(), 300);
 }
 
+// --- Timeline Replay ---
+let replayActive = false;
+let replayPlaying = false;
+let replayTimer = null;
+let replaySorted = [];
+let replaySpeed = 1;
+
+function toggleReplay() {
+  replayActive = !replayActive;
+  const tl = document.getElementById('timeline');
+  const btn = document.getElementById('btnReplay');
+  const legend = document.getElementById('legend');
+  if (replayActive) {
+    replaySorted = [...allNets].filter(n=>n.firstSeen).sort((a,b)=>(a.firstSeen||'').localeCompare(b.firstSeen||''));
+    if (replaySorted.length < 2) { replayActive=false; return; }
+    tl.style.display = 'block';
+    btn.classList.add('active');
+    legend.style.bottom = '64px';
+    document.getElementById('tlSlider').max = replaySorted.length;
+    document.getElementById('tlSlider').value = 0;
+    tlSeek(0);
+  } else {
+    tlStop();
+    tl.style.display = 'none';
+    btn.classList.remove('active');
+    legend.style.bottom = '20px';
+    renderAll();
+  }
+}
+
+function tlSeek(val) {
+  const idx = parseInt(val);
+  const visible = replaySorted.slice(0, idx);
+  renderMap(visible);
+  renderStats(visible);
+  renderPanel(visible);
+
+  if (idx > 0) {
+    const n = replaySorted[idx-1];
+    const time = (n.firstSeen||'').split(' ')[1] || '--:--';
+    document.getElementById('tlTime').textContent = time;
+    // Move map to latest point
+    if (n.hasGps) map.panTo([n.lat,n.lon], {animate:true, duration:0.3});
+  } else {
+    document.getElementById('tlTime').textContent = '--:--';
+  }
+  document.getElementById('tlCount').textContent = idx+' / '+replaySorted.length;
+}
+
+function tlTogglePlay() {
+  if (replayPlaying) { tlStop(); }
+  else { tlPlay(); }
+}
+
+function tlPlay() {
+  replayPlaying = true;
+  document.querySelector('#tlPlay i').className = 'fa-solid fa-pause';
+  document.getElementById('tlPlay').classList.add('active');
+  tlTick();
+}
+
+function tlStop() {
+  replayPlaying = false;
+  if (replayTimer) { cancelAnimationFrame(replayTimer); replayTimer=null; }
+  document.querySelector('#tlPlay i').className = 'fa-solid fa-play';
+  document.getElementById('tlPlay').classList.remove('active');
+}
+
+let _lastTick = 0;
+function tlTick() {
+  if (!replayPlaying) return;
+  const now = performance.now();
+  // Throttle: advance every 80ms base, faster with speed multiplier
+  const interval = 80 / replaySpeed;
+  if (now - _lastTick < interval) { replayTimer = requestAnimationFrame(tlTick); return; }
+  _lastTick = now;
+
+  const slider = document.getElementById('tlSlider');
+  let v = parseInt(slider.value) + 1;
+  if (v > replaySorted.length) { tlStop(); return; }
+  slider.value = v;
+  tlSeek(v);
+  replayTimer = requestAnimationFrame(tlTick);
+}
+
+function tlReset() {
+  const slider = document.getElementById('tlSlider');
+  slider.value = 0;
+  tlSeek(0);
+}
+
+function tlSetSpeed(val) { replaySpeed = parseFloat(val); }
+
+// --- Data loading ---
 async function loadSessionList() {
   try {
     const r = await fetch('/api/wardriving/sessions', {credentials:'include'});
@@ -303,7 +615,11 @@ async function loadSession() {
   if (!path) return;
   try {
     const r = await fetch(`/api/wardriving/session?path=${encodeURIComponent(path)}`, {credentials:'include'});
-    if (r.ok) { allNets = parseCSV(await r.text()); renderAll(); }
+    if (r.ok) {
+      allNets = parseCSV(await r.text());
+      if (replayActive) toggleReplay();
+      renderAll();
+    }
   } catch(e){}
 }
 
@@ -320,16 +636,21 @@ async function loadLive() {
   } catch(e){}
 }
 
-function toggleLive() {
+async function toggleLive() {
   const btn = document.getElementById('btnLive');
   const dot = document.getElementById('liveDot');
   if (liveInterval) {
     clearInterval(liveInterval); liveInterval=null;
     btn.classList.remove('active'); dot.style.display='none';
+    try { await fetch('/api/wardriving/stop', {method:'POST', credentials:'include'}); } catch(e){}
   } else {
-    loadLive();
-    liveInterval = setInterval(loadLive, 5000);
+    try {
+      const r = await fetch('/api/wardriving/start', {method:'POST', credentials:'include'});
+      if (!r.ok) { alert('Failed to start wardriving'); return; }
+    } catch(e) { alert('Connection error'); return; }
     btn.classList.add('active'); dot.style.display='inline';
+    setTimeout(loadLive, 3000);
+    liveInterval = setInterval(loadLive, 2000);
   }
 }
 
