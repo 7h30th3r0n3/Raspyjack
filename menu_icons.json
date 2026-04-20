@@ -368,6 +368,13 @@
                 " nfc_scanner": "",
                 " nfc_emv": "",
                 " nfc_ndef_writer": "",
+                " nfc_magic": "",
+                " nfc_format": "",
+                " nfc_bruteforce": "",
+                " nfc_amiibo": "",
+                " nfc_hotel": "",
+                " nfc_fuzzer": "",
+                " nfc_transport": "",
                 " nfc_saved": ""
         }
 }

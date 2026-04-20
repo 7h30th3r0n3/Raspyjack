@@ -233,12 +233,40 @@ class _PN532Base:
             return bytes(p[3:])
         return None
 
+    def in_communicate_thru_raw(self, data: bytes, timeout=0.5) -> Optional[bytes]:
+        """Send raw bytes via InCommunicateThru (no target number). For magic card backdoor."""
+        cmd = [0x42] + list(data)
+        self._write_frame(cmd)
+        resp = self._read_response(32, timeout=timeout)
+        p = self._parse_response(resp, 0x43)
+        if p and len(p) >= 2:
+            return bytes(p[2:])
+        return None
+
     def init_as_target(self, uid: bytes, atqa: bytes = b"\x04\x00", sak: int = 0x08, timeout: float = 1.0) -> Optional[bytes]:
         """Initialize PN532 as a passive MIFARE target (card emulation).
         MIFARE params: SENS_RES(2B) + NFCID1t(3B) + SEL_RES(1B)
+        PN532 uses NFCID1t[0..2] as UID bytes 1-3, and auto-generates byte 0 (BCC).
+        To emit a full 4-byte UID, we pass uid[1:4] so the reader sees uid[1] uid[2] uid[3] + BCC.
+        But most readers report the 4 bytes from anti-collision: the 3 NFCID1t bytes + generated BCC.
+        We pass all 4 uid bytes packed: uid[0:3] as NFCID1t. The reader gets uid[0] uid[1] uid[2] + auto-BCC.
         """
         mode = 0x04
         sens_res = [atqa[1], atqa[0]] if len(atqa) >= 2 else [0x04, 0x00]
+        # PN532 NFCID1t = 3 bytes. Reader sees these 3 bytes as UID[0..2].
+        # The 4th byte the reader sees is the XOR checksum (BCC) computed by PN532.
+        # To get the desired 4-byte UID, we encode it so that:
+        #   NFCID1t = [uid[1], uid[2], uid[3]]
+        #   The PN532 puts CT=0x88 as first byte of anticollision frame
+        #   Reader sees: 0x88, uid[1], uid[2], uid[3], BCC
+        #   But after SELECT, reader reports UID = uid[1], uid[2], uid[3], BCC... wrong.
+        # Actually for single-size UID (4 bytes), PN532 sends:
+        #   Anticollision: NFCID1t[0], NFCID1t[1], NFCID1t[2], BCC
+        #   Where BCC = NFCID1t[0] ^ NFCID1t[1] ^ NFCID1t[2] ^ 0x88 (for CT-based)
+        # Most readers report UID = first 4 bytes = NFCID1t[0..2] + BCC
+        # So to get UID = uid[0..3], set NFCID1t = uid[0..2]
+        # The 4th byte will be BCC = uid[0]^uid[1]^uid[2]^0x88 (NOT uid[3])
+        # This is a PN532 limitation - we can only control 3 bytes.
         nfcid1t = list(uid[:3]) if len(uid) >= 3 else [0x01, 0x02, 0x03]
         sel_res = sak if isinstance(sak, int) else sak[0]
         mifare_params = sens_res + nfcid1t + [sel_res]
