@@ -4063,13 +4063,18 @@ class DisposableMenu:
             "exfiltration",
             "evasion",
             "remote_access",
+            "nfc_rfid",
             "utilities",
             "hardware",
             "games",
             "examples",
         ]
 
+        _CATEGORY_LABELS = {"nfc_rfid": "NFC/RFID", "remote_access": "Remote Access"}
+
         def _label(cat: str) -> str:
+            if cat in _CATEGORY_LABELS:
+                return f" {_CATEGORY_LABELS[cat]}"
             return f" {cat.replace('_', ' ').title()}"
 
         categories = list_payloads_by_category()

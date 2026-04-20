@@ -104,7 +104,9 @@
                 " Utilities": "",
                 " Hardware": "",
                 " Games": "",
-                " Examples": ""
+                " Examples": "",
+                " NFC/RFID": "",
+                " Nfc Rfid": ""
         },
         "payloads": {
                 " ad_recon": "",
@@ -359,6 +361,13 @@
         },
         "fallbacks": {
                 "__scan__": "",
-                "__site__": ""
+                "__site__": "",
+                " nfc_reader": "",
+                " nfc_cloner": "",
+                " nfc_crack": "",
+                " nfc_scanner": "",
+                " nfc_emv": "",
+                " nfc_ndef_writer": "",
+                " nfc_saved": ""
         }
 }
