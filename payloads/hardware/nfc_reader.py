@@ -1,26 +1,21 @@
 #!/usr/bin/env python3
 """
-RaspyJack Payload -- NFC/RFID Reader
-======================================
-Author: 7h30th3r0n3
+RaspyJack Payload -- NFC/RFID Reader & Cloner
+===============================================
+Read, save and clone NFC/RFID cards.
+Supports PN532 (UART/I2C), ACR122U, SCL3711 via nfcpy.
 
-NFC/RFID reader via PN532 module over I2C.  Detects cards, reads UIDs,
-identifies card type, and attempts MIFARE Classic sector dumps using
-common default keys.
+Modes:
+  READ       Detect card, read UID + MIFARE sectors
+  CLONE      Write saved dump to a new card (magic cards supported)
+  SAVED      Browse and manage saved card dumps
 
-Setup / Prerequisites
----------------------
-- PN532 module connected via I2C (address 0x24).
-- I2C enabled (dtparam=i2c_arm=on in config.txt).
-- python3-smbus or smbus2 installed.
-
-Controls
---------
-  OK         -- Read card (poll for card and read)
-  UP / DOWN  -- Scroll sectors / data
-  KEY1       -- Scan I2C bus for PN532
-  KEY2       -- Export card dump to loot
-  KEY3       -- Exit
+Controls:
+  OK         Action (read/clone/select)
+  UP/DOWN    Navigate / scroll
+  KEY1       Cycle mode
+  KEY2       Save / delete
+  KEY3       Exit / back
 """
 
 import os
@@ -35,7 +30,7 @@ sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..", "..")))
 import RPi.GPIO as GPIO
 import LCD_1in44
 import LCD_Config
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
 
@@ -50,30 +45,27 @@ except ImportError:
         smbus = None
         SMBUS_OK = False
 
+try:
+    import serial
+    SERIAL_OK = True
+except ImportError:
+    serial = None
+    SERIAL_OK = False
+
+try:
+    import nfc as nfcpy
+    NFCPY_OK = True
+except ImportError:
+    nfcpy = None
+    NFCPY_OK = False
+
 PINS = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
     "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16,
 }
-GPIO.setmode(GPIO.BCM)
-for pin in PINS.values():
-    GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-
-LCD = LCD_1in44.LCD()
-LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-WIDTH, HEIGHT = LCD.width, LCD.height
-font = scaled_font()
+WIDTH, HEIGHT = LCD_1in44.LCD_WIDTH, LCD_1in44.LCD_HEIGHT
 
 PN532_I2C_ADDR = 0x24
-I2C_BUS = 1
-LOOT_DIR = "/root/Raspyjack/loot/NFC"
-DEBOUNCE = 0.22
-
-DEFAULT_KEYS = [
-    bytes.fromhex("FFFFFFFFFFFF"), bytes.fromhex("A0A1A2A3A4A5"),
-    bytes.fromhex("D3F7D3F7D3F7"), bytes.fromhex("000000000000"),
-]
-
-# PN532 command constants
 PN532_PREAMBLE = 0x00
 PN532_STARTCODE1 = 0x00
 PN532_STARTCODE2 = 0xFF
@@ -84,18 +76,45 @@ CMD_INLISTPASSIVETARGET = 0x4A
 CMD_INDATAEXCHANGE = 0x40
 CMD_GETFIRMWAREVERSION = 0x02
 
-lock = threading.Lock()
-_running = True
+LOOT_DIR = "/root/Raspyjack/loot/NFC"
+DEBOUNCE = 0.18
+_last_btn = 0
+
+DEFAULT_KEYS = [
+    bytes.fromhex("FFFFFFFFFFFF"),
+    bytes.fromhex("A0A1A2A3A4A5"),
+    bytes.fromhex("D3F7D3F7D3F7"),
+    bytes.fromhex("000000000000"),
+    bytes.fromhex("B0B1B2B3B4B5"),
+    bytes.fromhex("AABBCCDDEEFF"),
+    bytes.fromhex("1A2B3C4D5E6F"),
+    bytes.fromhex("010203040506"),
+    bytes.fromhex("123456789ABC"),
+]
+
+MODES = ["read", "clone", "saved"]
 
 
-# PN532 I2C low-level
+def _btn():
+    global _last_btn
+    b = get_button(PINS, GPIO)
+    now = time.time()
+    if b and now - _last_btn < DEBOUNCE:
+        return None
+    if b:
+        _last_btn = now
+    return b
+
+
+# ---------------------------------------------------------------------------
+# PN532 I2C driver
+# ---------------------------------------------------------------------------
 
 class PN532I2C:
-    """Minimal PN532 I2C driver."""
-
-    def __init__(self, bus_num=I2C_BUS, addr=PN532_I2C_ADDR):
+    def __init__(self, bus_num=1, addr=PN532_I2C_ADDR):
         self.bus = smbus.SMBus(bus_num)
         self.addr = addr
+        self.can_write = True
 
     def close(self):
         try:
@@ -104,331 +123,750 @@ class PN532I2C:
             pass
 
     def _write_frame(self, data):
-        """Send a PN532 command frame."""
         length = len(data) + 1
         lcs = (~length + 1) & 0xFF
         frame = [PN532_PREAMBLE, PN532_STARTCODE1, PN532_STARTCODE2,
                  length, lcs, PN532_HOSTTOPN532] + list(data)
         dcs = (~(sum([PN532_HOSTTOPN532] + list(data))) + 1) & 0xFF
-        frame.append(dcs)
-        frame.append(0x00)  # postamble
+        frame += [dcs, 0x00]
         self.bus.write_i2c_block_data(self.addr, frame[0], frame[1:])
 
     def _read_response(self, expected_len=32, timeout=1.0):
-        """Read a response frame, waiting for the ready bit."""
         deadline = time.time() + timeout
         while time.time() < deadline:
             try:
                 status = self.bus.read_byte(self.addr)
                 if status & 0x01:
-                    raw = self.bus.read_i2c_block_data(self.addr, 0x00, expected_len + 8)
-                    # Skip ready byte and find data
-                    if len(raw) > 7:
-                        return raw
-                    return raw
+                    return self.bus.read_i2c_block_data(self.addr, 0x00, expected_len + 8)
             except OSError:
                 pass
             time.sleep(0.02)
         return None
 
-    def get_firmware_version(self):
-        """Return (IC, ver, rev, support) or None."""
-        self._write_frame([CMD_GETFIRMWAREVERSION])
-        resp = self._read_response(12)
+    def _parse_response(self, resp, cmd_reply):
         if resp is None:
             return None
-        # Find response code 0xD5 0x03
-        for i in range(len(resp) - 5):
-            if resp[i] == PN532_PN532TOHOST and resp[i + 1] == 0x03:
-                return (resp[i + 2], resp[i + 3], resp[i + 4], resp[i + 5])
+        for i in range(len(resp) - 2):
+            if resp[i] == PN532_PN532TOHOST and resp[i + 1] == cmd_reply:
+                return resp[i:]
+        return None
+
+    def get_firmware_version(self):
+        self._write_frame([CMD_GETFIRMWAREVERSION])
+        resp = self._read_response(12)
+        p = self._parse_response(resp, 0x03)
+        if p and len(p) >= 6:
+            return (p[2], p[3], p[4], p[5])
         return None
 
     def sam_config(self):
-        """Configure SAM for normal mode."""
         self._write_frame([CMD_SAMCONFIGURATION, 0x01, 0x14, 0x01])
         self._read_response(12)
 
     def read_passive_target(self, timeout=2.0):
-        """Poll for a passive target. Return UID bytes or None."""
         self._write_frame([CMD_INLISTPASSIVETARGET, 0x01, 0x00])
         resp = self._read_response(32, timeout=timeout)
-        if resp is None:
+        p = self._parse_response(resp, 0x4B)
+        if p is None or len(p) < 8 or p[2] < 1:
             return None
-        # Parse InListPassiveTarget response
-        for i in range(len(resp) - 3):
-            if resp[i] == PN532_PN532TOHOST and resp[i + 1] == 0x4B:
-                num_targets = resp[i + 2]
-                if num_targets < 1:
-                    return None
-                # resp[i+3] = target number, resp[i+4] = SENS_RES, etc.
-                uid_len_idx = i + 7
-                if uid_len_idx >= len(resp):
-                    return None
-                uid_len = resp[uid_len_idx]
-                uid_start = uid_len_idx + 1
-                uid_end = uid_start + uid_len
-                if uid_end <= len(resp):
-                    return bytes(resp[uid_start:uid_end])
+        uid_len = p[7]
+        if len(p) >= 8 + uid_len:
+            return bytes(p[8:8 + uid_len])
         return None
 
-    def mifare_auth_block(self, block, key, uid):
-        """Authenticate a MIFARE Classic block with Key A."""
-        cmd = [CMD_INDATAEXCHANGE, 0x01, 0x60, block] + list(key) + list(uid[:4])
+    def mifare_auth(self, block, key, uid, key_type=0x60):
+        cmd = [CMD_INDATAEXCHANGE, 0x01, key_type, block] + list(key) + list(uid[:4])
         self._write_frame(cmd)
-        resp = self._read_response(12, timeout=1.0)
+        resp = self._read_response(12)
+        p = self._parse_response(resp, 0x41)
+        return p is not None and len(p) >= 3 and p[2] == 0x00
+
+    def mifare_read(self, block):
+        self._write_frame([CMD_INDATAEXCHANGE, 0x01, 0x30, block])
+        resp = self._read_response(32)
+        p = self._parse_response(resp, 0x41)
+        if p and len(p) >= 19 and p[2] == 0x00:
+            return bytes(p[3:19])
+        return None
+
+    def mifare_write(self, block, data):
+        cmd = [CMD_INDATAEXCHANGE, 0x01, 0xA0, block] + list(data[:16])
+        self._write_frame(cmd)
+        resp = self._read_response(12)
+        p = self._parse_response(resp, 0x41)
+        return p is not None and len(p) >= 3 and p[2] == 0x00
+
+
+# ---------------------------------------------------------------------------
+# PN532 UART driver
+# ---------------------------------------------------------------------------
+
+class PN532UART:
+    def __init__(self, port="/dev/ttyUSB0", baudrate=115200):
+        self.ser = serial.Serial(port, baudrate, timeout=0.5)
+        self.can_write = True
+        self._wakeup()
+
+    def close(self):
+        try:
+            self.ser.close()
+        except Exception:
+            pass
+
+    def _wakeup(self):
+        self.ser.write(b"\x55\x55\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\x03\xfd\xd4\x14\x01\x17\x00")
+        time.sleep(0.1)
+        self.ser.reset_input_buffer()
+
+    def _write_frame(self, data):
+        length = len(data) + 1
+        lcs = (~length + 1) & 0xFF
+        body = [PN532_HOSTTOPN532] + list(data)
+        dcs = (~sum(body) + 1) & 0xFF
+        self.ser.write(bytes([PN532_PREAMBLE, PN532_STARTCODE1, PN532_STARTCODE2,
+                              length, lcs] + body + [dcs, 0x00]))
+
+    def _read_response(self, expected_len=32, timeout=1.0):
+        deadline = time.time() + timeout
+        buf = b""
+        while time.time() < deadline:
+            chunk = self.ser.read(expected_len + 16)
+            if chunk:
+                buf += chunk
+            ack_idx = buf.find(b"\x00\x00\xff\x00\xff\x00")
+            if ack_idx >= 0:
+                buf = buf[ack_idx + 6:]
+            resp_idx = buf.find(b"\x00\x00\xff")
+            if resp_idx >= 0 and len(buf) > resp_idx + 5:
+                frame_len = buf[resp_idx + 3]
+                total = resp_idx + 6 + frame_len + 1
+                if len(buf) >= total:
+                    return list(buf[resp_idx + 5:resp_idx + 5 + frame_len + 1])
+            if not chunk:
+                time.sleep(0.02)
+        return None
+
+    def _parse_response(self, resp, cmd_reply):
         if resp is None:
-            return False
+            return None
         for i in range(len(resp) - 2):
-            if resp[i] == PN532_PN532TOHOST and resp[i + 1] == 0x41:
-                return resp[i + 2] == 0x00
+            if resp[i] == PN532_PN532TOHOST and resp[i + 1] == cmd_reply:
+                return resp[i:]
+        return None
+
+    def get_firmware_version(self):
+        self._write_frame([CMD_GETFIRMWAREVERSION])
+        resp = self._read_response(12)
+        p = self._parse_response(resp, 0x03)
+        if p and len(p) >= 6:
+            return (p[2], p[3], p[4], p[5])
+        return None
+
+    def sam_config(self):
+        self._write_frame([CMD_SAMCONFIGURATION, 0x01, 0x14, 0x01])
+        self._read_response(12)
+
+    def read_passive_target(self, timeout=2.0):
+        self._write_frame([CMD_INLISTPASSIVETARGET, 0x01, 0x00])
+        resp = self._read_response(32, timeout=timeout)
+        p = self._parse_response(resp, 0x4B)
+        if p is None or len(p) < 8 or p[2] < 1:
+            return None
+        uid_len = p[7]
+        if len(p) >= 8 + uid_len:
+            return bytes(p[8:8 + uid_len])
+        return None
+
+    def mifare_auth(self, block, key, uid, key_type=0x60):
+        cmd = [CMD_INDATAEXCHANGE, 0x01, key_type, block] + list(key) + list(uid[:4])
+        self._write_frame(cmd)
+        resp = self._read_response(12)
+        p = self._parse_response(resp, 0x41)
+        return p is not None and len(p) >= 3 and p[2] == 0x00
+
+    def mifare_read(self, block):
+        self._write_frame([CMD_INDATAEXCHANGE, 0x01, 0x30, block])
+        resp = self._read_response(32)
+        p = self._parse_response(resp, 0x41)
+        if p and len(p) >= 19 and p[2] == 0x00:
+            return bytes(p[3:19])
+        return None
+
+    def mifare_write(self, block, data):
+        cmd = [CMD_INDATAEXCHANGE, 0x01, 0xA0, block] + list(data[:16])
+        self._write_frame(cmd)
+        resp = self._read_response(12)
+        p = self._parse_response(resp, 0x41)
+        return p is not None and len(p) >= 3 and p[2] == 0x00
+
+
+# ---------------------------------------------------------------------------
+# nfcpy wrapper (ACR122U, SCL3711, etc.)
+# ---------------------------------------------------------------------------
+
+class NfcpyDriver:
+    def __init__(self, clf):
+        self.clf = clf
+        self.can_write = False
+
+    def close(self):
+        try:
+            self.clf.close()
+        except Exception:
+            pass
+
+    def get_firmware_version(self):
+        return (0, 1, 0, 0)
+
+    def sam_config(self):
+        pass
+
+    def read_passive_target(self, timeout=2.0):
+        try:
+            tag = self.clf.connect(rdwr={"on-connect": lambda t: False},
+                                   terminate=lambda: False)
+            if tag and hasattr(tag, "identifier"):
+                return bytes(tag.identifier)
+        except Exception:
+            pass
+        return None
+
+    def mifare_auth(self, block, key, uid, key_type=0x60):
         return False
 
-    def mifare_read_block(self, block):
-        """Read 16 bytes from a MIFARE Classic block."""
-        cmd = [CMD_INDATAEXCHANGE, 0x01, 0x30, block]
-        self._write_frame(cmd)
-        resp = self._read_response(32, timeout=1.0)
-        if resp is None:
-            return None
-        for i in range(len(resp) - 18):
-            if resp[i] == PN532_PN532TOHOST and resp[i + 1] == 0x41:
-                if resp[i + 2] == 0x00:
-                    return bytes(resp[i + 3:i + 19])
+    def mifare_read(self, block):
+        return None
+
+    def mifare_write(self, block, data):
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Auto-detect reader
+# ---------------------------------------------------------------------------
+
+UART_PORTS = ["/dev/ttyUSB0", "/dev/ttyUSB1", "/dev/ttyAMA0"]
+
+
+def _detect_reader():
+    """Auto-detect NFC reader. Returns (driver, description) or (None, error)."""
+    if NFCPY_OK:
+        for path in ["usb", "usb:072f:2200", "usb:04e6:5591"]:
+            try:
+                clf = nfcpy.ContactlessFrontend(path)
+                desc = str(clf.device) if hasattr(clf, "device") else path
+                return NfcpyDriver(clf), f"nfcpy: {desc[:18]}"
+            except Exception:
+                pass
+
+    if SERIAL_OK:
+        for port in UART_PORTS:
+            if not os.path.exists(port):
+                continue
+            for baud in [115200, 9600]:
+                try:
+                    drv = PN532UART(port, baud)
+                    fw = drv.get_firmware_version()
+                    if fw:
+                        drv.sam_config()
+                        return drv, f"PN532 UART {port}"
+                    drv.close()
+                except Exception:
+                    pass
+
+    if SMBUS_OK:
+        for addr in [PN532_I2C_ADDR, 0x48]:
+            try:
+                drv = PN532I2C(addr=addr)
+                fw = drv.get_firmware_version()
+                if fw:
+                    drv.sam_config()
+                    return drv, f"PN532 I2C 0x{addr:02X}"
+                drv.close()
+            except Exception:
+                pass
+
+    return None, "No NFC reader found"
+
+
+# ---------------------------------------------------------------------------
+# Card operations
+# ---------------------------------------------------------------------------
+
+def _detect_card_type(uid):
+    n = len(uid)
+    if n == 4:
+        return "MIFARE Classic"
+    if n == 7:
+        return "MIFARE UL/NTAG"
+    if n == 10:
+        return "MIFARE DESFire"
+    return f"Unknown ({n}B)"
+
+
+def _full_read(drv, uid, progress_cb=None):
+    """Read all sectors of a MIFARE Classic card. Returns list of sector dicts."""
+    sectors = []
+    n_sectors = 16 if len(uid) == 4 else 0
+    for sec in range(n_sectors):
+        if progress_cb:
+            progress_cb(sec, n_sectors, sectors)
+        first_block = sec * 4
+        authed = False
+        used_key = ""
+        key_type_used = 0x60
+        for key in DEFAULT_KEYS:
+            for kt in [0x60, 0x61]:
+                if drv.mifare_auth(first_block, key, uid, kt):
+                    authed = True
+                    used_key = key.hex().upper()
+                    key_type_used = kt
+                    break
+            if authed:
+                break
+        blocks = []
+        if authed:
+            for b in range(4):
+                data = drv.mifare_read(first_block + b)
+                blocks.append(data.hex() if data else "?" * 32)
+        sectors.append({
+            "sector": sec,
+            "blocks": blocks,
+            "key": used_key,
+            "key_type": "A" if key_type_used == 0x60 else "B",
+            "authed": authed,
+        })
+    return sectors
+
+
+def _write_clone(drv, uid, dump, progress_cb=None):
+    """Write a dump to a MIFARE Classic card. Returns (written, skipped, errors)."""
+    written = 0
+    skipped = 0
+    errors = 0
+    all_sectors = dump.get("sectors", [])
+    total = len(all_sectors)
+    for idx, sec_data in enumerate(all_sectors):
+        if progress_cb:
+            progress_cb(idx, total, written, skipped, errors)
+        sec = sec_data["sector"]
+        blocks = sec_data.get("blocks", [])
+        key_hex = sec_data.get("key", "")
+        if not blocks or not key_hex or key_hex in ("", "NONE"):
+            skipped += 1
+            continue
+        key = bytes.fromhex(key_hex)
+        first_block = sec * 4
+        if not drv.mifare_auth(first_block, key, uid):
+            for dk in DEFAULT_KEYS:
+                if drv.mifare_auth(first_block, dk, uid):
+                    break
+            else:
+                errors += 1
+                continue
+
+        for i, blk_hex in enumerate(blocks):
+            block_num = first_block + i
+            if block_num == 0 or i == 3 or blk_hex == "?" * 32:
+                continue
+            try:
+                data = bytes.fromhex(blk_hex)
+                if drv.mifare_write(block_num, data):
+                    written += 1
+                else:
+                    errors += 1
+            except Exception:
+                errors += 1
+    return written, skipped, errors
+
+
+def _save_dump(uid, card_type, sectors):
+    """Save card dump to JSON."""
+    os.makedirs(LOOT_DIR, exist_ok=True)
+    uid_hex = uid.hex().upper()
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    fname = f"nfc_{uid_hex}_{ts}.json"
+    dump = {
+        "uid": uid_hex,
+        "uid_bytes": list(uid),
+        "type": card_type,
+        "timestamp": ts,
+        "sectors": sectors,
+    }
+    with open(os.path.join(LOOT_DIR, fname), "w") as f:
+        json.dump(dump, f, indent=2)
+    return fname
+
+
+def _list_dumps():
+    """List saved card dumps."""
+    if not os.path.isdir(LOOT_DIR):
+        return []
+    result = []
+    for f in sorted(os.listdir(LOOT_DIR), reverse=True):
+        if f.startswith("nfc_") and f.endswith(".json"):
+            path = os.path.join(LOOT_DIR, f)
+            try:
+                with open(path) as fh:
+                    d = json.load(fh)
+                result.append({
+                    "file": f,
+                    "path": path,
+                    "uid": d.get("uid", "?"),
+                    "type": d.get("type", "?"),
+                    "sectors": len(d.get("sectors", [])),
+                    "ts": d.get("timestamp", ""),
+                })
+            except Exception:
+                pass
+    return result
+
+
+def _load_dump(path):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except Exception:
         return None
 
 
-# I2C scan
-
-def _scan_i2c_for_pn532():
-    """Scan I2C bus for PN532 address."""
-    if not SMBUS_OK:
-        return False, "smbus not installed"
-    for addr in [PN532_I2C_ADDR] + list(range(0x20, 0x30)):
-        try:
-            bus = smbus.SMBus(I2C_BUS)
-            bus.read_byte(addr)
-            bus.close()
-            return True, f"Found at 0x{addr:02X}"
-        except OSError:
-            continue
-    return False, "PN532 not found"
-
-
-# Card type detection
-
-def _detect_card_type(uid):
-    """Guess card type from UID length."""
-    uid_len = len(uid)
-    if uid_len == 4:
-        return "MIFARE Classic 1K/4K"
-    if uid_len == 7:
-        return "MIFARE Ultralight/NTAG"
-    if uid_len == 10:
-        return "MIFARE DESFire"
-    return f"Unknown ({uid_len}B UID)"
-
-
-# State
-
-card_uid = None
-card_type = ""
-sector_data = []   # list of {"sector": N, "blocks": [...], "key_used": hex}
-status_msg = "Ready"
-scroll = 0
-pn532 = None
-
-
-# Export
-
-def _export_dump():
-    """Write card data to loot JSON."""
-    if card_uid is None:
-        return "No card data"
-    os.makedirs(LOOT_DIR, exist_ok=True)
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    uid_hex = card_uid.hex().upper()
-    fname = f"nfc_{uid_hex}_{ts}.json"
-    fpath = os.path.join(LOOT_DIR, fname)
-
-    dump = {
-        "timestamp": ts,
-        "uid": uid_hex,
-        "uid_bytes": len(card_uid),
-        "card_type": card_type,
-        "sectors": [],
-    }
-    for s in sector_data:
-        dump["sectors"].append({
-            "sector": s["sector"],
-            "key_used": s["key_used"],
-            "blocks": [b.hex() if isinstance(b, bytes) else b for b in s["blocks"]],
-        })
-
-    try:
-        with open(fpath, "w") as fh:
-            json.dump(dump, fh, indent=2)
-        return f"Saved: {fname[:16]}"
-    except OSError as exc:
-        return f"Err: {str(exc)[:16]}"
-
-
-# Card reading
-
-def _read_card():
-    """Attempt to read a card: UID, type, MIFARE sector dump."""
-    global card_uid, card_type, sector_data, status_msg, pn532
-
-    if not SMBUS_OK:
-        status_msg = "smbus not found"
-        return
-
-    try:
-        if pn532 is None:
-            pn532 = PN532I2C()
-            pn532.sam_config()
-    except Exception as exc:
-        status_msg = f"Init err: {str(exc)[:14]}"
-        pn532 = None
-        return
-
-    status_msg = "Polling..."
-    uid = pn532.read_passive_target(timeout=3.0)
-    if uid is None:
-        status_msg = "No card detected"
-        return
-
-    with lock:
-        card_uid = uid
-        card_type = _detect_card_type(uid)
-        sector_data = []
-        status_msg = f"UID: {uid.hex().upper()}"
-
-    # Attempt MIFARE Classic dump if 4-byte UID
-    if len(uid) == 4:
-        sectors = []
-        for sector in range(16):
-            first_block = sector * 4
-            authenticated = False
-            used_key = ""
-            for key in DEFAULT_KEYS:
-                if pn532.mifare_auth_block(first_block, key, uid):
-                    authenticated = True
-                    used_key = key.hex().upper()
-                    break
-            blocks = []
-            if authenticated:
-                for b in range(4):
-                    data = pn532.mifare_read_block(first_block + b)
-                    blocks.append(data if data else b"?" * 16)
-            sectors.append({
-                "sector": sector,
-                "blocks": blocks,
-                "key_used": used_key if authenticated else "NONE",
-            })
-        with lock:
-            sector_data = sectors
-            status_msg = f"Read {sum(1 for s in sectors if s['key_used'] != 'NONE')}/16 sectors"
-
-
-# Drawing
-
-def _draw_main(lcd, status, uid, ctype, sectors, scr):
-    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ScaledDraw(img)
-
-    d.rectangle((0, 0, 127, 12), fill="#111")
-    d.text((2, 1), "NFC READER", font=font, fill="#00ccff")
-    d.text((108, 1), "K3", font=font, fill="#888")
-
-    y = 16
-    d.text((2, y), status[:22], font=font, fill="#ffaa00"); y += 13
-
-    if uid is not None:
-        uid_hex = uid.hex().upper()
-        d.text((2, y), f"UID: {uid_hex[:16]}", font=font, fill="#00ff00"); y += 12
-        d.text((2, y), f"Type: {ctype[:18]}", font=font, fill="#ccc"); y += 14
-
-        if sectors:
-            visible = 4
-            end = min(len(sectors), scr + visible)
-            for i in range(scr, end):
-                s = sectors[i]
-                key_info = s["key_used"][:6] if s["key_used"] != "NONE" else "locked"
-                color = "#00ff00" if s["key_used"] != "NONE" else "#ff4444"
-                d.text((2, y), f"S{s['sector']:02d} [{key_info}]", font=font, fill=color)
-                # Show first block preview
-                if s["blocks"]:
-                    blk = s["blocks"][0]
-                    if isinstance(blk, bytes):
-                        preview = blk[:6].hex().upper()
-                    else:
-                        preview = str(blk)[:12]
-                    d.text((70, y), preview[:10], font=font, fill="#888")
-                y += 12
-    else:
-        d.text((4, 50), "Press OK to read", font=font, fill="#666")
-        d.text((4, 64), "K1 to scan I2C", font=font, fill="#888")
-
-    d.rectangle((0, 116, 127, 127), fill="#111")
-    d.text((2, 117), "OK:read K1:scan K2:exp", font=font, fill="#666")
-    lcd.LCD_ShowImage(img, 0, 0)
-
-
+# ---------------------------------------------------------------------------
 # Main
+# ---------------------------------------------------------------------------
 
 def main():
-    global _running, scroll, status_msg, pn532
+    GPIO.setmode(GPIO.BCM)
+    for pin in PINS.values():
+        GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
-    if not SMBUS_OK:
+    LCD_Config.GPIO_Init()
+    lcd = LCD_1in44.LCD()
+    lcd.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
+    lcd.LCD_Clear()
+
+    font = scaled_font(10)
+    font_sm = scaled_font(8)
+    font_xs = scaled_font(7)
+
+    if not SMBUS_OK and not SERIAL_OK and not NFCPY_OK:
         img = Image.new("RGB", (WIDTH, HEIGHT), "black")
         d = ScaledDraw(img)
-        d.text((4, 50), "smbus not found!", font=font, fill="#ff0000")
-        d.text((4, 65), "pip install smbus2", font=font, fill="#888")
-        LCD.LCD_ShowImage(img, 0, 0)
+        d.text((4, 45), "No NFC library!", font=font, fill="#ff0000")
+        d.text((4, 60), "pip install nfcpy", font=font_sm, fill="#888")
+        d.text((4, 73), "or smbus2 / pyserial", font=font_sm, fill="#888")
+        lcd.LCD_ShowImage(img, 0, 0)
         time.sleep(3)
-        LCD.LCD_Clear()
         GPIO.cleanup()
         return 1
 
-    last_press = 0.0
+    # Detect reader
+    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+    d = ScaledDraw(img)
+    d.text((4, 50), "Detecting reader...", font=font_sm, fill="#FFAA00")
+    lcd.LCD_ShowImage(img, 0, 0)
+
+    drv, drv_desc = _detect_reader()
+
+    mode_idx = 0
+    scroll = 0
+    last_card = None       # {uid, type, sectors}
+    status = drv_desc if drv else "No reader found"
+    selected_dump = None   # for clone mode
 
     try:
         while True:
-            btn = get_button(PINS, GPIO)
-            now = time.time()
-            if btn and (now - last_press) < DEBOUNCE:
-                btn = None
-            if btn:
-                last_press = now
+            btn = _btn()
 
             if btn == "KEY3":
                 break
-            elif btn == "OK":
-                _read_card()
+
+            if btn == "KEY1":
+                mode_idx = (mode_idx + 1) % len(MODES)
                 scroll = 0
-            elif btn == "KEY1":
-                found, msg = _scan_i2c_for_pn532()
-                status_msg = msg
-            elif btn == "KEY2":
-                status_msg = _export_dump()
-            elif btn == "UP":
-                scroll = max(0, scroll - 1)
-            elif btn == "DOWN":
-                with lock:
-                    max_s = max(0, len(sector_data) - 4)
-                scroll = min(scroll + 1, max_s)
 
-            with lock:
-                _draw_main(LCD, status_msg, card_uid, card_type, list(sector_data), scroll)
+            mode = MODES[mode_idx]
 
-            time.sleep(0.08)
+            # ===== READ MODE =====
+            if mode == "read":
+                if btn == "OK":
+                    if drv is None:
+                        drv, drv_desc = _detect_reader()
+                        status = drv_desc
+                    if drv:
+                        status = "Polling..."
+                        img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+                        d = ScaledDraw(img)
+                        d.rectangle((0, 0, 127, 12), fill="#111")
+                        d.text((2, 1), "READ", font=font_sm, fill="#00CCFF")
+                        d.text((4, 50), "Place card on reader", font=font_sm, fill="#FFAA00")
+                        lcd.LCD_ShowImage(img, 0, 0)
+
+                        uid = drv.read_passive_target(timeout=3.0)
+                        if uid:
+                            ctype = _detect_card_type(uid)
+                            uid_hex = uid.hex().upper()
+
+                            def _read_progress(sec, total, done):
+                                authed = sum(1 for s in done if s["authed"])
+                                pct = sec * 100 // max(1, total)
+                                img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+                                d = ScaledDraw(img)
+                                d.rectangle((0, 0, 127, 12), fill="#111")
+                                d.text((2, 1), "READ", font=font_sm, fill="#00CCFF")
+                                d.text((80, 1), f"{pct}%", font=font_sm, fill="#00FF00")
+                                d.text((4, 18), f"UID: {uid_hex[:16]}", font=font_sm, fill="#00FF00")
+                                d.text((4, 30), f"Type: {ctype}", font=font_sm, fill="#ccc")
+                                # Progress bar
+                                bar_y = 46
+                                d.rectangle((4, bar_y, 123, bar_y + 8), outline="#333")
+                                bw = max(1, int(119 * sec / max(1, total)))
+                                d.rectangle((4, bar_y, 4 + bw, bar_y + 8), fill="#00CCFF")
+                                d.text((4, bar_y + 12), f"Sector {sec}/{total}", font=font_sm, fill="#FFAA00")
+                                d.text((4, bar_y + 24), f"Cracked: {authed}  Locked: {sec - authed}", font=font_xs, fill="#888")
+                                # Show last cracked sector
+                                if done:
+                                    last = done[-1]
+                                    col = "#00FF00" if last["authed"] else "#FF4444"
+                                    txt = f"S{last['sector']:02d} [{last['key'][:6]}]" if last["authed"] else f"S{last['sector']:02d} LOCKED"
+                                    d.text((4, bar_y + 38), txt, font=font_sm, fill=col)
+                                lcd.LCD_ShowImage(img, 0, 0)
+
+                            sectors = _full_read(drv, uid, progress_cb=_read_progress)
+                            authed = sum(1 for s in sectors if s["authed"])
+                            last_card = {"uid": uid, "type": ctype, "sectors": sectors}
+                            status = f"UID:{uid.hex().upper()[:8]} {authed}/{len(sectors)}sec"
+                            scroll = 0
+                        else:
+                            status = "No card detected"
+                            last_card = None
+
+                elif btn == "KEY2" and last_card:
+                    fname = _save_dump(last_card["uid"], last_card["type"], last_card["sectors"])
+                    status = f"Saved: {fname[:18]}"
+
+                elif btn == "UP":
+                    scroll = max(0, scroll - 1)
+                elif btn == "DOWN":
+                    if last_card:
+                        scroll = min(scroll + 1, max(0, len(last_card["sectors"]) - 4))
+
+                # Draw read mode
+                img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+                d = ScaledDraw(img)
+                d.rectangle((0, 0, 127, 12), fill="#111")
+                d.text((2, 1), "READ", font=font_sm, fill="#00CCFF")
+                d.text((50, 1), drv_desc[:12] if drv else "NO READER", font=font_xs,
+                       fill="#00FF00" if drv else "#FF4444")
+
+                y = 16
+                d.text((2, y), status[:24], font=font_sm, fill="#FFAA00")
+                y += 13
+
+                if last_card:
+                    uid_hex = last_card["uid"].hex().upper()
+                    d.text((2, y), f"UID: {uid_hex}", font=font_sm, fill="#00FF00")
+                    y += 11
+                    d.text((2, y), f"Type: {last_card['type']}", font=font_sm, fill="#ccc")
+                    y += 13
+
+                    secs = last_card["sectors"]
+                    for i in range(scroll, min(len(secs), scroll + 4)):
+                        s = secs[i]
+                        col = "#00FF00" if s["authed"] else "#FF4444"
+                        key_txt = s["key"][:6] if s["authed"] else "LOCKED"
+                        d.text((2, y), f"S{s['sector']:02d}", font=font_sm, fill=col)
+                        d.text((22, y), f"[{key_txt}]", font=font_sm, fill="#888")
+                        if s["blocks"]:
+                            d.text((72, y), s["blocks"][0][:12], font=font_xs, fill="#555")
+                        y += 11
+                else:
+                    d.text((4, 55), "Press OK to read card", font=font_sm, fill="#666")
+
+                d.rectangle((0, 116, 127, 127), fill="#111")
+                d.text((2, 117), "OK:Read K2:Save K1:Mode", font=font_xs, fill="#666")
+                lcd.LCD_ShowImage(img, 0, 0)
+
+            # ===== CLONE MODE =====
+            elif mode == "clone":
+                dumps = _list_dumps()
+
+                if btn == "UP":
+                    scroll = max(0, scroll - 1)
+                elif btn == "DOWN":
+                    scroll = min(scroll + 1, max(0, len(dumps) - 1))
+                elif btn == "OK" and dumps:
+                    selected_dump = _load_dump(dumps[min(scroll, len(dumps) - 1)]["path"])
+                    if selected_dump and drv and drv.can_write:
+                        # Wait for target card
+                        img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+                        d = ScaledDraw(img)
+                        d.rectangle((0, 0, 127, 12), fill="#111")
+                        d.text((2, 1), "CLONE", font=font_sm, fill="#FF00FF")
+                        d.text((4, 30), f"Source: {selected_dump['uid'][:12]}", font=font_sm, fill="#ccc")
+                        d.text((4, 50), "Place TARGET card", font=font_sm, fill="#FFAA00")
+                        d.text((4, 65), "on reader now...", font=font_sm, fill="#FFAA00")
+                        lcd.LCD_ShowImage(img, 0, 0)
+
+                        uid = drv.read_passive_target(timeout=5.0)
+                        if uid:
+                            target_hex = uid.hex().upper()
+
+                            def _clone_progress(sec, total, w, s, e):
+                                pct = sec * 100 // max(1, total)
+                                img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+                                d = ScaledDraw(img)
+                                d.rectangle((0, 0, 127, 12), fill="#111")
+                                d.text((2, 1), "CLONE", font=font_sm, fill="#FF00FF")
+                                d.text((80, 1), f"{pct}%", font=font_sm, fill="#FF00FF")
+                                d.text((4, 18), f"Target: {target_hex[:12]}", font=font_sm, fill="#ccc")
+                                bar_y = 34
+                                d.rectangle((4, bar_y, 123, bar_y + 8), outline="#333")
+                                bw = max(1, int(119 * sec / max(1, total)))
+                                d.rectangle((4, bar_y, 4 + bw, bar_y + 8), fill="#FF00FF")
+                                d.text((4, bar_y + 12), f"Sector {sec}/{total}", font=font_sm, fill="#FFAA00")
+                                d.text((4, bar_y + 26), f"Written:{w} Skip:{s} Err:{e}", font=font_xs, fill="#888")
+                                lcd.LCD_ShowImage(img, 0, 0)
+
+                            written, skipped, errors = _write_clone(drv, uid, selected_dump, progress_cb=_clone_progress)
+                            if errors == 0 and written > 0:
+                                status = f"Cloned! {written} blocks"
+                            else:
+                                status = f"W:{written} S:{skipped} E:{errors}"
+                        else:
+                            status = "No target card"
+                    elif not drv:
+                        status = "No reader connected"
+                    elif not drv.can_write:
+                        status = "Reader can't write"
+
+                # Draw clone mode
+                img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+                d = ScaledDraw(img)
+                d.rectangle((0, 0, 127, 12), fill="#111")
+                d.text((2, 1), "CLONE", font=font_sm, fill="#FF00FF")
+                d.text((80, 1), f"{len(dumps)}cards", font=font_xs, fill="#888")
+
+                y = 16
+                d.text((2, y), status[:24], font=font_sm, fill="#FFAA00")
+                y += 13
+
+                if not dumps:
+                    d.text((4, 50), "No saved cards", font=font_sm, fill="#666")
+                    d.text((4, 65), "Read a card first", font=font_sm, fill="#888")
+                else:
+                    d.text((2, y), "Select card to clone:", font=font_xs, fill="#888")
+                    y += 10
+                    for i in range(max(0, scroll - 2), min(len(dumps), scroll + 4)):
+                        dm = dumps[i]
+                        col = "#FF00FF" if i == scroll else "#888"
+                        prefix = "> " if i == scroll else "  "
+                        d.text((2, y), f"{prefix}{dm['uid'][:10]}", font=font_sm, fill=col)
+                        d.text((85, y), dm["type"][:8], font=font_xs, fill="#555")
+                        y += 11
+                        if y > 108:
+                            break
+
+                d.rectangle((0, 116, 127, 127), fill="#111")
+                can_w = drv.can_write if drv else False
+                d.text((2, 117), "OK:Clone" if can_w else "Reader: read-only", font=font_xs,
+                       fill="#666" if can_w else "#FF4444")
+                lcd.LCD_ShowImage(img, 0, 0)
+
+            # ===== SAVED MODE =====
+            elif mode == "saved":
+                dumps = _list_dumps()
+
+                if btn == "UP":
+                    scroll = max(0, scroll - 1)
+                elif btn == "DOWN":
+                    scroll = min(scroll + 1, max(0, len(dumps) - 1))
+                elif btn == "KEY2" and dumps:
+                    # Delete selected dump
+                    idx = min(scroll, len(dumps) - 1)
+                    try:
+                        os.remove(dumps[idx]["path"])
+                        status = f"Deleted {dumps[idx]['uid'][:8]}"
+                        dumps = _list_dumps()
+                        scroll = min(scroll, max(0, len(dumps) - 1))
+                    except Exception:
+                        status = "Delete failed"
+                elif btn == "OK" and dumps:
+                    # Show dump detail
+                    idx = min(scroll, len(dumps) - 1)
+                    dump = _load_dump(dumps[idx]["path"])
+                    if dump:
+                        detail_scroll = 0
+                        while True:
+                            img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+                            d = ScaledDraw(img)
+                            d.rectangle((0, 0, 127, 12), fill="#111")
+                            d.text((2, 1), "CARD DETAIL", font=font_sm, fill="#00CCFF")
+
+                            y = 16
+                            d.text((2, y), f"UID: {dump['uid']}", font=font_sm, fill="#00FF00")
+                            y += 11
+                            d.text((2, y), f"Type: {dump.get('type', '?')}", font=font_sm, fill="#ccc")
+                            y += 11
+                            d.text((2, y), f"Date: {dump.get('timestamp', '?')[:10]}", font=font_sm, fill="#888")
+                            y += 13
+
+                            secs = dump.get("sectors", [])
+                            for i in range(detail_scroll, min(len(secs), detail_scroll + 4)):
+                                s = secs[i]
+                                col = "#00FF00" if s.get("key", "") not in ("", "NONE") else "#FF4444"
+                                d.text((2, y), f"S{s['sector']:02d} [{s.get('key', '?')[:6]}]", font=font_sm, fill=col)
+                                if s.get("blocks"):
+                                    d.text((72, y), s["blocks"][0][:12], font=font_xs, fill="#555")
+                                y += 11
+
+                            d.rectangle((0, 116, 127, 127), fill="#111")
+                            d.text((2, 117), "^v:Scroll KEY3:Back", font=font_xs, fill="#666")
+                            lcd.LCD_ShowImage(img, 0, 0)
+
+                            b2 = _btn()
+                            if b2 == "KEY3":
+                                break
+                            elif b2 == "UP":
+                                detail_scroll = max(0, detail_scroll - 1)
+                            elif b2 == "DOWN":
+                                detail_scroll = min(detail_scroll + 1, max(0, len(secs) - 4))
+
+                # Draw saved mode
+                img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+                d = ScaledDraw(img)
+                d.rectangle((0, 0, 127, 12), fill="#111")
+                d.text((2, 1), "SAVED", font=font_sm, fill="#00FF00")
+                d.text((80, 1), f"{len(dumps)}cards", font=font_xs, fill="#888")
+
+                y = 16
+                d.text((2, y), status[:24], font=font_sm, fill="#FFAA00")
+                y += 13
+
+                if not dumps:
+                    d.text((4, 50), "No saved cards", font=font_sm, fill="#666")
+                else:
+                    for i in range(max(0, scroll - 2), min(len(dumps), scroll + 5)):
+                        dm = dumps[i]
+                        col = "#00CCFF" if i == scroll else "#888"
+                        prefix = "> " if i == scroll else "  "
+                        d.text((2, y), f"{prefix}{dm['uid'][:10]}", font=font_sm, fill=col)
+                        d.text((78, y), dm["type"][:7], font=font_xs, fill="#555")
+                        d.text((110, y), f"{dm['sectors']}s", font=font_xs, fill="#444")
+                        y += 11
+                        if y > 108:
+                            break
+
+                d.rectangle((0, 116, 127, 127), fill="#111")
+                d.text((2, 117), "OK:View K2:Del K1:Mode", font=font_xs, fill="#666")
+                lcd.LCD_ShowImage(img, 0, 0)
+
+            time.sleep(0.03)
 
     finally:
-        _running = False
-        if pn532 is not None:
-            pn532.close()
+        if drv:
+            drv.close()
         try:
-            LCD.LCD_Clear()
+            lcd.LCD_Clear()
         except Exception:
             pass
         GPIO.cleanup()
