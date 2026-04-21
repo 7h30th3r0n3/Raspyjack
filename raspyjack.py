@@ -4064,13 +4064,14 @@ class DisposableMenu:
             "evasion",
             "remote_access",
             "nfc_rfid",
+            "sdr",
             "utilities",
             "hardware",
             "games",
             "examples",
         ]
 
-        _CATEGORY_LABELS = {"nfc_rfid": "NFC/RFID", "remote_access": "Remote Access"}
+        _CATEGORY_LABELS = {"nfc_rfid": "NFC/RFID", "sdr": "SDR/Radio", "remote_access": "Remote Access"}
 
         def _label(cat: str) -> str:
             if cat in _CATEGORY_LABELS:
