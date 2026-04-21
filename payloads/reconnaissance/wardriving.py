@@ -86,7 +86,7 @@ DWELL_24 = 0.3       # 300ms like Kismet (was 800ms)
 DWELL_5 = 0.4        # slightly longer for DFS channels
 
 VIEWS = ["live", "map", "gps", "cards", "channels", "stats", "networks", "export"]
-AUTOSAVE_INTERVAL = 20   # auto-save Wigle CSV every 20 seconds
+AUTOSAVE_INTERVAL = 10   # auto-save Wigle CSV every 10 seconds
 AUTO_MODE = "--auto" in sys.argv
 
 # Known monitor drivers (from _iface_helper)
@@ -523,7 +523,8 @@ def _packet_handler(pkt):
             total_beacons += 1
             gps_snap = dict(gps_data) if gps_data else None
 
-            if bssid not in networks:
+            is_new = bssid not in networks
+            if is_new:
                 networks[bssid] = {
                     "ssid": ssid,
                     "bssid": bssid,
@@ -541,6 +542,7 @@ def _packet_handler(pkt):
                     "gps": gps_snap,
                     "beacon_count": 1,
                 }
+                _append_live_csv(bssid, networks[bssid])
             else:
                 net = networks[bssid]
                 net["last_seen"] = now
@@ -653,17 +655,26 @@ def _channel_hopper_split(iface, channels):
 
 def _sniffer(iface):
     """Sniff on monitor interface."""
+    _pkt_count = [0]
     def _counted_handler(pkt):
-        with lock:
-            if iface in card_state:
-                card_state[iface]["packets"] += 1
-        _packet_handler(pkt)
+        _pkt_count[0] += 1
+        if _pkt_count[0] % 10 == 0:
+            try:
+                if iface in card_state:
+                    card_state[iface]["packets"] = _pkt_count[0]
+            except Exception:
+                pass
+        try:
+            _packet_handler(pkt)
+        except Exception:
+            pass
     try:
         scapy_sniff(
             iface=iface,
             prn=_counted_handler,
             stop_filter=lambda _: _shutdown.is_set() or not _scanning.is_set(),
             store=0,
+            timeout=300,
         )
     except Exception:
         pass
@@ -784,7 +795,8 @@ def _merge_iw_network(bssid, ssid, channel, signal, security,
         total_beacons += 1
         gps_snap = dict(gps_data) if gps_data else None
 
-        if bssid not in networks:
+        is_new = bssid not in networks
+        if is_new:
             networks[bssid] = {
                 "ssid": ssid,
                 "bssid": bssid,
@@ -802,6 +814,7 @@ def _merge_iw_network(bssid, ssid, channel, signal, security,
                 "gps": gps_snap,
                 "beacon_count": 1,
             }
+            _append_live_csv(bssid, networks[bssid])
         else:
             net = networks[bssid]
             net["last_seen"] = now
@@ -1727,6 +1740,41 @@ def _save_session_meta():
         pass
 
 
+_live_csv_initialized = False
+
+
+def _append_live_csv(bssid, net):
+    """Append a single network to the live CSV immediately. Never loses data."""
+    global _live_csv_initialized
+    live_path = os.path.join(LOOT_DIR, "wardriving_live.csv")
+    session_path = _session_wigle_path
+    try:
+        for path in [live_path, session_path]:
+            if not path:
+                continue
+            is_new_file = not os.path.isfile(path) or os.path.getsize(path) < 10
+            with open(path, "a", newline="") as f:
+                if is_new_file:
+                    f.write("WigleWifi-1.4,appRelease=RaspyJack-v2,model=RaspberryPi,"
+                            "release=2.0,device=RaspyJack,display=LCD144,"
+                            "board=RaspberryPi,brand=7h30th3r0n3\n")
+                    f.write("MAC,SSID,AuthMode,FirstSeen,Channel,RSSI,"
+                            "CurrentLatitude,CurrentLongitude,AltitudeMeters,"
+                            "AccuracyMeters,Type\n")
+                gps = net.get("gps")
+                lat = f"{gps['lat']:.6f}" if gps else ""
+                lon = f"{gps['lon']:.6f}" if gps else ""
+                alt = f"{gps.get('alt', 0):.1f}" if gps else ""
+                auth = _security_to_wigle(net["security"], net["cipher"], net.get("auth", ""))
+                writer = csv.writer(f)
+                writer.writerow([
+                    bssid, net["ssid"], auth, net["first_seen"],
+                    net["channel"], net["signal"], lat, lon, alt, "10", "WIFI",
+                ])
+    except Exception:
+        pass
+
+
 def _write_wigle_csv(path, nets):
     """Write Wigle-format CSV to a given path."""
     try:
@@ -1773,10 +1821,21 @@ def _auto_save_wigle():
 # ---------------------------------------------------------------------------
 
 
+def _emergency_save(signum=None, frame=None):
+    """Emergency save on crash or signal."""
+    try:
+        _auto_save_wigle()
+        _save_to_db()
+    except Exception:
+        pass
+
+
 def main():
     global view_idx, scroll, sort_mode, dual_mode
 
     os.makedirs(LOOT_DIR, exist_ok=True)
+    signal.signal(signal.SIGTERM, _emergency_save)
+    signal.signal(signal.SIGINT, _emergency_save)
 
     GPIO.setmode(GPIO.BCM)
     for pin in PINS.values():
@@ -1945,8 +2004,12 @@ def main():
                 else:
                     # Stop scan
                     _scanning.clear()
-                    time.sleep(0.5)
-                    _save_to_db()
+                    time.sleep(0.3)
+                    try:
+                        _auto_save_wigle()
+                        _save_to_db()
+                    except Exception:
+                        pass
 
                 time.sleep(0.3)
 
@@ -1992,23 +2055,26 @@ def main():
                 time.sleep(0.2)
 
             # Draw current view
-            current_view = VIEWS[view_idx]
-            if current_view == "live":
-                _draw_live(lcd, font, font_sm)
-            elif current_view == "map":
-                _draw_map(lcd, font, font_sm)
-            elif current_view == "gps":
-                _draw_gps(lcd, font, font_sm)
-            elif current_view == "cards":
-                _draw_cards(lcd, font, font_sm, scroll)
-            elif current_view == "channels":
-                _draw_channels(lcd, font, font_sm)
-            elif current_view == "stats":
-                _draw_stats(lcd, font, font_sm)
-            elif current_view == "networks":
-                _draw_networks(lcd, font, font_sm, scroll, sort_mode)
-            elif current_view == "export":
-                _draw_export(lcd, font, font_sm, export_files)
+            try:
+                current_view = VIEWS[view_idx]
+                if current_view == "live":
+                    _draw_live(lcd, font, font_sm)
+                elif current_view == "map":
+                    _draw_map(lcd, font, font_sm)
+                elif current_view == "gps":
+                    _draw_gps(lcd, font, font_sm)
+                elif current_view == "cards":
+                    _draw_cards(lcd, font, font_sm, scroll)
+                elif current_view == "channels":
+                    _draw_channels(lcd, font, font_sm)
+                elif current_view == "stats":
+                    _draw_stats(lcd, font, font_sm)
+                elif current_view == "networks":
+                    _draw_networks(lcd, font, font_sm, scroll, sort_mode)
+                elif current_view == "export":
+                    _draw_export(lcd, font, font_sm, export_files)
+            except Exception:
+                pass
 
             time.sleep(0.05)
 
