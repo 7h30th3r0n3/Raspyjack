@@ -147,6 +147,7 @@ card_state = {}        # iface -> {channel, channels_24, channels_5, band, drive
 # UI
 view_idx = 0
 scroll = 0
+live_sort = 0  # 0=signal, 1=recent, 2=name, 3=open_first
 sort_mode = 0          # 0=signal, 1=name, 2=security
 
 
@@ -1035,15 +1036,25 @@ def _draw_live(lcd, font, font_sm):
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
     d = ScaledDraw(img)
 
+    LIVE_SORTS = ["Signal", "Recent", "Name", "Open"]
+
     with lock:
         net_count = len(networks)
         cli_count = len(probes)
         beacons = total_beacons
         ch = current_channel
         gps_snap = dict(gps_data) if gps_data else None
-        # Get 6 most recent/strongest
-        recent = sorted(networks.values(),
-                        key=lambda n: n["signal"], reverse=True)[:6]
+        nets = list(networks.values())
+
+    if live_sort == 0:
+        nets.sort(key=lambda n: n["signal"], reverse=True)
+    elif live_sort == 1:
+        nets.sort(key=lambda n: n["last_seen"], reverse=True)
+    elif live_sort == 2:
+        nets.sort(key=lambda n: n["ssid"].lower())
+    elif live_sort == 3:
+        nets.sort(key=lambda n: (0 if "OPN" in n["security"] or "OPEN" in n["security"] or n["security"] == "" else 1, -n["signal"]))
+    recent = nets[:6]
 
     scanning = _scanning.is_set()
     dm = dual_mode
@@ -1064,6 +1075,10 @@ def _draw_live(lcd, font, font_sm):
     gps_txt = f"GPS:{gps_snap['lat']:.4f},{gps_snap['lon']:.4f}" if gps_snap else "GPS: No fix"
     gps_col = "#00FF00" if gps_snap else "#FF4444"
     d.text((2, 24), gps_txt, font=font_sm, fill=gps_col)
+
+    # Sort indicator
+    sort_label = LIVE_SORTS[live_sort]
+    d.text((80, 25), sort_label, font=font_sm, fill="#555")
 
     # Network list
     y = 36
@@ -1087,7 +1102,7 @@ def _draw_live(lcd, font, font_sm):
 
     # Footer
     d.rectangle((0, 116, 127, 127), fill="#111")
-    d.text((2, 117), "OK:Scan K1:View K2:Exp", font=font_sm, fill="#888")
+    d.text((2, 117), "OK:Scan K1:Vw <>:Sort", font=font_sm, fill="#888")
     lcd.LCD_ShowImage(img, 0, 0)
 
 
@@ -1447,6 +1462,7 @@ def _lat_to_merc(lat):
 
 
 def _fetch_map_tile(z, x, y):
+    """Load tile from cache only. Download if not scanning."""
     os.makedirs(_MAP_TILE_CACHE, exist_ok=True)
     cache_path = os.path.join(_MAP_TILE_CACHE, f"{z}_{x}_{y}.png")
     if os.path.isfile(cache_path):
@@ -1454,6 +1470,9 @@ def _fetch_map_tile(z, x, y):
             return Image.open(cache_path).convert("RGB")
         except Exception:
             pass
+    # Only download if NOT actively scanning (avoid lag during wardriving)
+    if _scanning.is_set():
+        return None
     url = _MAP_TILE_URL.format(z=z, x=x, y=y)
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "RaspyJack/1.0"})
@@ -1831,7 +1850,7 @@ def _emergency_save(signum=None, frame=None):
 
 
 def main():
-    global view_idx, scroll, sort_mode, dual_mode
+    global view_idx, scroll, sort_mode, dual_mode, live_sort
 
     os.makedirs(LOOT_DIR, exist_ok=True)
     signal.signal(signal.SIGTERM, _emergency_save)
@@ -2049,9 +2068,13 @@ def main():
                 scroll = min(max_s, scroll + 1)
                 time.sleep(0.12)
 
-            # LEFT/RIGHT = sort (networks view)
+            # LEFT/RIGHT = sort
             elif btn == "LEFT" or btn == "RIGHT":
-                sort_mode = (sort_mode + 1) % 3
+                current_view = VIEWS[view_idx]
+                if current_view == "live":
+                    live_sort = (live_sort + (1 if btn == "RIGHT" else -1)) % 4
+                elif current_view == "networks":
+                    sort_mode = (sort_mode + 1) % 3
                 time.sleep(0.2)
 
             # Draw current view

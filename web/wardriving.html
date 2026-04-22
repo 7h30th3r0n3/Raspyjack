@@ -160,6 +160,7 @@
       </select>
       <button class="fb" id="fGps" onclick="toggleFilter('fGps')" title="GPS only">GPS</button>
       <button class="fb" id="fHidden" onclick="toggleFilter('fHidden')" title="Hidden SSIDs">Hidden</button>
+      <button class="fb" id="fShowHidden" onclick="toggleShowHidden()" title="Show hidden APs">Masked(<span id="hiddenCount">0</span>)</button>
     </div>
     <div id="apList"></div>
   </div>
@@ -283,6 +284,9 @@ let markersLayer = L.layerGroup().addTo(map);
 let routeLayer = L.layerGroup().addTo(map);
 let allNets = [];
 let liveInterval = null;
+let hiddenMacs = new Set();
+try { const h = localStorage.getItem('wd_hidden'); if(h) hiddenMacs = new Set(JSON.parse(h)); } catch(e){}
+function saveHidden() { try { localStorage.setItem('wd_hidden', JSON.stringify([...hiddenMacs])); } catch(e){} }
 
 function secInfo(auth) {
   if (!auth) return {cls:'b-wpa2',label:'?',color:'#888'};
@@ -419,13 +423,7 @@ function renderMap(visibleNets) {
       const c = L.circleMarker([n.lat,n.lon], {
         radius:5, fillColor:color, color, weight:1, fillOpacity:0.9, renderer:canvasRenderer,
       });
-      c.bindPopup(`<div style="font-family:monospace;font-size:11px">
-        <b style="color:var(--accent)">${n.ssid||'(hidden)'}</b><br>
-        <span style="color:#666">${n.mac}</span><br>
-        <span style="color:${color}">${n.auth}</span><br>
-        CH:${n.channel} | ${n.rssi}dBm<br>
-        <span style="color:#555">${n.firstSeen}</span>
-      </div>`);
+      c.on('click', (function(net) { return function() { onMarkerClick(net); }; })(n));
       markersLayer.addLayer(c);
       bounds.push([n.lat,n.lon]);
     }
@@ -478,6 +476,7 @@ function getFiltered(src) {
   if (fCh === '5g') filtered = filtered.filter(n => { const c=parseInt(n.channel); return c>=36; });
   if (fGps) filtered = filtered.filter(n => n.hasGps);
   if (fHidden) filtered = filtered.filter(n => !n.ssid || n.ssid.trim()==='');
+  filtered = filtered.filter(n => !hiddenMacs.has(n.mac));
 
   return filtered;
 }
@@ -545,11 +544,70 @@ function showDetail(n) {
   } else {
     html += '<div class="detail-gps"><i class="fa-solid fa-location-dot" style="color:#333"></i> No GPS data</div>';
   }
+  const isHidden = hiddenMacs.has(n.mac);
+  html += '<div style="margin-top:10px;display:flex;gap:6px">';
+  html += '<button onclick="toggleHideAP(\''+n.mac+'\')" style="flex:1;padding:5px;border:1px solid '+(isHidden?'#00ff88':'#ff3333')+';background:'+(isHidden?'#002a1a':'#2a0000')+';color:'+(isHidden?'#00ff88':'#ff3333')+';border-radius:4px;cursor:pointer;font-size:11px;font-family:monospace">'+(isHidden?'<i class="fa-solid fa-eye"></i> Show':'<i class="fa-solid fa-eye-slash"></i> Hide')+'</button>';
+  html += '</div>';
   document.getElementById('apDetailContent').innerHTML = html;
   document.getElementById('apDetail').classList.add('open');
 }
 
+function toggleHideAP(mac) {
+  if (hiddenMacs.has(mac)) {
+    hiddenMacs.delete(mac);
+  } else {
+    hiddenMacs.add(mac);
+  }
+  saveHidden();
+  updateHiddenCount();
+  closeDetail();
+  applyFilters();
+}
+
+function toggleShowHidden() {
+  const btn = document.getElementById('fShowHidden');
+  if (btn.classList.contains('on')) {
+    btn.classList.remove('on');
+  } else {
+    btn.classList.add('on');
+    hiddenMacs.clear();
+    saveHidden();
+    updateHiddenCount();
+    applyFilters();
+  }
+}
+
+function updateHiddenCount() {
+  document.getElementById('hiddenCount').textContent = hiddenMacs.size;
+}
+
 function closeDetail() { document.getElementById('apDetail').classList.remove('open'); }
+
+function onMarkerClick(n) {
+  // Open detail panel
+  showDetail(n);
+  // Highlight in side panel list
+  const pnets = window._panelNets || [];
+  for (let i = 0; i < pnets.length; i++) {
+    if (pnets[i].mac === n.mac) {
+      const el = document.querySelector(`#apList .ap[data-i="${i}"]`);
+      if (el) {
+        el.scrollIntoView({block:'center'});
+        el.style.background = '#1a2850';
+        setTimeout(() => { el.style.background = ''; }, 2000);
+      }
+      break;
+    }
+  }
+  // Flash on map
+  if (n.hasGps) {
+    const flash = L.circleMarker([n.lat, n.lon], {
+      radius:18, fillColor:'#fff', color:secInfo(n.auth).color,
+      weight:2, fillOpacity:0.2, renderer:canvasRenderer,
+    }).addTo(map);
+    setTimeout(() => map.removeLayer(flash), 2000);
+  }
+}
 
 function renderAll() { renderMap(); renderStats(); renderPanel(); fitMapBounds(); }
 
@@ -574,7 +632,7 @@ function toggleReplay() {
   const btn = document.getElementById('btnReplay');
   const legend = document.getElementById('legend');
   if (replayActive) {
-    replaySorted = [...allNets].filter(n=>n.firstSeen).sort((a,b)=>(a.firstSeen||'').localeCompare(b.firstSeen||''));
+    replaySorted = [...allNets].filter(n=>n.firstSeen && !hiddenMacs.has(n.mac)).sort((a,b)=>(a.firstSeen||'').localeCompare(b.firstSeen||''));
     if (replaySorted.length < 2) { replayActive=false; return; }
     tl.style.display = 'block';
     btn.classList.add('active');
@@ -718,6 +776,7 @@ async function toggleLive() {
 
 loadSessionList();
 setTimeout(loadSession, 500);
+updateHiddenCount();
 </script>
 </body>
 </html>
