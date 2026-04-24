@@ -558,24 +558,12 @@ if [ ! -f "$CERT" ] || [ ! -f "$KEY" ] || \
 fi
 
 cat > /etc/caddy/Caddyfile <<EOF
-{
-    auto_https disable_redirects
-    default_bind 0.0.0.0
-}
-
 :443 {
     tls $CERT $KEY
 
     @ws path /ws*
-    reverse_proxy @ws 127.0.0.1:8765 {
-        header_up X-Forwarded-Proto {scheme}
-        header_up X-Forwarded-Host {host}
-    }
-
-    reverse_proxy 127.0.0.1:8080 {
-        header_up X-Forwarded-Proto {scheme}
-        header_up X-Forwarded-Host {host}
-    }
+    reverse_proxy @ws 127.0.0.1:8765
+    reverse_proxy 127.0.0.1:8080
 }
 EOF
 

@@ -87,7 +87,7 @@ DWELL_5 = 0.4        # slightly longer for DFS channels
 
 VIEWS = ["live", "map", "gps", "cards", "channels", "stats", "networks", "export"]
 AUTOSAVE_INTERVAL = 10   # auto-save Wigle CSV every 10 seconds
-MAX_NETWORKS = 5000      # prune oldest networks above this limit
+MAX_NETWORKS = 50000     # prune oldest networks above this limit (safety valve for OOM)
 AUTO_MODE = "--auto" in sys.argv
 
 # Known monitor drivers (from _iface_helper)
@@ -132,6 +132,7 @@ _scanning = threading.Event()
 
 # Scan data
 networks = {}          # bssid -> {ssid, channel, signal, security, ...}
+_pending_csv = []      # buffered new networks for CSV write (flushed by autosave)
 probes = {}            # client_mac -> {ssids: set, count, last_seen, signal}
 gps_data = None        # {lat, lon, alt, speed, sats, mode, ts}
 gps_ready = False
@@ -544,7 +545,7 @@ def _packet_handler(pkt):
                     "gps": gps_snap,
                     "beacon_count": 1,
                 }
-                _append_live_csv(bssid, networks[bssid])
+                _pending_csv.append((bssid, dict(networks[bssid])))
             else:
                 net = networks[bssid]
                 net["last_seen"] = now
@@ -666,6 +667,12 @@ def _sniffer(iface):
                     card_state[iface]["packets"] = _pkt_count[0]
             except Exception:
                 pass
+        # Only process Beacon/ProbeResp/ProbeReq frames — skip data/control frames
+        if not pkt.haslayer(Dot11):
+            return
+        ftype = pkt[Dot11].type
+        if ftype != 0:
+            return
         try:
             _packet_handler(pkt)
         except Exception:
@@ -816,7 +823,7 @@ def _merge_iw_network(bssid, ssid, channel, signal, security,
                 "gps": gps_snap,
                 "beacon_count": 1,
             }
-            _append_live_csv(bssid, networks[bssid])
+            _pending_csv.append((bssid, dict(networks[bssid])))
         else:
             net = networks[bssid]
             net["last_seen"] = now
@@ -1756,14 +1763,22 @@ def _autosave_thread():
             break
         if _scanning.is_set():
             _autosave_counter += 1
+            # Flush pending CSV writes (outside lock, no contention)
+            if _pending_csv:
+                batch = list(_pending_csv)
+                _pending_csv.clear()
+                for bssid, net in batch:
+                    _append_live_csv(bssid, net)
             _prune_networks()
             _save_session_meta()
-            # Full CSV rewrite + DB save only every 60s (6 cycles)
-            # The append_live_csv already saves each network immediately
             if _autosave_counter % 6 == 0:
                 _auto_save_wigle()
                 _save_to_db()
     # Final save on shutdown
+    if _pending_csv:
+        for bssid, net in _pending_csv:
+            _append_live_csv(bssid, net)
+        _pending_csv.clear()
     _auto_save_wigle()
     _save_to_db()
     _save_session_meta()
@@ -2007,20 +2022,21 @@ def main():
                                     "packets": 0, "5g": iface in cards_5g,
                                 }
 
-                            # Split 2.4GHz channels across all cards
-                            all_24_cards = cards_24_only + cards_5g
-                            n_24 = len(all_24_cards)
-                            for idx, iface in enumerate(all_24_cards):
-                                ch_list = [CHANNELS_24[i] for i in range(idx, len(CHANNELS_24), n_24)]
-                                t = threading.Thread(
-                                    target=_channel_hopper_split,
-                                    args=(iface, ch_list),
-                                    daemon=True)
-                                t.start()
-                                threads.append(t)
-
-                            # Split 5GHz channels across 5G-capable cards only
-                            if cards_5g:
+                            # Smart channel split:
+                            # If 2.4-only cards exist, let them handle 2.4GHz
+                            # and dedicate 5G-capable cards to 5GHz only
+                            if cards_24_only and cards_5g:
+                                # 2.4-only cards: split 2.4GHz channels between them
+                                n_24 = len(cards_24_only)
+                                for idx, iface in enumerate(cards_24_only):
+                                    ch_list = [CHANNELS_24[i] for i in range(idx, len(CHANNELS_24), n_24)]
+                                    t = threading.Thread(
+                                        target=_channel_hopper_split,
+                                        args=(iface, ch_list),
+                                        daemon=True)
+                                    t.start()
+                                    threads.append(t)
+                                # 5G cards: 5GHz only
                                 n_5g = len(cards_5g)
                                 for idx, iface in enumerate(cards_5g):
                                     ch_list = [CHANNELS_5[i] for i in range(idx, len(CHANNELS_5), n_5g)]
@@ -2030,6 +2046,28 @@ def main():
                                         daemon=True)
                                     t.start()
                                     threads.append(t)
+                            else:
+                                # All cards same type: split everything
+                                all_24_cards = cards_24_only + cards_5g
+                                n_24 = len(all_24_cards)
+                                for idx, iface in enumerate(all_24_cards):
+                                    ch_list = [CHANNELS_24[i] for i in range(idx, len(CHANNELS_24), n_24)]
+                                    t = threading.Thread(
+                                        target=_channel_hopper_split,
+                                        args=(iface, ch_list),
+                                        daemon=True)
+                                    t.start()
+                                    threads.append(t)
+                                if cards_5g:
+                                    n_5g = len(cards_5g)
+                                    for idx, iface in enumerate(cards_5g):
+                                        ch_list = [CHANNELS_5[i] for i in range(idx, len(CHANNELS_5), n_5g)]
+                                        t = threading.Thread(
+                                            target=_channel_hopper_split,
+                                            args=(iface, ch_list),
+                                            daemon=True)
+                                        t.start()
+                                        threads.append(t)
 
                     # Always start iw scan on wlan0 (works with or without USB cards)
                     if os.path.isdir("/sys/class/net/wlan0/wireless"):
