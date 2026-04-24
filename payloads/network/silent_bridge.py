@@ -34,6 +34,15 @@ WIDTH, HEIGHT = LCD_1in44.LCD_WIDTH, LCD_1in44.LCD_HEIGHT
 BRIDGE = "br0"
 
 GPIO.setmode(GPIO.BCM)
+
+_PINS = {
+    "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
+    "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16
+}
+
+for pin in _PINS.values():
+    GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+
 GPIO.setup(KEY3_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 REFRESH_SEC = 1.0
 
