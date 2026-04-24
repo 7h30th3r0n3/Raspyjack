@@ -71,6 +71,7 @@ def _supports_mode(iface, mode="AP"):
     For monitor mode: first checks iw phy info, then falls back to
     driver name matching for known-good drivers that don't report
     capabilities correctly via nl80211 (common with out-of-tree Realtek).
+    Works with Nexmon-patched brcmfmac (onboard Pi WiFi with injection).
     """
     try:
         phy_link = os.path.realpath(f"/sys/class/net/{iface}/phy80211")
@@ -91,6 +92,14 @@ def _supports_mode(iface, mode="AP"):
             return True
 
     return False
+
+
+def supports_monitor(iface):
+    """Public helper: True if *iface* supports monitor mode.
+
+    Works for USB dongles AND onboard WiFi with Nexmon.
+    """
+    return _supports_mode(iface, "monitor")
 
 
 def _get_ip(iface):
@@ -207,7 +216,7 @@ def select_interface(lcd, font, pins, gpio, iface_type="any", title=None,
     if not ifaces:
         if require_monitor:
             _show_message(lcd, font, "No monitor iface!", "#FF4444")
-            _show_message(lcd, font, "Need USB WiFi dongle", "#FFAA00")
+            _show_message(lcd, font, "Need WiFi w/ monitor", "#FFAA00")
         else:
             _show_message(lcd, font, "No interface found!", "#FF4444")
         return None

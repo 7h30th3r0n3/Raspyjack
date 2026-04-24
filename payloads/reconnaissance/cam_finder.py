@@ -27,7 +27,7 @@ sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..", "..")))
 # Import the working wardriving scanner — we inherit everything from it
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
-from payloads._iface_helper import select_interface
+from payloads._iface_helper import select_interface, supports_monitor
 from payloads.reconnaissance.wardriving import (  # type: ignore
     WardrivingScanner,
     LCD_AVAILABLE,
@@ -262,10 +262,10 @@ class CamFinderScanner(WardrivingScanner):
         interfaces = []
         try:
             for name in os.listdir("/sys/class/net"):
-                if name == "lo" or name == "wlan0":
-                    continue  # wlan0 reserved for WebUI
+                if name == "lo":
+                    continue
                 if os.path.isdir(f"/sys/class/net/{name}/wireless"):
-                    if self._is_onboard_wifi_iface(name):
+                    if not supports_monitor(name):
                         continue
                     interfaces.append(name)
         except Exception:
@@ -273,15 +273,15 @@ class CamFinderScanner(WardrivingScanner):
 
         # Fallback to iw dev if /sys found nothing
         if not interfaces:
-            interfaces = [i for i in self.get_wifi_interfaces() if not self._is_onboard_wifi_iface(i)]
+            interfaces = [i for i in self.get_wifi_interfaces() if supports_monitor(i)]
 
         if not interfaces:
             return None
 
-        print(f"  Found wireless interfaces (excluding onboard/WebUI): {interfaces}", flush=True)
+        print(f"  Found wireless interfaces with monitor mode: {interfaces}", flush=True)
 
         # Drivers known NOT to support monitor mode
-        no_monitor = {'brcmfmac', 'b43', 'wl'}
+        no_monitor = {'b43', 'wl'}
 
         capable = []
         fallback = []

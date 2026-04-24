@@ -34,7 +34,7 @@ import LCD_Config
 from PIL import Image, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
-from payloads._iface_helper import select_interface
+from payloads._iface_helper import select_interface, supports_monitor
 
 # Optional scapy for handshake capture mode
 try:
@@ -197,12 +197,6 @@ def setup_monitor_mode(iface):
     """Enable monitor mode on *iface*. Returns (success, mon_iface_name)."""
     log(f"Setting up monitor mode on {iface}")
 
-    # Reject onboard WiFi
-    driver_check = run_command(f"ethtool -i {iface} 2>/dev/null || echo unknown")
-    if "brcmfmac" in driver_check:
-        log("Onboard Broadcom WiFi -- no monitor mode support")
-        return False, iface
-
     # Unmanage from NetworkManager, kill wpa_supplicant for this iface only
     run_command(f"nmcli device set {iface} managed no")
     run_command(f"pkill -f 'wpa_supplicant.*{iface}'")
@@ -253,10 +247,9 @@ def validate_setup(iface):
             time.sleep(2)
             return False, iface
 
-    # Check if onboard (no monitor mode)
-    driver = run_command(f"ethtool -i {iface} 2>/dev/null || echo unknown")
-    if "brcmfmac" in driver:
-        draw_status(f"{iface} = onboard WiFi\nNo monitor mode!\nUse USB dongle", CLR_RED)
+    # Check monitor mode capability
+    if not supports_monitor(iface):
+        draw_status(f"{iface} no monitor mode!\nNeed compatible card", CLR_RED)
         time.sleep(3)
         return False, iface
 

@@ -40,7 +40,7 @@ from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
 from payloads._keyboard_helper import lcd_keyboard
-from payloads._iface_helper import select_interface
+from payloads._iface_helper import select_interface, supports_monitor
 
 try:
     from scapy.all import (
@@ -180,7 +180,7 @@ def _find_external_wifi():
                 continue
             if not os.path.isdir(f"/sys/class/net/{name}/wireless"):
                 continue
-            if _is_onboard_wifi_iface(name):
+            if not supports_monitor(name):
                 continue
             return name
     except Exception:

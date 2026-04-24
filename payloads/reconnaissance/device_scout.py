@@ -387,9 +387,8 @@ def start_all():
     # WiFi
     wifi_all = list_interfaces("wifi")
     usb_wifi = [i["name"] for i in wifi_all
-                if not i.get("is_onboard") and
-                (i.get("supports_monitor") or
-                 _get_driver(i["name"]) in KNOWN_MONITOR_DRIVERS)]
+                if i.get("supports_monitor") or
+                _get_driver(i["name"]) in KNOWN_MONITOR_DRIVERS]
 
     mon_ifaces.clear()
     for iface in usb_wifi:
