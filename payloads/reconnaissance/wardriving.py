@@ -87,6 +87,7 @@ DWELL_5 = 0.4        # slightly longer for DFS channels
 
 VIEWS = ["live", "map", "gps", "cards", "channels", "stats", "networks", "export"]
 AUTOSAVE_INTERVAL = 10   # auto-save Wigle CSV every 10 seconds
+MAX_NETWORKS = 5000      # prune oldest networks above this limit
 AUTO_MODE = "--auto" in sys.argv
 
 # Known monitor drivers (from _iface_helper)
@@ -847,13 +848,22 @@ def _init_db():
     conn.close()
 
 
+_db_saved_count = 0
+
+
 def _save_to_db():
-    """Save all networks to SQLite."""
+    """Save networks to SQLite — only new/changed ones."""
+    global _db_saved_count
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=5)
         c = conn.cursor()
         with lock:
+            # Only save if new networks appeared
+            if len(networks) == _db_saved_count:
+                conn.close()
+                return
             nets = dict(networks)
+            _db_saved_count = len(networks)
         for bssid, n in nets.items():
             gps = n.get("gps")
             lat = gps["lat"] if gps else None
@@ -1038,23 +1048,25 @@ def _draw_live(lcd, font, font_sm):
 
     LIVE_SORTS = ["Signal", "Recent", "Name", "Open"]
 
+    import heapq
     with lock:
         net_count = len(networks)
         cli_count = len(probes)
         beacons = total_beacons
         ch = current_channel
         gps_snap = dict(gps_data) if gps_data else None
-        nets = list(networks.values())
-
-    if live_sort == 0:
-        nets.sort(key=lambda n: n["signal"], reverse=True)
-    elif live_sort == 1:
-        nets.sort(key=lambda n: n["last_seen"], reverse=True)
-    elif live_sort == 2:
-        nets.sort(key=lambda n: n["ssid"].lower())
-    elif live_sort == 3:
-        nets.sort(key=lambda n: (0 if "OPN" in n["security"] or "OPEN" in n["security"] or n["security"] == "" else 1, -n["signal"]))
-    recent = nets[:6]
+        # Only extract top 6 — O(n) instead of O(n log n) sort
+        vals = networks.values()
+        if live_sort == 0:
+            recent = heapq.nlargest(6, vals, key=lambda n: n["signal"])
+        elif live_sort == 1:
+            recent = heapq.nlargest(6, vals, key=lambda n: n["last_seen"])
+        elif live_sort == 2:
+            recent = heapq.nsmallest(6, vals, key=lambda n: n["ssid"].lower())
+        elif live_sort == 3:
+            recent = heapq.nsmallest(6, vals, key=lambda n: (0 if "OPN" in n["security"] or "OPEN" in n["security"] or n["security"] == "" else 1, -n["signal"]))
+        else:
+            recent = list(vals)[:6]
 
     scanning = _scanning.is_set()
     dm = dual_mode
@@ -1722,15 +1734,35 @@ def _init_session():
         pass
 
 
+def _prune_networks():
+    """Remove oldest networks if over MAX_NETWORKS to prevent OOM."""
+    with lock:
+        if len(networks) <= MAX_NETWORKS:
+            return
+        sorted_nets = sorted(networks.items(), key=lambda x: x[1].get("last_seen", ""), reverse=True)
+        pruned = dict(sorted_nets[:MAX_NETWORKS])
+        networks.clear()
+        networks.update(pruned)
+
+
+_autosave_counter = 0
+
+
 def _autosave_thread():
-    """Background thread: save session Wigle CSV + live CSV every AUTOSAVE_INTERVAL seconds."""
+    """Background thread: lightweight periodic maintenance."""
+    global _autosave_counter
     while not _shutdown.is_set():
         if _shutdown.wait(timeout=AUTOSAVE_INTERVAL):
             break
         if _scanning.is_set():
-            _auto_save_wigle()
-            _save_to_db()
+            _autosave_counter += 1
+            _prune_networks()
             _save_session_meta()
+            # Full CSV rewrite + DB save only every 60s (6 cycles)
+            # The append_live_csv already saves each network immediately
+            if _autosave_counter % 6 == 0:
+                _auto_save_wigle()
+                _save_to_db()
     # Final save on shutdown
     _auto_save_wigle()
     _save_to_db()
