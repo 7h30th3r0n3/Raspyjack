@@ -208,17 +208,8 @@ def setup_monitor_mode(iface):
         log(f"{iface} already in monitor mode")
         return True, iface
 
-    # Method 1: airmon-ng
-    log("Trying airmon-ng")
-    run_command(f"airmon-ng start {iface}")
-    for candidate in [f"{iface}mon", iface]:
-        chk = run_command(f"iw dev {candidate} info")
-        if "type monitor" in chk:
-            log(f"Monitor mode on {candidate} via airmon-ng")
-            return True, candidate
-
-    # Method 2: manual iw
-    log("Trying manual iw")
+    # Method 1: manual iw (works with Nexmon and most drivers)
+    log("Trying iw")
     run_command(f"ip link set {iface} down")
     time.sleep(0.5)
     run_command(f"iw dev {iface} set type monitor")
@@ -229,6 +220,15 @@ def setup_monitor_mode(iface):
     if "type monitor" in chk:
         log(f"Monitor mode on {iface} via iw")
         return True, iface
+
+    # Method 2: airmon-ng fallback
+    log("Trying airmon-ng")
+    run_command(f"airmon-ng start {iface}")
+    for candidate in [f"{iface}mon", iface]:
+        chk = run_command(f"iw dev {candidate} info")
+        if "type monitor" in chk:
+            log(f"Monitor mode on {candidate} via airmon-ng")
+            return True, candidate
 
     log("Failed to enable monitor mode")
     return False, iface

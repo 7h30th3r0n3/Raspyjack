@@ -139,7 +139,23 @@ def _monitor_up(iface):
             pass
     time.sleep(0.5)
 
-    # airmon-ng
+    # Try iw first (works with Nexmon and most drivers)
+    try:
+        subprocess.run(["sudo", "ip", "link", "set", iface, "down"],
+                       capture_output=True, timeout=10)
+        subprocess.run(["sudo", "iw", iface, "set", "monitor", "none"],
+                       capture_output=True, timeout=10)
+        subprocess.run(["sudo", "ip", "link", "set", iface, "up"],
+                       capture_output=True, timeout=10)
+        time.sleep(0.5)
+        r = subprocess.run(["iw", "dev", iface, "info"],
+                           capture_output=True, text=True, timeout=5)
+        if "type monitor" in r.stdout:
+            return iface
+    except Exception:
+        pass
+
+    # Fallback: airmon-ng
     try:
         subprocess.run(["sudo", "airmon-ng", "start", iface],
                        capture_output=True, timeout=30)
@@ -148,22 +164,6 @@ def _monitor_up(iface):
                                capture_output=True, text=True, timeout=5)
             if "type monitor" in r.stdout:
                 return name
-    except Exception:
-        pass
-
-    # iw fallback
-    try:
-        subprocess.run(["sudo", "ip", "link", "set", iface, "down"],
-                       check=True, timeout=10)
-        subprocess.run(["sudo", "iw", iface, "set", "monitor", "none"],
-                       check=True, timeout=10)
-        subprocess.run(["sudo", "ip", "link", "set", iface, "up"],
-                       check=True, timeout=10)
-        time.sleep(0.5)
-        r = subprocess.run(["iw", "dev", iface, "info"],
-                           capture_output=True, text=True, timeout=5)
-        if "type monitor" in r.stdout:
-            return iface
     except Exception:
         pass
 
