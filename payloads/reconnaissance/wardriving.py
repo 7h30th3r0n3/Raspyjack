@@ -132,7 +132,6 @@ _scanning = threading.Event()
 
 # Scan data
 networks = {}          # bssid -> {ssid, channel, signal, security, ...}
-_pending_csv = []      # buffered new networks for CSV write (flushed by autosave)
 probes = {}            # client_mac -> {ssids: set, count, last_seen, signal}
 gps_data = None        # {lat, lon, alt, speed, sats, mode, ts}
 gps_ready = False
@@ -545,7 +544,7 @@ def _packet_handler(pkt):
                     "gps": gps_snap,
                     "beacon_count": 1,
                 }
-                _pending_csv.append((bssid, dict(networks[bssid])))
+                _append_live_csv(bssid, networks[bssid])
             else:
                 net = networks[bssid]
                 net["last_seen"] = now
@@ -712,8 +711,9 @@ def _iw_scanner(iface):
         except Exception:
             pass
 
-        # Wait 10s between scans
-        if _shutdown.wait(timeout=10):
+        # Fast scan if no monitor cards, slower when running alongside sniffers
+        interval = 3 if not mon_ifaces else 10
+        if _shutdown.wait(timeout=interval):
             break
 
 
@@ -823,7 +823,7 @@ def _merge_iw_network(bssid, ssid, channel, signal, security,
                 "gps": gps_snap,
                 "beacon_count": 1,
             }
-            _pending_csv.append((bssid, dict(networks[bssid])))
+            _append_live_csv(bssid, networks[bssid])
         else:
             net = networks[bssid]
             net["last_seen"] = now
@@ -1763,22 +1763,12 @@ def _autosave_thread():
             break
         if _scanning.is_set():
             _autosave_counter += 1
-            # Flush pending CSV writes (outside lock, no contention)
-            if _pending_csv:
-                batch = list(_pending_csv)
-                _pending_csv.clear()
-                for bssid, net in batch:
-                    _append_live_csv(bssid, net)
             _prune_networks()
             _save_session_meta()
             if _autosave_counter % 6 == 0:
                 _auto_save_wigle()
                 _save_to_db()
     # Final save on shutdown
-    if _pending_csv:
-        for bssid, net in _pending_csv:
-            _append_live_csv(bssid, net)
-        _pending_csv.clear()
     _auto_save_wigle()
     _save_to_db()
     _save_session_meta()
