@@ -40,7 +40,7 @@ import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
-from payloads._iface_helper import select_interface
+from payloads._iface_helper import select_interface, supports_monitor
 
 try:
     from scapy.all import (
@@ -102,18 +102,18 @@ def _is_onboard_wifi_iface(iface):
 
 
 def _find_usb_wifi():
-    """Find a USB WiFi dongle suitable for monitor mode."""
+    """Find a WiFi interface suitable for monitor mode."""
     candidates = []
     try:
         for name in os.listdir("/sys/class/net"):
             if name == "lo":
                 continue
             if os.path.isdir(f"/sys/class/net/{name}/wireless"):
-                if not _is_onboard_wifi_iface(name):
+                if supports_monitor(name):
                     candidates.append(name)
     except Exception:
         pass
-    no_mon = {"brcmfmac", "b43", "wl"}
+    no_mon = {"b43", "wl"}
     good, fallback = [], []
     for iface in candidates:
         drv = ""

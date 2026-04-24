@@ -43,7 +43,7 @@ import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
-from payloads._iface_helper import select_interface
+from payloads._iface_helper import select_interface, supports_monitor
 
 PINS = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
@@ -185,15 +185,15 @@ def _rssi_to_distance(rssi):
 # Monitor mode management
 # ---------------------------------------------------------------------------
 def _find_wifi_dongle():
-    """Find a USB WiFi interface (not the built-in wlan0)."""
+    """Find a WiFi interface with monitor mode support."""
     try:
         out = subprocess.run(
             ["iw", "dev"], capture_output=True, text=True, timeout=5,
         )
         ifaces = re.findall(r"Interface\s+(\S+)", out.stdout)
-        # Prefer wlan1 (USB dongle), fallback to wlan0
-        for iface in ifaces:
-            if iface != "wlan0":
+        # Prefer interfaces with monitor support, try non-wlan0 first
+        for iface in sorted(ifaces, key=lambda x: (x == "wlan0", x)):
+            if supports_monitor(iface):
                 return iface
         if ifaces:
             return ifaces[0]

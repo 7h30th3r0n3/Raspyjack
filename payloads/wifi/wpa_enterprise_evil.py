@@ -52,7 +52,7 @@ import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
-from payloads._iface_helper import select_interface
+from payloads._iface_helper import select_interface, supports_monitor
 
 PINS = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
@@ -106,12 +106,12 @@ def _is_onboard_wifi_iface(iface):
 
 
 def _find_usb_wifi():
-    """Find first USB WiFi interface (skip onboard)."""
+    """Find first WiFi interface with monitor mode support."""
     try:
         for name in sorted(os.listdir("/sys/class/net")):
             if not name.startswith("wlan"):
                 continue
-            if _is_onboard_wifi_iface(name):
+            if not supports_monitor(name):
                 continue
             return name
     except Exception:

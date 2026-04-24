@@ -48,7 +48,7 @@ import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
-from payloads._iface_helper import select_interface
+from payloads._iface_helper import select_interface, supports_monitor
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -309,6 +309,7 @@ def _get_iface_info(iface):
         info["driver"] = drv
         if drv == "brcmfmac":
             info["is_onboard"] = True
+            info["supports_monitor"] = supports_monitor(iface)
     except Exception:
         pass
     try:
