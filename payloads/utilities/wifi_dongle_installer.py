@@ -748,35 +748,73 @@ class Installer:
 
     def _add_kali_repo(self):
         list_file = "/etc/apt/sources.list.d/kali-rolling.list"
+        keyring = "/usr/share/keyrings/kali-archive-keyring.gpg"
         if os.path.exists(list_file):
             return
         try:
-            with open(list_file, "w") as f:
-                f.write("deb http://http.kali.org/kali kali-rolling "
-                        "main contrib non-free non-free-firmware\n")
+            # Download signing key (works on Trixie with sqv)
             self._cmd([
-                "bash", "-c",
-                "wget -qO - https://archive.kali.org/archive-key.asc | apt-key add -"
+                "wget", "-q", "-O", keyring,
+                "https://archive.kali.org/archive-key.asc"
             ], timeout=30, ok_err=True)
+            # Add repo with signed-by (required for modern apt)
+            with open(list_file, "w") as f:
+                f.write(f"deb [signed-by={keyring}] http://http.kali.org/kali "
+                        "kali-rolling main contrib non-free non-free-firmware\n")
             log("Kali rolling repo added")
         except Exception as e:
             log(f"Kali repo error: {e}")
 
+    def _cmd_live(self, cmd_str: str, timeout: int = 600, start_pct: int = 40, end_pct: int = 90):
+        """Run a shell command with live progress feedback on LCD."""
+        try:
+            proc = subprocess.Popen(
+                cmd_str, shell=True,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, env={**os.environ, "DEBIAN_FRONTEND": "noninteractive"},
+            )
+            lines_seen = 0
+            last_update = time.time()
+            while proc.poll() is None:
+                line = proc.stdout.readline()
+                if line:
+                    lines_seen += 1
+                    line_clean = line.strip()[:22]
+                    if time.time() - last_update > 1.0 and line_clean:
+                        pct = min(end_pct, start_pct + lines_seen // 3)
+                        self._p(pct, line_clean)
+                        last_update = time.time()
+            proc.stdout.read()
+            return proc.returncode == 0
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            return False
+        except Exception:
+            return False
+
     def _build_github(self, repo_url: str, driver: str) -> bool:
         build_dir = f"/tmp/rj_drv_{driver}"
         self._cmd(["rm", "-rf", build_dir], timeout=10, ok_err=True)
-        self._p(40, "git clone...")
+
+        self._p(35, "Downloading driver...")
         ok, _ = self._cmd(["git", "clone", "--depth=1", repo_url, build_dir],
                           timeout=120)
         if not ok:
+            self._p(35, "Download failed!")
             log(f"git clone failed for {repo_url}")
             return False
+
+        self._p(40, "Installing deps...")
+        self._cmd(["bash", "-c",
+                    "apt-get install -y dkms bc build-essential "
+                    "raspberrypi-kernel-headers linux-headers-$(uname -r) 2>/dev/null"],
+                   timeout=120, ok_err=True)
 
         # Check if dkms.conf exists before trying DKMS
         dkms_conf = os.path.join(build_dir, "dkms.conf")
         if os.path.isfile(dkms_conf):
-            self._p(55, "DKMS install...")
-            # Extract version from dkms.conf for proper dkms add
+            self._p(50, "Building (DKMS)...")
+            self._p(51, "This takes 15-30 min...")
             version = "1.0"
             try:
                 with open(dkms_conf) as f:
@@ -786,26 +824,30 @@ class Installer:
                             break
             except Exception:
                 pass
-            ok, out = self._cmd(
-                ["bash", "-c",
-                 f"cd {build_dir} && dkms add . 2>/dev/null; "
-                 f"dkms build {driver}/{version} && "
-                 f"dkms install {driver}/{version}"],
-                timeout=600)
+            ok = self._cmd_live(
+                f"cd {build_dir} && dkms add . 2>/dev/null; "
+                f"dkms build {driver}/{version} 2>&1 && "
+                f"dkms install {driver}/{version} 2>&1",
+                timeout=1800, start_pct=52, end_pct=88)
             if ok:
+                self._p(90, "DKMS OK!")
                 return True
-            log(f"DKMS failed: {out[:300]}")
+            self._p(55, "DKMS failed, trying make")
+            log(f"DKMS failed for {driver}/{version}")
 
-        # Fallback: make install (works for aircrack-ng repos)
-        self._p(60, "make install...")
-        ok, out = self._cmd(
-            ["bash", "-c",
-             f"cd {build_dir} && "
-             f"make -j$(nproc) KVER=$(uname -r) 2>&1 | tail -20 && "
-             f"make install KVER=$(uname -r)"],
-            timeout=600)
+        # Fallback: make install
+        self._p(60, "Compiling driver...")
+        self._p(61, "This takes 15-30 min...")
+        ok = self._cmd_live(
+            f"cd {build_dir} && "
+            f"make -j3 KVER=$(uname -r) 2>&1 && "
+            f"make install KVER=$(uname -r) 2>&1",
+            timeout=1800, start_pct=62, end_pct=88)
         if not ok:
-            log(f"make install failed: {out[:300]}")
+            self._p(88, "Build failed!")
+            log(f"make install failed for {driver}")
+        else:
+            self._p(90, "Build OK!")
         return ok
 
     def _usb_reprobe(self, vid: str, pid: str):
