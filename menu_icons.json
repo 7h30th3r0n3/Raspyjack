@@ -106,7 +106,9 @@
                 " Games": "",
                 " Examples": "",
                 " NFC/RFID": "",
-                " Nfc Rfid": ""
+                " Nfc Rfid": "",
+                " SDR/Radio": "",
+                " Sdr": ""
         },
         "payloads": {
                 " ad_recon": "",
@@ -375,6 +377,7 @@
                 " nfc_hotel": "",
                 " nfc_fuzzer": "",
                 " nfc_transport": "",
+                " sdr_fm": "",
                 " nfc_saved": ""
         }
 }
