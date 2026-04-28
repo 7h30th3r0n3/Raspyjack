@@ -190,6 +190,12 @@ header .text-\[10px\],
     min-height: 2.25rem;
   }
 }
+/* device shell: center below the side-by-side breakpoint (lg = 1024px) */
+@media (max-width: 1023px) {
+  #deviceShell {
+    align-self: center;
+  }
+}
 
 /* ---------- Look-match PR1: make WebUI visually closer to IDE ---------- */
 body {
@@ -226,8 +232,10 @@ body::after {
   opacity: 0.3;
   z-index: 0;
 }
-main,
-#sidebar {
+/* main needs position:relative so z-index stacks it above the fixed body::before/after overlays.
+   Do NOT apply position:relative to #sidebar — it would override Tailwind's position:fixed
+   at mobile widths, putting the entire nav into document flow and bloating the page height. */
+main {
   position: relative;
   z-index: 1;
 }
