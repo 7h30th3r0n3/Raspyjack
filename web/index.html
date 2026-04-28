@@ -34,6 +34,7 @@
       background: radial-gradient(1200px 800px at 50% -10%, var(--rj-bg-2) 0%, var(--rj-bg-1) 55%, var(--rj-bg-0) 100%);
       color: var(--rj-text);
       letter-spacing: 0.01em;
+      overflow-x: hidden;
     }
     button, a {
       transition: background-color .16s ease, color .16s ease, border-color .16s ease, box-shadow .16s ease, transform .12s ease;
@@ -231,9 +232,6 @@
       border-radius: 0;
       overflow: hidden;
     }
-    .terminal-divider {
-      border-right: 1px solid rgba(148, 163, 184, 0.2);
-    }
     .terminal-body {
       height: 320px;
     }
@@ -329,12 +327,10 @@
         padding-left: 0.75rem !important;
         padding-right: 0.75rem !important;
       }
+    }
+    @media (max-width: 1024px) {
       #deviceTab .terminal-body {
         height: 250px;
-      }
-      #deviceShell {
-        transform: scale(.96);
-        transform-origin: top center;
       }
     }
   </style>
@@ -442,9 +438,9 @@
 
       <!-- Device card -->
       <div id="deviceTab" class="block">
-        <div class="flex flex-col md:flex-row md:items-start md:gap-6">
-          <div class="md:order-1 order-2 flex-1 min-w-0">
-            <div class="terminal-wrap terminal-divider md:pr-6">
+        <div class="flex flex-col lg:flex-row lg:items-start lg:gap-6">
+          <div class="lg:order-1 order-2 flex-1 min-w-0">
+            <div class="terminal-wrap lg:border-r lg:border-slate-400/20 lg:pr-6">
               <div class="flex items-center justify-between px-4 py-3 border-b border-slate-800/70">
                 <div class="text-sm font-semibold text-emerald-300">Terminal</div>
                 <div class="flex items-center gap-2">
@@ -457,18 +453,18 @@
             </div>
           </div>
 
-          <div class="md:order-2 order-1 flex justify-center md:justify-end md:pl-6">
-            <div id="deviceShell" data-theme="neon" class="device-shell theme-neon rounded-3xl p-4 md:p-5 w-fit mx-auto md:mx-0">
+          <div class="lg:order-2 order-1 flex justify-center lg:justify-end w-full lg:w-auto">
+            <div id="deviceShell" data-theme="neon" class="device-shell theme-neon rounded-3xl p-3 sm:p-4 xl:p-5 w-full max-w-[300px] xl:w-fit xl:max-w-none mx-auto lg:mx-0">
       <div class="pager-clip" aria-hidden="true"></div>
       <div class="pager-brand">RaspyJack P200</div>
       <div class="pager-speaker" aria-hidden="true">
         <span></span><span></span><span></span><span></span><span></span>
       </div>
       <!-- Default layout (Neon / Pager) -->
-      <div class="layout-default grid grid-cols-[140px_140px] md:grid-cols-[120px_auto_120px] gap-3 md:gap-4 justify-items-center items-center">
+      <div class="layout-default grid grid-cols-2 xl:grid-cols-[120px_auto_120px] gap-3 xl:gap-4 justify-items-center items-center">
         <!-- Left pad -->
-        <div class="order-2 md:order-1 flex md:block justify-center justify-self-start">
-          <div class="grid grid-cols-3 grid-rows-3 gap-1.5 w-[120px]">
+        <div class="order-2 xl:order-1 flex xl:block justify-center justify-self-start">
+          <div class="grid grid-cols-3 grid-rows-3 gap-1 xl:gap-1.5 w-full xl:w-[120px]">
             <div></div>
             <button class="rj-btn dpad-btn rounded-xl bg-slate-800/70 hover:bg-slate-700/70 w-10 h-10 flex items-center justify-center backdrop-blur ring-1 ring-white/10 hover:ring-emerald-400/30 transition" data-btn="UP">▲</button>
             <div></div>
@@ -482,10 +478,10 @@
         </div>
 
         <!-- Screen -->
-        <div class="order-1 md:order-2 col-span-2 md:col-span-1">
+        <div class="order-1 xl:order-2 col-span-2 xl:col-span-1">
           <div class="screen-frame rounded-2xl p-2">
             <div class="flex items-center justify-center">
-              <canvas id="screen" width="128" height="128" class="w-[240px] md:w-[300px] aspect-square"></canvas>
+              <canvas id="screen" width="128" height="128" class="w-full xl:w-[300px] aspect-square"></canvas>
             </div>
           </div>
           <div class="pager-text mt-3 text-center text-xs text-slate-400">OK = Enter · KEY3 = Esc</div>
@@ -493,17 +489,17 @@
         </div>
 
         <!-- Right buttons -->
-        <div class="order-3 md:order-3 flex flex-col items-center gap-2 md:items-stretch justify-self-end">
-          <button class="rj-btn key-btn rounded-xl bg-fuchsia-700/80 hover:bg-fuchsia-600/80 px-3 py-2 w-24 ring-1 ring-white/10 transition" data-btn="KEY1">KEY1</button>
-          <button class="rj-btn key-btn rounded-xl bg-fuchsia-700/80 hover:bg-fuchsia-600/80 px-3 py-2 w-24 ring-1 ring-white/10 transition" data-btn="KEY2">KEY2</button>
-          <button class="rj-btn key-btn rounded-xl bg-fuchsia-700/80 hover:bg-fuchsia-600/80 px-3 py-2 w-24 ring-1 ring-white/10 transition" data-btn="KEY3">KEY3</button>
+        <div class="order-3 flex flex-col items-stretch gap-2 justify-self-end w-full xl:w-auto">
+          <button class="rj-btn key-btn rounded-xl bg-fuchsia-700/80 hover:bg-fuchsia-600/80 px-3 py-2 w-full xl:w-24 ring-1 ring-white/10 transition" data-btn="KEY1">KEY1</button>
+          <button class="rj-btn key-btn rounded-xl bg-fuchsia-700/80 hover:bg-fuchsia-600/80 px-3 py-2 w-full xl:w-24 ring-1 ring-white/10 transition" data-btn="KEY2">KEY2</button>
+          <button class="rj-btn key-btn rounded-xl bg-fuchsia-700/80 hover:bg-fuchsia-600/80 px-3 py-2 w-full xl:w-24 ring-1 ring-white/10 transition" data-btn="KEY3">KEY3</button>
         </div>
       </div>
 
       <!-- Game Boy layout -->
       <div class="layout-gameboy hidden">
         <div class="screen-frame">
-          <canvas id="screen-gb" width="128" height="128" class="w-[240px] md:w-[300px] aspect-square"></canvas>
+          <canvas id="screen-gb" width="128" height="128" class="w-full xl:w-[300px] aspect-square"></canvas>
         </div>
         <div class="flex justify-between mb-4">
           <div class="grid grid-cols-3 grid-rows-3 gap-2">
@@ -530,7 +526,7 @@
       <!-- Pager layout -->
       <div class="layout-pager hidden">
         <div class="screen-frame">
-          <canvas id="screen-pager" width="128" height="128" class="w-[240px] md:w-[300px] aspect-square"></canvas>
+          <canvas id="screen-pager" width="128" height="128" class="w-full xl:w-[300px] aspect-square"></canvas>
         </div>
         <div class="flex justify-between mb-4 mt-4">
           <div class="grid grid-cols-3 grid-rows-3 gap-2">
