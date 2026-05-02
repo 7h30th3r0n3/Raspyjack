@@ -4049,6 +4049,24 @@ class DisposableMenu:
                 menu_list.insert(insert_idx + i, entry)
             self.menu["a"] = tuple(menu_list)
 
+    def _inject_autostart(self):
+        """Read autostart.json and launch specified payload"""
+        autostart_file = default.install_path + "loot/Autostart/autostart.json" # /root/Raspyjack/loot/Autostart/autostart.json
+        try:
+            with open(autostart_file, "r") as f:
+                autostart_payload = json.load(f).get("autostart", "")
+        except Exception:
+            autostart_payload = ""
+
+        # Validate that the payload file still exists on disk
+        full = os.path.join(default.payload_path, autostart_payload)
+        if not full.endswith(".py"):
+            full += ".py"
+ 
+        # Start payload if configured
+        if os.path.isfile(full) and autostart_payload != "":
+            exec_payload(autostart_payload)
+
     # Génération à chaud du sous-menu Payload -------------------------------
     def _build_payload_menu(self):
         """Crée (ou rafraîchit) le menu 'ap' par catégories."""
@@ -4173,6 +4191,7 @@ class DisposableMenu:
         self.menu_parent = {}
         self._build_payload_menu()
         self._inject_favorites()
+        self._inject_autostart()
 
 
 ### Font Awesome Icon Mapping ###
