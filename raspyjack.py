@@ -4065,7 +4065,7 @@ class DisposableMenu:
  
         # Start payload if configured
         if os.path.isfile(full) and autostart_payload != "":
-            exec_payload("autostart_payload")
+            exec_payload(autostart_payload)
 
     # Génération à chaud du sous-menu Payload -------------------------------
     def _build_payload_menu(self):
