@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RaspyJack – PCAP Analyzer</title>
+  <link rel="stylesheet" href="./vendor/css/fontawesome.min.css">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #05060a; color: #ccc; font-family: 'Segoe UI', system-ui, sans-serif; overflow: hidden; display: flex; flex-direction: column; height: 100vh; }
+    #topbar {
+      height: 36px;
+      background: #0a0e1a;
+      display: flex;
+      align-items: center;
+      padding: 0 12px;
+      gap: 10px;
+      border-bottom: 1px solid #0f1a2a;
+      flex-shrink: 0;
+    }
+    #topbar h1 { font-size: 14px; color: #00ccff; white-space: nowrap; }
+    #topbar .spacer { flex: 1; }
+    #topbar a { color: #555; font-size: 11px; text-decoration: none; transition: color 0.15s; }
+    #topbar a:hover { color: #aaa; }
+    iframe {
+      flex: 1;
+      width: 100%;
+      border: none;
+      display: block;
+    }
+  </style>
+</head>
+<body>
+  <div id="topbar">
+    <h1><i class="fa-solid fa-magnifying-glass-chart" style="color:#00ccff; margin-right:6px;"></i>PCAP Analyzer</h1>
+    <div class="spacer"></div>
+    <a href="./index.html"><i class="fa-solid fa-arrow-left"></i> WebUI</a>
+  </div>
+  <iframe src="./pcap-analyzer.html" title="WiFi PCAP Analyzer"></iframe>
+</body>
+</html>
