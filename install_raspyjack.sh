@@ -279,6 +279,16 @@ defaults.ctl.card 1
 ALSA
   info "ALSA configured for ES8388 (card 1)"
 
+  # Create RPi/GPIO.py shim (shadows system RPi.GPIO with evdev-based input)
+  step "Creating RPi.GPIO shim for CardputerZero keyboard …"
+  mkdir -p /root/Raspyjack/RPi
+  cat > /root/Raspyjack/RPi/__init__.py <<'RPYINIT'
+RPYINIT
+  cat > /root/Raspyjack/RPi/GPIO.py <<'RPYGPIO'
+from gpio_shim import *
+RPYGPIO
+  info "RPi/GPIO.py shim installed (evdev-based keyboard input)"
+
   # Install opencv-python-headless via pip (not in apt)
   step "Installing OpenCV …"
   sudo pip3 install --break-system-packages opencv-python-headless 2>/dev/null \
