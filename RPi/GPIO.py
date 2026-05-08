@@ -1,56 +1,47 @@
 """
-gpio_shim – Drop-in replacement for RPi.GPIO on M5Stack CardputerZero.
-Translates GPIO.input() calls to evdev key state via evdev_keys module.
-GPIO.output/setup/setmode are no-ops (no physical GPIO buttons on this device).
+RPi.GPIO shim – Detects platform and delegates accordingly.
+On CardputerZero: uses gpio_shim (evdev-based).
+On standard Raspberry Pi: falls through to the real RPi.GPIO system package.
 """
 
-import evdev_keys
+import os as _os
+import json as _json
+import sys as _sys
 
-# RPi.GPIO constants
-BCM = 11
-BOARD = 10
-IN = 0
-OUT = 1
-PUD_UP = 22
-PUD_DOWN = 21
-HIGH = 1
-LOW = 0
-
-# Map GPIO pin numbers -> Raspyjack button names
-_PIN_TO_BUTTON = {
-    6:  'KEY_UP_PIN',
-    19: 'KEY_DOWN_PIN',
-    5:  'KEY_LEFT_PIN',
-    26: 'KEY_RIGHT_PIN',
-    13: 'KEY_PRESS_PIN',
-    21: 'KEY1_PIN',
-    20: 'KEY2_PIN',
-    16: 'KEY3_PIN',
-}
-
-
-def setmode(mode):
+_IS_CARDPUTER = False
+try:
+    for _p in [
+        _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", "gui_conf.json"),
+        "/root/Raspyjack/gui_conf.json",
+    ]:
+        if _os.path.isfile(_p):
+            with open(_p, "r") as _f:
+                _IS_CARDPUTER = _json.load(_f).get("DISPLAY", {}).get("type") == "CARDPUTER_320"
+            break
+except Exception:
     pass
 
+if _IS_CARDPUTER:
+    from gpio_shim import *
+else:
+    # Remove this local RPi package from sys.modules so the real one loads
+    _this_pkg = "RPi"
+    _this_mod = "RPi.GPIO"
+    if _this_pkg in _sys.modules:
+        del _sys.modules[_this_pkg]
+    if _this_mod in _sys.modules:
+        del _sys.modules[_this_mod]
 
-def setwarnings(flag):
-    pass
+    # Temporarily remove our directory from sys.path to find the REAL RPi.GPIO
+    _our_dir = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+    _saved_path = list(_sys.path)
+    _sys.path = [p for p in _sys.path if _os.path.abspath(p) != _our_dir]
 
-
-def setup(pin, direction, pull_up_down=None):
-    pass
-
-
-def output(pin, value):
-    pass
-
-
-def input(pin):
-    button = _PIN_TO_BUTTON.get(pin)
-    if button is None:
-        return 1
-    return 0 if evdev_keys.is_pressed(button) else 1
-
-
-def cleanup():
-    pass
+    try:
+        import RPi.GPIO as _real_gpio
+        # Re-export everything from the real RPi.GPIO
+        for _attr in dir(_real_gpio):
+            if not _attr.startswith("__"):
+                globals()[_attr] = getattr(_real_gpio, _attr)
+    finally:
+        _sys.path = _saved_path
