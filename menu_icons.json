@@ -89,7 +89,15 @@
                 " wifi": "",
                 " shopping": "",
                 " Random screensaver: ON": "",
-                " Random screensaver: OFF": ""
+                " Random screensaver: OFF": "",
+                " Clock settings": "",
+                " Show/Hide clock": "",
+                " Set timezone": "",
+                " Set time manual": "",
+                " Toggle NTP sync": "",
+                " Clock info": "",
+                " Toggle clock": "",
+                " PIN": ""
         },
         "categories": {
                 " Reconnaissance": "",
@@ -108,7 +116,8 @@
                 " NFC/RFID": "",
                 " Nfc Rfid": "",
                 " SDR/Radio": "",
-                " Sdr": ""
+                " Sdr": "",
+                " Sdr Radio": ""
         },
         "payloads": {
                 " ad_recon": "",
@@ -359,7 +368,18 @@
                 " payload_updater": "",
                 " card_tester": "",
                 " whisperpair": "",
-                " gps_config": ""
+                " gps_config": "",
+                " cardputer_tuner": "",
+                " gobuster_dir": "",
+                " map_downloader": "",
+                " map_viewer": "",
+                " ragnar": "",
+                " test_ble_wait_for_present": "",
+                " trigger_marker": "",
+                " wdgwars_upload": "",
+                " sdr_suite": "",
+                " winamp_player": "",
+                " sdr_adsb": ""
         },
         "fallbacks": {
                 "__scan__": "",
