@@ -20,6 +20,15 @@ cmd()   { command -v "$1" >/dev/null 2>&1; }
 UPDATE_MODE=0
 [[ "${1:-}" == "--update" ]] && UPDATE_MODE=1
 
+# ───── auto-detect CardputerZero hardware ────────────────────
+IS_CARDPUTER=0
+CFG_TMP=/boot/firmware/config.txt; [[ -f $CFG_TMP ]] || CFG_TMP=/boot/config.txt
+if grep -q "cardputerzero-overlay" "$CFG_TMP" 2>/dev/null; then
+  IS_CARDPUTER=1
+elif cat /sys/class/graphics/fb0/name 2>/dev/null | grep -q "st7789v_m5st"; then
+  IS_CARDPUTER=1
+fi
+
 # ───── 0 ▸ convert CRLF if file came from Windows ────────────
 if grep -q $'\r' "$0"; then
   step "Converting CRLF → LF in $0"
@@ -55,12 +64,20 @@ else
   echo ""
   echo "  Which LCD screen are you using?"
   echo ""
-  echo "    1) ST7735_128  — 1.44\" 128×128  (original Waveshare HAT)"
-  echo "    2) ST7789_240  — 1.3\"  240×240"
+  echo "    1) ST7735_128    — 1.44\" 128×128  (original Waveshare HAT)"
+  echo "    2) ST7789_240    — 1.3\"  240×240"
+  echo "    3) CARDPUTER_320 — M5Stack CardputerZero 320×170"
   echo ""
-  read -rp "  Enter choice [1/2] (default: 1): " DISPLAY_CHOICE
+  DEFAULT_CHOICE=1
+  if [[ $IS_CARDPUTER -eq 1 ]]; then
+    DEFAULT_CHOICE=3
+    info "CardputerZero hardware auto-detected!"
+  fi
+  read -rp "  Enter choice [1/2/3] (default: $DEFAULT_CHOICE): " DISPLAY_CHOICE
+  DISPLAY_CHOICE="${DISPLAY_CHOICE:-$DEFAULT_CHOICE}"
   case "$DISPLAY_CHOICE" in
     2) DISPLAY_TYPE="ST7789_240" ;;
+    3) DISPLAY_TYPE="CARDPUTER_320" ;;
     *) DISPLAY_TYPE="ST7735_128" ;;
   esac
 fi
@@ -78,7 +95,7 @@ with open("/root/Raspyjack/gui_conf.json") as f:
 if "DISPLAY" not in data:
     data["DISPLAY"] = {}
 data["DISPLAY"]["type"] = dtype
-data["DISPLAY"]["supported_types"] = ["ST7735_128", "ST7789_240"]
+data["DISPLAY"]["supported_types"] = ["ST7735_128", "ST7789_240", "CARDPUTER_320"]
 # Preserve flip if it exists
 # (flip key is NOT overwritten, it stays as-is)
 with open("/root/Raspyjack/gui_conf.json", "w") as f:
@@ -99,6 +116,14 @@ for d in ad_recon auto_loot_exfil bt_audio cctv_scanner cctv_viewer dns_tunnel \
 done
 mkdir -p /root/Raspyjack/loot/wordlists
 
+# ───── 1‑d ▸ CardputerZero: disable M5Stack APPLaunch service ─
+if [[ "$DISPLAY_TYPE" == "CARDPUTER_320" ]]; then
+  step "Disabling M5Stack APPLaunch service …"
+  sudo systemctl stop APPLaunch.service 2>/dev/null || true
+  sudo systemctl disable APPLaunch.service 2>/dev/null || true
+  info "APPLaunch service disabled (replaced by RaspyJack)"
+fi
+
 # ───── 2 ▸ install / upgrade required APT packages ───────────
 PACKAGES=(
   python3 python3-pip python3-dev \
@@ -113,6 +138,11 @@ PACKAGES=(
   firmware-linux-nonfree firmware-realtek firmware-atheros \
   git i2c-tools
 )
+
+# CardputerZero extra packages
+if [[ "$DISPLAY_TYPE" == "CARDPUTER_320" ]]; then
+  PACKAGES+=( mpv rtl-433 bluez-alsa-utils )
+fi
 
 # Fix missing GPG keys before apt update
 step "Checking APT repository keys …"
@@ -230,22 +260,48 @@ else
 fi
 
 # ───── 3 ▸ enable I²C / SPI & kernel modules ────────────────
-step "Checking I²C & SPI …"
-SPI_OK=0
-ls /dev/spidev0.0 >/dev/null 2>&1 && grep -q "i2c-dev" /etc/modules 2>/dev/null && SPI_OK=1
-if [[ $SPI_OK -eq 1 ]]; then
-  info "I²C & SPI already configured"
+if [[ "$DISPLAY_TYPE" == "CARDPUTER_320" ]]; then
+  info "CardputerZero: framebuffer display — skipping SPI/I²C HAT setup"
+
+  # Blacklist DVB driver for RTL-SDR direct access
+  step "Blacklisting DVB driver for RTL-SDR …"
+  if ! grep -q "blacklist dvb_usb_rtl28xxu" /etc/modprobe.d/rtlsdr-blacklist.conf 2>/dev/null; then
+    echo "blacklist dvb_usb_rtl28xxu" | sudo tee /etc/modprobe.d/rtlsdr-blacklist.conf >/dev/null
+    sudo modprobe -r dvb_usb_rtl28xxu 2>/dev/null || true
+    info "dvb_usb_rtl28xxu blacklisted"
+  fi
+
+  # ALSA config for ES8388 codec
+  step "Configuring ALSA for ES8388 audio codec …"
+  sudo tee /etc/asound.conf >/dev/null <<'ALSA'
+defaults.pcm.card 1
+defaults.ctl.card 1
+ALSA
+  info "ALSA configured for ES8388 (card 1)"
+
+  # Install opencv-python-headless via pip (not in apt)
+  step "Installing OpenCV …"
+  sudo pip3 install --break-system-packages opencv-python-headless 2>/dev/null \
+    || warn "opencv install failed — video_player may not work"
+
 else
-  add_dtparam dtparam=i2c_arm=on
-  add_dtparam dtparam=i2c1=on
-  add_dtparam dtparam=spi=on
-  MODULES=(i2c-bcm2835 i2c-dev spi_bcm2835 spidev)
-  for m in "${MODULES[@]}"; do
-    grep -qxF "$m" /etc/modules || echo "$m" | sudo tee -a /etc/modules >/dev/null
-    sudo modprobe "$m" || true
-  done
-  grep -qE '^dtoverlay=spi0-[12]cs' "$CFG" || echo 'dtoverlay=spi0-2cs' | sudo tee -a "$CFG" >/dev/null
-  info "I²C & SPI configured"
+  step "Checking I²C & SPI …"
+  SPI_OK=0
+  ls /dev/spidev0.0 >/dev/null 2>&1 && grep -q "i2c-dev" /etc/modules 2>/dev/null && SPI_OK=1
+  if [[ $SPI_OK -eq 1 ]]; then
+    info "I²C & SPI already configured"
+  else
+    add_dtparam dtparam=i2c_arm=on
+    add_dtparam dtparam=i2c1=on
+    add_dtparam dtparam=spi=on
+    MODULES=(i2c-bcm2835 i2c-dev spi_bcm2835 spidev)
+    for m in "${MODULES[@]}"; do
+      grep -qxF "$m" /etc/modules || echo "$m" | sudo tee -a /etc/modules >/dev/null
+      sudo modprobe "$m" || true
+    done
+    grep -qE '^dtoverlay=spi0-[12]cs' "$CFG" || echo 'dtoverlay=spi0-2cs' | sudo tee -a "$CFG" >/dev/null
+    info "I²C & SPI configured"
+  fi
 fi
 
 # ───── 4 ▸ WiFi attack setup ──────────────────────────────────
@@ -401,6 +457,7 @@ ExecStart=/usr/bin/python3 /root/Raspyjack/raspyjack.py
 Restart=on-failure
 User=root
 Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/root/Raspyjack
 
 [Install]
 WantedBy=multi-user.target
@@ -462,6 +519,7 @@ ExecStart=/usr/bin/python3 /root/Raspyjack/device_server.py
 Restart=on-failure
 User=root
 Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/root/Raspyjack
 Environment=RJ_WS_TOKEN_FILE=/root/Raspyjack/.webui_token
 Environment=RJ_WEB_AUTH_SECRET_FILE=/root/Raspyjack/.webui_session_secret
 Environment=RJ_WEB_AUTH_FILE=/root/Raspyjack/.webui_auth.json
@@ -490,6 +548,7 @@ ExecStart=/usr/bin/python3 /root/Raspyjack/web_server.py
 Restart=on-failure
 User=root
 Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/root/Raspyjack
 Environment=RJ_WS_TOKEN_FILE=/root/Raspyjack/.webui_token
 Environment=RJ_WEB_AUTH_SECRET_FILE=/root/Raspyjack/.webui_session_secret
 Environment=RJ_WEB_AUTH_FILE=/root/Raspyjack/.webui_auth.json
@@ -615,11 +674,19 @@ set -e
 # ───── 6 ▸ final health‑check ────────────────────────────────
 step "Running post install checks …"
 
-# 6‑a SPI device nodes
-if ls /dev/spidev* 2>/dev/null | grep -q spidev0.0; then
-  info "SPI device found: $(ls /dev/spidev* | xargs)"
+# 6‑a SPI / framebuffer device nodes
+if [[ "$DISPLAY_TYPE" == "CARDPUTER_320" ]]; then
+  if [ -e /dev/fb0 ]; then
+    info "Framebuffer found: /dev/fb0 (CardputerZero)"
+  else
+    warn "Framebuffer /dev/fb0 NOT found – display may not work"
+  fi
 else
-  warn "SPI device NOT found – a reboot may still be required."
+  if ls /dev/spidev* 2>/dev/null | grep -q spidev0.0; then
+    info "SPI device found: $(ls /dev/spidev* | xargs)"
+  else
+    warn "SPI device NOT found – a reboot may still be required."
+  fi
 fi
 
 # 6‑b WiFi attack tools check
@@ -637,9 +704,14 @@ else
 fi
 
 # 6‑d python imports
-python3 - <<'PY' || fail "Python dependency test failed"
+RJ_DISPLAY_TYPE="$DISPLAY_TYPE" PYTHONPATH=/root/Raspyjack python3 - <<'PY' || fail "Python dependency test failed"
 import importlib, sys
-required = ("scapy", "netifaces", "pyudev", "serial", "smbus2", "RPi.GPIO", "spidev", "PIL", "qrcode", "requests")
+import os
+dtype = os.environ.get("RJ_DISPLAY_TYPE", "ST7735_128")
+if dtype == "CARDPUTER_320":
+    required = ("scapy", "netifaces", "pyudev", "serial", "smbus2", "PIL", "qrcode", "requests", "evdev", "numpy")
+else:
+    required = ("scapy", "netifaces", "pyudev", "serial", "smbus2", "RPi.GPIO", "spidev", "PIL", "qrcode", "requests")
 optional = ("bluepy", "bleak")
 ok = True
 for mod in required:

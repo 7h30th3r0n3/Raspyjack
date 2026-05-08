@@ -32,11 +32,33 @@ for _p in _CONF_PATHS:
             pass
         break
 
-LCD_SCALE = 240 / 128 if _DISPLAY_TYPE == "ST7789_240" else 1.0
+try:
+    import LCD_1in44
+    _LCD_W = LCD_1in44.LCD_WIDTH
+    _LCD_H = LCD_1in44.LCD_HEIGHT
+except Exception:
+    _LCD_W = 240 if _DISPLAY_TYPE == "ST7789_240" else (320 if _DISPLAY_TYPE == "CARDPUTER_320" else 128)
+    _LCD_H = 240 if _DISPLAY_TYPE == "ST7789_240" else (170 if _DISPLAY_TYPE == "CARDPUTER_320" else 128)
+
+LCD_SCALE_X = _LCD_W / 128
+LCD_SCALE_Y = _LCD_H / 128
+LCD_SCALE = min(LCD_SCALE_X, LCD_SCALE_Y)
+
+_is_square = abs(LCD_SCALE_X - LCD_SCALE_Y) < 0.01
+
+
+def SX(v):
+    """Scale a 128-base X coordinate to current display width."""
+    return int(v * LCD_SCALE_X)
+
+
+def SY(v):
+    """Scale a 128-base Y coordinate to current display height."""
+    return int(v * LCD_SCALE_Y)
 
 
 def S(v):
-    """Scale a 128-base pixel value to the current display resolution."""
+    """Scale a 128-base pixel value uniformly (fonts, line widths)."""
     return int(v * LCD_SCALE)
 
 
@@ -60,20 +82,21 @@ def scaled_font(size=10):
 # ---------------------------------------------------------------------------
 def _scale_point(pt):
     """Scale a 2-tuple or 2-list."""
-    return (S(pt[0]), S(pt[1]))
+    if _is_square:
+        return (S(pt[0]), S(pt[1]))
+    return (SX(pt[0]), SY(pt[1]))
 
 
 def _scale_coords(coords):
     """Scale a flat sequence of coordinates or a list of point tuples."""
     if not coords:
         return coords
-    # list/tuple of 2-tuples: [(x,y), (x,y), ...]
     if isinstance(coords[0], (list, tuple)):
         return [_scale_point(p) for p in coords]
-    # flat 4-value box: (x0, y0, x1, y1) or [x0, y0, x1, y1]
     if len(coords) == 4:
-        return [S(coords[0]), S(coords[1]), S(coords[2]), S(coords[3])]
-    # flat 2-value point
+        if _is_square:
+            return [S(coords[0]), S(coords[1]), S(coords[2]), S(coords[3])]
+        return [SX(coords[0]), SY(coords[1]), SX(coords[2]), SY(coords[3])]
     if len(coords) == 2:
         return (S(coords[0]), S(coords[1]))
     return coords

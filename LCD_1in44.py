@@ -35,7 +35,7 @@ from PIL import Image as PILImage, ImageOps
 
 # ---------------------------------------------------------------------------
 # Display type detection from gui_conf.json
-# Supported: "ST7735_128" (1.44" 128x128) and "ST7789_240" (1.3" 240x240)
+# Supported: "ST7735_128" (128x128), "ST7789_240" (240x240), "CARDPUTER_320" (320x170)
 # ---------------------------------------------------------------------------
 _DISPLAY_TYPE = "ST7735_128"  # default
 
@@ -59,7 +59,14 @@ else:
 # ---------------------------------------------------------------------------
 # Resolution constants based on display type
 # ---------------------------------------------------------------------------
-if _DISPLAY_TYPE == "ST7789_240":
+if _DISPLAY_TYPE == "CARDPUTER_320":
+    LCD_WIDTH  = 320
+    LCD_HEIGHT = 170
+    LCD_X = 0
+    LCD_Y = 0
+    LCD_X_MAXPIXEL = 320
+    LCD_Y_MAXPIXEL = 170
+elif _DISPLAY_TYPE == "ST7789_240":
     LCD_WIDTH  = 240
     LCD_HEIGHT = 240
     LCD_X = 0
@@ -79,7 +86,10 @@ else:
 # Scale helper – payloads import this: from LCD_1in44 import S
 # All coordinates are authored for 128; S() adapts them to the actual panel.
 # ---------------------------------------------------------------------------
-LCD_SCALE = LCD_WIDTH / 128  # 1.0 on 128x128, 1.875 on 240x240
+if _DISPLAY_TYPE == "CARDPUTER_320":
+    LCD_SCALE = LCD_HEIGHT / 128  # 1.328 — use height (constraining dimension) for widescreen
+else:
+    LCD_SCALE = LCD_WIDTH / 128  # 1.0 on 128x128, 1.875 on 240x240
 
 def S(v):
     """Scale a 128-base pixel value to the current display resolution."""
@@ -457,9 +467,12 @@ class LCD:
     #function:
     #			initialization
     #********************************************************************************/
-    def LCD_Init(self, Lcd_ScanDir):
+    def LCD_Init(self, Lcd_ScanDir=None):
         if (LCD_Config.GPIO_Init() != 0):
             return -1
+
+        if self.display_type == "CARDPUTER_320":
+            return 0
 
         # Set SPI speed based on display type
         if self.display_type == "ST7789_240":
@@ -477,7 +490,7 @@ class LCD:
         self.LCD_InitReg()
 
         #Set the display scan and color transfer modes
-        self.LCD_SetGramScanWay(Lcd_ScanDir)
+        self.LCD_SetGramScanWay(Lcd_ScanDir or SCAN_DIR_DFT)
         LCD_Config.Driver_Delay_ms(200)
 
         #sleep out
@@ -513,6 +526,9 @@ class LCD:
         self.LCD_WriteReg(0x2C)
 
     def LCD_Clear(self):
+        if self.display_type == "CARDPUTER_320":
+            LCD_Config.fb_write(b'\x00' * LCD_Config.FB_SIZE)
+            return
         _buffer = [0x00]*(self.width * self.height * 2)
         self.LCD_SetWindows(0, 0, self.width, self.height)
         GPIO.output(LCD_Config.LCD_DC_PIN, GPIO.HIGH)
@@ -526,17 +542,27 @@ class LCD:
             Image = Image.rotate(180)
         imwidth, imheight = Image.size
         if imwidth != self.width or imheight != self.height:
-            raise ValueError('Image must be same dimensions as display \
-                ({0}x{1}).' .format(self.width, self.height))
-        img = np.asarray(Image)
-        pix = np.zeros((self.width,self.height,2), dtype = np.uint8)
-        pix[...,[0]] = np.add(np.bitwise_and(img[...,[0]],0xF8),np.right_shift(img[...,[1]],5))
-        pix[...,[1]] = np.add(np.bitwise_and(np.left_shift(img[...,[1]],3),0xE0),np.right_shift(img[...,[2]],3))
-        pix = pix.flatten().tolist()
-        self.LCD_SetWindows(0, 0, self.width , self.height)
-        GPIO.output(LCD_Config.LCD_DC_PIN, GPIO.HIGH)
-        for i in range(0,len(pix),4096):
-            LCD_Config.SPI_Write_Byte(pix[i:i+4096])
+            Image = Image.resize((self.width, self.height))
+
+        if self.display_type == "CARDPUTER_320":
+            img = Image.convert("RGB")
+            arr = np.asarray(img)
+            r = (arr[..., 0].astype(np.uint16) >> 3) << 11
+            g = (arr[..., 1].astype(np.uint16) >> 2) << 5
+            b = arr[..., 2].astype(np.uint16) >> 3
+            rgb565 = (r | g | b).astype(np.uint16).tobytes()
+            LCD_Config.fb_write(rgb565)
+        else:
+            img = np.asarray(Image)
+            pix = np.zeros((self.width,self.height,2), dtype = np.uint8)
+            pix[...,[0]] = np.add(np.bitwise_and(img[...,[0]],0xF8),np.right_shift(img[...,[1]],5))
+            pix[...,[1]] = np.add(np.bitwise_and(np.left_shift(img[...,[1]],3),0xE0),np.right_shift(img[...,[2]],3))
+            pix = pix.flatten().tolist()
+            self.LCD_SetWindows(0, 0, self.width , self.height)
+            GPIO.output(LCD_Config.LCD_DC_PIN, GPIO.HIGH)
+            for i in range(0,len(pix),4096):
+                LCD_Config.SPI_Write_Byte(pix[i:i+4096])
+
         # Mirror the LCD frame for remote clients (throttled)
         if _FRAME_MIRROR_ENABLED or _CARDPUTER_FRAME_ENABLED:
             global _last_frame_save
