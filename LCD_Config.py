@@ -43,6 +43,15 @@ try:
 except Exception:
     pass
 
+# Hardware auto-detect fallback: if gui_conf.json says ST7735 but we're on a CardputerZero
+if _DISPLAY_TYPE != "CARDPUTER_320":
+    try:
+        with open("/sys/class/graphics/fb0/name", "r") as _fb:
+            if "st7789v_m5st" in _fb.read():
+                _DISPLAY_TYPE = "CARDPUTER_320"
+    except Exception:
+        pass
+
 
 if _DISPLAY_TYPE == "CARDPUTER_320":
     # ===================================================================

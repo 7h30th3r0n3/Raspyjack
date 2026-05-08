@@ -56,6 +56,15 @@ for _p in _CONF_PATHS:
 else:
     _FLIP_180 = False
 
+# Hardware auto-detect fallback for CardputerZero
+if _DISPLAY_TYPE != "CARDPUTER_320":
+    try:
+        with open("/sys/class/graphics/fb0/name", "r") as _fb:
+            if "st7789v_m5st" in _fb.read():
+                _DISPLAY_TYPE = "CARDPUTER_320"
+    except Exception:
+        pass
+
 # ---------------------------------------------------------------------------
 # Resolution constants based on display type
 # ---------------------------------------------------------------------------
