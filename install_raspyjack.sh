@@ -169,7 +169,7 @@ step "Installing dependencies …"
 to_install=($(sudo apt-get -qq --just-print install "${PACKAGES[@]}" | awk '/^Inst/ {print $2}'))
 if ((${#to_install[@]})); then
   info "Will install/upgrade: ${to_install[*]}"
-  sudo apt-get install -y --no-install-recommends "${PACKAGES[@]}"
+  sudo apt-get install -y --no-install-recommends "${PACKAGES[@]}" || warn "Some packages had errors (non-critical, continuing...)"
 else
   info "All packages already installed & up‑to‑date."
 fi
