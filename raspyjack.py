@@ -217,6 +217,20 @@ def _log_virtual_consume(stage, button):
 # https://www.waveshare.com/wiki/File:1.44inch-LCD-HAT-Code.7z
 
 _wifi_connected = False
+_battery_pct = -1
+_battery_charging = False
+_show_clock = True
+
+def _check_battery():
+    global _battery_pct, _battery_charging
+    try:
+        with open("/sys/class/power_supply/bq27500-0/voltage_now") as f:
+            uv = int(f.read().strip())
+        _battery_pct = max(0, min(100, int((uv / 1_000_000 - 3.0) / 1.2 * 100)))
+        with open("/sys/class/power_supply/bq27500-0/status") as f:
+            _battery_charging = f.read().strip() == "Charging"
+    except Exception:
+        _battery_pct = -1
 
 def _check_wifi():
     """Check if wlan0 is connected to a WiFi network."""
@@ -239,6 +253,7 @@ def _stats_loop():
             _wifi_tick += 1
             if _wifi_tick % 5 == 0:
                 _check_wifi()
+                _check_battery()
             status = ""
             if subprocess.call(['pgrep', 'nmap'], stdout=subprocess.DEVNULL) == 0:
                 status = "(Scan in progress)"
@@ -315,7 +330,10 @@ start_time = time.time()
 # Screen dimensions (read from LCD driver at import time)
 _SCR_W = LCD_1in44.LCD_WIDTH
 _SCR_H = LCD_1in44.LCD_HEIGHT
-_SCALE = _SCR_W / 128  # 1.0 for 128x128, 1.875 for 240x240
+if _SCR_W != _SCR_H:
+    _SCALE = _SCR_H / 128  # widescreen: use height as constraining dimension
+else:
+    _SCALE = _SCR_W / 128  # square: 1.0 for 128x128, 1.875 for 240x240
 
 def S(v):
     """Scale a pixel value from 128-base to current screen resolution."""
@@ -800,6 +818,7 @@ def LoadConfig():
     global lock_config
     global _flip_enabled
     global _random_screensaver
+    global _show_clock
 
     if not (os.path.exists(default.config_file) and os.path.isfile(default.config_file)):
         print("Can't find a config file! Creating one at '" + default.config_file + "'...")
@@ -813,6 +832,7 @@ def LoadConfig():
         lock_config = _normalize_lock_config(data.get("LOCK"))
         _random_screensaver = bool(data.get("LOCK", {}).get("random_screensaver", False))
         _flip_enabled = data.get("DISPLAY", {}).get("flip", False)
+        _show_clock = data.get("TOOLBAR", {}).get("show_clock", True)
         if _flip_enabled:
             PINS = _apply_flip(PINS)
         try:
@@ -823,6 +843,23 @@ def LoadConfig():
         for item in PINS:
             GPIO.setup(PINS[item], GPIO.IN, pull_up_down=GPIO.PUD_UP)
     print(f"Config loaded! (flip={'ON' if _flip_enabled else 'OFF'})")
+
+
+def ToggleClock():
+    global _show_clock
+    _show_clock = not _show_clock
+    try:
+        with open(default.config_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if "TOOLBAR" not in data:
+            data["TOOLBAR"] = {}
+        data["TOOLBAR"]["show_clock"] = _show_clock
+        with open(default.config_file, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=4, sort_keys=True)
+    except Exception:
+        pass
+    state = "ON" if _show_clock else "OFF"
+    Dialog_info(f"Clock: {state}", wait=False, timeout=1)
 
 
 def ToggleFlip():
@@ -846,13 +883,46 @@ def _draw_toolbar():
         draw.text((0, S(-2)), f"{_temp_c:.0f} °C ", fill="WHITE", font=font)
         if _status_text:
             draw.text((S(30), S(-2)), _status_text, fill="WHITE", font=font)
-        # WiFi icon at top right when connected
+        right_x = _SCR_W
+        try:
+            _tb_icon = ImageFont.truetype('/usr/share/fonts/truetype/fontawesome/fa-solid-900.ttf', S(8))
+        except Exception:
+            _tb_icon = font
         if _wifi_connected:
+            right_x -= S(12)
             try:
-                _tb_icon = ImageFont.truetype('/usr/share/fonts/truetype/fontawesome/fa-solid-900.ttf', S(8))
-                draw.text((_SCR_W - S(10), S(0)), "\uf1eb", fill="WHITE", font=_tb_icon)
+                draw.text((right_x, S(0)), "", fill="WHITE", font=_tb_icon)
             except Exception:
-                draw.text((_SCR_W - S(8), S(0)), "W", fill="WHITE", font=font)
+                draw.text((right_x, S(0)), "W", fill="WHITE", font=font)
+        if _battery_pct >= 0:
+            bat_color = "RED" if _battery_pct <= 15 else ("ORANGE" if _battery_pct <= 30 else "WHITE")
+            pct_text = f"{_battery_pct}%"
+            right_x -= S(2)
+            pct_w = font.getlength(pct_text) if hasattr(font, 'getlength') else len(pct_text) * S(5)
+            right_x -= int(pct_w)
+            draw.text((right_x, S(-2)), pct_text, fill=bat_color, font=font)
+            if _battery_pct > 90: bat_icon = ""
+            elif _battery_pct > 65: bat_icon = ""
+            elif _battery_pct > 35: bat_icon = ""
+            elif _battery_pct > 10: bat_icon = ""
+            else: bat_icon = ""
+            right_x -= S(11)
+            try:
+                draw.text((right_x, S(0)), bat_icon, fill=bat_color, font=_tb_icon)
+            except Exception:
+                pass
+            if _battery_charging:
+                right_x -= S(7)
+                try:
+                    draw.text((right_x, S(-1)), "", fill="YELLOW", font=_tb_icon)
+                except Exception:
+                    pass
+        if _show_clock:
+            clock_text = time.strftime("%H:%M")
+            right_x -= S(2)
+            clk_w = font.getlength(clock_text) if hasattr(font, 'getlength') else len(clock_text) * S(5)
+            right_x -= int(clk_w)
+            draw.text((right_x, S(-2)), clock_text, fill="#88BBFF", font=font)
         mark_display_dirty()
     except Exception:
         pass
@@ -1945,8 +2015,14 @@ def RenderMenuCarouselOnce(inlist, selected_index=0):
 
 def RenderMenuGridOnce(inlist, selected_index=0):
     """Render a non-interactive snapshot of the grid view."""
-    GRID_COLS = 2
-    GRID_ROWS = 4
+    pad_x = S(4)
+    pad_top = S(22) if hasattr(default, 'start_text') else S(14)
+    cell_min_w = S(55)
+    cell_h = S(25)
+    usable_w = _SCR_W - pad_x * 2
+    usable_h = _SCR_H - pad_top - S(4)
+    GRID_COLS = max(2, usable_w // cell_min_w)
+    GRID_ROWS = max(2, usable_h // cell_h)
     GRID_ITEMS = GRID_COLS * GRID_ROWS
 
     if not inlist:
@@ -1992,7 +2068,7 @@ def RenderCurrentMenuOnce():
     Used after returning from a payload to restore proper styling/icons.
     """
     inlist = m.GetMenuList()
-    if m.which == "a" and m.view_mode in ["grid", "carousel"]:
+    if m.view_mode in ["grid", "carousel"]:
         if m.view_mode == "grid":
             RenderMenuGridOnce(inlist, m.select)
         else:
@@ -4319,12 +4395,18 @@ def GetMenuCarousel(inlist, duplicates=False):
 
 def GetMenuGrid(inlist, duplicates=False):
     """
-    Display menu items in a grid layout (2 columns x 4 rows = 8 items visible).
+    Display menu items in a grid layout with dynamic columns.
     - Grid navigation: UP/DOWN/LEFT/RIGHT
     - Returns selected item or empty string
     """
-    GRID_COLS = 2
-    GRID_ROWS = 4
+    pad_x = S(4)
+    pad_top = S(22) if hasattr(default, 'start_text') else S(14)
+    cell_min_w = S(55)
+    cell_h = S(25)
+    usable_w = _SCR_W - pad_x * 2
+    usable_h = _SCR_H - pad_top - S(4)
+    GRID_COLS = max(2, usable_w // cell_min_w)
+    GRID_ROWS = max(2, usable_h // cell_h)
     GRID_ITEMS = GRID_COLS * GRID_ROWS
 
     if not inlist:
@@ -4496,7 +4578,7 @@ def main():
             exec_payload(requested)
             continue
         # Use different view modes only for main menu ("a"), list view for all submenus
-        if m.which == "a" and m.view_mode in ["grid", "carousel"]:
+        if m.view_mode in ["grid", "carousel"]:
             if m.view_mode == "grid":
                 selected_item = GetMenuGrid(m.GetMenuList())
             else:  # carousel
