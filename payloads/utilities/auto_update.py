@@ -408,12 +408,17 @@ def run_install_script():
     try:
         with open(os.path.join(RASPYJACK_DIR, "gui_conf.json"), "r") as f:
             cfg = json.load(f)
-        if cfg.get("DISPLAY", {}).get("type") == "ST7789_240":
+        dtype = cfg.get("DISPLAY", {}).get("type", "")
+        if dtype == "ST7789_240":
             display_choice = "2"
+        elif dtype == "CARDPUTER_320":
+            display_choice = "3"
     except Exception:
         pass
 
     try:
+        import select
+        INSTALL_TIMEOUT = 180  # 3 minutes max per readline
         proc = subprocess.Popen(
             ["bash", INSTALL_SCRIPT, "--update"],
             cwd=RASPYJACK_DIR,
@@ -422,8 +427,6 @@ def run_install_script():
             stderr=subprocess.STDOUT,
             text=True,
         )
-        # In --update mode, display is auto-detected from gui_conf.json
-        # No interactive prompt needed, but send choice as fallback
         try:
             proc.stdin.write(display_choice + "\n")
             proc.stdin.flush()
@@ -431,7 +434,17 @@ def run_install_script():
             pass
         line_count = 0
         last_line = ""
+        start = time.monotonic()
         while True:
+            if time.monotonic() - start > 600:
+                proc.kill()
+                return False, "Timeout (10min)"
+            ready, _, _ = select.select([proc.stdout], [], [], INSTALL_TIMEOUT)
+            if not ready:
+                show_progress("Installing...", "Still working...", min(90, line_count * 2))
+                if proc.poll() is not None:
+                    break
+                continue
             line = proc.stdout.readline()
             if not line and proc.poll() is not None:
                 break
@@ -441,7 +454,7 @@ def run_install_script():
                 last_line = clean
                 show_progress("Installing...", clean, min(95, line_count * 2))
 
-        rc = proc.wait(timeout=300)
+        rc = proc.wait(timeout=30)
         if rc != 0:
             return False, f"Exit code {rc}: {last_line}"
         return True, "OK"
