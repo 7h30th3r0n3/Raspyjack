@@ -477,8 +477,14 @@ def _menu_filter_backspace():
     if not _menu_filter:
         _menu_filter_active = False
 
+def _check_search_trigger():
+    """Check if S key is pressed to enter search mode (CardputerZero only)."""
+    if not _HAS_EVDEV:
+        return False
+    return _evdev.is_key_pressed(31)  # S key
+
 def _check_search_key():
-    """Check if a letter key is pressed (CardputerZero only). Returns char or None."""
+    """Check if a letter key is pressed during search mode. Returns char or None."""
     if not _HAS_EVDEV:
         return None
     for code, char in _KEY_CHARS.items():
@@ -2291,18 +2297,24 @@ def GetMenuString(inlist, duplicates=False):
         time.sleep(0.12)
 
         # -- 4/ Lecture des boutons -----------------------------------------
-        # Check for search key (letter pressed on CardputerZero keyboard)
-        search_char = _check_search_key()
-        if search_char is not None:
+        # S key enters search mode (CardputerZero keyboard)
+        if not _menu_filter_active and _check_search_trigger():
             _menu_filter_activate()
-            _menu_filter_add(search_char)
-            filtered = _filter_menu_items(inlist_original, _menu_filter)
-            if filtered:
-                inlist = filtered
-                total = len(inlist)
-                index = 0
-            time.sleep(0.15)
+            time.sleep(0.2)
             continue
+
+        # In search mode, capture letter keys for the query
+        if _menu_filter_active:
+            search_char = _check_search_key()
+            if search_char is not None:
+                _menu_filter_add(search_char)
+                filtered = _filter_menu_items(inlist_original, _menu_filter)
+                if filtered:
+                    inlist = filtered
+                    total = len(inlist)
+                    index = 0
+                time.sleep(0.15)
+                continue
 
         btn = getButton()
 
