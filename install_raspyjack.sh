@@ -136,7 +136,7 @@ PACKAGES=(
   aircrack-ng wireless-tools wpasupplicant iw \
   hostapd dnsmasq-base sshpass bridge-utils john autossh reaver ebtables \
   firmware-linux-nonfree firmware-realtek firmware-atheros \
-  git i2c-tools
+  git i2c-tools rtl-sdr
 )
 
 # CardputerZero extra packages
