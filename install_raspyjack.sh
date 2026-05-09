@@ -259,17 +259,19 @@ else
   info "FontAwesome font already present"
 fi
 
+# ───── 2‑e ▸ Blacklist DVB driver for RTL-SDR direct access ──
+step "Blacklisting DVB driver for RTL-SDR …"
+if ! grep -q "blacklist dvb_usb_rtl28xxu" /etc/modprobe.d/rtlsdr-blacklist.conf 2>/dev/null; then
+  echo "blacklist dvb_usb_rtl28xxu" | sudo tee /etc/modprobe.d/rtlsdr-blacklist.conf >/dev/null
+  sudo modprobe -r dvb_usb_rtl28xxu 2>/dev/null || true
+  info "dvb_usb_rtl28xxu blacklisted"
+else
+  info "DVB blacklist already configured"
+fi
+
 # ───── 3 ▸ enable I²C / SPI & kernel modules ────────────────
 if [[ "$DISPLAY_TYPE" == "CARDPUTER_320" ]]; then
   info "CardputerZero: framebuffer display — skipping SPI/I²C HAT setup"
-
-  # Blacklist DVB driver for RTL-SDR direct access
-  step "Blacklisting DVB driver for RTL-SDR …"
-  if ! grep -q "blacklist dvb_usb_rtl28xxu" /etc/modprobe.d/rtlsdr-blacklist.conf 2>/dev/null; then
-    echo "blacklist dvb_usb_rtl28xxu" | sudo tee /etc/modprobe.d/rtlsdr-blacklist.conf >/dev/null
-    sudo modprobe -r dvb_usb_rtl28xxu 2>/dev/null || true
-    info "dvb_usb_rtl28xxu blacklisted"
-  fi
 
   # ALSA config for ES8388 codec
   step "Configuring ALSA for ES8388 audio codec …"
