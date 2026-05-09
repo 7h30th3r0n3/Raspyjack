@@ -436,9 +436,9 @@ def run_install_script():
         last_line = ""
         start = time.monotonic()
         while True:
-            if time.monotonic() - start > 600:
+            if time.monotonic() - start > 900:
                 proc.kill()
-                return False, "Timeout (10min)"
+                return False, "Timeout (15min)"
             ready, _, _ = select.select([proc.stdout], [], [], INSTALL_TIMEOUT)
             if not ready:
                 show_progress("Installing...", "Still working...", min(90, line_count * 2))
