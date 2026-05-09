@@ -30,8 +30,33 @@ def detect_sdr():
             ["rtl_test", "-t"], capture_output=True, text=True, timeout=5,
         )
         combined = r.stdout + r.stderr
-        if "Found" in combined and "Realtek" in combined:
-            return True, "RTL-SDR", "rtlsdr"
+        if "Found" in combined or "RTL28" in combined or "RTL-SDR" in combined or "R82" in combined or "R828" in combined:
+            label = "RTL-SDR"
+            if "R828D" in combined or "Blog V4" in combined:
+                label = "RTL-SDR V4"
+            elif "R820T" in combined:
+                label = "RTL-SDR"
+            return True, label, "rtlsdr"
+    except FileNotFoundError:
+        pass
+    except Exception:
+        pass
+    # Try rtl_433 detection (works with V4 when rtl_test doesn't)
+    try:
+        r = subprocess.run(
+            ["rtl_433", "-F", "null", "-T", "0"], capture_output=True, text=True, timeout=5,
+        )
+        combined = r.stdout + r.stderr
+        if "Found" in combined or "RTL" in combined or "SDR" in combined:
+            label = "RTL-SDR (via rtl_433)"
+            return True, label, "rtlsdr"
+    except Exception:
+        pass
+    # Fallback: check if USB device is present even without drivers
+    try:
+        r = subprocess.run(["lsusb"], capture_output=True, text=True, timeout=3)
+        if "0bda:2838" in r.stdout or "0bda:2832" in r.stdout:
+            return False, "RTL-SDR detected but drivers not working", "none"
     except Exception:
         pass
     return False, "No SDR found", "none"

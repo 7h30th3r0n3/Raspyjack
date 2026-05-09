@@ -922,6 +922,67 @@ def ToggleClock():
     Dialog_info(f"Clock: {state}", wait=False, timeout=1)
 
 
+def ClockSetTimezone():
+    common_tz = [
+        "Europe/Paris", "Europe/London", "Europe/Berlin",
+        "Europe/Madrid", "Europe/Rome", "Europe/Brussels",
+        "America/New_York", "America/Chicago", "America/Los_Angeles",
+        "Asia/Tokyo", "Asia/Shanghai", "Asia/Dubai",
+        "Australia/Sydney", "Pacific/Auckland", "UTC",
+    ]
+    try:
+        current = subprocess.check_output(["cat", "/etc/timezone"], timeout=3).decode().strip()
+    except Exception:
+        current = "Unknown"
+    cursor = 0
+    scroll = 0
+    visible = max(3, (_SCR_H - S(30)) // S(14))
+    while True:
+        lines = [f"  Timezone ({current})"]
+        for i in range(scroll, min(len(common_tz), scroll + visible)):
+            prefix = "> " if i == cursor else "  "
+            lines.append(f"{prefix}{common_tz[i]}")
+        ShowLines(lines, bold=[cursor - scroll + 1] if cursor >= scroll else [])
+        btn = getButton()
+        if btn == "KEY_UP_PIN":
+            cursor = max(0, cursor - 1)
+            if cursor < scroll:
+                scroll = cursor
+        elif btn == "KEY_DOWN_PIN":
+            cursor = min(len(common_tz) - 1, cursor + 1)
+            if cursor >= scroll + visible:
+                scroll = cursor - visible + 1
+        elif btn in ("KEY_PRESS_PIN", "KEY2_PIN"):
+            tz = common_tz[cursor]
+            subprocess.run(["timedatectl", "set-timezone", tz], capture_output=True, timeout=5)
+            Dialog_info(f"Timezone: {tz}", wait=False, timeout=1.5)
+            return
+        elif btn in ("KEY1_PIN", "KEY3_PIN", "KEY_LEFT_PIN"):
+            return
+
+
+def ClockToggleNTP():
+    try:
+        r = subprocess.run(["timedatectl", "show", "--property=NTP"], capture_output=True, text=True, timeout=3)
+        ntp_on = "yes" in r.stdout.lower()
+    except Exception:
+        ntp_on = False
+    new_state = "false" if ntp_on else "true"
+    subprocess.run(["timedatectl", "set-ntp", new_state], capture_output=True, timeout=5)
+    state = "OFF" if ntp_on else "ON"
+    Dialog_info(f"NTP sync: {state}", wait=False, timeout=1.5)
+
+
+def ClockShowInfo():
+    try:
+        r = subprocess.run(["timedatectl"], capture_output=True, text=True, timeout=3)
+        lines = [l.strip() for l in r.stdout.strip().splitlines()[:7] if l.strip()]
+    except Exception:
+        lines = ["Error reading time info"]
+    ShowLines(lines)
+    getButton()
+
+
 def ToggleFlip():
     """Toggle 180-degree screen and controls flip, save and restart."""
     global _flip_enabled
@@ -4092,8 +4153,16 @@ class DisposableMenu:
         "ae": (
             [" Colors",         "aea"],
             [" Flip screen 180", ToggleFlip],
+            [" Clock settings", "aeb"],
             [" Refresh config", LoadConfig],
             [" Save config!",   SaveConfig]
+        ),
+
+        "aeb": (
+            [" Show/Hide clock", ToggleClock],
+            [" Set timezone",    ClockSetTimezone],
+            [" Toggle NTP sync", ClockToggleNTP],
+            [" Clock info",      ClockShowInfo],
         ),
 
         "aea": (
