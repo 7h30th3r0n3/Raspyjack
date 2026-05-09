@@ -439,6 +439,60 @@ class template():
         self.gamepad = dic["GAMEPAD"]
         self.gamepad_fill = dic["GAMEPAD_FILL"]
 
+
+# Menu search filter (CardputerZero keyboard support)
+_menu_filter = ""
+_menu_filter_active = False
+try:
+    import evdev_keys as _evdev
+    _HAS_EVDEV = True
+except ImportError:
+    _HAS_EVDEV = False
+
+# Evdev keycode → character mapping for search
+_KEY_CHARS = {
+    16:'q',17:'w',18:'e',19:'r',20:'t',21:'y',22:'u',23:'i',24:'o',25:'p',
+    30:'a',31:'s',32:'d',33:'f',34:'g',35:'h',36:'j',37:'k',38:'l',
+    44:'z',45:'x',46:'c',47:'v',48:'b',49:'n',50:'m',
+    2:'1',3:'2',4:'3',5:'4',6:'5',7:'6',8:'7',9:'8',10:'9',11:'0',
+    57:' ',
+}
+
+def _menu_filter_reset():
+    global _menu_filter, _menu_filter_active
+    _menu_filter = ""
+    _menu_filter_active = False
+
+def _menu_filter_activate():
+    global _menu_filter_active
+    _menu_filter_active = True
+
+def _menu_filter_add(char):
+    global _menu_filter
+    _menu_filter += char
+
+def _menu_filter_backspace():
+    global _menu_filter, _menu_filter_active
+    _menu_filter = _menu_filter[:-1]
+    if not _menu_filter:
+        _menu_filter_active = False
+
+def _check_search_key():
+    """Check if a letter key is pressed (CardputerZero only). Returns char or None."""
+    if not _HAS_EVDEV:
+        return None
+    for code, char in _KEY_CHARS.items():
+        if _evdev.is_key_pressed(code):
+            return char
+    return None
+
+def _filter_menu_items(inlist, query):
+    """Filter menu items by search query. Returns filtered list."""
+    if not query:
+        return inlist
+    q = query.lower()
+    return [item for item in inlist if q in item.lower()]
+
 ####### Simple methods #######
 ### Get any button press ###
 def getButton():
@@ -881,7 +935,9 @@ def _draw_toolbar():
     try:
         draw.line([(0, S(4)), (_SCR_W, S(4))], fill="#222", width=S(10))
         draw.text((0, S(-2)), f"{_temp_c:.0f} °C ", fill="WHITE", font=font)
-        if _status_text:
+        if _menu_filter_active and _menu_filter:
+            draw.text((S(30), S(-2)), f"🔍 {_menu_filter}", fill="#FFAA00", font=font)
+        elif _status_text:
             draw.text((S(30), S(-2)), _status_text, fill="WHITE", font=font)
         right_x = _SCR_W
         try:
@@ -2162,6 +2218,8 @@ def GetMenuString(inlist, duplicates=False):
 
     total   = len(inlist)           # nb total d'items
     index   = min(m.select, total - 1) if total > 0 else 0  # restore last position
+    inlist_original = list(inlist)  # keep unfiltered copy for search
+    _menu_filter_reset()
     offset  = max(0, index - WINDOW + 1) if index >= WINDOW else 0
 
     while True:
@@ -2233,7 +2291,33 @@ def GetMenuString(inlist, duplicates=False):
         time.sleep(0.12)
 
         # -- 4/ Lecture des boutons -----------------------------------------
+        # Check for search key (letter pressed on CardputerZero keyboard)
+        search_char = _check_search_key()
+        if search_char is not None:
+            _menu_filter_activate()
+            _menu_filter_add(search_char)
+            filtered = _filter_menu_items(inlist_original, _menu_filter)
+            if filtered:
+                inlist = filtered
+                total = len(inlist)
+                index = 0
+            time.sleep(0.15)
+            continue
+
         btn = getButton()
+
+        # Backspace clears one char from filter
+        if btn == "KEY2_PIN" and _menu_filter_active:
+            _menu_filter_backspace()
+            if _menu_filter:
+                filtered = _filter_menu_items(inlist_original, _menu_filter)
+                inlist = filtered if filtered else inlist_original
+            else:
+                inlist = inlist_original
+            total = len(inlist)
+            index = min(index, total - 1) if total > 0 else 0
+            time.sleep(0.15)
+            continue
 
         if m.which == "a":
             if _cv(btn):
@@ -2243,9 +2327,9 @@ def GetMenuString(inlist, duplicates=False):
                 continue
 
         if btn == "KEY_DOWN_PIN":
-            index = (index + 1) % total      # wrap vers le début
+            index = (index + 1) % total
         elif btn == "KEY_UP_PIN":
-            index = (index - 1) % total      # wrap vers la fin
+            index = (index - 1) % total
         elif btn in ("KEY_PRESS_PIN", "KEY_RIGHT_PIN"):
             raw = inlist[index]
             if empty:
@@ -2259,6 +2343,7 @@ def GetMenuString(inlist, duplicates=False):
             toggle_view_mode()
             return (-1, "") if duplicates else ""
         elif btn == "KEY_LEFT_PIN":
+            _menu_filter_reset()
             return (-1, "") if duplicates else ""
         elif btn == "KEY3_PIN" and m.which == "a":
             if _handle_main_menu_key3_double_click():
