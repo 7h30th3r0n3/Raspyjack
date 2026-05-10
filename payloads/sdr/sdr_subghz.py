@@ -149,8 +149,12 @@ def _capture_thread(freq):
     os.makedirs(LOOT_DIR, exist_ok=True)
 
     cmd = [
-        "rtl_433", "-f", str(freq), "-F", "json",
+        "rtl_433", "-f", str(freq), "-g", "40", "-s", "1000000",
+        "-F", "json", "-F", "log",
         "-M", "time:unix", "-M", "protocol", "-M", "level",
+        "-X", "n=CAME,m=OOK_PWM,s=320,l=640,r=960,g=1500,t=200",
+        "-X", "n=NICE,m=OOK_PWM,s=500,l=1000,r=1500,g=2000,t=300",
+        "-X", "n=GATE_REMOTE,m=OOK_PWM,s=300,l=900,r=1200,g=2000,t=200",
     ]
 
     try:
