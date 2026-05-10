@@ -91,6 +91,7 @@ connections = []      # list of {"ts", "proto", "src", "sport", "dst", "dport"}
 _poison_thread = None
 _monitor_thread = None
 _dns_proc = None
+_dns_rule_active = False
 
 # ---------------------------------------------------------------------------
 # Network helpers
@@ -308,23 +309,30 @@ def _connection_monitor():
 
 def _start_dns_intercept():
     """Redirect DNS queries from target to our Pi via iptables."""
-    global _dns_proc
+    global _dns_proc, _dns_rule_active
+    if _dns_rule_active:
+        return
     _run_silent([
         "sudo", "iptables", "-t", "nat", "-A", "PREROUTING",
         "-s", target_ip, "-p", "udp", "--dport", "53",
         "-j", "REDIRECT", "--to-port", "53",
     ])
+    _dns_rule_active = True
     # Start simple dns responder via dnsmasq
     _dns_proc = None  # iptables redirect is sufficient if Pi runs DNS
 
 
 def _stop_dns_intercept():
     """Remove DNS interception iptables rules."""
+    global _dns_rule_active
+    if not _dns_rule_active:
+        return
     _run_silent([
         "sudo", "iptables", "-t", "nat", "-D", "PREROUTING",
         "-s", target_ip, "-p", "udp", "--dport", "53",
         "-j", "REDIRECT", "--to-port", "53",
     ])
+    _dns_rule_active = False
     if _dns_proc and _dns_proc.poll() is None:
         _dns_proc.terminate()
 
@@ -462,10 +470,6 @@ def _stop_attack():
 
     # Disable IP forwarding
     _run_silent(["sudo", "sysctl", "-w", "net.ipv4.ip_forward=0"])
-
-    # Clean iptables
-    _run_silent(["sudo", "iptables", "-t", "nat", "-F"])
-
 
 # ---------------------------------------------------------------------------
 # Discovery thread
