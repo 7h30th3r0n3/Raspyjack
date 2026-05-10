@@ -379,7 +379,8 @@
                 " wdgwars_upload": "",
                 " sdr_suite": "",
                 " winamp_player": "",
-                " sdr_adsb": ""
+                " sdr_adsb": "",
+                " hdmi_mirror": ""
         },
         "fallbacks": {
                 "__scan__": "",

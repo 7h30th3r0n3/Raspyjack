@@ -122,6 +122,11 @@ if [[ "$DISPLAY_TYPE" == "CARDPUTER_320" ]]; then
   sudo systemctl stop APPLaunch.service 2>/dev/null || true
   sudo systemctl disable APPLaunch.service 2>/dev/null || true
   info "APPLaunch service disabled (replaced by RaspyJack)"
+
+  step "Disabling desktop environment (saves RAM on CM0) …"
+  sudo systemctl stop lightdm.service 2>/dev/null || true
+  sudo systemctl disable lightdm.service 2>/dev/null || true
+  info "LightDM disabled — HDMI available for RaspyJack mirroring"
 fi
 
 # ───── 2 ▸ install / upgrade required APT packages ───────────
