@@ -45,12 +45,14 @@ except Exception:
 
 # Hardware auto-detect fallback: if gui_conf.json says ST7735 but we're on a CardputerZero
 if _DISPLAY_TYPE != "CARDPUTER_320":
-    try:
-        with open("/sys/class/graphics/fb0/name", "r") as _fb:
-            if "st7789v_m5st" in _fb.read():
-                _DISPLAY_TYPE = "CARDPUTER_320"
-    except Exception:
-        pass
+    for _i in range(4):
+        try:
+            with open(f"/sys/class/graphics/fb{_i}/name", "r") as _fb:
+                if "st7789v_m5st" in _fb.read():
+                    _DISPLAY_TYPE = "CARDPUTER_320"
+                    break
+        except Exception:
+            pass
 
 
 if _DISPLAY_TYPE == "CARDPUTER_320":
@@ -64,7 +66,19 @@ if _DISPLAY_TYPE == "CARDPUTER_320":
     LCD_CS_PIN = -1
     LCD_BL_PIN = -1
 
-    FB_DEVICE = os.environ.get("RJ_FB_DEVICE", "/dev/fb0")
+    # Auto-detect framebuffer: find the one with st7789v_m5st
+    FB_DEVICE = os.environ.get("RJ_FB_DEVICE", "")
+    if not FB_DEVICE:
+        FB_DEVICE = "/dev/fb0"  # default fallback
+        for _i in range(4):
+            _fb_name_path = f"/sys/class/graphics/fb{_i}/name"
+            try:
+                with open(_fb_name_path) as _fn:
+                    if "st7789v_m5st" in _fn.read():
+                        FB_DEVICE = f"/dev/fb{_i}"
+                        break
+            except Exception:
+                pass
     FB_WIDTH = 320
     FB_HEIGHT = 170
     FB_BPP = 16
