@@ -6,7 +6,18 @@ import threading
 import evdev
 import os
 
-EVDEV_DEVICE = os.environ.get('RJ_KEYBOARD_DEVICE', '/dev/input/event3')
+# Auto-detect TCA8418 keyboard device
+EVDEV_DEVICE = os.environ.get('RJ_KEYBOARD_DEVICE', '')
+if not EVDEV_DEVICE:
+    EVDEV_DEVICE = '/dev/input/event3'  # fallback
+    for _i in range(8):
+        try:
+            with open(f'/sys/class/input/event{_i}/device/name') as _n:
+                if 'tca8418' in _n.read().lower():
+                    EVDEV_DEVICE = f'/dev/input/event{_i}'
+                    break
+        except Exception:
+            pass
 
 _KEYMAP = {
     103: 'KEY_UP_PIN',
