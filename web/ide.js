@@ -1,101 +1,118 @@
-(function(){
+(function () {
   const shared = window.RJShared || {};
   // ------------------------ DOM references ------------------------
-  const ideStatusEl = document.getElementById('ideStatus');
-  const treeContainer = document.getElementById('treeContainer');
-  const refreshTreeBtn = document.getElementById('refreshTree');
-  const newFileBtn = document.getElementById('newFileBtn');
-  const newFolderBtn = document.getElementById('newFolderBtn');
-  const currentPathEl = document.getElementById('currentPath');
-  const dirtyFlagEl = document.getElementById('dirtyFlag');
-  const payloadRunStateEl = document.getElementById('payloadRunState');
-  const saveBtn = document.getElementById('saveBtn');
-  const runBtn = document.getElementById('runBtn');
-  const stopBtn = document.getElementById('stopBtn');
-  const editorTextarea = document.getElementById('editor');
-  const logoutBtn = document.getElementById('logoutBtn');
-  const restartUiBtn = document.getElementById('restartUiBtn');
-  const restartUiModal = document.getElementById('restartUiModal');
-  const restartUiModalConfirm = document.getElementById('restartUiModalConfirm');
-  const restartUiModalCancel = document.getElementById('restartUiModalCancel');
-  const restartUiModalClose = document.getElementById('restartUiModalClose');
-  const restartUiModalError = document.getElementById('restartUiModalError');
-  const wsStatusEl = document.getElementById('wsStatus');
-  const canvas = document.getElementById('screen-gb') || document.getElementById('screen');
-  const ctx = canvas ? canvas.getContext('2d') : null;
-  const entryModal = document.getElementById('entryModal');
-  const entryModalTitle = document.getElementById('entryModalTitle');
-  const entryModalFolder = document.getElementById('entryModalFolder');
-  const entryModalName = document.getElementById('entryModalName');
-  const entryModalConfirm = document.getElementById('entryModalConfirm');
-  const entryModalCancel = document.getElementById('entryModalCancel');
-  const entryModalClose = document.getElementById('entryModalClose');
-  const renameModal = document.getElementById('renameModal');
-  const renameModalPath = document.getElementById('renameModalPath');
-  const renameModalName = document.getElementById('renameModalName');
-  const renameModalConfirm = document.getElementById('renameModalConfirm');
-  const renameModalCancel = document.getElementById('renameModalCancel');
-  const renameModalClose = document.getElementById('renameModalClose');
-  const treeContextMenu = document.getElementById('treeContextMenu');
-  const treeContextMenuPanel = document.getElementById('treeContextMenuPanel');
-  const ctxRenameBtn = document.getElementById('ctxRename');
-  const ctxDeleteBtn = document.getElementById('ctxDelete');
-  const deleteModal = document.getElementById('deleteModal');
-  const deleteModalPath = document.getElementById('deleteModalPath');
-  const deleteModalConfirm = document.getElementById('deleteModalConfirm');
-  const deleteModalCancel = document.getElementById('deleteModalCancel');
-  const deleteModalClose = document.getElementById('deleteModalClose');
-  const unsavedModal = document.getElementById('unsavedModal');
-  const unsavedModalConfirm = document.getElementById('unsavedModalConfirm');
-  const unsavedModalCancel = document.getElementById('unsavedModalCancel');
-  const unsavedModalClose = document.getElementById('unsavedModalClose');
-  const saveBeforeRunModal = document.getElementById('saveBeforeRunModal');
-  const saveBeforeRunModalConfirm = document.getElementById('saveBeforeRunModalConfirm');
-  const saveBeforeRunModalCancel = document.getElementById('saveBeforeRunModalCancel');
-  const saveBeforeRunModalClose = document.getElementById('saveBeforeRunModalClose');
-  const noticeModal = document.getElementById('noticeModal');
-  const noticeModalTitle = document.getElementById('noticeModalTitle');
-  const noticeModalMessage = document.getElementById('noticeModalMessage');
-  const noticeModalConfirm = document.getElementById('noticeModalConfirm');
-  const noticeModalClose = document.getElementById('noticeModalClose');
-  const authModal = document.getElementById('authModal');
-  const authModalTitle = document.getElementById('authModalTitle');
-  const authModalMessage = document.getElementById('authModalMessage');
-  const authModalUsername = document.getElementById('authModalUsername');
-  const authModalPassword = document.getElementById('authModalPassword');
-  const authModalPasswordConfirm = document.getElementById('authModalPasswordConfirm');
-  const authModalToken = document.getElementById('authModalToken');
-  const authModalRules = document.getElementById('authModalRules');
-  const authModalError = document.getElementById('authModalError');
-  const authModalToggleRecovery = document.getElementById('authModalToggleRecovery');
-  const authModalConfirm = document.getElementById('authModalConfirm');
-  const authModalCancel = document.getElementById('authModalCancel');
-  const authModalClose = document.getElementById('authModalClose');
-  const leftPanel = document.getElementById('leftPanel');
-  const resizeHandle = document.getElementById('resizeHandle');
+  const ideStatusEl = document.getElementById("ideStatus");
+  const treeContainer = document.getElementById("treeContainer");
+  const refreshTreeBtn = document.getElementById("refreshTree");
+  const newFileBtn = document.getElementById("newFileBtn");
+  const newFolderBtn = document.getElementById("newFolderBtn");
+  const currentPathEl = document.getElementById("currentPath");
+  const dirtyFlagEl = document.getElementById("dirtyFlag");
+  const payloadRunStateEl = document.getElementById("payloadRunState");
+  const saveBtn = document.getElementById("saveBtn");
+  const runBtn = document.getElementById("runBtn");
+  const stopBtn = document.getElementById("stopBtn");
+  const editorTextarea = document.getElementById("editor");
+  const logoutBtn = document.getElementById("logoutBtn");
+  const restartUiBtn = document.getElementById("restartUiBtn");
+  const restartUiModal = document.getElementById("restartUiModal");
+  const restartUiModalConfirm = document.getElementById(
+    "restartUiModalConfirm",
+  );
+  const restartUiModalCancel = document.getElementById("restartUiModalCancel");
+  const restartUiModalClose = document.getElementById("restartUiModalClose");
+  const restartUiModalError = document.getElementById("restartUiModalError");
+  const wsStatusEl = document.getElementById("wsStatus");
+  const canvas =
+    document.getElementById("screen-gb") || document.getElementById("screen");
+  const ctx = canvas ? canvas.getContext("2d") : null;
+  const entryModal = document.getElementById("entryModal");
+  const entryModalTitle = document.getElementById("entryModalTitle");
+  const entryModalFolder = document.getElementById("entryModalFolder");
+  const entryModalName = document.getElementById("entryModalName");
+  const entryModalConfirm = document.getElementById("entryModalConfirm");
+  const entryModalCancel = document.getElementById("entryModalCancel");
+  const entryModalClose = document.getElementById("entryModalClose");
+  const renameModal = document.getElementById("renameModal");
+  const renameModalPath = document.getElementById("renameModalPath");
+  const renameModalName = document.getElementById("renameModalName");
+  const renameModalConfirm = document.getElementById("renameModalConfirm");
+  const renameModalCancel = document.getElementById("renameModalCancel");
+  const renameModalClose = document.getElementById("renameModalClose");
+  const treeContextMenu = document.getElementById("treeContextMenu");
+  const treeContextMenuPanel = document.getElementById("treeContextMenuPanel");
+  const ctxRenameBtn = document.getElementById("ctxRename");
+  const ctxDeleteBtn = document.getElementById("ctxDelete");
+  const deleteModal = document.getElementById("deleteModal");
+  const deleteModalPath = document.getElementById("deleteModalPath");
+  const deleteModalConfirm = document.getElementById("deleteModalConfirm");
+  const deleteModalCancel = document.getElementById("deleteModalCancel");
+  const deleteModalClose = document.getElementById("deleteModalClose");
+  const unsavedModal = document.getElementById("unsavedModal");
+  const unsavedModalConfirm = document.getElementById("unsavedModalConfirm");
+  const unsavedModalCancel = document.getElementById("unsavedModalCancel");
+  const unsavedModalClose = document.getElementById("unsavedModalClose");
+  const saveBeforeRunModal = document.getElementById("saveBeforeRunModal");
+  const saveBeforeRunModalConfirm = document.getElementById(
+    "saveBeforeRunModalConfirm",
+  );
+  const saveBeforeRunModalCancel = document.getElementById(
+    "saveBeforeRunModalCancel",
+  );
+  const saveBeforeRunModalClose = document.getElementById(
+    "saveBeforeRunModalClose",
+  );
+  const noticeModal = document.getElementById("noticeModal");
+  const noticeModalTitle = document.getElementById("noticeModalTitle");
+  const noticeModalMessage = document.getElementById("noticeModalMessage");
+  const noticeModalConfirm = document.getElementById("noticeModalConfirm");
+  const noticeModalClose = document.getElementById("noticeModalClose");
+  const authModal = document.getElementById("authModal");
+  const authModalTitle = document.getElementById("authModalTitle");
+  const authModalMessage = document.getElementById("authModalMessage");
+  const authModalUsername = document.getElementById("authModalUsername");
+  const authModalPassword = document.getElementById("authModalPassword");
+  const authModalPasswordConfirm = document.getElementById(
+    "authModalPasswordConfirm",
+  );
+  const authModalToken = document.getElementById("authModalToken");
+  const authModalRules = document.getElementById("authModalRules");
+  const authModalError = document.getElementById("authModalError");
+  const authModalToggleRecovery = document.getElementById(
+    "authModalToggleRecovery",
+  );
+  const authModalConfirm = document.getElementById("authModalConfirm");
+  const authModalCancel = document.getElementById("authModalCancel");
+  const authModalClose = document.getElementById("authModalClose");
+  const leftPanel = document.getElementById("leftPanel");
+  const resizeHandle = document.getElementById("resizeHandle");
 
   // ------------------------ Helpers ------------------------
-  function applyStatusTone(el, txt){
+  function applyStatusTone(el, txt) {
     if (!el) return;
-    const s = String(txt || '').toLowerCase();
-    el.classList.remove('status-tone-ok', 'status-tone-warn', 'status-tone-bad');
+    const s = String(txt || "").toLowerCase();
+    el.classList.remove(
+      "status-tone-ok",
+      "status-tone-warn",
+      "status-tone-bad",
+    );
     if (/connected|authenticated|ready|saved|launched|active|ok/.test(s)) {
-      el.classList.add('status-tone-ok');
+      el.classList.add("status-tone-ok");
     } else if (/loading|connecting|starting|running|reconnecting/.test(s)) {
-      el.classList.add('status-tone-warn');
+      el.classList.add("status-tone-warn");
     } else if (/failed|error|denied|disconnected/.test(s)) {
-      el.classList.add('status-tone-bad');
+      el.classList.add("status-tone-bad");
     }
   }
 
-  function setIdeStatus(text){
+  function setIdeStatus(text) {
     if (ideStatusEl) {
       ideStatusEl.textContent = text;
       applyStatusTone(ideStatusEl, text);
     }
   }
 
-  function getSearchParams(){
+  function getSearchParams() {
     try {
       return new URLSearchParams(location.search);
     } catch {
@@ -103,535 +120,569 @@
     }
   }
 
-  function getApiUrl(path, params = {}){
+  function getApiUrl(path, params = {}) {
     if (shared.getApiUrl) return shared.getApiUrl(path, params, location);
     const qs = new URLSearchParams(params).toString();
     const base = location.origin;
-    return `${base}${path}${qs ? `?${qs}` : ''}`;
+    return `${base}${path}${qs ? `?${qs}` : ""}`;
   }
 
-  function getWsUrl(){
+  function getWsUrl() {
     if (shared.getWsUrl) return shared.getWsUrl(location);
-    if (location.protocol === 'https:'){
-      return `${location.origin.replace(/^https:/, 'wss:')}/ws`;
+    if (location.protocol === "https:") {
+      return `${location.origin.replace(/^https:/, "wss:")}/ws`;
     }
     const p = getSearchParams();
-    const host = location.hostname || 'raspberrypi.local';
-    const port = p.get('port') || '8765';
-    return `ws://${host}:${port}/`.replace(/\/\/\//,'//');
+    const host = location.hostname || "raspberrypi.local";
+    const port = p.get("port") || "8765";
+    return `ws://${host}:${port}/`.replace(/\/\/\//, "//");
   }
 
-  const AUTH_STORAGE_KEY = 'rj.authToken';
-  let authToken = '';
-  let wsTicket = '';
+  const AUTH_STORAGE_KEY = "rj.authToken";
+  let authToken = "";
+  let wsTicket = "";
   let authPromptResolver = null;
   let restartUiPromptResolver = null;
   let unsavedPromptResolver = null;
   let saveBeforeRunPromptResolver = null;
   let noticePromptResolver = null;
   let authInFlight = null;
-  let authMode = 'login';
+  let authMode = "login";
   let authRecoveryMode = false;
 
-  function saveAuthToken(token){
-    if (shared.saveToken){
+  function saveAuthToken(token) {
+    if (shared.saveToken) {
       authToken = shared.saveToken(AUTH_STORAGE_KEY, token);
       return;
     }
-    authToken = String(token || '').trim();
-    try{
-      if (authToken){
+    authToken = String(token || "").trim();
+    try {
+      if (authToken) {
         sessionStorage.setItem(AUTH_STORAGE_KEY, authToken);
       } else {
         sessionStorage.removeItem(AUTH_STORAGE_KEY);
       }
-    }catch{}
+    } catch {}
   }
 
-  function loadAuthToken(){
-    if (shared.loadToken){
+  function loadAuthToken() {
+    if (shared.loadToken) {
       const stored = shared.loadToken(AUTH_STORAGE_KEY);
       if (stored) authToken = stored;
     } else {
-      try{
-        const stored = (sessionStorage.getItem(AUTH_STORAGE_KEY) || '').trim();
+      try {
+        const stored = (sessionStorage.getItem(AUTH_STORAGE_KEY) || "").trim();
         if (stored) authToken = stored;
-      }catch{}
+      } catch {}
     }
 
-    const migrated = shared.migrateTokenFromUrl ? shared.migrateTokenFromUrl(AUTH_STORAGE_KEY, 'token') : '';
+    const migrated = shared.migrateTokenFromUrl
+      ? shared.migrateTokenFromUrl(AUTH_STORAGE_KEY, "token")
+      : "";
     if (migrated) authToken = migrated;
     if (migrated) return;
 
-    try{
+    try {
       const u = new URL(window.location.href);
-      const token = (u.searchParams.get('token') || '').trim();
-      if (token){
+      const token = (u.searchParams.get("token") || "").trim();
+      if (token) {
         saveAuthToken(token);
-        u.searchParams.delete('token');
-        window.history.replaceState({}, '', u.toString());
+        u.searchParams.delete("token");
+        window.history.replaceState({}, "", u.toString());
       }
-    }catch{}
+    } catch {}
   }
 
-  function setAuthError(msg){
+  function setAuthError(msg) {
     if (!authModalError) return;
-    const text = String(msg || '').trim();
+    const text = String(msg || "").trim();
     authModalError.textContent = text;
-    authModalError.classList.toggle('hidden', !text);
+    authModalError.classList.toggle("hidden", !text);
   }
 
-  function setAuthMode(mode, message){
+  function setAuthMode(mode, message) {
     authMode = mode;
-    if (authModalTitle){
-      authModalTitle.textContent = mode === 'bootstrap' ? 'Create Admin Account' : 'Login Required';
+    if (authModalTitle) {
+      authModalTitle.textContent =
+        mode === "bootstrap" ? "Create Admin Account" : "Login Required";
     }
-    if (authModalMessage){
-      authModalMessage.textContent = message || (mode === 'bootstrap'
-        ? 'Set the first admin account for this device.'
-        : 'Log in to continue.');
+    if (authModalMessage) {
+      authModalMessage.textContent =
+        message ||
+        (mode === "bootstrap"
+          ? "Set the first admin account for this device."
+          : "Log in to continue.");
     }
-    const isBootstrap = mode === 'bootstrap';
-    if (authModalRules) authModalRules.classList.toggle('hidden', !isBootstrap);
-    if (authModalPasswordConfirm) authModalPasswordConfirm.classList.toggle('hidden', !isBootstrap);
-    if (authModalUsername) authModalUsername.classList.toggle('hidden', authRecoveryMode);
-    if (authModalPassword) authModalPassword.classList.toggle('hidden', authRecoveryMode);
-    if (authModalToken) authModalToken.classList.toggle('hidden', !authRecoveryMode);
-    if (authModalToggleRecovery){
-      authModalToggleRecovery.classList.toggle('hidden', isBootstrap);
-      authModalToggleRecovery.textContent = authRecoveryMode ? 'Use username/password login' : 'Use recovery token instead';
+    const isBootstrap = mode === "bootstrap";
+    if (authModalRules) authModalRules.classList.toggle("hidden", !isBootstrap);
+    if (authModalPasswordConfirm)
+      authModalPasswordConfirm.classList.toggle("hidden", !isBootstrap);
+    if (authModalUsername)
+      authModalUsername.classList.toggle("hidden", authRecoveryMode);
+    if (authModalPassword)
+      authModalPassword.classList.toggle("hidden", authRecoveryMode);
+    if (authModalToken)
+      authModalToken.classList.toggle("hidden", !authRecoveryMode);
+    if (authModalToggleRecovery) {
+      authModalToggleRecovery.classList.toggle("hidden", isBootstrap);
+      authModalToggleRecovery.textContent = authRecoveryMode
+        ? "Use username/password login"
+        : "Use recovery token instead";
     }
-    if (authModalConfirm) authModalConfirm.textContent = isBootstrap ? 'Create Admin' : 'Login';
+    if (authModalConfirm)
+      authModalConfirm.textContent = isBootstrap ? "Create Admin" : "Login";
   }
 
-  function setRecoveryMode(enabled){
+  function setRecoveryMode(enabled) {
     authRecoveryMode = !!enabled;
-    setAuthMode(authMode, authModalMessage ? authModalMessage.textContent : '');
-    setAuthError('');
-    if (authRecoveryMode){
+    setAuthMode(authMode, authModalMessage ? authModalMessage.textContent : "");
+    setAuthError("");
+    if (authRecoveryMode) {
       if (authModalToken) authModalToken.focus();
     } else if (authModalUsername) {
       authModalUsername.focus();
     }
   }
 
-  function resolveAuthPrompt(payload){
+  function resolveAuthPrompt(payload) {
     if (!authPromptResolver) return;
     const resolver = authPromptResolver;
     authPromptResolver = null;
-    if (authModal) authModal.classList.add('hidden');
+    if (authModal) authModal.classList.add("hidden");
     resolver(payload || null);
   }
 
-  function promptForAuth(message, mode = 'login'){
-    if (!authModal || !authModalConfirm || !authModalCancel || !authModalClose){
+  function promptForAuth(message, mode = "login") {
+    if (
+      !authModal ||
+      !authModalConfirm ||
+      !authModalCancel ||
+      !authModalClose
+    ) {
       return Promise.resolve(null);
     }
-    if (authPromptResolver){
+    if (authPromptResolver) {
       return Promise.resolve(null);
     }
-    if (authModalUsername) authModalUsername.value = '';
-    if (authModalPassword) authModalPassword.value = '';
-    if (authModalPasswordConfirm) authModalPasswordConfirm.value = '';
-    if (authModalToken) authModalToken.value = authToken || '';
+    if (authModalUsername) authModalUsername.value = "";
+    if (authModalPassword) authModalPassword.value = "";
+    if (authModalPasswordConfirm) authModalPasswordConfirm.value = "";
+    if (authModalToken) authModalToken.value = authToken || "";
     authRecoveryMode = false;
     setAuthMode(mode, message);
-    setAuthError('');
-    authModal.classList.remove('hidden');
+    setAuthError("");
+    authModal.classList.remove("hidden");
     setTimeout(() => {
       try {
-        if (mode === 'bootstrap'){
+        if (mode === "bootstrap") {
           authModalUsername && authModalUsername.focus();
         } else if (authModalUsername) {
           authModalUsername.focus();
         }
       } catch {}
     }, 10);
-    return new Promise(resolve => {
+    return new Promise((resolve) => {
       authPromptResolver = resolve;
     });
   }
 
-  function authHeaders(extra){
+  function authHeaders(extra) {
     if (shared.authHeaders) return shared.authHeaders(authToken, extra);
     const headers = Object.assign({}, extra || {});
-    if (authToken){
+    if (authToken) {
       headers.Authorization = `Bearer ${authToken}`;
     }
     return headers;
   }
 
-  async function apiFetch(url, options = {}, allowRetry = true){
+  async function apiFetch(url, options = {}, allowRetry = true) {
     const merged = Object.assign({}, options);
     merged.headers = authHeaders(merged.headers);
-    merged.credentials = 'include';
+    merged.credentials = "include";
     const res = await fetch(url, merged);
-    if (res.status === 401 && allowRetry){
-      const ok = await ensureAuthenticated('Session expired. Log in again.');
-      if (ok){
+    if (res.status === 401 && allowRetry) {
+      const ok = await ensureAuthenticated("Session expired. Log in again.");
+      if (ok) {
         return apiFetch(url, options, false);
       }
     }
     return res;
   }
 
-  async function fetchBootstrapStatus(){
-    if (shared.fetchBootstrapStatus){
+  async function fetchBootstrapStatus() {
+    if (shared.fetchBootstrapStatus) {
       return shared.fetchBootstrapStatus(getApiUrl.bind(null));
     }
-    try{
-      const res = await fetch(getApiUrl('/api/auth/bootstrap-status'), { cache: 'no-store' });
+    try {
+      const res = await fetch(getApiUrl("/api/auth/bootstrap-status"), {
+        cache: "no-store",
+      });
       const data = await res.json();
       return !!(res.ok && data && data.initialized);
-    }catch{
+    } catch {
       return true;
     }
   }
 
-  async function fetchAuthMe(){
-    if (shared.fetchAuthMe){
+  async function fetchAuthMe() {
+    if (shared.fetchAuthMe) {
       return shared.fetchAuthMe(getApiUrl.bind(null), authToken);
     }
-    try{
-      const res = await fetch(getApiUrl('/api/auth/me'), {
-        cache: 'no-store',
-        credentials: 'include',
+    try {
+      const res = await fetch(getApiUrl("/api/auth/me"), {
+        cache: "no-store",
+        credentials: "include",
         headers: authHeaders({}),
       });
       if (!res.ok) return null;
       const data = await res.json();
       return data && data.authenticated ? data : null;
-    }catch{
+    } catch {
       return null;
     }
   }
 
-  async function attemptBootstrap(message){
-    const input = await promptForAuth(message || 'Set the first admin account for this device.', 'bootstrap');
+  async function attemptBootstrap(message) {
+    const input = await promptForAuth(
+      message || "Set the first admin account for this device.",
+      "bootstrap",
+    );
     if (!input) return false;
-    const username = String(input.username || '').trim();
-    const password = String(input.password || '');
-    const confirm = String(input.confirm || '');
-    if (!username || !password){
-      setAuthError('Username and password are required.');
+    const username = String(input.username || "").trim();
+    const password = String(input.password || "");
+    const confirm = String(input.confirm || "");
+    if (!username || !password) {
+      setAuthError("Username and password are required.");
       return attemptBootstrap(message);
     }
-    if (username.length < 3){
-      setAuthError('username must be at least 3 characters');
+    if (username.length < 3) {
+      setAuthError("username must be at least 3 characters");
       return attemptBootstrap(message);
     }
-    if (username.length > 32){
-      setAuthError('username too long');
+    if (username.length > 32) {
+      setAuthError("username too long");
       return attemptBootstrap(message);
     }
-    if (password.length < 8){
-      setAuthError('password must be at least 8 characters');
+    if (password.length < 8) {
+      setAuthError("password must be at least 8 characters");
       return attemptBootstrap(message);
     }
-    if (password !== confirm){
-      setAuthError('Passwords do not match.');
+    if (password !== confirm) {
+      setAuthError("Passwords do not match.");
       return attemptBootstrap(message);
     }
-    try{
-      const res = await fetch(getApiUrl('/api/auth/bootstrap'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
+    try {
+      const res = await fetch(getApiUrl("/api/auth/bootstrap"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ username, password }),
       });
       const data = await res.json();
-      if (!res.ok){
-        if (res.status === 409){
-          return attemptLogin('Admin already exists. Log in to continue.');
+      if (!res.ok) {
+        if (res.status === 409) {
+          return attemptLogin("Admin already exists. Log in to continue.");
         }
-        setAuthError(data && data.error ? data.error : 'Bootstrap failed');
+        setAuthError(data && data.error ? data.error : "Bootstrap failed");
         return attemptBootstrap(message);
       }
-      saveAuthToken('');
+      saveAuthToken("");
       return true;
-    }catch{
-      setAuthError('Bootstrap request failed.');
+    } catch {
+      setAuthError("Bootstrap request failed.");
       return attemptBootstrap(message);
     }
   }
 
-  async function attemptLogin(message){
-    const input = await promptForAuth(message || 'Log in to continue.', 'login');
+  async function attemptLogin(message) {
+    const input = await promptForAuth(
+      message || "Log in to continue.",
+      "login",
+    );
     if (!input) return false;
 
-    if (input.recovery){
-      const token = String(input.token || '').trim();
-      if (!token){
-        setAuthError('Recovery token is required.');
+    if (input.recovery) {
+      const token = String(input.token || "").trim();
+      if (!token) {
+        setAuthError("Recovery token is required.");
         return attemptLogin(message);
       }
       saveAuthToken(token);
-      try{
-        const meRes = await fetch(getApiUrl('/api/auth/me'), {
-          cache: 'no-store',
+      try {
+        const meRes = await fetch(getApiUrl("/api/auth/me"), {
+          cache: "no-store",
           headers: authHeaders({}),
-          credentials: 'include',
+          credentials: "include",
         });
-        if (!meRes.ok){
-          setAuthError('Invalid recovery token.');
+        if (!meRes.ok) {
+          setAuthError("Invalid recovery token.");
           return attemptLogin(message);
         }
         return true;
-      }catch{
-        setAuthError('Recovery auth failed.');
+      } catch {
+        setAuthError("Recovery auth failed.");
         return attemptLogin(message);
       }
     }
 
-    const username = String(input.username || '').trim();
-    const password = String(input.password || '');
-    if (!username || !password){
-      setAuthError('Username and password are required.');
+    const username = String(input.username || "").trim();
+    const password = String(input.password || "");
+    if (!username || !password) {
+      setAuthError("Username and password are required.");
       return attemptLogin(message);
     }
-    try{
-      const res = await fetch(getApiUrl('/api/auth/login'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
+    try {
+      const res = await fetch(getApiUrl("/api/auth/login"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ username, password }),
       });
       const data = await res.json();
-      if (!res.ok){
-        setAuthError(data && data.error ? data.error : 'Login failed');
+      if (!res.ok) {
+        setAuthError(data && data.error ? data.error : "Login failed");
         return attemptLogin(message);
       }
-      saveAuthToken('');
+      saveAuthToken("");
       return true;
-    }catch{
-      setAuthError('Login request failed.');
+    } catch {
+      setAuthError("Login request failed.");
       return attemptLogin(message);
     }
   }
 
-  async function refreshWsTicket(){
-    wsTicket = '';
-    if (shared.refreshWsTicket){
+  async function refreshWsTicket() {
+    wsTicket = "";
+    if (shared.refreshWsTicket) {
       wsTicket = await shared.refreshWsTicket(getApiUrl.bind(null), authToken);
       return;
     }
     if (authToken) return;
-    try{
-      const res = await fetch(getApiUrl('/api/auth/ws-ticket'), {
-        method: 'POST',
-        credentials: 'include',
+    try {
+      const res = await fetch(getApiUrl("/api/auth/ws-ticket"), {
+        method: "POST",
+        credentials: "include",
       });
       const data = await res.json();
-      if (res.ok && data && data.ticket){
+      if (res.ok && data && data.ticket) {
         wsTicket = String(data.ticket);
       }
-    }catch{}
+    } catch {}
   }
 
-  async function ensureAuthenticated(message){
-    if (authInFlight){
+  async function ensureAuthenticated(message) {
+    if (authInFlight) {
       return authInFlight;
     }
     authInFlight = (async () => {
       const me = await fetchAuthMe();
-      if (me){
+      if (me) {
         await refreshWsTicket();
         return true;
       }
 
-    const initialized = await fetchBootstrapStatus();
-    if (!initialized){
-      const bootOk = await attemptBootstrap(message);
-      if (!bootOk) return false;
+      const initialized = await fetchBootstrapStatus();
+      if (!initialized) {
+        const bootOk = await attemptBootstrap(message);
+        if (!bootOk) return false;
+        await refreshWsTicket();
+        return true;
+      }
+      const loginOk = await attemptLogin(message);
+      if (!loginOk) return false;
       await refreshWsTicket();
       return true;
-    }
-    const loginOk = await attemptLogin(message);
-    if (!loginOk) return false;
-    await refreshWsTicket();
-    return true;
     })();
-    try{
+    try {
       return await authInFlight;
     } finally {
       authInFlight = null;
     }
   }
 
-  async function logoutUser(){
-    try{
-      await fetch(getApiUrl('/api/auth/logout'), { method: 'POST', credentials: 'include' });
-    }catch{}
-    saveAuthToken('');
-    wsTicket = '';
-    try{
+  async function logoutUser() {
+    try {
+      await fetch(getApiUrl("/api/auth/logout"), {
+        method: "POST",
+        credentials: "include",
+      });
+    } catch {}
+    saveAuthToken("");
+    wsTicket = "";
+    try {
       if (ws) ws.close();
-    }catch{}
+    } catch {}
     window.location.reload();
   }
 
-  function bytesFromString(s){
+  function bytesFromString(s) {
     return new TextEncoder().encode(s).length;
   }
 
-  function escapeHtml(value){
-    return String(value ?? '')
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#39;');
+  function escapeHtml(value) {
+    return String(value ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
   }
 
-  function escapeAttr(value){
+  function escapeAttr(value) {
     return escapeHtml(value);
   }
 
-  function getFileIcon(filename){
-    const ext = filename.split('.').pop()?.toLowerCase() || '';
+  function getFileIcon(filename) {
+    const ext = filename.split(".").pop()?.toLowerCase() || "";
     const iconMap = {
-      'py': 'fa-brands fa-python',      // Python
-      'js': 'fa-brands fa-js',          // JavaScript
-      'ts': 'fa-brands fa-js',          // TypeScript
-      'json': 'fa-file-code',           // JSON
-      'md': 'fa-file-lines',            // Markdown
-      'txt': 'fa-file-lines',           // Text
-      'log': 'fa-file-lines',           // Log
-      'sh': 'fa-terminal',              // Shell script
-      'bash': 'fa-terminal',            // Bash
-      'yml': 'fa-file-code',            // YAML
-      'yaml': 'fa-file-code',           // YAML
-      'conf': 'fa-gear',                // Config
-      'ini': 'fa-gear',                 // Config
-      'cfg': 'fa-gear',                 // Config
-      'xml': 'fa-file-code',            // XML
-      'html': 'fa-brands fa-html5',     // HTML
-      'css': 'fa-brands fa-css3-alt',   // CSS
-      'php': 'fa-brands fa-php',        // PHP
-      'sql': 'fa-database',             // SQL
-      'c': 'fa-file-code',              // C
-      'cpp': 'fa-file-code',            // C++
-      'h': 'fa-file-code',              // Header
-      'hpp': 'fa-file-code',            // C++ Header
-      'java': 'fa-brands fa-java',      // Java
-      'go': 'fa-file-code',             // Go
-      'rs': 'fa-file-code',             // Rust
-      'rb': 'fa-gem',                   // Ruby
-      'pl': 'fa-file-code',             // Perl
-      'r': 'fa-file-code',              // R
-      'png': 'fa-image',                // Image
-      'jpg': 'fa-image',                // Image
-      'jpeg': 'fa-image',               // Image
-      'gif': 'fa-image',                // Image
-      'svg': 'fa-image',                // SVG
-      'zip': 'fa-file-zipper',          // Archive
-      'tar': 'fa-file-zipper',          // Archive
-      'gz': 'fa-file-zipper',           // Archive
-      'pdf': 'fa-file-pdf',             // PDF
+      py: "fa-brands fa-python", // Python
+      js: "fa-brands fa-js", // JavaScript
+      ts: "fa-brands fa-js", // TypeScript
+      json: "fa-file-code", // JSON
+      md: "fa-file-lines", // Markdown
+      txt: "fa-file-lines", // Text
+      log: "fa-file-lines", // Log
+      sh: "fa-terminal", // Shell script
+      bash: "fa-terminal", // Bash
+      yml: "fa-file-code", // YAML
+      yaml: "fa-file-code", // YAML
+      conf: "fa-gear", // Config
+      ini: "fa-gear", // Config
+      cfg: "fa-gear", // Config
+      xml: "fa-file-code", // XML
+      html: "fa-brands fa-html5", // HTML
+      css: "fa-brands fa-css3-alt", // CSS
+      php: "fa-brands fa-php", // PHP
+      sql: "fa-database", // SQL
+      c: "fa-file-code", // C
+      cpp: "fa-file-code", // C++
+      h: "fa-file-code", // Header
+      hpp: "fa-file-code", // C++ Header
+      java: "fa-brands fa-java", // Java
+      go: "fa-file-code", // Go
+      rs: "fa-file-code", // Rust
+      rb: "fa-gem", // Ruby
+      pl: "fa-file-code", // Perl
+      r: "fa-file-code", // R
+      png: "fa-image", // Image
+      jpg: "fa-image", // Image
+      jpeg: "fa-image", // Image
+      gif: "fa-image", // Image
+      svg: "fa-image", // SVG
+      zip: "fa-file-zipper", // Archive
+      tar: "fa-file-zipper", // Archive
+      gz: "fa-file-zipper", // Archive
+      pdf: "fa-file-pdf", // PDF
     };
-    return iconMap[ext] || 'fa-file'; // default file icon
+    return iconMap[ext] || "fa-file"; // default file icon
   }
 
   // ------------------------ File tree state ------------------------
   let treeData = null;
   let expandedPaths = new Set();
-  let selectedPath = null;   // currently opened file
-  let currentFolder = '';    // folder used for create operations
+  let selectedPath = null; // currently opened file
+  let currentFolder = ""; // folder used for create operations
   let ctxTargetPath = null;
   let ctxTargetType = null;
   let payloadActivePath = null;
   let payloadRunPending = false;
   let payloadStopPending = false;
 
-  function normalizePayloadPath(path){
-    return String(path || '').replace(/\\/g, '/').replace(/^\/+/, '');
+  function normalizePayloadPath(path) {
+    return String(path || "")
+      .replace(/\\/g, "/")
+      .replace(/^\/+/, "");
   }
 
-  function updatePayloadRunUi(){
+  function updatePayloadRunUi() {
     const selected = normalizePayloadPath(selectedPath);
     const running = normalizePayloadPath(payloadActivePath);
     const hasSelection = !!selected;
     const runningAny = !!running;
     const runningSelected = runningAny && selected && selected === running;
 
-    if (runBtn){
+    if (runBtn) {
       runBtn.disabled = !hasSelection || runningAny || payloadRunPending;
       runBtn.innerHTML = payloadRunPending
         ? '<i class="fa-solid fa-spinner fa-spin text-[10px]"></i> Starting...'
         : '<i class="fa-solid fa-play text-[10px]"></i> Run';
     }
 
-    if (stopBtn){
+    if (stopBtn) {
       stopBtn.disabled = !runningAny || payloadStopPending;
       stopBtn.innerHTML = payloadStopPending
         ? '<i class="fa-solid fa-spinner fa-spin text-[10px]"></i> Stopping...'
         : '<i class="fa-solid fa-stop text-[10px]"></i> Stop';
     }
 
-    if (payloadRunStateEl){
-      if (payloadRunPending){
-        payloadRunStateEl.textContent = 'Starting...';
-        payloadRunStateEl.className = 'text-amber-300';
-      } else if (payloadStopPending){
-        payloadRunStateEl.textContent = 'Stopping...';
-        payloadRunStateEl.className = 'text-amber-300';
-      } else if (runningAny){
-        payloadRunStateEl.textContent = runningSelected ? 'Running (current file)' : 'Running (another payload)';
-        payloadRunStateEl.className = 'text-emerald-300';
+    if (payloadRunStateEl) {
+      if (payloadRunPending) {
+        payloadRunStateEl.textContent = "Starting...";
+        payloadRunStateEl.className = "text-amber-300";
+      } else if (payloadStopPending) {
+        payloadRunStateEl.textContent = "Stopping...";
+        payloadRunStateEl.className = "text-amber-300";
+      } else if (runningAny) {
+        payloadRunStateEl.textContent = runningSelected
+          ? "Running (current file)"
+          : "Running (another payload)";
+        payloadRunStateEl.className = "text-emerald-300";
       } else {
-        payloadRunStateEl.textContent = 'Idle';
-        payloadRunStateEl.className = 'text-slate-400';
+        payloadRunStateEl.textContent = "Idle";
+        payloadRunStateEl.className = "text-slate-400";
       }
     }
   }
 
-  function setCurrentFolder(path){
-    currentFolder = (path === undefined || path === null) ? '' : path;
-    if (treeContainer){
-      treeContainer.querySelectorAll('.folder-node').forEach(el => {
-        const p = el.getAttribute('data-path') || '';
-        el.classList.toggle('active', p === currentFolder);
+  function setCurrentFolder(path) {
+    currentFolder = path === undefined || path === null ? "" : path;
+    if (treeContainer) {
+      treeContainer.querySelectorAll(".folder-node").forEach((el) => {
+        const p = el.getAttribute("data-path") || "";
+        el.classList.toggle("active", p === currentFolder);
       });
     }
   }
 
-  function setSelectedPath(path){
+  function setSelectedPath(path) {
     selectedPath = path || null;
-    if (currentPathEl){
-      currentPathEl.textContent = path ? `payloads/${path}` : 'No file selected';
+    if (currentPathEl) {
+      currentPathEl.textContent = path
+        ? `payloads/${path}`
+        : "No file selected";
     }
     if (saveBtn) saveBtn.disabled = !path;
     if (runBtn) runBtn.disabled = !path;
     // update active highlighting
-    if (treeContainer){
-      treeContainer.querySelectorAll('.file-node').forEach(el => {
-        const p = el.getAttribute('data-path') || '';
-        el.classList.toggle('active', !!path && p === path);
+    if (treeContainer) {
+      treeContainer.querySelectorAll(".file-node").forEach((el) => {
+        const p = el.getAttribute("data-path") || "";
+        el.classList.toggle("active", !!path && p === path);
       });
     }
     // when a file is selected, also track its parent folder
-    if (path){
-      const parts = path.split('/');
+    if (path) {
+      const parts = path.split("/");
       parts.pop();
-      const folder = parts.join('/');
+      const folder = parts.join("/");
       setCurrentFolder(folder);
     }
     updatePayloadRunUi();
   }
 
-  function hideContextMenu(){
-    if (treeContextMenu){
-      treeContextMenu.classList.add('hidden');
+  function hideContextMenu() {
+    if (treeContextMenu) {
+      treeContextMenu.classList.add("hidden");
     }
     ctxTargetPath = null;
     ctxTargetType = null;
   }
 
-  function showContextMenu(x, y, path, type){
+  function showContextMenu(x, y, path, type) {
     if (!treeContextMenu || !treeContextMenuPanel) return;
     ctxTargetPath = path;
     ctxTargetType = type;
-    treeContextMenu.classList.remove('hidden');
+    treeContextMenu.classList.remove("hidden");
     treeContextMenu.style.left = `${x}px`;
     treeContextMenu.style.top = `${y}px`;
 
@@ -641,10 +692,10 @@
     const vh = window.innerHeight;
     let left = x;
     let top = y;
-    if (rect.right > vw){
+    if (rect.right > vw) {
       left = Math.max(0, x - rect.width);
     }
-    if (rect.bottom > vh){
+    if (rect.bottom > vh) {
       top = Math.max(0, y - rect.height);
     }
     treeContextMenu.style.left = `${left}px`;
@@ -655,51 +706,52 @@
   let editor = null;
   let isDirty = false;
 
-  function setDirty(dirty){
+  function setDirty(dirty) {
     isDirty = !!dirty;
-    if (dirtyFlagEl){
-      dirtyFlagEl.classList.toggle('hidden', !dirty);
+    if (dirtyFlagEl) {
+      dirtyFlagEl.classList.toggle("hidden", !dirty);
     }
   }
 
-  function ensureEditor(){
+  function ensureEditor() {
     if (editor || !editorTextarea || !window.CodeMirror) return;
     editor = CodeMirror.fromTextArea(editorTextarea, {
-      mode: 'python',
-      theme: 'monokai',
+      mode: "python",
+      theme: "monokai",
       lineNumbers: true,
       indentUnit: 4,
       indentWithTabs: false,
       lineWrapping: true,
       autofocus: true,
     });
-    editor.on('change', () => {
-      if (selectedPath){
+    editor.on("change", () => {
+      if (selectedPath) {
         setDirty(true);
       }
     });
   }
 
   // ------------------------ Tree rendering ------------------------
-  function renderTreeNode(node, depth){
-    const container = document.createElement('div');
-    const isDir = node.type === 'dir';
+  function renderTreeNode(node, depth) {
+    const container = document.createElement("div");
+    const isDir = node.type === "dir";
     const indent = depth * 14;
 
-    const row = document.createElement('div');
-    row.className = 'flex items-center text-[11px] text-slate-200 hover:bg-slate-800/60 rounded-md px-1 py-0.5';
+    const row = document.createElement("div");
+    row.className =
+      "flex items-center text-[11px] text-slate-200 hover:bg-slate-800/60 rounded-md px-1 py-0.5";
     row.style.paddingLeft = `${indent}px`;
 
-    if (isDir){
-      const toggle = document.createElement('button');
-      toggle.type = 'button';
-      toggle.className = 'mr-1 text-slate-400 hover:text-slate-200';
-      const open = expandedPaths.has(node.path || '');
-      toggle.textContent = open ? '▾' : '▸';
-      toggle.addEventListener('click', (e) => {
+    if (isDir) {
+      const toggle = document.createElement("button");
+      toggle.type = "button";
+      toggle.className = "mr-1 text-slate-400 hover:text-slate-200";
+      const open = expandedPaths.has(node.path || "");
+      toggle.textContent = open ? "▾" : "▸";
+      toggle.addEventListener("click", (e) => {
         e.stopPropagation();
-        const key = node.path || '';
-        if (expandedPaths.has(key)){
+        const key = node.path || "";
+        if (expandedPaths.has(key)) {
           expandedPaths.delete(key);
         } else {
           expandedPaths.add(key);
@@ -708,39 +760,44 @@
       });
       row.appendChild(toggle);
     } else {
-      const icon = document.createElement('i');
+      const icon = document.createElement("i");
       icon.className = `file-icon mr-1 ${getFileIcon(node.name)}`;
       row.appendChild(icon);
     }
 
-    const label = document.createElement('div');
-    label.className = 'flex-1 min-w-0 truncate';
+    const label = document.createElement("div");
+    label.className = "flex-1 min-w-0 truncate";
     label.textContent = node.name;
     row.appendChild(label);
 
-    if (!isDir){
-      row.classList.add('file-node');
-      row.setAttribute('data-path', node.path || '');
-      if (selectedPath && node.path === selectedPath){
-        row.classList.add('active');
+    if (!isDir) {
+      row.classList.add("file-node");
+      row.setAttribute("data-path", node.path || "");
+      if (selectedPath && node.path === selectedPath) {
+        row.classList.add("active");
       }
-      row.addEventListener('click', () => {
-        onFileSelected(node.path || '');
+      row.addEventListener("click", () => {
+        onFileSelected(node.path || "");
       });
     } else {
-      row.classList.add('folder-node');
-      row.setAttribute('data-path', node.path || '');
-      row.addEventListener('click', () => {
+      row.classList.add("folder-node");
+      row.setAttribute("data-path", node.path || "");
+      row.addEventListener("click", () => {
         setSelectedPath(null);
-        setCurrentFolder(node.path || '');
+        setCurrentFolder(node.path || "");
       });
     }
 
     container.appendChild(row);
 
-    if (isDir && node.children && node.children.length && expandedPaths.has(node.path || '')){
-      const childrenWrapper = document.createElement('div');
-      node.children.forEach(child => {
+    if (
+      isDir &&
+      node.children &&
+      node.children.length &&
+      expandedPaths.has(node.path || "")
+    ) {
+      const childrenWrapper = document.createElement("div");
+      node.children.forEach((child) => {
         childrenWrapper.appendChild(renderTreeNode(child, depth + 1));
       });
       container.appendChild(childrenWrapper);
@@ -748,181 +805,189 @@
     return container;
   }
 
-  function renderTree(){
+  function renderTree() {
     if (!treeContainer) return;
-    treeContainer.innerHTML = '';
-    if (!treeData){
-      treeContainer.innerHTML = '<div class="text-[11px] text-slate-500 px-1 py-1">No payloads directory found.</div>';
+    treeContainer.innerHTML = "";
+    if (!treeData) {
+      treeContainer.innerHTML =
+        '<div class="text-[11px] text-slate-500 px-1 py-1">No payloads directory found.</div>';
       return;
     }
-    expandedPaths.add(''); // always expand root
+    expandedPaths.add(""); // always expand root
     treeContainer.appendChild(renderTreeNode(treeData, 0));
   }
 
-  async function loadTree(){
-    setIdeStatus('Loading tree...');
-    try{
-      const url = getApiUrl('/api/payloads/tree');
-      const res = await apiFetch(url, { cache: 'no-store' });
+  async function loadTree() {
+    setIdeStatus("Loading tree...");
+    try {
+      const url = getApiUrl("/api/payloads/tree");
+      const res = await apiFetch(url, { cache: "no-store" });
       const data = await res.json();
-      if (!res.ok || data.error){
-        throw new Error(data.error || 'tree_failed');
+      if (!res.ok || data.error) {
+        throw new Error(data.error || "tree_failed");
       }
       treeData = data;
-      if (!expandedPaths.size){
-        expandedPaths.add('');
+      if (!expandedPaths.size) {
+        expandedPaths.add("");
       }
       renderTree();
       // restore selection highlights after re-render
-      if (selectedPath){
+      if (selectedPath) {
         setSelectedPath(selectedPath);
-      } else if (currentFolder){
+      } else if (currentFolder) {
         setCurrentFolder(currentFolder);
       }
-      setIdeStatus('Ready');
-    }catch(e){
+      setIdeStatus("Ready");
+    } catch (e) {
       console.error(e);
-      setIdeStatus('Failed to load tree');
-      if (treeContainer){
-        treeContainer.innerHTML = '<div class="text-[11px] text-rose-400 px-1 py-1">Failed to load payload tree.</div>';
+      setIdeStatus("Failed to load tree");
+      if (treeContainer) {
+        treeContainer.innerHTML =
+          '<div class="text-[11px] text-rose-400 px-1 py-1">Failed to load payload tree.</div>';
       }
     }
   }
 
   // ------------------------ File operations ------------------------
-  async function onFileSelected(path){
+  async function onFileSelected(path) {
     if (!path) return;
-    if (isDirty){
+    if (isDirty) {
       const ok = await promptDiscardUnsavedChanges();
       if (!ok) return;
     }
-    setIdeStatus('Loading file...');
-    try{
-      const url = getApiUrl('/api/payloads/file', { path });
-      const res = await apiFetch(url, { cache: 'no-store' });
+    setIdeStatus("Loading file...");
+    try {
+      const url = getApiUrl("/api/payloads/file", { path });
+      const res = await apiFetch(url, { cache: "no-store" });
       const data = await res.json();
-      if (!res.ok || data.error){
-        throw new Error(data.error || 'load_failed');
+      if (!res.ok || data.error) {
+        throw new Error(data.error || "load_failed");
       }
       ensureEditor();
-      if (editor){
-        editor.setValue(data.content || '');
+      if (editor) {
+        editor.setValue(data.content || "");
         editor.focus();
       }
       setSelectedPath(data.path || path);
       setDirty(false);
-      setIdeStatus('Ready');
-    }catch(e){
+      setIdeStatus("Ready");
+    } catch (e) {
       console.error(e);
-      setIdeStatus('Failed to load file');
+      setIdeStatus("Failed to load file");
     }
   }
 
-  async function saveCurrentFile(){
+  async function saveCurrentFile() {
     if (!selectedPath || !editor) return false;
     const content = editor.getValue();
     const sizeBytes = bytesFromString(content);
-    if (sizeBytes > 512 * 1024){
+    if (sizeBytes > 512 * 1024) {
       await showNoticeModal({
-        title: 'File Too Large',
-        message: 'File is too large to save via WebUI (limit 512 KB).',
-        tone: 'amber',
+        title: "File Too Large",
+        message: "File is too large to save via WebUI (limit 512 KB).",
+        tone: "amber",
       });
       return false;
     }
-    setIdeStatus('Saving...');
-    try{
-      const url = getApiUrl('/api/payloads/file');
+    setIdeStatus("Saving...");
+    try {
+      const url = getApiUrl("/api/payloads/file");
       const res = await apiFetch(url, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: selectedPath, content })
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: selectedPath, content }),
       });
       const data = await res.json();
-      if (!res.ok || data.error){
-        throw new Error(data.error || 'save_failed');
+      if (!res.ok || data.error) {
+        throw new Error(data.error || "save_failed");
       }
       setDirty(false);
-      setIdeStatus('Saved');
+      setIdeStatus("Saved");
       return true;
-    }catch(e){
+    } catch (e) {
       console.error(e);
-      setIdeStatus('Save failed');
+      setIdeStatus("Save failed");
       await showNoticeModal({
-        title: 'Save Failed',
-        message: 'Failed to save file.',
-        tone: 'rose',
+        title: "Save Failed",
+        message: "Failed to save file.",
+        tone: "rose",
       });
       return false;
     }
   }
 
   let pendingEntryType = null;
-  let pendingEntryBase = '';
+  let pendingEntryBase = "";
   let pendingRenamePath = null;
 
-  async function performCreateEntry(type, rel){
+  async function performCreateEntry(type, rel) {
     setIdeStatus(`Creating ${type}...`);
-    try{
-      const url = getApiUrl('/api/payloads/entry');
+    try {
+      const url = getApiUrl("/api/payloads/entry");
       const body = { path: rel, type };
-      if (type === 'file'){
-        body.content = '#!/usr/bin/env python3\n\n\"\"\"\nRaspyJack payload\n\"\"\"\n\n';
+      if (type === "file") {
+        body.content =
+          '#!/usr/bin/env python3\n\n\"\"\"\nRaspyJack payload\n\"\"\"\n\n';
       }
       const res = await apiFetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
       });
       const data = await res.json();
-      if (!res.ok || data.error){
-        throw new Error(data.error || 'create_failed');
+      if (!res.ok || data.error) {
+        throw new Error(data.error || "create_failed");
       }
-      setIdeStatus('Created');
+      setIdeStatus("Created");
       await loadTree();
-    }catch(e){
+    } catch (e) {
       console.error(e);
-      setIdeStatus('Create failed');
+      setIdeStatus("Create failed");
       await showNoticeModal({
-        title: 'Create Failed',
+        title: "Create Failed",
         message: `Failed to create ${type}.`,
-        tone: 'rose',
+        tone: "rose",
       });
     }
   }
 
-  function openEntryModal(type){
+  function openEntryModal(type) {
     pendingEntryType = type;
-    const base = currentFolder || (selectedPath ? selectedPath.split('/').slice(0, -1).join('/') : '');
-    pendingEntryBase = base || '';
-    if (entryModalTitle){
-      entryModalTitle.textContent = type === 'dir' ? 'New Folder' : 'New File';
+    const base =
+      currentFolder ||
+      (selectedPath ? selectedPath.split("/").slice(0, -1).join("/") : "");
+    pendingEntryBase = base || "";
+    if (entryModalTitle) {
+      entryModalTitle.textContent = type === "dir" ? "New Folder" : "New File";
     }
-    if (entryModalFolder){
-      const folderLabel = pendingEntryBase ? `payloads/${pendingEntryBase}` : 'payloads/';
+    if (entryModalFolder) {
+      const folderLabel = pendingEntryBase
+        ? `payloads/${pendingEntryBase}`
+        : "payloads/";
       entryModalFolder.textContent = folderLabel;
     }
-    if (entryModalName){
-      entryModalName.value = '';
-      entryModalName.placeholder = type === 'dir' ? 'Folder name' : 'Filename (e.g. my_payload.py)';
+    if (entryModalName) {
+      entryModalName.value = "";
+      entryModalName.placeholder =
+        type === "dir" ? "Folder name" : "Filename (e.g. my_payload.py)";
     }
-    if (entryModal){
-      entryModal.classList.remove('hidden');
+    if (entryModal) {
+      entryModal.classList.remove("hidden");
     }
-    if (entryModalName){
+    if (entryModalName) {
       setTimeout(() => entryModalName.focus(), 10);
     }
   }
 
-  function closeEntryModal(){
-    if (entryModal){
-      entryModal.classList.add('hidden');
+  function closeEntryModal() {
+    if (entryModal) {
+      entryModal.classList.add("hidden");
     }
     pendingEntryType = null;
-    pendingEntryBase = '';
+    pendingEntryBase = "";
   }
 
-  async function handleEntryConfirm(){
+  async function handleEntryConfirm() {
     if (!pendingEntryType || !entryModalName) return;
     const raw = entryModalName.value.trim();
     if (!raw) return;
@@ -931,67 +996,67 @@
     closeEntryModal();
   }
 
-  function createEntry(type){
+  function createEntry(type) {
     openEntryModal(type);
   }
 
-  async function performRename(oldPath, newName){
-    const parts = oldPath.split('/');
-    const parent = parts.slice(0, -1).join('/');
+  async function performRename(oldPath, newName) {
+    const parts = oldPath.split("/");
+    const parent = parts.slice(0, -1).join("/");
     const newPath = parent ? `${parent}/${newName}` : newName;
-    setIdeStatus('Renaming...');
-    try{
-      const url = getApiUrl('/api/payloads/entry');
+    setIdeStatus("Renaming...");
+    try {
+      const url = getApiUrl("/api/payloads/entry");
       const res = await apiFetch(url, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ old_path: oldPath, new_path: newPath })
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ old_path: oldPath, new_path: newPath }),
       });
       const data = await res.json();
-      if (!res.ok || data.error){
-        throw new Error(data.error || 'rename_failed');
+      if (!res.ok || data.error) {
+        throw new Error(data.error || "rename_failed");
       }
-      if (selectedPath === oldPath){
+      if (selectedPath === oldPath) {
         setSelectedPath(data.new_path || newPath);
       }
-      setIdeStatus('Renamed');
+      setIdeStatus("Renamed");
       await loadTree();
-    }catch(e){
+    } catch (e) {
       console.error(e);
-      setIdeStatus('Rename failed');
+      setIdeStatus("Rename failed");
       await showNoticeModal({
-        title: 'Rename Failed',
-        message: 'Failed to rename entry.',
-        tone: 'rose',
+        title: "Rename Failed",
+        message: "Failed to rename entry.",
+        tone: "rose",
       });
     }
   }
 
-  function openRenameModal(path){
+  function openRenameModal(path) {
     if (!path) return;
     pendingRenamePath = path;
-    const parts = path.split('/');
-    const oldName = parts[parts.length - 1] || 'payloads';
-    if (renameModalPath){
-      renameModalPath.textContent = path || 'payloads/';
+    const parts = path.split("/");
+    const oldName = parts[parts.length - 1] || "payloads";
+    if (renameModalPath) {
+      renameModalPath.textContent = path || "payloads/";
     }
-    if (renameModalName){
+    if (renameModalName) {
       renameModalName.value = oldName;
       renameModalName.select();
     }
-    if (renameModal){
-      renameModal.classList.remove('hidden');
+    if (renameModal) {
+      renameModal.classList.remove("hidden");
     }
   }
 
-  function closeRenameModal(){
-    if (renameModal){
-      renameModal.classList.add('hidden');
+  function closeRenameModal() {
+    if (renameModal) {
+      renameModal.classList.add("hidden");
     }
     pendingRenamePath = null;
   }
 
-  async function handleRenameConfirm(){
+  async function handleRenameConfirm() {
     if (!pendingRenamePath || !renameModalName) return;
     const newName = renameModalName.value.trim();
     if (!newName) return;
@@ -999,72 +1064,72 @@
     closeRenameModal();
   }
 
-  function renameEntry(path){
+  function renameEntry(path) {
     openRenameModal(path);
   }
 
   let pendingDeletePath = null;
 
-  function openDeleteModal(path){
+  function openDeleteModal(path) {
     if (!path) return;
     pendingDeletePath = path;
-    if (deleteModalPath){
-      deleteModalPath.textContent = path || 'payloads/';
+    if (deleteModalPath) {
+      deleteModalPath.textContent = path || "payloads/";
     }
-    if (deleteModal){
-      deleteModal.classList.remove('hidden');
+    if (deleteModal) {
+      deleteModal.classList.remove("hidden");
     }
   }
 
-  function closeDeleteModal(){
-    if (deleteModal){
-      deleteModal.classList.add('hidden');
+  function closeDeleteModal() {
+    if (deleteModal) {
+      deleteModal.classList.add("hidden");
     }
     pendingDeletePath = null;
   }
 
-  async function handleDeleteConfirm(){
+  async function handleDeleteConfirm() {
     if (!pendingDeletePath) return;
     const path = pendingDeletePath;
     closeDeleteModal();
-    setIdeStatus('Deleting...');
-    try{
-      const url = getApiUrl('/api/payloads/entry', { path });
-      const res = await apiFetch(url, { method: 'DELETE' });
+    setIdeStatus("Deleting...");
+    try {
+      const url = getApiUrl("/api/payloads/entry", { path });
+      const res = await apiFetch(url, { method: "DELETE" });
       const data = await res.json();
-      if (!res.ok || data.error){
-        throw new Error(data.error || 'delete_failed');
+      if (!res.ok || data.error) {
+        throw new Error(data.error || "delete_failed");
       }
-      if (selectedPath === path){
+      if (selectedPath === path) {
         setSelectedPath(null);
-        if (editor){
-          editor.setValue('');
+        if (editor) {
+          editor.setValue("");
         }
         setDirty(false);
       }
-      setIdeStatus('Deleted');
+      setIdeStatus("Deleted");
       await loadTree();
-    }catch(e){
+    } catch (e) {
       console.error(e);
-      setIdeStatus('Delete failed');
+      setIdeStatus("Delete failed");
       await showNoticeModal({
-        title: 'Delete Failed',
-        message: 'Failed to delete entry.',
-        tone: 'rose',
+        title: "Delete Failed",
+        message: "Failed to delete entry.",
+        tone: "rose",
       });
     }
   }
 
-  function deleteEntry(path){
+  function deleteEntry(path) {
     openDeleteModal(path);
   }
 
   // ------------------------ Run payload ------------------------
-  async function runCurrentPayload(){
+  async function runCurrentPayload() {
     if (!selectedPath) return;
     if (normalizePayloadPath(payloadActivePath)) return;
     // if dirty, offer to save first
-    if (isDirty){
+    if (isDirty) {
       const ok = await promptSaveBeforeRun();
       if (!ok) return;
       const saved = await saveCurrentFile();
@@ -1072,65 +1137,70 @@
     }
     payloadRunPending = true;
     updatePayloadRunUi();
-    setIdeStatus('Starting payload...');
-    try{
-      const url = getApiUrl('/api/payloads/run');
+    setIdeStatus("Starting payload...");
+    try {
+      const url = getApiUrl("/api/payloads/run");
       const res = await apiFetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: selectedPath })
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: selectedPath }),
       });
       const data = await res.json();
-      if (!res.ok || !data.ok){
-        throw new Error(data.error || 'run_failed');
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error || "run_failed");
       }
       payloadActivePath = normalizePayloadPath(selectedPath);
       payloadStopPending = false;
       updatePayloadRunUi();
-      setIdeStatus('Payload launched');
-    }catch(e){
+      setIdeStatus("Payload launched");
+    } catch (e) {
       console.error(e);
-      setIdeStatus('Run failed');
+      setIdeStatus("Run failed");
       await showNoticeModal({
-        title: 'Run Failed',
-        message: 'Failed to start payload.',
-        tone: 'rose',
+        title: "Run Failed",
+        message: "Failed to start payload.",
+        tone: "rose",
       });
-    }finally{
+    } finally {
       payloadRunPending = false;
       updatePayloadRunUi();
     }
   }
 
-  async function pollPayloadStatus(){
-    try{
-      const res = await apiFetch(getApiUrl('/api/payloads/status'), { cache: 'no-store' });
+  async function pollPayloadStatus() {
+    try {
+      const res = await apiFetch(getApiUrl("/api/payloads/status"), {
+        cache: "no-store",
+      });
       const data = await res.json();
-      if (!res.ok){
+      if (!res.ok) {
         return;
       }
-      payloadActivePath = data && data.running ? normalizePayloadPath(data.path) : null;
-      if (!payloadActivePath){
+      payloadActivePath =
+        data && data.running ? normalizePayloadPath(data.path) : null;
+      if (!payloadActivePath) {
         payloadRunPending = false;
         payloadStopPending = false;
       }
       updatePayloadRunUi();
-    }catch{}
+    } catch {}
   }
 
-  async function stopCurrentPayload(){
+  async function stopCurrentPayload() {
     if (!normalizePayloadPath(payloadActivePath)) return;
     payloadStopPending = true;
     updatePayloadRunUi();
-    setIdeStatus('Stopping payload...');
-    try{
-      sendInput('KEY3', 'press');
-      setTimeout(() => sendInput('KEY3', 'release'), 120);
-      setTimeout(() => { pollPayloadStatus(); }, 300);
-    }catch(e){
+    setIdeStatus("Stopping payload...");
+    try {
+      sendInput("KEY3", "press");
+      setTimeout(() => sendInput("KEY3", "release"), 120);
+      setTimeout(() => {
+        pollPayloadStatus();
+      }, 300);
+    } catch (e) {
       console.error(e);
-      setIdeStatus('Stop failed');
-    }finally{
+      setIdeStatus("Stop failed");
+    } finally {
       setTimeout(() => {
         payloadStopPending = false;
         updatePayloadRunUi();
@@ -1138,144 +1208,194 @@
     }
   }
 
-  function setRestartUiError(msg){
+  function setRestartUiError(msg) {
     if (!restartUiModalError) return;
-    const text = String(msg || '').trim();
+    const text = String(msg || "").trim();
     restartUiModalError.textContent = text;
-    restartUiModalError.classList.toggle('hidden', !text);
+    restartUiModalError.classList.toggle("hidden", !text);
   }
 
-  function resolveRestartUiPrompt(value){
+  function resolveRestartUiPrompt(value) {
     if (!restartUiPromptResolver) return;
     const resolver = restartUiPromptResolver;
     restartUiPromptResolver = null;
-    if (restartUiModal) restartUiModal.classList.add('hidden');
+    if (restartUiModal) restartUiModal.classList.add("hidden");
     resolver(!!value);
   }
 
-  function resolveUnsavedPrompt(value){
+  function resolveUnsavedPrompt(value) {
     if (!unsavedPromptResolver) return;
     const resolver = unsavedPromptResolver;
     unsavedPromptResolver = null;
-    if (unsavedModal) unsavedModal.classList.add('hidden');
+    if (unsavedModal) unsavedModal.classList.add("hidden");
     resolver(!!value);
   }
 
-  function promptDiscardUnsavedChanges(){
-    if (!unsavedModal || !unsavedModalConfirm || !unsavedModalCancel || !unsavedModalClose){
+  function promptDiscardUnsavedChanges() {
+    if (
+      !unsavedModal ||
+      !unsavedModalConfirm ||
+      !unsavedModalCancel ||
+      !unsavedModalClose
+    ) {
       return Promise.resolve(false);
     }
-    if (unsavedPromptResolver){
+    if (unsavedPromptResolver) {
       return Promise.resolve(false);
     }
-    unsavedModal.classList.remove('hidden');
-    return new Promise(resolve => {
+    unsavedModal.classList.remove("hidden");
+    return new Promise((resolve) => {
       unsavedPromptResolver = resolve;
     });
   }
 
-  function resolveSaveBeforeRunPrompt(value){
+  function resolveSaveBeforeRunPrompt(value) {
     if (!saveBeforeRunPromptResolver) return;
     const resolver = saveBeforeRunPromptResolver;
     saveBeforeRunPromptResolver = null;
-    if (saveBeforeRunModal) saveBeforeRunModal.classList.add('hidden');
+    if (saveBeforeRunModal) saveBeforeRunModal.classList.add("hidden");
     resolver(!!value);
   }
 
-  function promptSaveBeforeRun(){
-    if (!saveBeforeRunModal || !saveBeforeRunModalConfirm || !saveBeforeRunModalCancel || !saveBeforeRunModalClose){
+  function promptSaveBeforeRun() {
+    if (
+      !saveBeforeRunModal ||
+      !saveBeforeRunModalConfirm ||
+      !saveBeforeRunModalCancel ||
+      !saveBeforeRunModalClose
+    ) {
       return Promise.resolve(false);
     }
-    if (saveBeforeRunPromptResolver){
+    if (saveBeforeRunPromptResolver) {
       return Promise.resolve(false);
     }
-    saveBeforeRunModal.classList.remove('hidden');
-    return new Promise(resolve => {
+    saveBeforeRunModal.classList.remove("hidden");
+    return new Promise((resolve) => {
       saveBeforeRunPromptResolver = resolve;
     });
   }
 
-  function applyNoticeTone(tone){
+  function applyNoticeTone(tone) {
     if (!noticeModalTitle || !noticeModalConfirm) return;
-    const titleToneClasses = ['text-rose-300', 'text-amber-300', 'text-emerald-300'];
+    const titleToneClasses = [
+      "text-rose-300",
+      "text-amber-300",
+      "text-emerald-300",
+    ];
     const btnToneClasses = [
-      'bg-rose-600/80', 'border-rose-300/30', 'hover:bg-rose-500/80',
-      'bg-amber-600/80', 'border-amber-300/30', 'hover:bg-amber-500/80',
-      'bg-emerald-600/80', 'border-emerald-300/30', 'hover:bg-emerald-500/80',
+      "bg-rose-600/80",
+      "border-rose-300/30",
+      "hover:bg-rose-500/80",
+      "bg-amber-600/80",
+      "border-amber-300/30",
+      "hover:bg-amber-500/80",
+      "bg-emerald-600/80",
+      "border-emerald-300/30",
+      "hover:bg-emerald-500/80",
     ];
     noticeModalTitle.classList.remove(...titleToneClasses);
     noticeModalConfirm.classList.remove(...btnToneClasses);
-    if (tone === 'amber'){
-      noticeModalTitle.classList.add('text-amber-300');
-      noticeModalConfirm.classList.add('bg-amber-600/80', 'border-amber-300/30', 'hover:bg-amber-500/80');
+    if (tone === "amber") {
+      noticeModalTitle.classList.add("text-amber-300");
+      noticeModalConfirm.classList.add(
+        "bg-amber-600/80",
+        "border-amber-300/30",
+        "hover:bg-amber-500/80",
+      );
       return;
     }
-    if (tone === 'emerald'){
-      noticeModalTitle.classList.add('text-emerald-300');
-      noticeModalConfirm.classList.add('bg-emerald-600/80', 'border-emerald-300/30', 'hover:bg-emerald-500/80');
+    if (tone === "emerald") {
+      noticeModalTitle.classList.add("text-emerald-300");
+      noticeModalConfirm.classList.add(
+        "bg-emerald-600/80",
+        "border-emerald-300/30",
+        "hover:bg-emerald-500/80",
+      );
       return;
     }
-    noticeModalTitle.classList.add('text-rose-300');
-    noticeModalConfirm.classList.add('bg-rose-600/80', 'border-rose-300/30', 'hover:bg-rose-500/80');
+    noticeModalTitle.classList.add("text-rose-300");
+    noticeModalConfirm.classList.add(
+      "bg-rose-600/80",
+      "border-rose-300/30",
+      "hover:bg-rose-500/80",
+    );
   }
 
-  function resolveNoticePrompt(){
+  function resolveNoticePrompt() {
     if (!noticePromptResolver) return;
     const resolver = noticePromptResolver;
     noticePromptResolver = null;
-    if (noticeModal) noticeModal.classList.add('hidden');
+    if (noticeModal) noticeModal.classList.add("hidden");
     resolver();
   }
 
-  function showNoticeModal({ title = 'Notice', message = 'Something went wrong.', tone = 'rose', buttonText = 'OK' } = {}){
-    if (!noticeModal || !noticeModalTitle || !noticeModalMessage || !noticeModalConfirm || !noticeModalClose){
+  function showNoticeModal({
+    title = "Notice",
+    message = "Something went wrong.",
+    tone = "rose",
+    buttonText = "OK",
+  } = {}) {
+    if (
+      !noticeModal ||
+      !noticeModalTitle ||
+      !noticeModalMessage ||
+      !noticeModalConfirm ||
+      !noticeModalClose
+    ) {
       return Promise.resolve();
     }
-    if (noticePromptResolver){
+    if (noticePromptResolver) {
       return Promise.resolve();
     }
     noticeModalTitle.textContent = title;
     noticeModalMessage.textContent = message;
     noticeModalConfirm.textContent = buttonText;
     applyNoticeTone(tone);
-    noticeModal.classList.remove('hidden');
-    return new Promise(resolve => {
+    noticeModal.classList.remove("hidden");
+    return new Promise((resolve) => {
       noticePromptResolver = resolve;
     });
   }
 
-  function promptRestartUi(){
-    if (!restartUiModal || !restartUiModalConfirm || !restartUiModalCancel || !restartUiModalClose){
+  function promptRestartUi() {
+    if (
+      !restartUiModal ||
+      !restartUiModalConfirm ||
+      !restartUiModalCancel ||
+      !restartUiModalClose
+    ) {
       return Promise.resolve(false);
     }
-    if (restartUiPromptResolver){
+    if (restartUiPromptResolver) {
       return Promise.resolve(false);
     }
-    setRestartUiError('');
-    restartUiModal.classList.remove('hidden');
-    return new Promise(resolve => {
+    setRestartUiError("");
+    restartUiModal.classList.remove("hidden");
+    return new Promise((resolve) => {
       restartUiPromptResolver = resolve;
     });
   }
 
-  async function restartUi(){
+  async function restartUi() {
     const confirmed = await promptRestartUi();
     if (!confirmed) return;
     if (restartUiBtn) restartUiBtn.disabled = true;
-    setIdeStatus('Restarting UI...');
-    try{
-      const res = await apiFetch(getApiUrl('/api/system/restart-ui'), { method: 'POST' });
+    setIdeStatus("Restarting UI...");
+    try {
+      const res = await apiFetch(getApiUrl("/api/system/restart-ui"), {
+        method: "POST",
+      });
       const data = await res.json();
-      if (!res.ok || !data || !data.ok){
-        throw new Error((data && data.error) ? data.error : 'restart_failed');
+      if (!res.ok || !data || !data.ok) {
+        throw new Error(data && data.error ? data.error : "restart_failed");
       }
-      setIdeStatus('UI restart requested');
-    }catch(e){
+      setIdeStatus("UI restart requested");
+    } catch (e) {
       console.error(e);
-      setIdeStatus('UI restart failed');
-      setRestartUiError('Failed to restart UI.');
-      if (restartUiModal) restartUiModal.classList.remove('hidden');
-    }finally{
+      setIdeStatus("UI restart failed");
+      setRestartUiError("Failed to restart UI.");
+      if (restartUiModal) restartUiModal.classList.remove("hidden");
+    } finally {
       if (restartUiBtn) restartUiBtn.disabled = false;
     }
   }
@@ -1285,137 +1405,184 @@
   let reconnectTimer = null;
   let wsAuthenticated = true;
 
-  function setWsStatus(text){
+  function setWsStatus(text) {
     if (wsStatusEl) {
       wsStatusEl.textContent = text;
       applyStatusTone(wsStatusEl, text);
     }
   }
 
-  function setupHiDPI(){
+  var _ideLogicalW = 128, _ideLogicalH = 128;
+  function setupHiDPI() {
     if (!canvas || !ctx) return;
     const DPR = Math.max(1, Math.floor(window.devicePixelRatio || 1));
-    const logical = 128;
-    canvas.width = logical * DPR;
-    canvas.height = logical * DPR;
+    canvas.width = _ideLogicalW * DPR;
+    canvas.height = _ideLogicalH * DPR;
     ctx.imageSmoothingEnabled = true;
-    try { ctx.imageSmoothingQuality = 'high'; } catch {}
+    try {
+      ctx.imageSmoothingQuality = "high";
+    } catch {}
   }
 
-  function sendInput(button, state){
+  function sendInput(button, state) {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    try{
-      ws.send(JSON.stringify({ type: 'input', button, state }));
-    }catch{}
+    try {
+      ws.send(JSON.stringify({ type: "input", button, state }));
+    } catch {}
   }
 
-  function bindButtons(){
-    const buttons = document.querySelectorAll('[data-btn]');
-    buttons.forEach(btn => {
-      const name = btn.getAttribute('data-btn');
-      const press = () => { btn.classList.add('active'); sendInput(name, 'press'); };
-      const release = () => { btn.classList.remove('active'); sendInput(name, 'release'); };
-      btn.addEventListener('mousedown', press);
-      btn.addEventListener('mouseup', release);
-      btn.addEventListener('mouseleave', release);
-      btn.addEventListener('touchstart', (e)=>{ e.preventDefault(); press(); }, {passive:false});
-      btn.addEventListener('touchend', (e)=>{ e.preventDefault(); release(); }, {passive:false});
-      btn.addEventListener('touchcancel', (e)=>{ e.preventDefault(); release(); }, {passive:false});
+  function bindButtons() {
+    const buttons = document.querySelectorAll("[data-btn]");
+    buttons.forEach((btn) => {
+      const name = btn.getAttribute("data-btn");
+      const press = () => {
+        btn.classList.add("active");
+        sendInput(name, "press");
+      };
+      const release = () => {
+        btn.classList.remove("active");
+        sendInput(name, "release");
+      };
+      btn.addEventListener("mousedown", press);
+      btn.addEventListener("mouseup", release);
+      btn.addEventListener("mouseleave", release);
+      btn.addEventListener(
+        "touchstart",
+        (e) => {
+          e.preventDefault();
+          press();
+        },
+        { passive: false },
+      );
+      btn.addEventListener(
+        "touchend",
+        (e) => {
+          e.preventDefault();
+          release();
+        },
+        { passive: false },
+      );
+      btn.addEventListener(
+        "touchcancel",
+        (e) => {
+          e.preventDefault();
+          release();
+        },
+        { passive: false },
+      );
     });
   }
 
-  function connectWs(){
+  function connectWs() {
     if (!canvas || !ctx) return;
-    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+    if (
+      ws &&
+      (ws.readyState === WebSocket.OPEN ||
+        ws.readyState === WebSocket.CONNECTING)
+    )
+      return;
     const url = getWsUrl();
-    try{
+    try {
       ws = new WebSocket(url);
-    }catch(e){
-      setWsStatus('WS error');
+    } catch (e) {
+      setWsStatus("WS error");
       scheduleReconnect();
       return;
     }
 
     ws.onopen = () => {
-      setWsStatus('Connected');
+      setWsStatus("Connected");
       wsAuthenticated = true;
-      if (wsTicket){
-        try{
-          ws.send(JSON.stringify({ type: 'auth_session', ticket: wsTicket }));
-        }catch{}
-      } else if (authToken){
-        try{
-          ws.send(JSON.stringify({ type: 'auth', token: authToken }));
-        }catch{}
+      if (wsTicket) {
+        try {
+          ws.send(JSON.stringify({ type: "auth_session", ticket: wsTicket }));
+        } catch {}
+      } else if (authToken) {
+        try {
+          ws.send(JSON.stringify({ type: "auth", token: authToken }));
+        } catch {}
       }
     };
 
     ws.onmessage = (ev) => {
-      try{
+      try {
         const msg = JSON.parse(ev.data);
-        if (msg.type === 'auth_required'){
+        if (msg.type === "auth_required") {
           wsAuthenticated = false;
-          if (wsTicket){
-            try{
-              ws.send(JSON.stringify({ type: 'auth_session', ticket: wsTicket }));
-            }catch{}
+          if (wsTicket) {
+            try {
+              ws.send(
+                JSON.stringify({ type: "auth_session", ticket: wsTicket }),
+              );
+            } catch {}
             return;
           }
-          if (authToken){
-            try{
-              ws.send(JSON.stringify({ type: 'auth', token: authToken }));
-            }catch{}
+          if (authToken) {
+            try {
+              ws.send(JSON.stringify({ type: "auth", token: authToken }));
+            } catch {}
             return;
           }
-          ensureAuthenticated('Authentication required to use WebSocket.')
-            .then(() => {
+          ensureAuthenticated("Authentication required to use WebSocket.").then(
+            () => {
               if (!ws || ws.readyState !== WebSocket.OPEN) return;
-              if (wsTicket){
-                try{
-                  ws.send(JSON.stringify({ type: 'auth_session', ticket: wsTicket }));
-                }catch{}
-              } else if (authToken){
-                try{
-                  ws.send(JSON.stringify({ type: 'auth', token: authToken }));
-                }catch{}
+              if (wsTicket) {
+                try {
+                  ws.send(
+                    JSON.stringify({ type: "auth_session", ticket: wsTicket }),
+                  );
+                } catch {}
+              } else if (authToken) {
+                try {
+                  ws.send(JSON.stringify({ type: "auth", token: authToken }));
+                } catch {}
               }
-            });
+            },
+          );
           return;
         }
-        if (msg.type === 'auth_ok'){
+        if (msg.type === "auth_ok") {
           wsAuthenticated = true;
-          setWsStatus('Authenticated');
+          setWsStatus("Authenticated");
           return;
         }
-        if (msg.type === 'auth_error'){
+        if (msg.type === "auth_error") {
           wsAuthenticated = false;
-          setWsStatus('Auth failed');
+          setWsStatus("Auth failed");
           return;
         }
-        if (msg.type === 'frame' && msg.data){
+        if (msg.type === "frame" && msg.data) {
           const img = new Image();
           img.onload = () => {
-            try{
-              ctx.clearRect(0,0,canvas.width,canvas.height);
+            try {
+              if (img.naturalWidth !== _ideLogicalW || img.naturalHeight !== _ideLogicalH) {
+                _ideLogicalW = img.naturalWidth;
+                _ideLogicalH = img.naturalHeight;
+                setupHiDPI();
+                if (canvas) canvas.style.aspectRatio = _ideLogicalW + "/" + _ideLogicalH;
+              }
+              ctx.clearRect(0, 0, canvas.width, canvas.height);
               ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-            }catch{}
+            } catch {}
           };
-          img.src = 'data:image/jpeg;base64,' + msg.data;
+          img.src = "data:image/jpeg;base64," + msg.data;
         }
-      }catch{}
+      } catch {}
     };
 
     ws.onerror = () => {
-      try { ws.close(); } catch {}
+      try {
+        ws.close();
+      } catch {}
     };
 
     ws.onclose = () => {
-      setWsStatus('Disconnected – reconnecting…');
+      setWsStatus("Disconnected – reconnecting…");
       scheduleReconnect();
     };
   }
 
-  function scheduleReconnect(){
+  function scheduleReconnect() {
     if (reconnectTimer) return;
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
@@ -1428,8 +1595,11 @@
   // =====================================================================
   const TEMPLATES_DATA = [
     {
-      id: 'wifi-scanner', name: 'WiFi Scanner', category: 'wifi', filename: 'wifi_scanner.py',
-      description: 'Scan and display nearby WiFi networks with signal strength',
+      id: "wifi-scanner",
+      name: "WiFi Scanner",
+      category: "wifi",
+      filename: "wifi_scanner.py",
+      description: "Scan and display nearby WiFi networks with signal strength",
       code: `#!/usr/bin/env python3
 """
 RaspyJack WiFi Scanner
@@ -1462,7 +1632,7 @@ for pin in PINS.values():
 # LCD Setup
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-WIDTH, HEIGHT = 128, 128
+WIDTH, HEIGHT = LCD_1in44.LCD_WIDTH, LCD_1in44.LCD_HEIGHT
 font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 9)
 canvas = Image.new("RGB", (WIDTH, HEIGHT), "black")
 draw = ImageDraw.Draw(canvas)
@@ -1536,11 +1706,14 @@ if __name__ == "__main__":
         LCD.LCD_Clear()
         GPIO.cleanup()
         print("WiFi Scanner: exited cleanly.")
-`
+`,
     },
     {
-      id: 'ble-scanner', name: 'BLE Device Scanner', category: 'ble', filename: 'ble_scanner.py',
-      description: 'Discover nearby Bluetooth Low Energy devices',
+      id: "ble-scanner",
+      name: "BLE Device Scanner",
+      category: "ble",
+      filename: "ble_scanner.py",
+      description: "Discover nearby Bluetooth Low Energy devices",
       code: `#!/usr/bin/env python3
 """
 RaspyJack BLE Scanner
@@ -1568,7 +1741,7 @@ for pin in PINS.values():
 
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-WIDTH, HEIGHT = 128, 128
+WIDTH, HEIGHT = LCD_1in44.LCD_WIDTH, LCD_1in44.LCD_HEIGHT
 font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 9)
 canvas = Image.new("RGB", (WIDTH, HEIGHT), "black")
 draw = ImageDraw.Draw(canvas)
@@ -1641,11 +1814,14 @@ if __name__ == "__main__":
         LCD.LCD_Clear()
         GPIO.cleanup()
         print("BLE Scanner: exited cleanly.")
-`
+`,
     },
     {
-      id: 'network-nmap', name: 'Network Nmap Scanner', category: 'network', filename: 'nmap_scanner.py',
-      description: 'Run Nmap scans on the local network with auto-scheduling',
+      id: "network-nmap",
+      name: "Network Nmap Scanner",
+      category: "network",
+      filename: "nmap_scanner.py",
+      description: "Run Nmap scans on the local network with auto-scheduling",
       code: `#!/usr/bin/env python3
 """
 RaspyJack Nmap Scanner
@@ -1680,7 +1856,7 @@ for pin in PINS.values():
 
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-WIDTH, HEIGHT = 128, 128
+WIDTH, HEIGHT = LCD_1in44.LCD_WIDTH, LCD_1in44.LCD_HEIGHT
 font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 10)
 canvas = Image.new("RGB", (WIDTH, HEIGHT), "black")
 draw = ImageDraw.Draw(canvas)
@@ -1760,11 +1936,14 @@ if __name__ == "__main__":
         LCD.LCD_Clear()
         GPIO.cleanup()
         print("Nmap Scanner: exited cleanly.")
-`
+`,
     },
     {
-      id: 'honeypot-basic', name: 'Basic Honeypot', category: 'honeypot', filename: 'honeypot.py',
-      description: 'Listen for connections on common ports and log them',
+      id: "honeypot-basic",
+      name: "Basic Honeypot",
+      category: "honeypot",
+      filename: "honeypot.py",
+      description: "Listen for connections on common ports and log them",
       code: `#!/usr/bin/env python3
 """
 RaspyJack Basic Honeypot
@@ -1799,7 +1978,7 @@ for pin in PINS.values():
 
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-WIDTH, HEIGHT = 128, 128
+WIDTH, HEIGHT = LCD_1in44.LCD_WIDTH, LCD_1in44.LCD_HEIGHT
 font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 10)
 canvas = Image.new("RGB", (WIDTH, HEIGHT), "black")
 draw = ImageDraw.Draw(canvas)
@@ -1873,11 +2052,14 @@ if __name__ == "__main__":
         LCD.LCD_Clear()
         GPIO.cleanup()
         print(f"Honeypot: exited. {len(connections)} connections logged.")
-`
+`,
     },
     {
-      id: 'utility-menu', name: 'Menu Template', category: 'utility', filename: 'menu_template.py',
-      description: 'Basic menu navigation template with LCD and buttons',
+      id: "utility-menu",
+      name: "Menu Template",
+      category: "utility",
+      filename: "menu_template.py",
+      description: "Basic menu navigation template with LCD and buttons",
       code: `#!/usr/bin/env python3
 """
 RaspyJack Menu Template
@@ -1905,7 +2087,7 @@ for pin in PINS.values():
 
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-WIDTH, HEIGHT = 128, 128
+WIDTH, HEIGHT = LCD_1in44.LCD_WIDTH, LCD_1in44.LCD_HEIGHT
 font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 10)
 canvas = Image.new("RGB", (WIDTH, HEIGHT), "black")
 draw = ImageDraw.Draw(canvas)
@@ -1980,11 +2162,14 @@ if __name__ == "__main__":
         LCD.LCD_Clear()
         GPIO.cleanup()
         print("Menu Template: exited cleanly.")
-`
+`,
     },
     {
-      id: 'utility-status', name: 'System Status Display', category: 'utility', filename: 'system_status.py',
-      description: 'Display system stats like CPU, memory, and network',
+      id: "utility-status",
+      name: "System Status Display",
+      category: "utility",
+      filename: "system_status.py",
+      description: "Display system stats like CPU, memory, and network",
       code: `#!/usr/bin/env python3
 """
 RaspyJack System Status
@@ -2011,7 +2196,7 @@ for pin in PINS.values():
 
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-WIDTH, HEIGHT = 128, 128
+WIDTH, HEIGHT = LCD_1in44.LCD_WIDTH, LCD_1in44.LCD_HEIGHT
 font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 9)
 canvas = Image.new("RGB", (WIDTH, HEIGHT), "black")
 draw = ImageDraw.Draw(canvas)
@@ -2117,163 +2302,224 @@ if __name__ == "__main__":
         LCD.LCD_Clear()
         GPIO.cleanup()
         print("System Status: exited cleanly.")
-`
-    }
+`,
+    },
   ];
 
   const TEMPLATE_CATEGORIES = [
-    { id: 'wifi', name: 'WiFi', icon: 'fa-solid fa-wifi' },
-    { id: 'ble', name: 'BLE', icon: 'fa-brands fa-bluetooth-b' },
-    { id: 'network', name: 'Network', icon: 'fa-solid fa-network-wired' },
-    { id: 'honeypot', name: 'Honeypot', icon: 'fa-solid fa-shield-halved' },
-    { id: 'utility', name: 'Utility', icon: 'fa-solid fa-wrench' },
+    { id: "wifi", name: "WiFi", icon: "fa-solid fa-wifi" },
+    { id: "ble", name: "BLE", icon: "fa-brands fa-bluetooth-b" },
+    { id: "network", name: "Network", icon: "fa-solid fa-network-wired" },
+    { id: "honeypot", name: "Honeypot", icon: "fa-solid fa-shield-halved" },
+    { id: "utility", name: "Utility", icon: "fa-solid fa-wrench" },
   ];
 
   // =====================================================================
   //  PAYLOAD WIZARD (ported from raspyjack-ide-studio/PayloadWizard.tsx)
   // =====================================================================
   const WIZARD_TYPES = [
-    { id: 'wifi', name: 'WiFi Attack', icon: 'fa-solid fa-wifi', description: 'Scan networks, deauth, probe requests' },
-    { id: 'ble', name: 'BLE Scanner', icon: 'fa-brands fa-bluetooth-b', description: 'Bluetooth device scanning and spam' },
-    { id: 'network', name: 'Network Tool', icon: 'fa-solid fa-network-wired', description: 'Nmap scans, network analysis' },
-    { id: 'honeypot', name: 'Honeypot', icon: 'fa-solid fa-shield-halved', description: 'Trap and log connection attempts' },
-    { id: 'utility', name: 'Utility', icon: 'fa-solid fa-wrench', description: 'Custom tool with LCD/buttons' },
+    {
+      id: "wifi",
+      name: "WiFi Attack",
+      icon: "fa-solid fa-wifi",
+      description: "Scan networks, deauth, probe requests",
+    },
+    {
+      id: "ble",
+      name: "BLE Scanner",
+      icon: "fa-brands fa-bluetooth-b",
+      description: "Bluetooth device scanning and spam",
+    },
+    {
+      id: "network",
+      name: "Network Tool",
+      icon: "fa-solid fa-network-wired",
+      description: "Nmap scans, network analysis",
+    },
+    {
+      id: "honeypot",
+      name: "Honeypot",
+      icon: "fa-solid fa-shield-halved",
+      description: "Trap and log connection attempts",
+    },
+    {
+      id: "utility",
+      name: "Utility",
+      icon: "fa-solid fa-wrench",
+      description: "Custom tool with LCD/buttons",
+    },
   ];
 
   let wizardStep = 1;
   let wizardConfig = {
-    type: 'utility', name: 'my_payload.py',
-    wifiScanTimeout: 15, wifiDeauth: false,
-    bleScanDuration: 10, bleSpam: false,
-    networkNmap: true, networkInterface: 'eth0',
-    honeypotPorts: '22, 23, 80, 8080', honeypotDiscord: false,
-    utilityLcd: true, utilityButtons: true,
+    type: "utility",
+    name: "my_payload.py",
+    wifiScanTimeout: 15,
+    wifiDeauth: false,
+    bleScanDuration: 10,
+    bleSpam: false,
+    networkNmap: true,
+    networkInterface: "eth0",
+    honeypotPorts: "22, 23, 80, 8080",
+    honeypotDiscord: false,
+    utilityLcd: true,
+    utilityButtons: true,
   };
 
-  const wizardModal = document.getElementById('wizardModal');
-  const wizardModalClose = document.getElementById('wizardModalClose');
-  const wizardStepNum = document.getElementById('wizardStepNum');
-  const wizardStepLabel = document.getElementById('wizardStepLabel');
-  const wizardDots = [document.getElementById('wizardDot1'), document.getElementById('wizardDot2'), document.getElementById('wizardDot3')];
-  const wizardStepContent = document.getElementById('wizardStepContent');
-  const wizardBackBtn = document.getElementById('wizardBackBtn');
-  const wizardNextBtn = document.getElementById('wizardNextBtn');
-  const wizardGenerateBtn = document.getElementById('wizardGenerateBtn');
+  const wizardModal = document.getElementById("wizardModal");
+  const wizardModalClose = document.getElementById("wizardModalClose");
+  const wizardStepNum = document.getElementById("wizardStepNum");
+  const wizardStepLabel = document.getElementById("wizardStepLabel");
+  const wizardDots = [
+    document.getElementById("wizardDot1"),
+    document.getElementById("wizardDot2"),
+    document.getElementById("wizardDot3"),
+  ];
+  const wizardStepContent = document.getElementById("wizardStepContent");
+  const wizardBackBtn = document.getElementById("wizardBackBtn");
+  const wizardNextBtn = document.getElementById("wizardNextBtn");
+  const wizardGenerateBtn = document.getElementById("wizardGenerateBtn");
 
-  function openWizard(){
+  function openWizard() {
     wizardStep = 1;
-    wizardConfig = { type: 'utility', name: 'my_payload.py', wifiScanTimeout: 15, wifiDeauth: false, bleScanDuration: 10, bleSpam: false, networkNmap: true, networkInterface: 'eth0', honeypotPorts: '22, 23, 80, 8080', honeypotDiscord: false, utilityLcd: true, utilityButtons: true };
+    wizardConfig = {
+      type: "utility",
+      name: "my_payload.py",
+      wifiScanTimeout: 15,
+      wifiDeauth: false,
+      bleScanDuration: 10,
+      bleSpam: false,
+      networkNmap: true,
+      networkInterface: "eth0",
+      honeypotPorts: "22, 23, 80, 8080",
+      honeypotDiscord: false,
+      utilityLcd: true,
+      utilityButtons: true,
+    };
     renderWizardStep();
-    if (wizardModal) wizardModal.classList.remove('hidden');
+    if (wizardModal) wizardModal.classList.remove("hidden");
   }
 
-  function closeWizard(){
-    if (wizardModal) wizardModal.classList.add('hidden');
+  function closeWizard() {
+    if (wizardModal) wizardModal.classList.add("hidden");
   }
 
-  function renderWizardStep(){
+  function renderWizardStep() {
     if (!wizardStepContent) return;
     // Update header
-    const labels = ['Select Type', 'Configure', 'Generate'];
+    const labels = ["Select Type", "Configure", "Generate"];
     if (wizardStepNum) wizardStepNum.textContent = wizardStep;
     if (wizardStepLabel) wizardStepLabel.textContent = labels[wizardStep - 1];
-    wizardDots.forEach((d, i) => { if (d) d.classList.toggle('active', i < wizardStep); });
+    wizardDots.forEach((d, i) => {
+      if (d) d.classList.toggle("active", i < wizardStep);
+    });
     // Show/hide buttons
-    if (wizardBackBtn) wizardBackBtn.classList.toggle('hidden', wizardStep === 1);
-    if (wizardNextBtn) wizardNextBtn.classList.toggle('hidden', wizardStep === 3);
-    if (wizardGenerateBtn) wizardGenerateBtn.classList.toggle('hidden', wizardStep !== 3);
+    if (wizardBackBtn)
+      wizardBackBtn.classList.toggle("hidden", wizardStep === 1);
+    if (wizardNextBtn)
+      wizardNextBtn.classList.toggle("hidden", wizardStep === 3);
+    if (wizardGenerateBtn)
+      wizardGenerateBtn.classList.toggle("hidden", wizardStep !== 3);
 
     // Render step content
-    if (wizardStep === 1){
-      wizardStepContent.innerHTML = WIZARD_TYPES.map(t => `
-        <div class="wizard-type-card ${wizardConfig.type === t.id ? 'selected' : ''}" data-wizard-type="${escapeAttr(t.id)}">
-          <div class="type-icon"><i class="${escapeAttr(t.icon)} ${wizardConfig.type === t.id ? 'text-emerald-400' : 'text-slate-400'}"></i></div>
+    if (wizardStep === 1) {
+      wizardStepContent.innerHTML = WIZARD_TYPES.map(
+        (t) => `
+        <div class="wizard-type-card ${wizardConfig.type === t.id ? "selected" : ""}" data-wizard-type="${escapeAttr(t.id)}">
+          <div class="type-icon"><i class="${escapeAttr(t.icon)} ${wizardConfig.type === t.id ? "text-emerald-400" : "text-slate-400"}"></i></div>
           <div class="flex-1">
             <div class="text-sm font-medium text-slate-200">${escapeHtml(t.name)}</div>
             <div class="text-[10px] text-slate-400">${escapeHtml(t.description)}</div>
           </div>
-          ${wizardConfig.type === t.id ? '<i class="fa-solid fa-check text-emerald-400"></i>' : ''}
+          ${wizardConfig.type === t.id ? '<i class="fa-solid fa-check text-emerald-400"></i>' : ""}
         </div>
-      `).join('');
-      wizardStepContent.querySelectorAll('.wizard-type-card').forEach(card => {
-        card.addEventListener('click', () => {
-          wizardConfig.type = card.getAttribute('data-wizard-type');
-          renderWizardStep();
+      `,
+      ).join("");
+      wizardStepContent
+        .querySelectorAll(".wizard-type-card")
+        .forEach((card) => {
+          card.addEventListener("click", () => {
+            wizardConfig.type = card.getAttribute("data-wizard-type");
+            renderWizardStep();
+          });
         });
-      });
-    } else if (wizardStep === 2){
+    } else if (wizardStep === 2) {
       let fields = `
         <div class="space-y-3">
           <div>
             <label class="text-[11px] text-slate-300 block mb-1">Payload Name</label>
             <input type="text" id="wizCfgName" value="${escapeAttr(wizardConfig.name)}" class="w-full rounded-lg bg-slate-900/80 border border-slate-700/70 px-3 py-2 text-xs text-slate-100 font-mono focus:outline-none focus:ring-1 focus:ring-emerald-400">
           </div>`;
-      if (wizardConfig.type === 'wifi'){
+      if (wizardConfig.type === "wifi") {
         fields += `
           <div>
             <label class="text-[11px] text-slate-300 block mb-1">Scan Timeout (seconds)</label>
             <input type="number" id="wizCfgWifiTimeout" value="${wizardConfig.wifiScanTimeout}" class="w-full rounded-lg bg-slate-900/80 border border-slate-700/70 px-3 py-2 text-xs text-slate-100 focus:outline-none focus:ring-1 focus:ring-emerald-400">
           </div>
           <label class="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
-            <input type="checkbox" id="wizCfgWifiDeauth" ${wizardConfig.wifiDeauth ? 'checked' : ''} class="rounded border-slate-600">
+            <input type="checkbox" id="wizCfgWifiDeauth" ${wizardConfig.wifiDeauth ? "checked" : ""} class="rounded border-slate-600">
             Enable deauthentication attacks
           </label>`;
-      } else if (wizardConfig.type === 'ble'){
+      } else if (wizardConfig.type === "ble") {
         fields += `
           <div>
             <label class="text-[11px] text-slate-300 block mb-1">Scan Duration (seconds)</label>
             <input type="number" id="wizCfgBleDuration" value="${wizardConfig.bleScanDuration}" class="w-full rounded-lg bg-slate-900/80 border border-slate-700/70 px-3 py-2 text-xs text-slate-100 focus:outline-none focus:ring-1 focus:ring-emerald-400">
           </div>
           <label class="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
-            <input type="checkbox" id="wizCfgBleSpam" ${wizardConfig.bleSpam ? 'checked' : ''} class="rounded border-slate-600">
+            <input type="checkbox" id="wizCfgBleSpam" ${wizardConfig.bleSpam ? "checked" : ""} class="rounded border-slate-600">
             Include BLE spam mode
           </label>`;
-      } else if (wizardConfig.type === 'network'){
+      } else if (wizardConfig.type === "network") {
         fields += `
           <div>
             <label class="text-[11px] text-slate-300 block mb-1">Network Interface</label>
             <input type="text" id="wizCfgNetIface" value="${escapeAttr(wizardConfig.networkInterface)}" class="w-full rounded-lg bg-slate-900/80 border border-slate-700/70 px-3 py-2 text-xs text-slate-100 font-mono focus:outline-none focus:ring-1 focus:ring-emerald-400">
           </div>
           <label class="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
-            <input type="checkbox" id="wizCfgNetNmap" ${wizardConfig.networkNmap ? 'checked' : ''} class="rounded border-slate-600">
+            <input type="checkbox" id="wizCfgNetNmap" ${wizardConfig.networkNmap ? "checked" : ""} class="rounded border-slate-600">
             Enable Nmap scanning
           </label>`;
-      } else if (wizardConfig.type === 'honeypot'){
+      } else if (wizardConfig.type === "honeypot") {
         fields += `
           <div>
             <label class="text-[11px] text-slate-300 block mb-1">Listen Ports (comma-separated)</label>
             <input type="text" id="wizCfgHoneyPorts" value="${escapeAttr(wizardConfig.honeypotPorts)}" class="w-full rounded-lg bg-slate-900/80 border border-slate-700/70 px-3 py-2 text-xs text-slate-100 font-mono focus:outline-none focus:ring-1 focus:ring-emerald-400">
           </div>
           <label class="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
-            <input type="checkbox" id="wizCfgHoneyDiscord" ${wizardConfig.honeypotDiscord ? 'checked' : ''} class="rounded border-slate-600">
+            <input type="checkbox" id="wizCfgHoneyDiscord" ${wizardConfig.honeypotDiscord ? "checked" : ""} class="rounded border-slate-600">
             Enable Discord notifications
           </label>`;
       } else {
         fields += `
           <label class="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
-            <input type="checkbox" id="wizCfgUtilLcd" ${wizardConfig.utilityLcd ? 'checked' : ''} class="rounded border-slate-600">
+            <input type="checkbox" id="wizCfgUtilLcd" ${wizardConfig.utilityLcd ? "checked" : ""} class="rounded border-slate-600">
             Include LCD display helpers
           </label>
           <label class="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
-            <input type="checkbox" id="wizCfgUtilBtns" ${wizardConfig.utilityButtons ? 'checked' : ''} class="rounded border-slate-600">
+            <input type="checkbox" id="wizCfgUtilBtns" ${wizardConfig.utilityButtons ? "checked" : ""} class="rounded border-slate-600">
             Include button handling
           </label>`;
       }
-      fields += '</div>';
+      fields += "</div>";
       wizardStepContent.innerHTML = fields;
-    } else if (wizardStep === 3){
-      const typeInfo = WIZARD_TYPES.find(t => t.id === wizardConfig.type);
+    } else if (wizardStep === 3) {
+      const typeInfo = WIZARD_TYPES.find((t) => t.id === wizardConfig.type);
       let summary = `<ul class="text-xs text-slate-400 space-y-1 mt-1">
         <li>Type: ${escapeHtml(typeInfo ? typeInfo.name : wizardConfig.type)}</li>`;
-      if (wizardConfig.type === 'wifi') summary += `<li>Scan timeout: ${wizardConfig.wifiScanTimeout}s</li><li>Deauth: ${wizardConfig.wifiDeauth ? 'Enabled' : 'Disabled'}</li>`;
-      if (wizardConfig.type === 'ble') summary += `<li>Scan duration: ${wizardConfig.bleScanDuration}s</li><li>Spam mode: ${wizardConfig.bleSpam ? 'Enabled' : 'Disabled'}</li>`;
-      if (wizardConfig.type === 'network') summary += `<li>Interface: ${escapeHtml(wizardConfig.networkInterface)}</li><li>Nmap: ${wizardConfig.networkNmap ? 'Enabled' : 'Disabled'}</li>`;
-      if (wizardConfig.type === 'honeypot') summary += `<li>Ports: ${escapeHtml(wizardConfig.honeypotPorts)}</li><li>Discord: ${wizardConfig.honeypotDiscord ? 'Enabled' : 'Disabled'}</li>`;
-      summary += '</ul>';
+      if (wizardConfig.type === "wifi")
+        summary += `<li>Scan timeout: ${wizardConfig.wifiScanTimeout}s</li><li>Deauth: ${wizardConfig.wifiDeauth ? "Enabled" : "Disabled"}</li>`;
+      if (wizardConfig.type === "ble")
+        summary += `<li>Scan duration: ${wizardConfig.bleScanDuration}s</li><li>Spam mode: ${wizardConfig.bleSpam ? "Enabled" : "Disabled"}</li>`;
+      if (wizardConfig.type === "network")
+        summary += `<li>Interface: ${escapeHtml(wizardConfig.networkInterface)}</li><li>Nmap: ${wizardConfig.networkNmap ? "Enabled" : "Disabled"}</li>`;
+      if (wizardConfig.type === "honeypot")
+        summary += `<li>Ports: ${escapeHtml(wizardConfig.honeypotPorts)}</li><li>Discord: ${wizardConfig.honeypotDiscord ? "Enabled" : "Disabled"}</li>`;
+      summary += "</ul>";
       wizardStepContent.innerHTML = `
         <div class="p-4 rounded-lg bg-slate-800/30 border border-slate-800/70">
           <div class="font-medium text-sm text-slate-200 flex items-center gap-2">
-            <i class="${escapeAttr(typeInfo ? typeInfo.icon : 'fa-solid fa-file')} text-emerald-400"></i>
+            <i class="${escapeAttr(typeInfo ? typeInfo.icon : "fa-solid fa-file")} text-emerald-400"></i>
             ${escapeHtml(wizardConfig.name)}
           </div>
           ${summary}
@@ -2282,47 +2528,51 @@ if __name__ == "__main__":
     }
   }
 
-  function readWizardFormValues(){
-    const nameEl = document.getElementById('wizCfgName');
-    if (nameEl) wizardConfig.name = nameEl.value.trim() || 'my_payload.py';
-    const wifiTimeout = document.getElementById('wizCfgWifiTimeout');
-    if (wifiTimeout) wizardConfig.wifiScanTimeout = parseInt(wifiTimeout.value) || 15;
-    const wifiDeauth = document.getElementById('wizCfgWifiDeauth');
+  function readWizardFormValues() {
+    const nameEl = document.getElementById("wizCfgName");
+    if (nameEl) wizardConfig.name = nameEl.value.trim() || "my_payload.py";
+    const wifiTimeout = document.getElementById("wizCfgWifiTimeout");
+    if (wifiTimeout)
+      wizardConfig.wifiScanTimeout = parseInt(wifiTimeout.value) || 15;
+    const wifiDeauth = document.getElementById("wizCfgWifiDeauth");
     if (wifiDeauth) wizardConfig.wifiDeauth = wifiDeauth.checked;
-    const bleDur = document.getElementById('wizCfgBleDuration');
+    const bleDur = document.getElementById("wizCfgBleDuration");
     if (bleDur) wizardConfig.bleScanDuration = parseInt(bleDur.value) || 10;
-    const bleSpam = document.getElementById('wizCfgBleSpam');
+    const bleSpam = document.getElementById("wizCfgBleSpam");
     if (bleSpam) wizardConfig.bleSpam = bleSpam.checked;
-    const netIface = document.getElementById('wizCfgNetIface');
-    if (netIface) wizardConfig.networkInterface = netIface.value.trim() || 'eth0';
-    const netNmap = document.getElementById('wizCfgNetNmap');
+    const netIface = document.getElementById("wizCfgNetIface");
+    if (netIface)
+      wizardConfig.networkInterface = netIface.value.trim() || "eth0";
+    const netNmap = document.getElementById("wizCfgNetNmap");
     if (netNmap) wizardConfig.networkNmap = netNmap.checked;
-    const honeyPorts = document.getElementById('wizCfgHoneyPorts');
-    if (honeyPorts) wizardConfig.honeypotPorts = honeyPorts.value.trim() || '22, 23, 80, 8080';
-    const honeyDiscord = document.getElementById('wizCfgHoneyDiscord');
+    const honeyPorts = document.getElementById("wizCfgHoneyPorts");
+    if (honeyPorts)
+      wizardConfig.honeypotPorts =
+        honeyPorts.value.trim() || "22, 23, 80, 8080";
+    const honeyDiscord = document.getElementById("wizCfgHoneyDiscord");
     if (honeyDiscord) wizardConfig.honeypotDiscord = honeyDiscord.checked;
-    const utilLcd = document.getElementById('wizCfgUtilLcd');
+    const utilLcd = document.getElementById("wizCfgUtilLcd");
     if (utilLcd) wizardConfig.utilityLcd = utilLcd.checked;
-    const utilBtns = document.getElementById('wizCfgUtilBtns');
+    const utilBtns = document.getElementById("wizCfgUtilBtns");
     if (utilBtns) wizardConfig.utilityButtons = utilBtns.checked;
   }
 
-  function generatePayloadCode(cfg){
+  function generatePayloadCode(cfg) {
     const imports = [
-      '#!/usr/bin/env python3',
+      "#!/usr/bin/env python3",
       '"""',
       `RaspyJack Payload - ${cfg.name}`,
-      'Generated by Raspyjack IDE Studio',
+      "Generated by Raspyjack IDE Studio",
       '"""',
-      '',
-      '# Allow imports of RaspyJack helper modules',
-      'import os, sys',
+      "",
+      "# Allow imports of RaspyJack helper modules",
+      "import os, sys",
       "sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..')))",
-      '',
-      'import time',
-      'import signal',
-      'from payloads._input_helper import get_button',
-    ].join('\n');
+      "",
+      "import time",
+      "import signal",
+      "from payloads._input_helper import get_button",
+    ].join("\n");
 
     const gpioSetup = `
 # GPIO Configuration (BCM numbering)
@@ -2343,7 +2593,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-WIDTH, HEIGHT = 128, 128
+WIDTH, HEIGHT = LCD_1in44.LCD_WIDTH, LCD_1in44.LCD_HEIGHT
 font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 10)
 canvas = Image.new("RGB", (WIDTH, HEIGHT), "black")
 draw = ImageDraw.Draw(canvas)
@@ -2379,13 +2629,13 @@ signal.signal(signal.SIGINT, cleanup)
 signal.signal(signal.SIGTERM, cleanup)
 `;
 
-    let typeCode = '';
-    if (cfg.type === 'wifi'){
+    let typeCode = "";
+    if (cfg.type === "wifi") {
       typeCode = `
 # WiFi Configuration
 SCAN_TIMEOUT = ${cfg.wifiScanTimeout || 15}
 WIFI_INTERFACE = "wlan1"  # External WiFi dongle recommended
-${cfg.wifiDeauth ? 'DEAUTH_ENABLED = True' : 'DEAUTH_ENABLED = False'}
+${cfg.wifiDeauth ? "DEAUTH_ENABLED = True" : "DEAUTH_ENABLED = False"}
 
 def scan_networks():
     """Scan for WiFi networks."""
@@ -2415,11 +2665,11 @@ def main():
             break
         time.sleep(0.05)
 `;
-    } else if (cfg.type === 'ble'){
+    } else if (cfg.type === "ble") {
       typeCode = `
 # BLE Configuration
 SCAN_DURATION = ${cfg.bleScanDuration || 10}
-${cfg.bleSpam ? 'SPAM_MODE = True' : 'SPAM_MODE = False'}
+${cfg.bleSpam ? "SPAM_MODE = True" : "SPAM_MODE = False"}
 
 def scan_ble_devices():
     """Scan for BLE devices."""
@@ -2451,11 +2701,11 @@ def main():
             break
         time.sleep(0.05)
 `;
-    } else if (cfg.type === 'network'){
+    } else if (cfg.type === "network") {
       typeCode = `
 # Network Configuration
-INTERFACE = "${cfg.networkInterface || 'eth0'}"
-${cfg.networkNmap ? 'NMAP_ENABLED = True' : 'NMAP_ENABLED = False'}
+INTERFACE = "${cfg.networkInterface || "eth0"}"
+${cfg.networkNmap ? "NMAP_ENABLED = True" : "NMAP_ENABLED = False"}
 LOOT_DIR = "/root/Raspyjack/loot/Network/"
 
 import subprocess
@@ -2489,11 +2739,11 @@ def main():
             break
         time.sleep(0.05)
 `;
-    } else if (cfg.type === 'honeypot'){
+    } else if (cfg.type === "honeypot") {
       typeCode = `
 # Honeypot Configuration
-PORTS = [${cfg.honeypotPorts || '22, 23, 80, 8080'}]
-${cfg.honeypotDiscord ? 'DISCORD_ENABLED = True' : 'DISCORD_ENABLED = False'}
+PORTS = [${cfg.honeypotPorts || "22, 23, 80, 8080"}]
+${cfg.honeypotDiscord ? "DISCORD_ENABLED = True" : "DISCORD_ENABLED = False"}
 LOOT_DIR = "/root/Raspyjack/loot/honeypot/"
 LOG_FILE = LOOT_DIR + "connections.jsonl"
 
@@ -2580,66 +2830,80 @@ if __name__ == "__main__":
         GPIO.cleanup()
         print("${cfg.name}: exited cleanly.")
 `;
-    return [imports, gpioSetup, lcdSetup, buttonHelper, cleanupHandler, typeCode, mainBlock].join('\n');
+    return [
+      imports,
+      gpioSetup,
+      lcdSetup,
+      buttonHelper,
+      cleanupHandler,
+      typeCode,
+      mainBlock,
+    ].join("\n");
   }
 
-  function wizardGenerate(){
+  function wizardGenerate() {
     readWizardFormValues();
     const code = generatePayloadCode(wizardConfig);
     ensureEditor();
-    if (editor){
+    if (editor) {
       editor.setValue(code);
       setDirty(true);
       // Build a path under the current folder so Save/Run work
-      const filename = wizardConfig.name.endsWith('.py') ? wizardConfig.name : wizardConfig.name + '.py';
-      const savePath = currentFolder ? `${currentFolder}/${filename}` : filename;
+      const filename = wizardConfig.name.endsWith(".py")
+        ? wizardConfig.name
+        : wizardConfig.name + ".py";
+      const savePath = currentFolder
+        ? `${currentFolder}/${filename}`
+        : filename;
       setSelectedPath(savePath);
     }
     closeWizard();
-    setIdeStatus('Payload generated');
+    setIdeStatus("Payload generated");
   }
 
   // =====================================================================
   //  TEMPLATE LIBRARY
   // =====================================================================
-  const templateModal = document.getElementById('templateModal');
-  const templateModalClose = document.getElementById('templateModalClose');
-  const tmplCategoryTabs = document.getElementById('tmplCategoryTabs');
-  const tmplList = document.getElementById('tmplList');
-  const tmplPreviewEmpty = document.getElementById('tmplPreviewEmpty');
-  const tmplPreviewContent = document.getElementById('tmplPreviewContent');
-  const tmplPreviewName = document.getElementById('tmplPreviewName');
-  const tmplPreviewFile = document.getElementById('tmplPreviewFile');
-  const tmplPreviewCode = document.getElementById('tmplPreviewCode');
-  const tmplUseBtn = document.getElementById('tmplUseBtn');
+  const templateModal = document.getElementById("templateModal");
+  const templateModalClose = document.getElementById("templateModalClose");
+  const tmplCategoryTabs = document.getElementById("tmplCategoryTabs");
+  const tmplList = document.getElementById("tmplList");
+  const tmplPreviewEmpty = document.getElementById("tmplPreviewEmpty");
+  const tmplPreviewContent = document.getElementById("tmplPreviewContent");
+  const tmplPreviewName = document.getElementById("tmplPreviewName");
+  const tmplPreviewFile = document.getElementById("tmplPreviewFile");
+  const tmplPreviewCode = document.getElementById("tmplPreviewCode");
+  const tmplUseBtn = document.getElementById("tmplUseBtn");
 
-  let tmplActiveCategory = 'wifi';
+  let tmplActiveCategory = "wifi";
   let tmplSelectedId = null;
 
-  function openTemplateLibrary(){
-    tmplActiveCategory = 'wifi';
+  function openTemplateLibrary() {
+    tmplActiveCategory = "wifi";
     tmplSelectedId = null;
     renderTemplateTabs();
     renderTemplateList();
     renderTemplatePreview();
-    if (templateModal) templateModal.classList.remove('hidden');
+    if (templateModal) templateModal.classList.remove("hidden");
   }
 
-  function closeTemplateLibrary(){
-    if (templateModal) templateModal.classList.add('hidden');
+  function closeTemplateLibrary() {
+    if (templateModal) templateModal.classList.add("hidden");
   }
 
-  function renderTemplateTabs(){
+  function renderTemplateTabs() {
     if (!tmplCategoryTabs) return;
-    tmplCategoryTabs.innerHTML = TEMPLATE_CATEGORIES.map(cat => `
-      <div class="tmpl-category-tab ${tmplActiveCategory === cat.id ? 'active' : ''}" data-tmpl-cat="${escapeAttr(cat.id)}">
+    tmplCategoryTabs.innerHTML = TEMPLATE_CATEGORIES.map(
+      (cat) => `
+      <div class="tmpl-category-tab ${tmplActiveCategory === cat.id ? "active" : ""}" data-tmpl-cat="${escapeAttr(cat.id)}">
         <i class="${escapeAttr(cat.icon)} text-[10px]"></i>
         <span class="hidden sm:inline ml-1">${escapeHtml(cat.name)}</span>
       </div>
-    `).join('');
-    tmplCategoryTabs.querySelectorAll('.tmpl-category-tab').forEach(tab => {
-      tab.addEventListener('click', () => {
-        tmplActiveCategory = tab.getAttribute('data-tmpl-cat');
+    `,
+    ).join("");
+    tmplCategoryTabs.querySelectorAll(".tmpl-category-tab").forEach((tab) => {
+      tab.addEventListener("click", () => {
+        tmplActiveCategory = tab.getAttribute("data-tmpl-cat");
         tmplSelectedId = null;
         renderTemplateTabs();
         renderTemplateList();
@@ -2648,62 +2912,68 @@ if __name__ == "__main__":
     });
   }
 
-  function renderTemplateList(){
+  function renderTemplateList() {
     if (!tmplList) return;
-    const filtered = TEMPLATES_DATA.filter(t => t.category === tmplActiveCategory);
-    tmplList.innerHTML = filtered.map(t => {
-      const cat = TEMPLATE_CATEGORIES.find(c => c.id === t.category);
-      return `
-        <div class="tmpl-card ${tmplSelectedId === t.id ? 'selected' : ''}" data-tmpl-id="${escapeAttr(t.id)}">
+    const filtered = TEMPLATES_DATA.filter(
+      (t) => t.category === tmplActiveCategory,
+    );
+    tmplList.innerHTML = filtered
+      .map((t) => {
+        const cat = TEMPLATE_CATEGORIES.find((c) => c.id === t.category);
+        return `
+        <div class="tmpl-card ${tmplSelectedId === t.id ? "selected" : ""}" data-tmpl-id="${escapeAttr(t.id)}">
           <div class="flex items-start gap-2">
-            <i class="${escapeAttr(cat ? cat.icon : 'fa-solid fa-file')} text-xs mt-0.5 ${tmplSelectedId === t.id ? 'text-emerald-400' : 'text-slate-400'}"></i>
+            <i class="${escapeAttr(cat ? cat.icon : "fa-solid fa-file")} text-xs mt-0.5 ${tmplSelectedId === t.id ? "text-emerald-400" : "text-slate-400"}"></i>
             <div class="flex-1 min-w-0">
               <div class="flex items-center gap-2">
                 <span class="text-xs font-medium text-slate-200">${escapeHtml(t.name)}</span>
-                ${tmplSelectedId === t.id ? '<i class="fa-solid fa-check text-emerald-400 text-[10px]"></i>' : ''}
+                ${tmplSelectedId === t.id ? '<i class="fa-solid fa-check text-emerald-400 text-[10px]"></i>' : ""}
               </div>
               <div class="text-[10px] text-slate-400 line-clamp-2">${escapeHtml(t.description)}</div>
               <div class="text-[9px] font-mono text-emerald-400/60 mt-0.5">${escapeHtml(t.filename)}</div>
             </div>
           </div>
         </div>`;
-    }).join('');
-    tmplList.querySelectorAll('.tmpl-card').forEach(card => {
-      card.addEventListener('click', () => {
-        tmplSelectedId = card.getAttribute('data-tmpl-id');
+      })
+      .join("");
+    tmplList.querySelectorAll(".tmpl-card").forEach((card) => {
+      card.addEventListener("click", () => {
+        tmplSelectedId = card.getAttribute("data-tmpl-id");
         renderTemplateList();
         renderTemplatePreview();
       });
     });
   }
 
-  function renderTemplatePreview(){
-    const tmpl = TEMPLATES_DATA.find(t => t.id === tmplSelectedId);
-    if (!tmpl){
-      if (tmplPreviewEmpty) tmplPreviewEmpty.classList.remove('hidden');
-      if (tmplPreviewContent) tmplPreviewContent.classList.add('hidden');
+  function renderTemplatePreview() {
+    const tmpl = TEMPLATES_DATA.find((t) => t.id === tmplSelectedId);
+    if (!tmpl) {
+      if (tmplPreviewEmpty) tmplPreviewEmpty.classList.remove("hidden");
+      if (tmplPreviewContent) tmplPreviewContent.classList.add("hidden");
       return;
     }
-    if (tmplPreviewEmpty) tmplPreviewEmpty.classList.add('hidden');
-    if (tmplPreviewContent) tmplPreviewContent.classList.remove('hidden');
+    if (tmplPreviewEmpty) tmplPreviewEmpty.classList.add("hidden");
+    if (tmplPreviewContent) tmplPreviewContent.classList.remove("hidden");
     if (tmplPreviewName) tmplPreviewName.textContent = tmpl.name;
     if (tmplPreviewFile) tmplPreviewFile.textContent = tmpl.filename;
     if (tmplPreviewCode) tmplPreviewCode.textContent = tmpl.code;
   }
 
-  function useSelectedTemplate(){
-    const tmpl = TEMPLATES_DATA.find(t => t.id === tmplSelectedId);
+  function useSelectedTemplate() {
+    const tmpl = TEMPLATES_DATA.find((t) => t.id === tmplSelectedId);
     if (!tmpl) return;
     ensureEditor();
-    if (editor){
+    if (editor) {
       editor.setValue(tmpl.code);
       setDirty(true);
       // Build a path under the current folder so Save/Run work
-      const savePath = currentFolder ? `${currentFolder}/${tmpl.filename}` : tmpl.filename;
+      const savePath = currentFolder
+        ? `${currentFolder}/${tmpl.filename}`
+        : tmpl.filename;
       setSelectedPath(savePath);
     }
     closeTemplateLibrary();
-    setIdeStatus('Template loaded');
+    setIdeStatus("Template loaded");
   }
 
   // =====================================================================
@@ -2712,274 +2982,367 @@ if __name__ == "__main__":
   let gpioPanelEl = null;
   let gpioPanelVisible = false;
 
-  function initGpioPanel(){
-    const template = document.getElementById('gpioPanelTemplate');
+  function initGpioPanel() {
+    const template = document.getElementById("gpioPanelTemplate");
     if (!template) return;
     const clone = template.content.cloneNode(true);
-    gpioPanelEl = clone.querySelector('#gpioPanel');
+    gpioPanelEl = clone.querySelector("#gpioPanel");
     // Insert into main layout before the right preview section
-    const mainEl = document.querySelector('main');
-    const previewSection = mainEl ? mainEl.querySelector('section:last-child') : null;
-    if (mainEl && previewSection){
+    const mainEl = document.querySelector("main");
+    const previewSection = mainEl
+      ? mainEl.querySelector("section:last-child")
+      : null;
+    if (mainEl && previewSection) {
       mainEl.insertBefore(gpioPanelEl, previewSection);
     }
     // Wire section toggles
-    if (gpioPanelEl){
-      gpioPanelEl.querySelectorAll('.gpio-section-header').forEach(header => {
-        header.addEventListener('click', () => {
-          const section = header.getAttribute('data-gpio-section');
-          const body = gpioPanelEl.querySelector(`[data-gpio-body="${section}"]`);
-          const chevron = header.querySelector('.gpio-chevron');
-          if (body){
-            body.classList.toggle('hidden');
-            if (chevron){
-              chevron.classList.toggle('fa-chevron-down', !body.classList.contains('hidden'));
-              chevron.classList.toggle('fa-chevron-right', body.classList.contains('hidden'));
-              chevron.classList.toggle('text-emerald-400', !body.classList.contains('hidden'));
-              chevron.classList.toggle('text-slate-400', body.classList.contains('hidden'));
+    if (gpioPanelEl) {
+      gpioPanelEl.querySelectorAll(".gpio-section-header").forEach((header) => {
+        header.addEventListener("click", () => {
+          const section = header.getAttribute("data-gpio-section");
+          const body = gpioPanelEl.querySelector(
+            `[data-gpio-body="${section}"]`,
+          );
+          const chevron = header.querySelector(".gpio-chevron");
+          if (body) {
+            body.classList.toggle("hidden");
+            if (chevron) {
+              chevron.classList.toggle(
+                "fa-chevron-down",
+                !body.classList.contains("hidden"),
+              );
+              chevron.classList.toggle(
+                "fa-chevron-right",
+                body.classList.contains("hidden"),
+              );
+              chevron.classList.toggle(
+                "text-emerald-400",
+                !body.classList.contains("hidden"),
+              );
+              chevron.classList.toggle(
+                "text-slate-400",
+                body.classList.contains("hidden"),
+              );
             }
           }
         });
       });
       // Wire copy buttons
-      gpioPanelEl.querySelectorAll('.copy-btn').forEach(btn => {
-        btn.addEventListener('click', (e) => {
+      gpioPanelEl.querySelectorAll(".copy-btn").forEach((btn) => {
+        btn.addEventListener("click", (e) => {
           e.stopPropagation();
-          const codeBlock = btn.closest('.gpio-code-block');
-          if (codeBlock){
+          const codeBlock = btn.closest(".gpio-code-block");
+          if (codeBlock) {
             // Get text content without the button text
             const text = codeBlock.childNodes[0].textContent.trim();
             navigator.clipboard.writeText(text).then(() => {
-              btn.innerHTML = '<i class="fa-solid fa-check text-emerald-400"></i>';
-              setTimeout(() => { btn.innerHTML = '<i class="fa-regular fa-copy"></i>'; }, 1500);
+              btn.innerHTML =
+                '<i class="fa-solid fa-check text-emerald-400"></i>';
+              setTimeout(() => {
+                btn.innerHTML = '<i class="fa-regular fa-copy"></i>';
+              }, 1500);
             });
           }
         });
       });
       // Wire close button
-      const closeBtn = gpioPanelEl.querySelector('#gpioPanelClose');
-      if (closeBtn){
-        closeBtn.addEventListener('click', () => toggleGpioPanel());
+      const closeBtn = gpioPanelEl.querySelector("#gpioPanelClose");
+      if (closeBtn) {
+        closeBtn.addEventListener("click", () => toggleGpioPanel());
       }
     }
   }
 
-  function toggleGpioPanel(){
+  function toggleGpioPanel() {
     if (!gpioPanelEl) initGpioPanel();
     if (!gpioPanelEl) return;
     gpioPanelVisible = !gpioPanelVisible;
-    gpioPanelEl.classList.toggle('hidden', !gpioPanelVisible);
-    gpioPanelEl.classList.toggle('flex', gpioPanelVisible);
+    gpioPanelEl.classList.toggle("hidden", !gpioPanelVisible);
+    gpioPanelEl.classList.toggle("flex", gpioPanelVisible);
     // Update toolbar button active state
-    const gpioToggleBtn = document.getElementById('gpioToggleBtn');
-    if (gpioToggleBtn) gpioToggleBtn.classList.toggle('active', gpioPanelVisible);
+    const gpioToggleBtn = document.getElementById("gpioToggleBtn");
+    if (gpioToggleBtn)
+      gpioToggleBtn.classList.toggle("active", gpioPanelVisible);
   }
 
   // =====================================================================
   //  TOOLBAR WIRING
   // =====================================================================
-  const wizardBtn = document.getElementById('wizardBtn');
-  const templatesBtn = document.getElementById('templatesBtn');
-  const gpioToggleBtnEl = document.getElementById('gpioToggleBtn');
+  const wizardBtn = document.getElementById("wizardBtn");
+  const templatesBtn = document.getElementById("templatesBtn");
+  const gpioToggleBtnEl = document.getElementById("gpioToggleBtn");
 
-  if (wizardBtn) wizardBtn.addEventListener('click', () => openWizard());
-  if (templatesBtn) templatesBtn.addEventListener('click', () => openTemplateLibrary());
-  if (gpioToggleBtnEl) gpioToggleBtnEl.addEventListener('click', () => toggleGpioPanel());
+  if (wizardBtn) wizardBtn.addEventListener("click", () => openWizard());
+  if (templatesBtn)
+    templatesBtn.addEventListener("click", () => openTemplateLibrary());
+  if (gpioToggleBtnEl)
+    gpioToggleBtnEl.addEventListener("click", () => toggleGpioPanel());
 
   // Wizard modal events
-  if (wizardModalClose) wizardModalClose.addEventListener('click', () => closeWizard());
-  if (wizardModal) wizardModal.addEventListener('click', (e) => { if (e.target === wizardModal) closeWizard(); });
-  if (wizardBackBtn) wizardBackBtn.addEventListener('click', () => {
-    if (wizardStep === 2) readWizardFormValues();
-    wizardStep = Math.max(1, wizardStep - 1);
-    renderWizardStep();
-  });
-  if (wizardNextBtn) wizardNextBtn.addEventListener('click', () => {
-    if (wizardStep === 2) readWizardFormValues();
-    wizardStep = Math.min(3, wizardStep + 1);
-    renderWizardStep();
-  });
-  if (wizardGenerateBtn) wizardGenerateBtn.addEventListener('click', () => wizardGenerate());
+  if (wizardModalClose)
+    wizardModalClose.addEventListener("click", () => closeWizard());
+  if (wizardModal)
+    wizardModal.addEventListener("click", (e) => {
+      if (e.target === wizardModal) closeWizard();
+    });
+  if (wizardBackBtn)
+    wizardBackBtn.addEventListener("click", () => {
+      if (wizardStep === 2) readWizardFormValues();
+      wizardStep = Math.max(1, wizardStep - 1);
+      renderWizardStep();
+    });
+  if (wizardNextBtn)
+    wizardNextBtn.addEventListener("click", () => {
+      if (wizardStep === 2) readWizardFormValues();
+      wizardStep = Math.min(3, wizardStep + 1);
+      renderWizardStep();
+    });
+  if (wizardGenerateBtn)
+    wizardGenerateBtn.addEventListener("click", () => wizardGenerate());
 
   // Template modal events
-  if (templateModalClose) templateModalClose.addEventListener('click', () => closeTemplateLibrary());
-  if (templateModal) templateModal.addEventListener('click', (e) => { if (e.target === templateModal) closeTemplateLibrary(); });
-  if (tmplUseBtn) tmplUseBtn.addEventListener('click', () => useSelectedTemplate());
+  if (templateModalClose)
+    templateModalClose.addEventListener("click", () => closeTemplateLibrary());
+  if (templateModal)
+    templateModal.addEventListener("click", (e) => {
+      if (e.target === templateModal) closeTemplateLibrary();
+    });
+  if (tmplUseBtn)
+    tmplUseBtn.addEventListener("click", () => useSelectedTemplate());
 
   // ------------------------ Event bindings ------------------------
-  if (refreshTreeBtn) refreshTreeBtn.addEventListener('click', () => loadTree());
-  if (newFileBtn) newFileBtn.addEventListener('click', () => createEntry('file'));
-  if (newFolderBtn) newFolderBtn.addEventListener('click', () => createEntry('dir'));
-  if (saveBtn) saveBtn.addEventListener('click', () => saveCurrentFile());
-  if (runBtn) runBtn.addEventListener('click', () => runCurrentPayload());
-  if (stopBtn) stopBtn.addEventListener('click', () => stopCurrentPayload());
-  if (restartUiBtn) restartUiBtn.addEventListener('click', () => restartUi());
+  if (refreshTreeBtn)
+    refreshTreeBtn.addEventListener("click", () => loadTree());
+  if (newFileBtn)
+    newFileBtn.addEventListener("click", () => createEntry("file"));
+  if (newFolderBtn)
+    newFolderBtn.addEventListener("click", () => createEntry("dir"));
+  if (saveBtn) saveBtn.addEventListener("click", () => saveCurrentFile());
+  if (runBtn) runBtn.addEventListener("click", () => runCurrentPayload());
+  if (stopBtn) stopBtn.addEventListener("click", () => stopCurrentPayload());
+  if (restartUiBtn) restartUiBtn.addEventListener("click", () => restartUi());
 
   // Context menu for rename/delete on files and folders
-  if (treeContainer){
-    treeContainer.addEventListener('contextmenu', (e) => {
-      const node = e.target.closest('.file-node, .folder-node');
+  if (treeContainer) {
+    treeContainer.addEventListener("contextmenu", (e) => {
+      const node = e.target.closest(".file-node, .folder-node");
       if (!node) return;
       e.preventDefault();
-      const path = node.getAttribute('data-path') || '';
+      const path = node.getAttribute("data-path") || "";
       if (!path) return;
-      const type = node.classList.contains('folder-node') ? 'dir' : 'file';
+      const type = node.classList.contains("folder-node") ? "dir" : "file";
       showContextMenu(e.clientX, e.clientY, path, type);
     });
   }
 
-  if (ctxRenameBtn){
-    ctxRenameBtn.addEventListener('click', () => {
-      if (ctxTargetPath){
+  if (ctxRenameBtn) {
+    ctxRenameBtn.addEventListener("click", () => {
+      if (ctxTargetPath) {
         renameEntry(ctxTargetPath);
       }
       hideContextMenu();
     });
   }
 
-  if (ctxDeleteBtn){
-    ctxDeleteBtn.addEventListener('click', () => {
-      if (ctxTargetPath){
+  if (ctxDeleteBtn) {
+    ctxDeleteBtn.addEventListener("click", () => {
+      if (ctxTargetPath) {
         deleteEntry(ctxTargetPath);
       }
       hideContextMenu();
     });
   }
 
-  document.addEventListener('click', (e) => {
-    if (!treeContextMenu || treeContextMenu.classList.contains('hidden')) return;
-    if (!e.target.closest('#treeContextMenuPanel')){
+  document.addEventListener("click", (e) => {
+    if (!treeContextMenu || treeContextMenu.classList.contains("hidden"))
+      return;
+    if (!e.target.closest("#treeContextMenuPanel")) {
       hideContextMenu();
     }
   });
 
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape'){
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
       hideContextMenu();
       closeWizard();
       closeTemplateLibrary();
     }
   });
 
-  window.addEventListener('scroll', () => {
-    hideContextMenu();
-  }, true);
+  window.addEventListener(
+    "scroll",
+    () => {
+      hideContextMenu();
+    },
+    true,
+  );
 
-  if (entryModalCancel) entryModalCancel.addEventListener('click', () => closeEntryModal());
-  if (entryModalClose) entryModalClose.addEventListener('click', () => closeEntryModal());
-  if (entryModalConfirm) entryModalConfirm.addEventListener('click', () => handleEntryConfirm());
-  if (entryModal && entryModalName){
-    entryModal.addEventListener('click', (e) => {
+  if (entryModalCancel)
+    entryModalCancel.addEventListener("click", () => closeEntryModal());
+  if (entryModalClose)
+    entryModalClose.addEventListener("click", () => closeEntryModal());
+  if (entryModalConfirm)
+    entryModalConfirm.addEventListener("click", () => handleEntryConfirm());
+  if (entryModal && entryModalName) {
+    entryModal.addEventListener("click", (e) => {
       if (e.target === entryModal) closeEntryModal();
     });
-    entryModalName.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter'){
+    entryModalName.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
         e.preventDefault();
         handleEntryConfirm();
-      } else if (e.key === 'Escape'){
+      } else if (e.key === "Escape") {
         e.preventDefault();
         closeEntryModal();
       }
     });
   }
 
-  if (renameModalCancel) renameModalCancel.addEventListener('click', () => closeRenameModal());
-  if (renameModalClose) renameModalClose.addEventListener('click', () => closeRenameModal());
-  if (renameModalConfirm) renameModalConfirm.addEventListener('click', () => handleRenameConfirm());
-  if (renameModal && renameModalName){
-    renameModal.addEventListener('click', (e) => {
+  if (renameModalCancel)
+    renameModalCancel.addEventListener("click", () => closeRenameModal());
+  if (renameModalClose)
+    renameModalClose.addEventListener("click", () => closeRenameModal());
+  if (renameModalConfirm)
+    renameModalConfirm.addEventListener("click", () => handleRenameConfirm());
+  if (renameModal && renameModalName) {
+    renameModal.addEventListener("click", (e) => {
       if (e.target === renameModal) closeRenameModal();
     });
-    renameModalName.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter'){
+    renameModalName.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
         e.preventDefault();
         handleRenameConfirm();
-      } else if (e.key === 'Escape'){
+      } else if (e.key === "Escape") {
         e.preventDefault();
         closeRenameModal();
       }
     });
   }
 
-  if (deleteModalCancel) deleteModalCancel.addEventListener('click', () => closeDeleteModal());
-  if (deleteModalClose) deleteModalClose.addEventListener('click', () => closeDeleteModal());
-  if (deleteModalConfirm) deleteModalConfirm.addEventListener('click', () => handleDeleteConfirm());
-  if (deleteModal){
-    deleteModal.addEventListener('click', (e) => {
+  if (deleteModalCancel)
+    deleteModalCancel.addEventListener("click", () => closeDeleteModal());
+  if (deleteModalClose)
+    deleteModalClose.addEventListener("click", () => closeDeleteModal());
+  if (deleteModalConfirm)
+    deleteModalConfirm.addEventListener("click", () => handleDeleteConfirm());
+  if (deleteModal) {
+    deleteModal.addEventListener("click", (e) => {
       if (e.target === deleteModal) closeDeleteModal();
     });
-    deleteModal.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape'){
+    deleteModal.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
         e.preventDefault();
         closeDeleteModal();
       }
     });
   }
-  if (restartUiModalConfirm) restartUiModalConfirm.addEventListener('click', () => resolveRestartUiPrompt(true));
-  if (restartUiModalCancel) restartUiModalCancel.addEventListener('click', () => resolveRestartUiPrompt(false));
-  if (restartUiModalClose) restartUiModalClose.addEventListener('click', () => resolveRestartUiPrompt(false));
-  if (restartUiModal) restartUiModal.addEventListener('click', (e) => {
-    if (e.target === restartUiModal) resolveRestartUiPrompt(false);
-  });
-  if (unsavedModalConfirm) unsavedModalConfirm.addEventListener('click', () => resolveUnsavedPrompt(true));
-  if (unsavedModalCancel) unsavedModalCancel.addEventListener('click', () => resolveUnsavedPrompt(false));
-  if (unsavedModalClose) unsavedModalClose.addEventListener('click', () => resolveUnsavedPrompt(false));
-  if (unsavedModal) unsavedModal.addEventListener('click', (e) => {
-    if (e.target === unsavedModal) resolveUnsavedPrompt(false);
-  });
-  if (saveBeforeRunModalConfirm) saveBeforeRunModalConfirm.addEventListener('click', () => resolveSaveBeforeRunPrompt(true));
-  if (saveBeforeRunModalCancel) saveBeforeRunModalCancel.addEventListener('click', () => resolveSaveBeforeRunPrompt(false));
-  if (saveBeforeRunModalClose) saveBeforeRunModalClose.addEventListener('click', () => resolveSaveBeforeRunPrompt(false));
-  if (saveBeforeRunModal) saveBeforeRunModal.addEventListener('click', (e) => {
-    if (e.target === saveBeforeRunModal) resolveSaveBeforeRunPrompt(false);
-  });
-  if (noticeModalConfirm) noticeModalConfirm.addEventListener('click', () => resolveNoticePrompt());
-  if (noticeModalClose) noticeModalClose.addEventListener('click', () => resolveNoticePrompt());
-  if (noticeModal) noticeModal.addEventListener('click', (e) => {
-    if (e.target === noticeModal) resolveNoticePrompt();
-  });
-  if (authModalConfirm) authModalConfirm.addEventListener('click', () => {
-    resolveAuthPrompt({
-      recovery: authRecoveryMode,
-      token: authModalToken ? authModalToken.value : '',
-      username: authModalUsername ? authModalUsername.value : '',
-      password: authModalPassword ? authModalPassword.value : '',
-      confirm: authModalPasswordConfirm ? authModalPasswordConfirm.value : '',
+  if (restartUiModalConfirm)
+    restartUiModalConfirm.addEventListener("click", () =>
+      resolveRestartUiPrompt(true),
+    );
+  if (restartUiModalCancel)
+    restartUiModalCancel.addEventListener("click", () =>
+      resolveRestartUiPrompt(false),
+    );
+  if (restartUiModalClose)
+    restartUiModalClose.addEventListener("click", () =>
+      resolveRestartUiPrompt(false),
+    );
+  if (restartUiModal)
+    restartUiModal.addEventListener("click", (e) => {
+      if (e.target === restartUiModal) resolveRestartUiPrompt(false);
     });
-  });
-  if (authModalCancel) authModalCancel.addEventListener('click', () => resolveAuthPrompt(null));
-  if (authModalClose) authModalClose.addEventListener('click', () => resolveAuthPrompt(null));
-  if (authModal) authModal.addEventListener('click', (e) => {
-    if (e.target === authModal) resolveAuthPrompt(null);
-  });
-  if (authModalToggleRecovery) authModalToggleRecovery.addEventListener('click', () => {
-    setRecoveryMode(!authRecoveryMode);
-  });
+  if (unsavedModalConfirm)
+    unsavedModalConfirm.addEventListener("click", () =>
+      resolveUnsavedPrompt(true),
+    );
+  if (unsavedModalCancel)
+    unsavedModalCancel.addEventListener("click", () =>
+      resolveUnsavedPrompt(false),
+    );
+  if (unsavedModalClose)
+    unsavedModalClose.addEventListener("click", () =>
+      resolveUnsavedPrompt(false),
+    );
+  if (unsavedModal)
+    unsavedModal.addEventListener("click", (e) => {
+      if (e.target === unsavedModal) resolveUnsavedPrompt(false);
+    });
+  if (saveBeforeRunModalConfirm)
+    saveBeforeRunModalConfirm.addEventListener("click", () =>
+      resolveSaveBeforeRunPrompt(true),
+    );
+  if (saveBeforeRunModalCancel)
+    saveBeforeRunModalCancel.addEventListener("click", () =>
+      resolveSaveBeforeRunPrompt(false),
+    );
+  if (saveBeforeRunModalClose)
+    saveBeforeRunModalClose.addEventListener("click", () =>
+      resolveSaveBeforeRunPrompt(false),
+    );
+  if (saveBeforeRunModal)
+    saveBeforeRunModal.addEventListener("click", (e) => {
+      if (e.target === saveBeforeRunModal) resolveSaveBeforeRunPrompt(false);
+    });
+  if (noticeModalConfirm)
+    noticeModalConfirm.addEventListener("click", () => resolveNoticePrompt());
+  if (noticeModalClose)
+    noticeModalClose.addEventListener("click", () => resolveNoticePrompt());
+  if (noticeModal)
+    noticeModal.addEventListener("click", (e) => {
+      if (e.target === noticeModal) resolveNoticePrompt();
+    });
+  if (authModalConfirm)
+    authModalConfirm.addEventListener("click", () => {
+      resolveAuthPrompt({
+        recovery: authRecoveryMode,
+        token: authModalToken ? authModalToken.value : "",
+        username: authModalUsername ? authModalUsername.value : "",
+        password: authModalPassword ? authModalPassword.value : "",
+        confirm: authModalPasswordConfirm ? authModalPasswordConfirm.value : "",
+      });
+    });
+  if (authModalCancel)
+    authModalCancel.addEventListener("click", () => resolveAuthPrompt(null));
+  if (authModalClose)
+    authModalClose.addEventListener("click", () => resolveAuthPrompt(null));
+  if (authModal)
+    authModal.addEventListener("click", (e) => {
+      if (e.target === authModal) resolveAuthPrompt(null);
+    });
+  if (authModalToggleRecovery)
+    authModalToggleRecovery.addEventListener("click", () => {
+      setRecoveryMode(!authRecoveryMode);
+    });
   const authSubmitFromEnter = (e) => {
-    if (e.key === 'Enter'){
+    if (e.key === "Enter") {
       e.preventDefault();
       resolveAuthPrompt({
         recovery: authRecoveryMode,
-        token: authModalToken ? authModalToken.value : '',
-        username: authModalUsername ? authModalUsername.value : '',
-        password: authModalPassword ? authModalPassword.value : '',
-        confirm: authModalPasswordConfirm ? authModalPasswordConfirm.value : '',
+        token: authModalToken ? authModalToken.value : "",
+        username: authModalUsername ? authModalUsername.value : "",
+        password: authModalPassword ? authModalPassword.value : "",
+        confirm: authModalPasswordConfirm ? authModalPasswordConfirm.value : "",
       });
-    } else if (e.key === 'Escape'){
+    } else if (e.key === "Escape") {
       e.preventDefault();
       resolveAuthPrompt(null);
     }
   };
-  if (authModalToken) authModalToken.addEventListener('keydown', authSubmitFromEnter);
-  if (authModalUsername) authModalUsername.addEventListener('keydown', authSubmitFromEnter);
-  if (authModalPassword) authModalPassword.addEventListener('keydown', authSubmitFromEnter);
-  if (authModalPasswordConfirm) authModalPasswordConfirm.addEventListener('keydown', authSubmitFromEnter);
+  if (authModalToken)
+    authModalToken.addEventListener("keydown", authSubmitFromEnter);
+  if (authModalUsername)
+    authModalUsername.addEventListener("keydown", authSubmitFromEnter);
+  if (authModalPassword)
+    authModalPassword.addEventListener("keydown", authSubmitFromEnter);
+  if (authModalPasswordConfirm)
+    authModalPasswordConfirm.addEventListener("keydown", authSubmitFromEnter);
 
-  window.addEventListener('beforeunload', (e) => {
-    if (isDirty){
+  window.addEventListener("beforeunload", (e) => {
+    if (isDirty) {
       e.preventDefault();
-      e.returnValue = '';
-      return '';
+      e.returnValue = "";
+      return "";
     }
   });
 
@@ -2988,17 +3351,17 @@ if __name__ == "__main__":
   let startX = 0;
   let startWidth = 0;
 
-  function startResize(e){
+  function startResize(e) {
     if (!leftPanel) return;
     isResizing = true;
     startX = e.clientX || (e.touches && e.touches[0].clientX) || 0;
     startWidth = leftPanel.offsetWidth;
-    document.body.style.cursor = 'col-resize';
-    document.body.style.userSelect = 'none';
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
     e.preventDefault();
   }
 
-  function doResize(e){
+  function doResize(e) {
     if (!isResizing || !leftPanel) return;
     const currentX = e.clientX || (e.touches && e.touches[0].clientX) || 0;
     const diff = currentX - startX;
@@ -3007,25 +3370,25 @@ if __name__ == "__main__":
     const maxWidth = window.innerWidth * 0.5; // Max 50% of window width
     const clampedWidth = Math.max(minWidth, Math.min(maxWidth, newWidth));
     leftPanel.style.width = `${clampedWidth}px`;
-    leftPanel.style.flexShrink = '0';
+    leftPanel.style.flexShrink = "0";
     e.preventDefault();
   }
 
-  function stopResize(){
+  function stopResize() {
     isResizing = false;
-    document.body.style.cursor = '';
-    document.body.style.userSelect = '';
+    document.body.style.cursor = "";
+    document.body.style.userSelect = "";
   }
 
-  if (resizeHandle && leftPanel){
-    resizeHandle.addEventListener('mousedown', startResize);
-    resizeHandle.addEventListener('touchstart', startResize);
-    document.addEventListener('mousemove', doResize);
-    document.addEventListener('touchmove', doResize);
-    document.addEventListener('mouseup', stopResize);
-    document.addEventListener('touchend', stopResize);
+  if (resizeHandle && leftPanel) {
+    resizeHandle.addEventListener("mousedown", startResize);
+    resizeHandle.addEventListener("touchstart", startResize);
+    document.addEventListener("mousemove", doResize);
+    document.addEventListener("touchmove", doResize);
+    document.addEventListener("mouseup", stopResize);
+    document.addEventListener("touchend", stopResize);
   }
-  if (logoutBtn) logoutBtn.addEventListener('click', logoutUser);
+  if (logoutBtn) logoutBtn.addEventListener("click", logoutUser);
 
   // ------------------------ Init ------------------------
   loadAuthToken();
@@ -3035,7 +3398,7 @@ if __name__ == "__main__":
 
   let payloadPollTimer = null;
 
-  function schedulePayloadPoll(){
+  function schedulePayloadPoll() {
     if (payloadPollTimer) clearTimeout(payloadPollTimer);
     const delay = document.hidden ? 6000 : 1500;
     payloadPollTimer = setTimeout(async () => {
@@ -3044,16 +3407,16 @@ if __name__ == "__main__":
     }, delay);
   }
 
-  document.addEventListener('visibilitychange', () => {
-    if (!document.hidden){
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) {
       pollPayloadStatus();
     }
     schedulePayloadPoll();
   });
 
   const startAfterAuth = () => {
-    ensureAuthenticated('Log in to access Payload Studio.').then((ok) => {
-      if (!ok){
+    ensureAuthenticated("Log in to access Payload Studio.").then((ok) => {
+      if (!ok) {
         setTimeout(startAfterAuth, 0);
         return;
       }
@@ -3066,4 +3429,3 @@ if __name__ == "__main__":
   };
   startAfterAuth();
 })();
-

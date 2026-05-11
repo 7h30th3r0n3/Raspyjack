@@ -80,8 +80,9 @@ def _mirror_daemon(fb_path, fb_w, fb_h):
     """Daemon: read LCD fb and pipe to mpv on HDMI. No LCD interaction."""
     fb_size = fb_w * fb_h * 2
 
-    # Stop lightdm if running
+    # Free HDMI: stop display manager and console
     subprocess.run(["systemctl", "stop", "lightdm"], capture_output=True)
+    subprocess.run(["systemctl", "stop", "getty@tty1"], capture_output=True)
     time.sleep(0.5)
 
     cmd = [
@@ -135,6 +136,91 @@ def _mirror_daemon(fb_path, fb_w, fb_h):
             pass
 
 
+
+def _mirror_daemon_jpeg():
+    """Daemon: read raw LCD RGB frame, upscale, write to HDMI framebuffer."""
+    RAW_PATH = "/dev/shm/raspyjack_raw.rgb"
+    from PIL import Image as PILImage
+    import numpy as np
+
+    subprocess.run(["systemctl", "stop", "lightdm"], capture_output=True)
+    subprocess.run(["systemctl", "stop", "getty@tty1"], capture_output=True)
+    subprocess.run(["xrandr", "--output", "HDMI-1", "--mode", "640x480"], capture_output=True)
+    time.sleep(0.5)
+
+    with open(MIRROR_PID_FILE, "w") as f:
+        f.write(str(os.getpid()))
+
+    # Find HDMI framebuffer
+    hdmi_fb = None
+    hdmi_w, hdmi_h, hdmi_bpp = 0, 0, 16
+    for i in range(4):
+        try:
+            with open(f"/sys/class/graphics/fb{i}/name") as fn:
+                name = fn.read().strip()
+            if "vc4" in name or "drm" in name:
+                hdmi_fb = f"/dev/fb{i}"
+                with open(f"/sys/class/graphics/fb{i}/virtual_size") as vs:
+                    parts = vs.read().strip().split(",")
+                    hdmi_w, hdmi_h = int(parts[0]), int(parts[1])
+                with open(f"/sys/class/graphics/fb{i}/bits_per_pixel") as bp:
+                    hdmi_bpp = int(bp.read().strip())
+                break
+        except Exception:
+            pass
+
+    if not hdmi_fb:
+        return
+
+    fb_size = hdmi_w * hdmi_h * (hdmi_bpp // 8)
+    fd = os.open(hdmi_fb, os.O_RDWR)
+    fb = mmap.mmap(fd, fb_size, mmap.MAP_SHARED, mmap.PROT_WRITE | mmap.PROT_READ)
+
+    # Detect LCD resolution from first raw frame
+    lcd_w, lcd_h = 128, 128
+    try:
+        import LCD_1in44
+        lcd_w, lcd_h = LCD_1in44.LCD_WIDTH, LCD_1in44.LCD_HEIGHT
+    except Exception:
+        pass
+    raw_size = lcd_w * lcd_h * 3
+
+    frame_interval = 1.0 / 12
+
+    try:
+        while True:
+            t0 = time.monotonic()
+            try:
+                with open(RAW_PATH, "rb") as rf:
+                    raw = rf.read()
+                if len(raw) == raw_size:
+                    img = PILImage.frombytes("RGB", (lcd_w, lcd_h), raw)
+                    img = img.resize((hdmi_w, hdmi_h), PILImage.BILINEAR)
+                    arr = np.asarray(img)
+                    if hdmi_bpp == 16:
+                        r = (arr[..., 0].astype(np.uint16) >> 3) << 11
+                        g = (arr[..., 1].astype(np.uint16) >> 2) << 5
+                        b = arr[..., 2].astype(np.uint16) >> 3
+                        pixels = (r | g | b).astype(np.uint16).tobytes()
+                    else:
+                        pixels = arr.tobytes()
+                    fb.seek(0)
+                    fb.write(pixels)
+            except Exception:
+                pass
+            elapsed = time.monotonic() - t0
+            if elapsed < frame_interval:
+                time.sleep(frame_interval - elapsed)
+    except (KeyboardInterrupt, SystemExit):
+        pass
+    finally:
+        fb.close()
+        os.close(fd)
+        try:
+            os.unlink(MIRROR_PID_FILE)
+        except Exception:
+            pass
+
 def main():
     running, pid = _is_running()
 
@@ -150,27 +236,31 @@ def main():
         _show_msg("HDMI Mirror", "OFF", (255, 60, 60))
         return 0
 
-    # Toggle ON: start mirror daemon
-    fb_path, fb_w, fb_h = _find_lcd_fb()
-    if not fb_path:
-        _show_msg("HDMI Mirror", "No LCD FB!", (255, 60, 60))
-        return 1
-
+    # Toggle ON
     if not _check_hdmi():
         _show_msg("HDMI Mirror", "No HDMI cable!", (255, 200, 0))
         return 1
 
-    # Fork into background
+    fb_path, fb_w, fb_h = _find_lcd_fb()
+    use_jpeg = fb_path is None
+
+    if use_jpeg and not os.path.exists("/dev/shm/raspyjack_raw.rgb") and not os.path.exists("/dev/shm/raspyjack_last.jpg"):
+        _show_msg("HDMI Mirror", "No LCD data!", (255, 60, 60))
+        return 1
+
     pid = os.fork()
     if pid > 0:
-        # Parent: return immediately to Raspyjack menu
-        _show_msg("HDMI Mirror", "ON", (0, 255, 100))
+        mode = "JPEG" if use_jpeg else "FB"
+        _show_msg("HDMI Mirror", f"ON ({mode})", (0, 255, 100))
         return 0
 
     # Child: become daemon
     os.setsid()
     signal.signal(signal.SIGTERM, lambda s, f: sys.exit(0))
-    _mirror_daemon(fb_path, fb_w, fb_h)
+    if use_jpeg:
+        _mirror_daemon_jpeg()
+    else:
+        _mirror_daemon(fb_path, fb_w, fb_h)
     return 0
 
 

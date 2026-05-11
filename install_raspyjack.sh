@@ -104,7 +104,44 @@ flip_status = data["DISPLAY"].get("flip", False)
 print(f"[OK] gui_conf.json: type={dtype}, flip={flip_status}")
 PY
 else
-  info "gui_conf.json not found yet — will be created on first run."
+  info "gui_conf.json not found — creating with defaults."
+  python3 - "$DISPLAY_TYPE" <<'NEWCONF'
+import json, sys
+dtype = sys.argv[1]
+data = {
+    "COLORS": {
+        "BACKGROUND": "#000000",
+        "BORDER": "#05ff00",
+        "GAMEPAD": "#141494",
+        "GAMEPAD_FILL": "#eeeeee",
+        "SELECTED_TEXT": "#00ff55",
+        "SELECTED_TEXT_BACKGROUND": "#2d0fff",
+        "TEXT": "#05ff00"
+    },
+    "DISPLAY": {
+        "type": dtype,
+        "supported_types": ["ST7735_128", "ST7789_240", "CARDPUTER_320"],
+        "flip": False
+    },
+    "LOCK": {
+        "auto_lock_seconds": 0,
+        "enabled": False,
+        "pin_hash": ""
+    },
+    "PATHS": {
+        "IMAGEBROWSER_START": "/root/Raspyjack/img/",
+        "SCREENSAVER_GIF": "/root/Raspyjack/img/screensaver/default.gif"
+    },
+    "PINS": {
+        "KEY1_PIN": 21, "KEY2_PIN": 20, "KEY3_PIN": 16,
+        "KEY_DOWN_PIN": 19, "KEY_LEFT_PIN": 5,
+        "KEY_PRESS_PIN": 13, "KEY_RIGHT_PIN": 26, "KEY_UP_PIN": 6
+    }
+}
+with open("/root/Raspyjack/gui_conf.json", "w") as f:
+    json.dump(data, f, indent=4)
+print(f"[OK] gui_conf.json created: type={dtype}")
+NEWCONF
 fi
 
 # ───── 1‑c ▸ create payload config directories ───────────────

@@ -231,6 +231,8 @@
       border: none;
       border-radius: 0;
       overflow: hidden;
+      max-width: 100vw;
+      width: 100%;
     }
     .terminal-body {
       height: 320px;
@@ -454,12 +456,13 @@
           </div>
 
           <div class="lg:order-2 order-1 flex justify-center lg:justify-end w-full lg:w-auto">
-            <div id="deviceShell" data-theme="neon" class="device-shell theme-neon rounded-3xl p-3 sm:p-4 xl:p-5 w-full max-w-[300px] xl:w-fit xl:max-w-none mx-auto lg:mx-0">
+            <div id="deviceShell" data-theme="neon" class="device-shell theme-neon rounded-3xl p-3 sm:p-4 xl:p-5 w-fit mx-auto lg:mx-0 overflow-hidden" style="max-width:100vw">
       <div class="pager-clip" aria-hidden="true"></div>
       <div class="pager-brand">RaspyJack P200</div>
       <div class="pager-speaker" aria-hidden="true">
         <span></span><span></span><span></span><span></span><span></span>
       </div>
+
       <!-- Default layout (Neon / Pager) -->
       <div class="layout-default grid grid-cols-2 xl:grid-cols-[120px_auto_120px] gap-3 xl:gap-4 justify-items-center items-center">
         <!-- Left pad -->
@@ -479,13 +482,9 @@
 
         <!-- Screen -->
         <div class="order-1 xl:order-2 col-span-2 xl:col-span-1">
-          <div class="flex items-center gap-2 mb-2 px-1">
-            <span class="text-[10px] text-slate-500 shrink-0">Size</span>
-            <input id="screenSizeSlider" type="range" min="150" max="800" value="300" class="w-full h-1 accent-emerald-500 cursor-pointer">
-          </div>
           <div class="screen-frame rounded-2xl p-2">
             <div class="flex items-center justify-center">
-              <canvas id="screen" width="320" height="170" class="w-full xl:w-[300px] aspect-square"></canvas>
+              <canvas id="screen" width="128" height="128" class="w-full xl:w-[300px]"></canvas>
             </div>
           </div>
 
@@ -504,7 +503,7 @@
       <!-- Game Boy layout -->
       <div class="layout-gameboy hidden">
         <div class="screen-frame">
-          <canvas id="screen-gb" width="320" height="170" class="w-full xl:w-[300px] aspect-square"></canvas>
+          <canvas id="screen-gb" width="128" height="128" class="w-full xl:w-[300px]"></canvas>
         </div>
         <div class="flex justify-between mb-4">
           <div class="grid grid-cols-3 grid-rows-3 gap-2">
@@ -531,7 +530,7 @@
       <!-- Pager layout -->
       <div class="layout-pager hidden">
         <div class="screen-frame">
-          <canvas id="screen-pager" width="320" height="170" class="w-full xl:w-[300px] aspect-square"></canvas>
+          <canvas id="screen-pager" width="128" height="128" class="w-full xl:w-[300px]"></canvas>
         </div>
         <div class="flex justify-between mb-4 mt-4">
           <div class="grid grid-cols-3 grid-rows-3 gap-2">
@@ -573,6 +572,14 @@
               <button type="button" data-theme="neon" class="px-3 py-2 rounded-lg text-left text-xs font-semibold border border-slate-500/20 bg-slate-900/40 text-slate-300 hover:bg-slate-800/60 transition">Neon</button>
               <button type="button" data-theme="gameboy" class="px-3 py-2 rounded-lg text-left text-xs font-semibold border border-slate-500/20 bg-slate-900/40 text-slate-300 hover:bg-slate-800/60 transition">Game Boy</button>
               <button type="button" data-theme="pager" class="px-3 py-2 rounded-lg text-left text-xs font-semibold border border-slate-500/20 bg-slate-900/40 text-slate-300 hover:bg-slate-800/60 transition">Pager</button>
+            </div>
+          </div>
+
+          <div class="rounded-xl border border-slate-800/70 bg-slate-950/40 p-3">
+            <div class="text-xs font-semibold text-slate-200 mb-2">Screen Size</div>
+            <div class="flex items-center gap-3">
+              <input id="screenSizeSlider" type="range" min="50" max="400" value="100" step="25" class="flex-1 h-1 accent-emerald-500 cursor-pointer">
+              <span id="screenSizeLabel" class="text-xs text-emerald-300 font-mono w-10 text-right">x1.0</span>
             </div>
           </div>
 

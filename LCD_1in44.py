@@ -582,6 +582,13 @@ class LCD:
                 if (now - _last_frame_save) >= _FRAME_MIRROR_INTERVAL:
                     if _FRAME_MIRROR_ENABLED:
                         Image.save(_FRAME_MIRROR_PATH, "JPEG", quality=80)
+                    # Raw frame for HDMI mirror (no compression, no decode needed)
+                    try:
+                        raw = Image.convert("RGB").tobytes()
+                        with open("/dev/shm/raspyjack_raw.rgb", "wb") as _rf:
+                            _rf.write(raw)
+                    except Exception:
+                        pass
                     _save_cardputer_frame(Image)
                     _last_frame_save = now
             except Exception:
