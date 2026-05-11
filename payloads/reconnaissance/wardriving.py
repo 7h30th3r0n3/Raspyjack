@@ -86,7 +86,9 @@ DWELL_24 = 0.3       # 300ms like Kismet (was 800ms)
 DWELL_5 = 0.4        # slightly longer for DFS channels
 
 VIEWS = ["live", "map", "gps", "cards", "channels", "stats", "networks", "export"]
-AUTOSAVE_INTERVAL = 10   # auto-save Wigle CSV every 10 seconds
+AUTOSAVE_INTERVAL = 15   # autosave tick interval (seconds)
+DB_SAVE_TICKS     = 4    # save DB every N ticks (60s)
+WIGLE_SAVE_TICKS  = 8    # rewrite session Wigle CSV every N ticks (120s)
 MAX_NETWORKS = 50000     # prune oldest networks above this limit (safety valve for OOM)
 AUTO_MODE = "--auto" in sys.argv
 
@@ -1760,32 +1762,32 @@ def _init_session():
 def _prune_networks():
     """Remove oldest networks if over MAX_NETWORKS to prevent OOM."""
     with lock:
-        if len(networks) <= MAX_NETWORKS:
+        over = len(networks) - MAX_NETWORKS
+        if over <= 0:
             return
-        sorted_nets = sorted(networks.items(), key=lambda x: x[1].get("last_seen", ""), reverse=True)
-        pruned = dict(sorted_nets[:MAX_NETWORKS])
-        networks.clear()
-        networks.update(pruned)
+        sorted_bssids = sorted(networks, key=lambda b: networks[b].get("last_seen", ""))
+        for b in sorted_bssids[:over]:
+            del networks[b]
 
 
 _autosave_counter = 0
 
 
 def _autosave_thread():
-    """Background thread: lightweight periodic maintenance."""
+    """Background thread: periodic DB save and session metadata update."""
     global _autosave_counter
     while not _shutdown.is_set():
         if _shutdown.wait(timeout=AUTOSAVE_INTERVAL):
             break
-        if _scanning.is_set():
-            _autosave_counter += 1
+        if not _scanning.is_set():
+            continue
+        _autosave_counter += 1
+        _save_session_meta()
+        if _autosave_counter % DB_SAVE_TICKS == 0:
+            _save_to_db()
+        if _autosave_counter % WIGLE_SAVE_TICKS == 0:
             _prune_networks()
-            _save_session_meta()
-            if _autosave_counter % 6 == 0:
-                _auto_save_wigle()
-                _save_to_db()
     # Final save on shutdown
-    _auto_save_wigle()
     _save_to_db()
     _save_session_meta()
 
@@ -1795,15 +1797,16 @@ def _save_session_meta():
     if not _session_json_path:
         return
     with lock:
-        nets = dict(networks)
+        total = len(networks)
+        wigle = sum(1 for n in networks.values() if n.get("gps"))
     try:
         meta = {
             "session_id": _session_id,
             "start_time": _session_id,
             "end_time": datetime.now().isoformat(),
             "device": "RaspyJack",
-            "networks": len(nets),
-            "wigle_ready": sum(1 for n in nets.values() if n.get("gps")),
+            "networks": total,
+            "wigle_ready": wigle,
             "duration_seconds": int(time.time() - scan_start_time) if scan_start_time else 0,
         }
         with open(_session_json_path, "w") as f:
@@ -1812,37 +1815,35 @@ def _save_session_meta():
         pass
 
 
-_live_csv_initialized = False
+_WIGLE_HEADER = ("WigleWifi-1.4,appRelease=RaspyJack-v2,model=RaspberryPi,"
+                  "release=2.0,device=RaspyJack,display=LCD144,"
+                  "board=RaspberryPi,brand=7h30th3r0n3\n")
+_WIGLE_COLS = ("MAC,SSID,AuthMode,FirstSeen,Channel,RSSI,"
+               "CurrentLatitude,CurrentLongitude,AltitudeMeters,"
+               "AccuracyMeters,Type\n")
 
 
 def _append_live_csv(bssid, net):
-    """Append a single network to the live CSV immediately. Never loses data."""
-    global _live_csv_initialized
-    live_path = os.path.join(LOOT_DIR, "wardriving_live.csv")
+    """Append a single network to the session Wigle CSV. Skip if no GPS."""
+    gps = net.get("gps")
+    if not gps:
+        return
     session_path = _session_wigle_path
+    if not session_path:
+        return
     try:
-        for path in [live_path, session_path]:
-            if not path:
-                continue
-            is_new_file = not os.path.isfile(path) or os.path.getsize(path) < 10
-            with open(path, "a", newline="") as f:
-                if is_new_file:
-                    f.write("WigleWifi-1.4,appRelease=RaspyJack-v2,model=RaspberryPi,"
-                            "release=2.0,device=RaspyJack,display=LCD144,"
-                            "board=RaspberryPi,brand=7h30th3r0n3\n")
-                    f.write("MAC,SSID,AuthMode,FirstSeen,Channel,RSSI,"
-                            "CurrentLatitude,CurrentLongitude,AltitudeMeters,"
-                            "AccuracyMeters,Type\n")
-                gps = net.get("gps")
-                lat = f"{gps['lat']:.6f}" if gps else ""
-                lon = f"{gps['lon']:.6f}" if gps else ""
-                alt = f"{gps.get('alt', 0):.1f}" if gps else ""
-                auth = _security_to_wigle(net["security"], net["cipher"], net.get("auth", ""))
-                writer = csv.writer(f)
-                writer.writerow([
-                    bssid, net["ssid"], auth, net["first_seen"],
-                    net["channel"], net["signal"], lat, lon, alt, "10", "WIFI",
-                ])
+        is_new = not os.path.isfile(session_path) or os.path.getsize(session_path) < 10
+        with open(session_path, "a", newline="") as f:
+            if is_new:
+                f.write(_WIGLE_HEADER)
+                f.write(_WIGLE_COLS)
+            auth = _security_to_wigle(net["security"], net["cipher"], net.get("auth", ""))
+            csv.writer(f).writerow([
+                bssid, net["ssid"], auth, net["first_seen"],
+                net["channel"], net["signal"],
+                f"{gps['lat']:.6f}", f"{gps['lon']:.6f}",
+                f"{gps.get('alt', 0):.1f}", "10", "WIFI",
+            ])
     except Exception:
         pass
 
@@ -1875,17 +1876,6 @@ def _write_wigle_csv(path, nets):
         pass
 
 
-def _auto_save_wigle():
-    """Save Wigle CSV to both session file and live file."""
-    with lock:
-        nets = dict(networks)
-    if not nets:
-        return
-    # Session file (persisted, one per launch)
-    if _session_wigle_path:
-        _write_wigle_csv(_session_wigle_path, nets)
-    # Live file (always overwritten, for quick access)
-    _write_wigle_csv(os.path.join(LOOT_DIR, "wardriving_live.csv"), nets)
 
 
 # ---------------------------------------------------------------------------
@@ -1896,8 +1886,8 @@ def _auto_save_wigle():
 def _emergency_save(signum=None, frame=None):
     """Emergency save on crash or signal."""
     try:
-        _auto_save_wigle()
         _save_to_db()
+        _save_session_meta()
     except Exception:
         pass
 
@@ -2101,8 +2091,8 @@ def main():
                     _scanning.clear()
                     time.sleep(0.3)
                     try:
-                        _auto_save_wigle()
                         _save_to_db()
+                        _save_session_meta()
                     except Exception:
                         pass
 
@@ -2192,7 +2182,7 @@ def main():
 
         _exit_msg("Saving data...")
         _save_to_db()
-        _auto_save_wigle()
+        _save_session_meta()
 
         if mon_ifaces:
             _exit_msg("Restoring WiFi...")
