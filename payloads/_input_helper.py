@@ -82,17 +82,35 @@ def get_virtual_button():
     return _flip(_VIRTUAL_TO_BTN.get(name))
 
 
+_last_btn_time = 0
+_last_btn_name = None
+_GLOBAL_DEBOUNCE = 0.15
+
 def get_button(pins, gpio):
     """
     Return a button name using WebUI virtual input if available,
-    otherwise fall back to GPIO.
+    otherwise fall back to GPIO. Includes global debounce.
     """
+    global _last_btn_time, _last_btn_name
+    import time as _time
     mapped = get_virtual_button()
     if mapped:
+        now = _time.time()
+        if mapped == _last_btn_name and (now - _last_btn_time) < _GLOBAL_DEBOUNCE:
+            return None
+        _last_btn_time = now
+        _last_btn_name = mapped
         return mapped
     for btn, pin in pins.items():
         if gpio.input(pin) == 0:
-            return _flip(btn)
+            name = _flip(btn)
+            now = _time.time()
+            if name == _last_btn_name and (now - _last_btn_time) < _GLOBAL_DEBOUNCE:
+                return None
+            _last_btn_time = now
+            _last_btn_name = name
+            return name
+    _last_btn_name = None
     return None
 
 

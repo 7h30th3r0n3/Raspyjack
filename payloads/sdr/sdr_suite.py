@@ -386,15 +386,15 @@ def _mode_fm(sdr, settings):
         if station:
             d.text((64, 68), station, font=font, fill=(255, 180, 0), anchor="mm")
 
-        dial_y = SY(80)
-        dial_w = SX(120)
-        dial_x = SX(4)
-        d.rectangle((dial_x, dial_y, dial_x + dial_w, dial_y + SY(6)), fill=(20, 20, 30), outline=(40, 40, 50))
+        dial_y = 78
+        dial_x = 4
+        dial_w = 120
+        d.rectangle((dial_x, dial_y, dial_x + dial_w, dial_y + 6), fill=(20, 20, 30), outline=(40, 40, 50))
         pos = (freq - 87_500_000) / (108_000_000 - 87_500_000)
         cursor_x = dial_x + int(dial_w * pos)
-        d.rectangle((cursor_x - 1, dial_y - 1, cursor_x + 2, dial_y + SY(7)), fill=(0, 255, 100))
-        d.text((dial_x, dial_y + SY(8)), "87.5", font=font_sm, fill=(60, 60, 80))
-        d.text((dial_x + dial_w - SX(15), dial_y + SY(8)), "108", font=font_sm, fill=(60, 60, 80))
+        d.rectangle((cursor_x - 1, dial_y - 1, cursor_x + 2, dial_y + 7), fill=(0, 255, 100))
+        d.text((dial_x, dial_y + 9), "87.5", font=font_sm, fill=(60, 60, 80))
+        d.text((dial_x + dial_w - 15, dial_y + 9), "108", font=font_sm, fill=(60, 60, 80))
 
         if playing:
             d.text((64, 100), "PLAYING", font=font_sm, fill=(0, 200, 0), anchor="mm")
@@ -463,112 +463,236 @@ def _mode_fm(sdr, settings):
 # MODE 3: SCANNER
 # ═══════════════════════════════════════════════════════════════
 def _mode_scanner(sdr, settings):
+    import subprocess, numpy as np
     preset_idx = settings.get("last_preset", 0) % len(BAND_PRESETS)
     scanning = False
-    signals = []
-    scan_progress = 0.0
-    scroll = 0
+    spectrum = None       # array of dB values across the band
+    peak_hold = None      # max dB seen at each bin
+    cursor_bin = 0        # selected frequency bin
+    _scan_active = [False]
+
+    def _sweep_loop(preset, result, active):
+        """Continuous rtl_power sweep in background."""
+        while active[0] and _running:
+            try:
+                cmd = [
+                    "rtl_power", "-f",
+                    f"{preset['start']}:{preset['end']}:{max(preset['step'], 25000)}",
+                    "-g", "49.6", "-i", "1", "-1",
+                ]
+                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+                bins = []
+                for line in proc.stdout.strip().splitlines():
+                    parts = line.split(",")
+                    if len(parts) >= 7:
+                        db_vals = [float(x.strip()) for x in parts[6:] if x.strip()]
+                        bins.extend(db_vals)
+                if bins:
+                    result[0] = bins
+            except Exception:
+                pass
+
+    sweep_result = [None]
+    sweep_thread = None
 
     while _running:
         preset = BAND_PRESETS[preset_idx]
         img = Image.new("RGB", (WIDTH, HEIGHT), (0, 0, 0))
         d = ScaledDraw(img)
 
-        status = "SCANNING" if scanning else "IDLE"
-        _draw_header(d, "Scanner", status)
+        indicator = "●" if scanning else "○"
+        _draw_header(d, "Scanner", f"{indicator} {preset['name']}")
 
-        d.text((2, 13), preset["name"], font=font, fill=(255, 200, 0))
-        d.text((2, 24), f"{format_freq_short(preset['start'])} - {format_freq_short(preset['end'])}", font=font_sm, fill=(100, 100, 100))
+        # Spectrum display area (128-base coords, ScaledDraw scales them)
+        spec_x, spec_y = 2, 14
+        spec_w, spec_h = 124, 60
 
-        if scanning:
-            bar_y = SY(34)
-            d.rectangle((SX(2), bar_y, SX(125), bar_y + SY(5)), fill=(20, 20, 30), outline=(40, 40, 50))
-            d.rectangle((SX(2), bar_y, SX(2) + int(SX(123) * scan_progress), bar_y + SY(5)), fill=(255, 200, 0))
+        # Update spectrum from sweep result
+        if sweep_result[0] is not None:
+            spectrum = sweep_result[0]
+            sweep_result[0] = None
+            if peak_hold is None or len(peak_hold) != len(spectrum):
+                peak_hold = list(spectrum)
+            else:
+                for i in range(len(spectrum)):
+                    peak_hold[i] = max(peak_hold[i], spectrum[i])
 
-        list_y = SY(42)
-        visible = max(1, (HEIGHT - list_y - SY(12)) // SY(11))
-        if signals:
-            for i in range(min(visible, len(signals) - scroll)):
-                idx = scroll + i
-                sig = signals[idx]
-                y = list_y + i * SY(11)
-                strength = min(SX(30), max(1, int((sig["db"] + 80) / 60 * SX(30))))
-                d.text((SX(2), y), format_freq_short(sig["freq"]), font=font_sm, fill=(0, 255, 0))
-                d.text((SX(45), y), f"{sig['db']:.0f}dB", font=font_sm, fill=(200, 200, 200))
-                bar_col = (0, 200, 0) if sig["db"] > -30 else (0, 100, 200)
-                d.rectangle((SX(75), y + 1, SX(75) + strength, y + SY(7)), fill=bar_col)
+        # Draw spectrum bars
+        if spectrum and len(spectrum) > 0:
+            n = len(spectrum)
+            threshold = settings["scanner_threshold"]
+            # Auto-scale dB range from actual data
+            db_min = min(spectrum) - 5
+            db_max = max(spectrum) + 5
+
+            for i in range(min(spec_w, n)):
+                bin_idx = int(i * n / spec_w)
+                db = spectrum[bin_idx]
+                norm = max(0, min(1, (db - db_min) / (db_max - db_min)))
+                bar_h = int(norm * spec_h)
+                x = spec_x + i
+                y_bottom = spec_y + spec_h
+
+                # Color: blue below threshold, green above, red for strong
+                if db > -25:
+                    col = (255, 50, 50)
+                elif db > threshold:
+                    col = (0, 200, 0)
+                else:
+                    col = (30, 40, 60)
+                if bar_h > 0:
+                    d.line([(x, y_bottom), (x, y_bottom - bar_h)], fill=col)
+
+                # Peak hold dots
+                if peak_hold:
+                    pk = peak_hold[bin_idx]
+                    pk_norm = max(0, min(1, (pk - db_min) / (db_max - db_min)))
+                    pk_y = y_bottom - int(pk_norm * spec_h)
+                    d.rectangle((x, pk_y, x, pk_y), fill=(255, 255, 0))
+
+            # Threshold line
+            thr_norm = max(0, min(1, (threshold - db_min) / (db_max - db_min)))
+            thr_y = spec_y + spec_h - int(thr_norm * spec_h)
+            d.line([(spec_x, thr_y), (spec_x + spec_w, thr_y)], fill=(255, 100, 0))
+
+            # Cursor
+            cx = spec_x + int(cursor_bin * spec_w / max(1, n))
+            d.line([(cx, spec_y), (cx, spec_y + spec_h)], fill=(255, 255, 255))
+
+            # Cursor frequency + dB info
+            cursor_freq = preset["start"] + int(cursor_bin * (preset["end"] - preset["start"]) / max(1, n))
+            cursor_db = spectrum[min(cursor_bin, n - 1)]
+            d.text((2, 76), f"{format_freq(cursor_freq)}", font=font_sm, fill=(0, 255, 200))
+            d.text((70, 76), f"{cursor_db:.1f}dB", font=font_sm, fill=(200, 200, 200))
+
+            # Count signals above threshold
+            above = sum(1 for db in spectrum if db > threshold)
+            d.text((2, 86), f"{above} active | Thr:{threshold}dB", font=font_sm, fill=(100, 100, 100))
+
+            # Frequency scale
+            d.text((2, 96), format_freq_short(preset["start"]), font=font_sm, fill=(60, 60, 80))
+            mid = (preset["start"] + preset["end"]) // 2
+            d.text((50, 96), format_freq_short(mid), font=font_sm, fill=(60, 60, 80))
+            d.text((100, 96), format_freq_short(preset["end"]), font=font_sm, fill=(60, 60, 80))
         else:
-            d.text((64, 70), "No signals" if not scanning else "Scanning...", font=font, fill=(60, 60, 80), anchor="mm")
+            d.text((64, 50), "OK to scan" if not scanning else "Scanning...", font=font, fill=(60, 60, 80), anchor="mm")
 
-        d.text((SX(2), HEIGHT - SY(18)), f"Found: {len(signals)} | Thr: {settings['scanner_threshold']}dB", font=font_sm, fill=(100, 100, 100))
-        _draw_footer(d, "^v:Band OK:Scan K1:Mode")
+        _draw_footer(d, "OK:Scan UD:Band LR:Cursor")
         LCD.LCD_ShowImage(img, 0, 0)
 
         btn = _btn()
         if btn == "KEY3":
+            _scan_active[0] = False
             sdr.stop()
             return "exit"
         elif btn == "KEY1":
+            _scan_active[0] = False
             sdr.stop()
             time.sleep(0.25)
             return "next"
         elif btn == "OK":
             if scanning:
                 scanning = False
-                sdr.stop()
+                _scan_active[0] = False
             else:
                 scanning = True
-                signals = []
-                scan_progress = 0
-                threading.Thread(target=_scan_band, args=(sdr, settings, preset, signals, lambda p: _set_progress(p)), daemon=True).start()
+                _scan_active[0] = True
+                peak_hold = None
+                sweep_thread = threading.Thread(target=_sweep_loop, args=(preset, sweep_result, _scan_active), daemon=True)
+                sweep_thread.start()
             time.sleep(DEBOUNCE)
         elif btn == "UP":
             preset_idx = (preset_idx - 1) % len(BAND_PRESETS)
             settings["last_preset"] = preset_idx
+            spectrum = None
+            peak_hold = None
+            if scanning:
+                _scan_active[0] = False
+                scanning = False
             time.sleep(DEBOUNCE)
         elif btn == "DOWN":
             preset_idx = (preset_idx + 1) % len(BAND_PRESETS)
             settings["last_preset"] = preset_idx
-            time.sleep(DEBOUNCE)
-        elif btn == "RIGHT":
-            settings["scanner_threshold"] = min(-10, settings["scanner_threshold"] + 5)
+            spectrum = None
+            peak_hold = None
+            if scanning:
+                _scan_active[0] = False
+                scanning = False
             time.sleep(DEBOUNCE)
         elif btn == "LEFT":
-            settings["scanner_threshold"] = max(-80, settings["scanner_threshold"] - 5)
+            if spectrum:
+                cursor_bin = max(0, cursor_bin - max(1, len(spectrum) // 20))
+            time.sleep(DEBOUNCE)
+        elif btn == "RIGHT":
+            if spectrum:
+                cursor_bin = min(len(spectrum) - 1, cursor_bin + max(1, len(spectrum) // 20))
             time.sleep(DEBOUNCE)
         time.sleep(0.05)
     return "exit"
 
 
+    return "exit"
+
+
 _scan_pct = [0.0]
+_scan_thread = None
 
 def _set_progress(p):
     _scan_pct[0] = p
 
 def _scan_band(sdr, settings, preset, signals, progress_cb):
+    """Scan using rtl_power for fast wideband sweep."""
+    import subprocess, csv, io
     start = preset["start"]
     end = preset["end"]
     step = max(preset["step"], 25_000)
     threshold = settings["scanner_threshold"]
-    dwell = settings["scanner_dwell"]
-    freq = start
-    total_steps = max(1, (end - start) // step)
-    i = 0
+    bw = min(2_048_000, end - start + step)
 
-    sdr.start(start, 2_048_000, settings["gain"])
-    time.sleep(0.5)
-
-    while freq <= end and _running:
-        sdr.set_freq(freq)
-        time.sleep(dwell)
-        sig_db = sdr.get_signal_db()
-        if sig_db > threshold:
-            signals.append({"freq": freq, "db": sig_db})
-        i += 1
-        progress_cb(i / total_steps)
-        freq += step
-
-    sdr.stop()
+    # rtl_power does a single fast sweep across the entire band
+    cmd = [
+        "rtl_power", "-f", f"{start}:{end}:{step}",
+        "-g", "49.6", "-i", "1", "-1", "-F", "csv",
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        lines = proc.stdout.strip().splitlines()
+        total = max(1, len(lines))
+        for i, line in enumerate(lines):
+            if not _running:
+                break
+            try:
+                parts = line.split(",")
+                if len(parts) >= 7:
+                    freq_low = int(float(parts[2].strip()))
+                    freq_step = float(parts[4].strip())
+                    db_values = [float(x.strip()) for x in parts[6:] if x.strip()]
+                    for j, db in enumerate(db_values):
+                        f = freq_low + int(j * freq_step)
+                        if db > threshold:
+                            signals.append({"freq": f, "db": round(db, 1)})
+            except Exception:
+                pass
+            progress_cb((i + 1) / total)
+    except subprocess.TimeoutExpired:
+        pass
+    except FileNotFoundError:
+        # Fallback to slow method if rtl_power not available
+        freq = start
+        total_steps = max(1, (end - start) // step)
+        idx = 0
+        sdr.start(start, 2_048_000, settings.get("gain", 30))
+        time.sleep(0.3)
+        while freq <= end and _running:
+            sdr.set_freq(freq)
+            time.sleep(0.1)
+            sig_db = sdr.get_signal_db()
+            if sig_db > threshold:
+                signals.append({"freq": freq, "db": sig_db})
+            idx += 1
+            progress_cb(idx / total_steps)
+            freq += step
+        sdr.stop()
     progress_cb(1.0)
 
 

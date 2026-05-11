@@ -100,11 +100,11 @@ def _check_btn():
 def _set_vol(vol):
     global _volume
     _volume = max(0, min(100, vol))
-    subprocess.Popen(["amixer", "-c", "1", "sset", "Headphone", str(int(_volume * 63 / 100))],
+    subprocess.Popen(["amixer", "sset", "Headphone", str(int(_volume * 63 / 100))],
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    subprocess.Popen(["amixer", "-c", "1", "sset", "DACL", "180"],
+    subprocess.Popen(["amixer", "sset", "DACL", "180"],
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    subprocess.Popen(["amixer", "-c", "1", "sset", "DACR", "180"],
+    subprocess.Popen(["amixer", "sset", "DACR", "180"],
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 

@@ -317,11 +317,13 @@ if [[ "$DISPLAY_TYPE" == "CARDPUTER_320" ]]; then
 
   # ALSA config for ES8388 codec
   step "Configuring ALSA for ES8388 audio codec …"
-  sudo tee /etc/asound.conf >/dev/null <<'ALSA'
-defaults.pcm.card 1
-defaults.ctl.card 1
+  ES_CARD=$(aplay -l 2>/dev/null | grep -i 'ES8388\|ES8389' | head -1 | sed 's/card //' | cut -d: -f1)
+  ES_CARD=${ES_CARD:-0}
+  sudo tee /etc/asound.conf >/dev/null <<ALSA
+defaults.pcm.card $ES_CARD
+defaults.ctl.card $ES_CARD
 ALSA
-  info "ALSA configured for ES8388 (card 1)"
+  info "ALSA configured for ES8388 (card $ES_CARD)"
 
   # Create RPi/GPIO.py shim (shadows system RPi.GPIO with evdev-based input)
   step "Creating RPi.GPIO shim for CardputerZero keyboard …"

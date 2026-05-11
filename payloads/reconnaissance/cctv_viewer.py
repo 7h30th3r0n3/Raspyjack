@@ -207,17 +207,26 @@ _settings = {
 # =============================================================================
 # Settings menu UI
 # =============================================================================
-_last_settings_choices = None  # persists menu selections between calls
+_last_settings_choices = None
+_selected_cam_idx = 0  # persists menu selections between calls
 
 def _run_settings_menu():
     """Interactive settings menu on LCD. Returns dict of chosen settings."""
-    global _last_settings_choices
+    global _last_settings_choices, _selected_cam_idx
+
+    # Build camera selector from loaded cameras
+    cameras = _get("cameras") or []
+    cam_options = [(c[0][:14], i) for i, c in enumerate(cameras)] if cameras else [("No cameras", 0)]
+
+    # Dynamic menu: camera selector + static settings
+    all_items = [("camera", "Camera", cam_options, min(_selected_cam_idx, len(cam_options) - 1))] + list(MENU_ITEMS)
+
     # Restore previous selections or use defaults
-    if _last_settings_choices is not None and len(_last_settings_choices) == len(MENU_ITEMS):
+    if _last_settings_choices is not None and len(_last_settings_choices) == len(all_items):
         choices = list(_last_settings_choices)
     else:
-        choices = [item[3] for item in MENU_ITEMS]
-    cursor = 0  # which menu item is highlighted
+        choices = [item[3] for item in all_items]
+    cursor = 0
     last_press = 0.0
 
     while True:
@@ -235,8 +244,8 @@ def _run_settings_menu():
         scroll_offset = max(0, cursor - visible_count + 1)
         y_start = 16
 
-        for i in range(scroll_offset, min(scroll_offset + visible_count, len(MENU_ITEMS))):
-            key, label, options, _ = MENU_ITEMS[i]
+        for i in range(scroll_offset, min(scroll_offset + visible_count, len(all_items))):
+            key, label, options, _ = all_items[i]
             chosen_idx = choices[i]
             chosen_name = options[chosen_idx][0]
             y = y_start + (i - scroll_offset) * 20
@@ -283,32 +292,26 @@ def _run_settings_menu():
             last_press = now
 
         if btn == "UP":
-            cursor = (cursor - 1) % len(MENU_ITEMS)
+            cursor = (cursor - 1) % len(all_items)
 
         elif btn == "DOWN":
-            cursor = (cursor + 1) % len(MENU_ITEMS)
+            cursor = (cursor + 1) % len(all_items)
 
         elif btn == "LEFT":
-            _, _, options, _ = MENU_ITEMS[cursor]
+            _, _, options, _ = all_items[cursor]
             choices[cursor] = (choices[cursor] - 1) % len(options)
 
         elif btn == "RIGHT":
-            _, _, options, _ = MENU_ITEMS[cursor]
+            _, _, options, _ = all_items[cursor]
             choices[cursor] = (choices[cursor] + 1) % len(options)
 
-        elif btn == "OK":
-            # Confirm and return settings
+        elif btn in ("OK", "KEY3"):
             _last_settings_choices = list(choices)
-            result = {}
-            for i, (key, _, options, _) in enumerate(MENU_ITEMS):
-                result[key] = options[choices[i]][1]
-            return result
-
-        elif btn == "KEY3":
-            # Keep current selections
-            _last_settings_choices = list(choices)
-            result = {}
-            for i, (key, _, options, _) in enumerate(MENU_ITEMS):
+            # Extract camera selection
+            _selected_cam_idx = cam_options[choices[0]][1] if cam_options else 0
+            # Extract other settings (skip camera item at index 0)
+            result = {"camera_idx": _selected_cam_idx}
+            for i, (key, _, options, _) in enumerate(all_items[1:], 1):
                 result[key] = options[choices[i]][1]
             return result
 
@@ -822,9 +825,10 @@ def _draw_grid():
     start = _get("cam_idx")
     count = min(4, len(cameras))
     canvas = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    cell = WIDTH // 2  # 64
+    cell_w = WIDTH // 2
+    cell_h = HEIGHT // 2
 
-    positions = [(0, 0), (cell, 0), (0, cell), (cell, cell)]
+    positions = [(0, 0), (cell_w, 0), (0, cell_h), (cell_w, cell_h)]
     d = ImageDraw.Draw(canvas)
 
     for i in range(count):
@@ -833,11 +837,11 @@ def _draw_grid():
         with _grid_lock:
             frame = _grid_frames.get(idx)
         if frame is not None:
+            frame = frame.resize((cell_w, cell_h))
             canvas.paste(frame, (px, py))
         else:
-            d.rectangle((px, py, px + cell - 1, py + cell - 1), outline="#333")
-            d.text((px + 2, py + cell // 2), "...", font=font, fill="#666")
-        # Camera label
+            d.rectangle((px, py, px + cell_w - 1, py + cell_h - 1), outline="#333")
+            d.text((px + 2, py + cell_h // 2), "...", font=font, fill="#666")
         name = cameras[idx][0][:7]
         d.text((px + 1, py + 1), name, font=font, fill="#0F0")
 
@@ -993,12 +997,17 @@ def main():
     d.text((4, 96), "K3 = skip (defaults)", font=font, fill="#666")
     LCD.LCD_ShowImage(img, 0, 0)
 
+    # Pre-load cameras so the settings menu can show them
+    _load_cameras()
+
     # Wait for user choice: OK = settings menu, KEY3 = skip with defaults
     while True:
         btn = get_button(PINS, GPIO)
         if btn == "OK":
             chosen = _run_settings_menu()
             _settings.update(chosen)
+            if "camera_idx" in chosen:
+                _set(cam_idx=chosen["camera_idx"])
             break
         elif btn == "KEY3":
             break  # keep defaults
@@ -1113,6 +1122,8 @@ def main():
                 _stop_stream()
                 chosen = _run_settings_menu()
                 _settings.update(chosen)
+                if "camera_idx" in chosen:
+                    _set(cam_idx=chosen["camera_idx"])
                 # Resume stream with new settings
                 cameras = _get("cameras")
                 idx = _get("cam_idx")
