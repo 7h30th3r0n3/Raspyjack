@@ -571,10 +571,8 @@ def _packet_handler(pkt):
                 net["_sig_sum"] += sig
                 net["_sig_count"] += 1
                 net["signal"] = int(net["_sig_sum"] / net["_sig_count"])
-                # Update best GPS (prefer strongest signal position)
-                if gps_snap:
-                    if not net["gps"] or sig > net["signal"]:
-                        net["gps"] = gps_snap
+                if gps_snap and not net["gps"]:
+                    net["gps"] = gps_snap
                 if ssid != "<hidden>" and net["ssid"] == "<hidden>":
                     net["ssid"] = ssid
 
