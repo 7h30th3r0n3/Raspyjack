@@ -76,6 +76,18 @@ def detect_gps():
     return None, None
 
 
+def _release_serial_port(dev):
+    """Stop any serial-getty holding the UART port so gpsd can use it."""
+    if "ttyS" not in dev and "ttyAMA" not in dev:
+        return
+    port_name = os.path.basename(dev)
+    svc = f"serial-getty@{port_name}.service"
+    subprocess.run(["systemctl", "stop", svc], capture_output=True, timeout=5)
+    subprocess.run(["systemctl", "disable", svc], capture_output=True, timeout=5)
+    subprocess.run(["systemctl", "mask", svc], capture_output=True, timeout=5)
+    time.sleep(0.3)
+
+
 def start_gps():
     """Auto-detect GPS and start gpsd. Returns True if successful."""
     try:
@@ -89,16 +101,19 @@ def start_gps():
         if not dev:
             return False
 
+        # Release serial-getty if it holds the UART port
+        _release_serial_port(dev)
+
         # Set baud rate for UART devices
         if "ttyS" in dev or "ttyAMA" in dev:
             try:
-                subprocess.run(["stty", "-F", dev, str(baud)],
+                subprocess.run(["stty", "-F", dev, str(baud), "raw", "-echo"],
                                capture_output=True, timeout=3)
             except Exception:
                 pass
 
-        # Start gpsd with correct baud rate
-        cmd = ["gpsd", "-n", "-s", str(baud), dev]
+        # Start gpsd (-n: don't wait for client, no -s: let gpsd probe)
+        cmd = ["gpsd", "-n", dev]
         subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         time.sleep(2)
 

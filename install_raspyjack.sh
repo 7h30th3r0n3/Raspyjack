@@ -169,6 +169,15 @@ if [[ "$DISPLAY_TYPE" == "CARDPUTER_320" ]]; then
   sudo systemctl --user --global disable pipewire.service pipewire.socket pipewire-pulse.service pipewire-pulse.socket wireplumber.service 2>/dev/null || true
   sudo pkill -9 pipewire wireplumber pipewire-pulse 2>/dev/null || true
   info "PipeWire disabled — ALSA direct access for audio"
+
+  step "Releasing serial port for GPS HAT …"
+  sudo systemctl stop serial-getty@ttyS0.service 2>/dev/null || true
+  sudo systemctl disable serial-getty@ttyS0.service 2>/dev/null || true
+  sudo systemctl mask serial-getty@ttyS0.service 2>/dev/null || true
+  sudo systemctl stop serial-getty@ttyAMA0.service 2>/dev/null || true
+  sudo systemctl disable serial-getty@ttyAMA0.service 2>/dev/null || true
+  sudo systemctl mask serial-getty@ttyAMA0.service 2>/dev/null || true
+  info "serial-getty disabled on ttyS0/ttyAMA0 — GPS HAT can use UART"
 fi
 
 # ───── 2 ▸ install / upgrade required APT packages ───────────
