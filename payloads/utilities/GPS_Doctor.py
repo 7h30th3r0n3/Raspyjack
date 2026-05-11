@@ -115,7 +115,7 @@ def _render():
         d.rectangle((2, 14, 2 + filled, 18), fill=bar_col)
 
     # Log lines
-    start   = _scroll_idx if _review_mode else max(0, len(lines) - MAX_VISIBLE)
+    start   = _scroll_idx if _view_mode == 1 else max(0, len(lines) - MAX_VISIBLE)
     visible = lines[start: start + MAX_VISIBLE]
     y = 22
     for text, color in visible:
