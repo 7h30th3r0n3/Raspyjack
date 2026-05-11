@@ -257,13 +257,26 @@ def step4_gpsd_py3():
 
 def step5_detect_port():
     log_step(5, "GPS port detection")
+
+    # Use universal GPS helper for auto-detection (USB + GPIO/HAT)
+    try:
+        from payloads._gps_helper import detect_gps
+        log_info("scanning all ports...")
+        dev, baud = detect_gps()
+        if dev:
+            log_ok(f"found: {dev} @{baud}")
+            return dev
+        log_info("helper found nothing")
+    except Exception as e:
+        log_info(f"helper err: {str(e)[:20]}")
+
+    # Fallback: check device nodes manually
     candidates = [
         "/dev/ttyACM0", "/dev/ttyACM1",
         "/dev/ttyUSB0", "/dev/ttyUSB1",
+        "/dev/ttyS0", "/dev/ttyAMA0",
     ]
     found_port = None
-
-    # Check existing device nodes
     for p in candidates:
         if os.path.exists(p):
             log_info(f"device exists: {p}")
@@ -293,7 +306,7 @@ def step5_detect_port():
     else:
         log_warn("no port found now")
         log_info("plug dongle & rerun")
-        found_port = "/dev/ttyACM0"   # write config anyway
+        found_port = "/dev/ttyACM0"
 
     return found_port
 
@@ -453,6 +466,7 @@ def step9_test_gps(port):
     all_candidates = [
         "/dev/ttyACM0", "/dev/ttyACM1",
         "/dev/ttyUSB0", "/dev/ttyUSB1",
+        "/dev/ttyS0", "/dev/ttyAMA0",
     ]
     # Put the detected port first
     candidates = [port] + [p for p in all_candidates if p != port]
@@ -471,7 +485,7 @@ def step9_test_gps(port):
     time.sleep(1.5)   # wait for port release
 
     # ── 4. Baud rates to try ──────────────────────────────────────────────
-    BAUDS = [9600, 4800, 38400, 115200]
+    BAUDS = [9600, 115200, 38400, 57600, 4800]
 
     found_port  = None
     found_baud  = None
@@ -519,10 +533,16 @@ def step9_test_gps(port):
         if found_port:
             break   # correct port found
 
-    # ── 5. Restart gpsd (always, even on failure) ─────────────────────────
+    # ── 5. Restart gpsd via helper (correct device + baud) ──────────────
     log_info("restarting gpsd...")
-    run("systemctl start gpsd 2>/dev/null || gpsd -n -b "
-        "$(grep ^DEVICES /etc/default/gpsd | cut -d'\"' -f2) 2>/dev/null &")
+    try:
+        from payloads._gps_helper import start_gps
+        if start_gps():
+            log_ok("gpsd started (helper)")
+        else:
+            run("systemctl start gpsd 2>/dev/null")
+    except Exception:
+        run("systemctl start gpsd 2>/dev/null")
     time.sleep(1)
 
     # ── 6. Report results ─────────────────────────────────────────────────
