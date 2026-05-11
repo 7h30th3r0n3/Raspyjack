@@ -252,9 +252,34 @@ def _gpsd_sat_poller():
             break
 
 
+def _fake_gps_updater():
+    """Simulate a GPS track for testing. Activated by FAKE_GPS=1 env var."""
+    global gps_data, gps_ready
+    gps_ready = True
+    lat, lon = 48.8566, 2.3522  # Paris
+    dlat, dlon = 0.0001, 0.00015
+    alt = 35.0
+    while not _shutdown.is_set():
+        with lock:
+            gps_data = {
+                "lat": lat, "lon": lon, "alt": alt,
+                "speed": 4.2, "sats": 8, "sats_visible": 12,
+                "mode": 3, "ts": time.time(),
+            }
+        lat += dlat + (time.time() % 3 - 1.5) * 0.00002
+        lon += dlon + (time.time() % 5 - 2.5) * 0.00001
+        alt += 0.1
+        if _shutdown.wait(timeout=1):
+            break
+
+
 def _gps_updater():
     """Background thread: poll gpsd for position updates."""
     global gps_data, gps_ready
+
+    if os.environ.get("FAKE_GPS") == "1":
+        _fake_gps_updater()
+        return
 
     if not GPSD_OK:
         return
