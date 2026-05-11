@@ -479,12 +479,17 @@
 
         <!-- Screen -->
         <div class="order-1 xl:order-2 col-span-2 xl:col-span-1">
+          <div class="flex items-center gap-2 mb-2 px-1">
+            <span class="text-[10px] text-slate-500 shrink-0">Size</span>
+            <input id="screenSizeSlider" type="range" min="150" max="800" value="300" class="w-full h-1 accent-emerald-500 cursor-pointer">
+          </div>
           <div class="screen-frame rounded-2xl p-2">
             <div class="flex items-center justify-center">
-              <canvas id="screen" width="128" height="128" class="w-full xl:w-[300px] aspect-square"></canvas>
+              <canvas id="screen" width="320" height="170" class="w-full xl:w-[300px] aspect-square"></canvas>
             </div>
           </div>
-          <div class="pager-text mt-3 text-center text-xs text-slate-400">OK = Enter · KEY3 = Esc</div>
+
+          <div class="pager-text mt-2 text-center text-xs text-slate-400">OK = Enter · KEY3 = Esc</div>
           <div id="status" class="status-text pager-text mt-1 text-center text-[11px] text-slate-500">Connecting…</div>
         </div>
 
@@ -499,7 +504,7 @@
       <!-- Game Boy layout -->
       <div class="layout-gameboy hidden">
         <div class="screen-frame">
-          <canvas id="screen-gb" width="128" height="128" class="w-full xl:w-[300px] aspect-square"></canvas>
+          <canvas id="screen-gb" width="320" height="170" class="w-full xl:w-[300px] aspect-square"></canvas>
         </div>
         <div class="flex justify-between mb-4">
           <div class="grid grid-cols-3 grid-rows-3 gap-2">
@@ -526,7 +531,7 @@
       <!-- Pager layout -->
       <div class="layout-pager hidden">
         <div class="screen-frame">
-          <canvas id="screen-pager" width="128" height="128" class="w-full xl:w-[300px] aspect-square"></canvas>
+          <canvas id="screen-pager" width="320" height="170" class="w-full xl:w-[300px] aspect-square"></canvas>
         </div>
         <div class="flex justify-between mb-4 mt-4">
           <div class="grid grid-cols-3 grid-rows-3 gap-2">

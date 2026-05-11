@@ -7,22 +7,22 @@
   const ctxGb = canvasGb ? canvasGb.getContext('2d') : null;
   const ctxPager = canvasPager ? canvasPager.getContext('2d') : null;
   // Enable high-DPI backing store and high-quality smoothing
+  let logicalW = 128, logicalH = 128;
   function setupHiDPI(){
     const DPR = Math.max(1, Math.floor(window.devicePixelRatio || 1));
-    const logical = 128;
-    canvas.width = logical * DPR;
-    canvas.height = logical * DPR;
+    canvas.width = logicalW * DPR;
+    canvas.height = logicalH * DPR;
     ctx.imageSmoothingEnabled = true;
     try { ctx.imageSmoothingQuality = 'high'; } catch {}
     if (canvasGb && ctxGb) {
-      canvasGb.width = logical * DPR;
-      canvasGb.height = logical * DPR;
+      canvasGb.width = logicalW * DPR;
+      canvasGb.height = logicalH * DPR;
       ctxGb.imageSmoothingEnabled = true;
       try { ctxGb.imageSmoothingQuality = 'high'; } catch {}
     }
     if (canvasPager && ctxPager) {
-      canvasPager.width = logical * DPR;
-      canvasPager.height = logical * DPR;
+      canvasPager.width = logicalW * DPR;
+      canvasPager.height = logicalH * DPR;
       ctxPager.imageSmoothingEnabled = true;
       try { ctxPager.imageSmoothingQuality = 'high'; } catch {}
     }
@@ -751,6 +751,16 @@
           const img = new Image();
           img.onload = () => {
             try {
+              if (img.naturalWidth !== logicalW || img.naturalHeight !== logicalH) {
+                logicalW = img.naturalWidth;
+                logicalH = img.naturalHeight;
+                setupHiDPI();
+                [canvas, canvasGb, canvasPager].forEach(c => {
+                  if (!c) return;
+                  c.style.aspectRatio = logicalW + '/' + logicalH;
+                  c.classList.remove('aspect-square');
+                });
+              }
               ctx.clearRect(0,0,canvas.width,canvas.height);
               ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
               if (ctxGb && canvasGb) {
@@ -2058,4 +2068,23 @@
     });
   };
   startAfterAuth();
+  // Screen size slider
+  const _sizeSlider = document.getElementById('screenSizeSlider');
+  if (_sizeSlider) {
+    const _savedSize = localStorage.getItem('rj_screen_size');
+    if (_savedSize) _sizeSlider.value = _savedSize;
+    function _applyScreenSize(px) {
+      [canvas, canvasGb, canvasPager].forEach(c => {
+        if (!c) return;
+        c.style.width = px + 'px';
+        c.style.height = 'auto';
+      });
+    }
+    _applyScreenSize(_sizeSlider.value);
+    _sizeSlider.addEventListener('input', function() {
+      _applyScreenSize(this.value);
+      localStorage.setItem('rj_screen_size', this.value);
+    });
+  }
+
 })();
