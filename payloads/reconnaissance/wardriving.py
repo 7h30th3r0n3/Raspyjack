@@ -1208,6 +1208,32 @@ def _draw_gps(lcd, font, font_sm):
     lcd.LCD_ShowImage(img, 0, 0)
 
 
+_stats_cache = {}
+_stats_cache_ts = 0
+
+
+def _refresh_stats_cache():
+    global _stats_cache, _stats_cache_ts
+    now = time.time()
+    if now - _stats_cache_ts < 2.0 and _stats_cache:
+        return _stats_cache
+    with lock:
+        total = len(networks)
+        cli_count = len(probes)
+        probe_count = total_probes
+        gps_snap = dict(gps_data) if gps_data else None
+        wigle_ready = sum(1 for n in networks.values() if n.get("gps"))
+        sec_count = Counter(n["security"] for n in networks.values())
+        ch_count = Counter(n["channel"] for n in networks.values())
+    _stats_cache = {
+        "total": total, "cli": cli_count, "probes": probe_count,
+        "gps": gps_snap, "wigle": wigle_ready,
+        "sec": sec_count, "ch": ch_count,
+    }
+    _stats_cache_ts = now
+    return _stats_cache
+
+
 def _draw_stats(lcd, font, font_sm):
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
     d = ScaledDraw(img)
@@ -1215,17 +1241,12 @@ def _draw_stats(lcd, font, font_sm):
     d.rectangle((0, 0, 127, 12), fill="#111")
     d.text((2, 1), "STATISTICS", font=font_sm, fill="#FF00FF")
 
-    with lock:
-        nets = list(networks.values())
-        cli_count = len(probes)
-        probe_count = total_probes
-        gps_snap = dict(gps_data) if gps_data else None
-
-    total = len(nets)
-    wigle_ready = sum(1 for n in nets if n.get("gps"))
-
-    # Security breakdown
-    sec_count = Counter(n["security"] for n in nets)
+    sc = _refresh_stats_cache()
+    total = sc["total"]
+    cli_count = sc["cli"]
+    gps_snap = sc["gps"]
+    wigle_ready = sc["wigle"]
+    sec_count = sc["sec"]
     y = 16
     d.text((2, y), f"AP:{total} CLI:{cli_count} Wigle:{wigle_ready}", font=font_sm, fill="#FFFFFF")
     y += 14
@@ -1249,7 +1270,7 @@ def _draw_stats(lcd, font, font_sm):
     # Channel distribution (mini heatmap)
     if total > 0 and y < 100:
         y += 2
-        ch_count = Counter(n["channel"] for n in nets)
+        ch_count = sc["ch"]
         max_ch = max(ch_count.values()) if ch_count else 1
         d.text((2, y), "CH:", font=font_sm, fill="#666")
         for i, ch in enumerate(CHANNELS_24):
@@ -1434,7 +1455,13 @@ def _draw_channels(lcd, font, font_sm):
     lcd.LCD_ShowImage(img, 0, 0)
 
 
+_nets_cache = []
+_nets_cache_sort = -1
+_nets_cache_ts = 0
+
+
 def _draw_networks(lcd, font, font_sm, scroll_pos, sort):
+    global _nets_cache, _nets_cache_sort, _nets_cache_ts
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
     d = ScaledDraw(img)
 
@@ -1442,18 +1469,22 @@ def _draw_networks(lcd, font, font_sm, scroll_pos, sort):
     d.rectangle((0, 0, 127, 12), fill="#111")
     d.text((2, 1), f"NETWORKS [{sort_names[sort]}]", font=font_sm, fill="#00FF00")
 
-    with lock:
-        nets = list(networks.values())
-
-    # Sort
-    if sort == 0:
-        nets.sort(key=lambda n: n["signal"], reverse=True)
-    elif sort == 1:
-        nets.sort(key=lambda n: n["ssid"].lower())
-    elif sort == 2:
-        sec_order = {"Open": 0, "WEP": 1, "WPA": 2, "WPA2-PSK": 3,
-                     "WPA2-EAP": 4, "WPA3-SAE": 5}
-        nets.sort(key=lambda n: sec_order.get(n["security"], 3))
+    now = time.time()
+    if now - _nets_cache_ts > 2.0 or sort != _nets_cache_sort:
+        with lock:
+            nets = list(networks.values())
+        if sort == 0:
+            nets.sort(key=lambda n: n["signal"], reverse=True)
+        elif sort == 1:
+            nets.sort(key=lambda n: n["ssid"].lower())
+        elif sort == 2:
+            sec_order = {"Open": 0, "WEP": 1, "WPA": 2, "WPA2-PSK": 3,
+                         "WPA2-EAP": 4, "WPA3-SAE": 5}
+            nets.sort(key=lambda n: sec_order.get(n["security"], 3))
+        _nets_cache = nets
+        _nets_cache_sort = sort
+        _nets_cache_ts = now
+    nets = _nets_cache
 
     if not nets:
         d.text((10, 55), "No networks", font=font_sm, fill="#444")
@@ -1491,6 +1522,9 @@ _MAP_TILE_CACHE = "/root/Raspyjack/loot/wardriving/.tilecache"
 _MAP_TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
 _map_bg = None
 _map_bbox = None
+_map_overlay_cache = None
+_map_overlay_ts = 0
+_map_overlay_count = 0
 
 
 def _lat_to_merc(lat):
@@ -1498,8 +1532,11 @@ def _lat_to_merc(lat):
     return math.log(math.tan(math.pi / 4 + math.radians(lat) / 2))
 
 
+_tile_download_lock = threading.Lock()
+
+
 def _fetch_map_tile(z, x, y):
-    """Load tile from cache only. Download if not scanning."""
+    """Load tile from cache, download in background if missing."""
     os.makedirs(_MAP_TILE_CACHE, exist_ok=True)
     cache_path = os.path.join(_MAP_TILE_CACHE, f"{z}_{x}_{y}.png")
     if os.path.isfile(cache_path):
@@ -1507,17 +1544,17 @@ def _fetch_map_tile(z, x, y):
             return Image.open(cache_path).convert("RGB")
         except Exception:
             pass
-    # Only download if NOT actively scanning (avoid lag during wardriving)
-    if _scanning.is_set():
-        return None
     url = _MAP_TILE_URL.format(z=z, x=x, y=y)
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "RaspyJack/1.0"})
-        with urllib.request.urlopen(req, timeout=6) as resp:
-            data = resp.read()
-        with open(cache_path, "wb") as f:
-            f.write(data)
-        return Image.open(BytesIO(data)).convert("RGB")
+        with _tile_download_lock:
+            if os.path.isfile(cache_path):
+                return Image.open(cache_path).convert("RGB")
+            req = urllib.request.Request(url, headers={"User-Agent": "RaspyJack/1.0"})
+            with urllib.request.urlopen(req, timeout=4) as resp:
+                data = resp.read()
+            with open(cache_path, "wb") as f:
+                f.write(data)
+            return Image.open(BytesIO(data)).convert("RGB")
     except Exception:
         return None
 
@@ -1567,7 +1604,7 @@ def _map_project(lat, lon, bbox, width, height):
 
 
 def _draw_map(lcd, font, font_sm):
-    global _map_bg, _map_bbox
+    global _map_bg, _map_bbox, _map_overlay_cache, _map_overlay_ts, _map_overlay_count
 
     with lock:
         gps_snap = dict(gps_data) if gps_data else None
@@ -1611,6 +1648,7 @@ def _draw_map(lcd, font, font_sm):
             lcd.LCD_ShowImage(_loading, 0, 0)
         try:
             _map_bg, _map_bbox = _build_map_bg(cur_lat, cur_lon, WIDTH, HEIGHT)
+            _map_overlay_cache = None
         except Exception:
             pass
 
@@ -1618,42 +1656,51 @@ def _draw_map(lcd, font, font_sm):
         img = _map_bg.copy()
         d = ImageDraw.Draw(img)
 
-        # Draw GPS APs
-        gps_nets = [n for n in nets if n.get("gps")]
-        gps_nets.sort(key=lambda n: n.get("first_seen", ""))
+        # Draw GPS APs (cached overlay, refresh every 3s)
+        now_map = time.time()
+        rebuild_overlay = (now_map - _map_overlay_ts > 3.0 or
+                           _map_overlay_count != net_count or
+                           _map_overlay_cache is None)
+        if rebuild_overlay:
+            gps_nets = [n for n in nets if n.get("gps")]
+            gps_nets.sort(key=lambda n: n.get("first_seen", ""))
+            overlay = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
+            od = ImageDraw.Draw(overlay)
+            if len(gps_nets) >= 2:
+                pts = [_map_project(n["gps"]["lat"], n["gps"]["lon"], _map_bbox, WIDTH, HEIGHT) for n in gps_nets]
+                for i in range(len(pts) - 1):
+                    x1, y1 = pts[i]
+                    x2, y2 = pts[i + 1]
+                    if (-10 <= x1 <= WIDTH + 10 and -10 <= y1 <= HEIGHT + 10) or \
+                       (-10 <= x2 <= WIDTH + 10 and -10 <= y2 <= HEIGHT + 10):
+                        ratio = i / max(1, len(pts) - 1)
+                        r = int(100 * (1 - ratio))
+                        g = int(100 * ratio)
+                        od.line([(x1, y1), (x2, y2)], fill=(r, g, 60, 255), width=1)
+            for n in gps_nets:
+                x, y = _map_project(n["gps"]["lat"], n["gps"]["lon"], _map_bbox, WIDTH, HEIGHT)
+                if x < -5 or x > WIDTH + 5 or y < -5 or y > HEIGHT + 5:
+                    continue
+                sec = n.get("security", "")
+                if "WPA3" in sec:
+                    color = "#00ff88"
+                elif "WPA2" in sec:
+                    color = "#00ccff"
+                elif "WPA" in sec:
+                    color = "#ffaa00"
+                elif "WEP" in sec:
+                    color = "#ff8800"
+                elif "OPEN" in sec or "OPN" in sec:
+                    color = "#ff3333"
+                else:
+                    color = "#888"
+                od.ellipse([x - 2, y - 2, x + 2, y + 2], fill=color)
+            _map_overlay_cache = overlay
+            _map_overlay_ts = now_map
+            _map_overlay_count = net_count
 
-        # Route line
-        if len(gps_nets) >= 2:
-            pts = [_map_project(n["gps"]["lat"], n["gps"]["lon"], _map_bbox, WIDTH, HEIGHT) for n in gps_nets]
-            for i in range(len(pts) - 1):
-                x1, y1 = pts[i]
-                x2, y2 = pts[i + 1]
-                if (-10 <= x1 <= WIDTH + 10 and -10 <= y1 <= HEIGHT + 10) or \
-                   (-10 <= x2 <= WIDTH + 10 and -10 <= y2 <= HEIGHT + 10):
-                    ratio = i / max(1, len(pts) - 1)
-                    r = int(100 * (1 - ratio))
-                    g = int(100 * ratio)
-                    d.line([(x1, y1), (x2, y2)], fill=(r, g, 60), width=1)
-
-        # AP dots
-        for n in gps_nets:
-            x, y = _map_project(n["gps"]["lat"], n["gps"]["lon"], _map_bbox, WIDTH, HEIGHT)
-            if x < -5 or x > WIDTH + 5 or y < -5 or y > HEIGHT + 5:
-                continue
-            sec = n.get("security", "")
-            if "WPA3" in sec:
-                color = "#00ff88"
-            elif "WPA2" in sec:
-                color = "#00ccff"
-            elif "WPA" in sec:
-                color = "#ffaa00"
-            elif "WEP" in sec:
-                color = "#ff8800"
-            elif "OPEN" in sec or "OPN" in sec:
-                color = "#ff3333"
-            else:
-                color = "#888"
-            d.ellipse([x - 2, y - 2, x + 2, y + 2], fill=color)
+        if _map_overlay_cache:
+            img.paste(_map_overlay_cache, (0, 0), _map_overlay_cache)
 
         # Current position — pulsing cross
         cx, cy = _map_project(cur_lat, cur_lon, _map_bbox, WIDTH, HEIGHT)
