@@ -164,6 +164,11 @@ if [[ "$DISPLAY_TYPE" == "CARDPUTER_320" ]]; then
   sudo systemctl stop lightdm.service 2>/dev/null || true
   sudo systemctl disable lightdm.service 2>/dev/null || true
   info "LightDM disabled — HDMI available for RaspyJack mirroring"
+
+  step "Disabling PipeWire/WirePlumber (frees audio device for direct ALSA) …"
+  sudo systemctl --user --global disable pipewire.service pipewire.socket pipewire-pulse.service pipewire-pulse.socket wireplumber.service 2>/dev/null || true
+  sudo pkill -9 pipewire wireplumber pipewire-pulse 2>/dev/null || true
+  info "PipeWire disabled — ALSA direct access for audio"
 fi
 
 # ───── 2 ▸ install / upgrade required APT packages ───────────

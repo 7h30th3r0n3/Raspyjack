@@ -420,7 +420,7 @@ def _mode_fm(sdr, settings):
                 fm_proc = None
                 playing = False
             else:
-                fm_proc = start_fm_audio(freq, settings.get("audio_device", "plughw:1,0"))
+                fm_proc = start_fm_audio(freq, settings.get("audio_device", "default"))
                 playing = True
             time.sleep(DEBOUNCE)
         elif btn == "UP":
@@ -428,14 +428,14 @@ def _mode_fm(sdr, settings):
             settings["center_freq"] = freq
             if playing:
                 stop_fm_audio(fm_proc)
-                fm_proc = start_fm_audio(freq, settings.get("audio_device", "plughw:1,0"))
+                fm_proc = start_fm_audio(freq, settings.get("audio_device", "default"))
             time.sleep(DEBOUNCE)
         elif btn == "DOWN":
             freq = max(87_500_000, freq - step)
             settings["center_freq"] = freq
             if playing:
                 stop_fm_audio(fm_proc)
-                fm_proc = start_fm_audio(freq, settings.get("audio_device", "plughw:1,0"))
+                fm_proc = start_fm_audio(freq, settings.get("audio_device", "default"))
             time.sleep(DEBOUNCE)
         elif btn == "RIGHT":
             preset_idx = (preset_idx + 1) % len(FM_STATIONS)
@@ -443,7 +443,7 @@ def _mode_fm(sdr, settings):
             settings["center_freq"] = freq
             if playing:
                 stop_fm_audio(fm_proc)
-                fm_proc = start_fm_audio(freq, settings.get("audio_device", "plughw:1,0"))
+                fm_proc = start_fm_audio(freq, settings.get("audio_device", "default"))
             time.sleep(DEBOUNCE)
         elif btn == "LEFT":
             preset_idx = (preset_idx - 1) % len(FM_STATIONS)
@@ -451,7 +451,7 @@ def _mode_fm(sdr, settings):
             settings["center_freq"] = freq
             if playing:
                 stop_fm_audio(fm_proc)
-                fm_proc = start_fm_audio(freq, settings.get("audio_device", "plughw:1,0"))
+                fm_proc = start_fm_audio(freq, settings.get("audio_device", "default"))
             time.sleep(DEBOUNCE)
         time.sleep(0.05)
     if fm_proc:

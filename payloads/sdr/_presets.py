@@ -43,7 +43,7 @@ DEFAULT_SETTINGS = {
     "colormap": "turbo",
     "db_min": -70,
     "db_max": -10,
-    "audio_device": "plughw:1,0",
+    "audio_device": "default",
     "waterfall_fps": 10,
     "scanner_threshold": -45,
     "scanner_dwell": 0.3,

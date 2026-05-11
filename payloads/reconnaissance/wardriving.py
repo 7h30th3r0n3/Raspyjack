@@ -545,10 +545,12 @@ def _packet_handler(pkt):
                     "beacon_count": 1,
                 }
                 _append_live_csv(bssid, networks[bssid])
+                _dirty_bssids.add(bssid)
             else:
                 net = networks[bssid]
                 net["last_seen"] = now
                 net["beacon_count"] += 1
+                _dirty_bssids.add(bssid)
                 # Signal averaging (rolling average)
                 net["_sig_sum"] += sig
                 net["_sig_count"] += 1
@@ -856,22 +858,22 @@ def _init_db():
 
 
 _db_saved_count = 0
+_dirty_bssids = set()  # networks modified since last save
 
 
 def _save_to_db():
-    """Save networks to SQLite — only new/changed ones."""
+    """Save only dirty (modified) networks to SQLite."""
     global _db_saved_count
     try:
+        with lock:
+            if not _dirty_bssids:
+                return
+            to_save = {b: networks[b] for b in _dirty_bssids if b in networks}
+            _dirty_bssids.clear()
+            _db_saved_count = len(networks)
         conn = sqlite3.connect(DB_PATH, timeout=5)
         c = conn.cursor()
-        with lock:
-            # Only save if new networks appeared
-            if len(networks) == _db_saved_count:
-                conn.close()
-                return
-            nets = dict(networks)
-            _db_saved_count = len(networks)
-        for bssid, n in nets.items():
+        for bssid, n in to_save.items():
             gps = n.get("gps")
             lat = gps["lat"] if gps else None
             lon = gps["lon"] if gps else None

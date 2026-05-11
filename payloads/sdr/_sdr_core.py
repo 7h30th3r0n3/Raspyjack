@@ -267,14 +267,14 @@ class SDRDevice:
         return self._sample_rate
 
 
-def start_fm_audio(freq_hz, device="plughw:1,0"):
+def start_fm_audio(freq_hz, device="default"):
     _kill_stale()
     cmd = (
-        f"rtl_fm -f {freq_hz} -M wbfm -s 200000 -r 48000 - "
+        f"rtl_fm -f {freq_hz} -M wbfm -s 200000 -r 48000 -g 20 - "
         f"| aplay -D {device} -f S16_LE -r 48000 -c 1 -q"
     )
     return subprocess.Popen(
-        cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        cmd, shell=True, stderr=subprocess.DEVNULL,
         preexec_fn=os.setsid,
     )
 
