@@ -267,10 +267,12 @@ def _gps_updater():
     gps_ready = True
     threading.Thread(target=_gpsd_sat_poller, daemon=True).start()
 
+    _no_fix_count = 0
     while not _shutdown.is_set():
         try:
             pkt = gpsd_mod.get_current()
             if hasattr(pkt, 'mode') and pkt.mode >= 2:
+                _no_fix_count = 0
                 with lock:
                     gps_data = {
                         "lat": pkt.lat,
@@ -282,6 +284,12 @@ def _gps_updater():
                         "mode": pkt.mode,
                         "ts": time.time(),
                     }
+            else:
+                _no_fix_count += 1
+                if _no_fix_count > 30:
+                    with lock:
+                        if gps_data:
+                            gps_data["mode"] = 0
         except Exception:
             pass
 
@@ -1589,22 +1597,22 @@ def _draw_map(lcd, font, font_sm):
     need_reload = _map_bg is None or _map_bbox is None
     if not need_reload:
         cx, cy = _map_project(cur_lat, cur_lon, _map_bbox, WIDTH, HEIGHT)
-        margin = WIDTH // 5
+        margin = WIDTH // 8
         if cx < margin or cx > WIDTH - margin or cy < margin or cy > HEIGHT - margin:
             need_reload = True
     if need_reload:
-        _loading = Image.new("RGB", (WIDTH, HEIGHT), "black")
-        _ld = ScaledDraw(_loading)
-        _ld.rectangle((0, 0, 127, 12), fill="#111")
-        _ld.text((2, 1), "MAP", font=font_sm, fill="#00CCFF")
-        _ld.text((10, 50), "Loading tiles...", font=font_sm, fill="#FFAA00")
-        _ld.text((10, 65), f"{cur_lat:.4f}, {cur_lon:.4f}", font=font_sm, fill="#666")
-        lcd.LCD_ShowImage(_loading, 0, 0)
+        if _map_bg is None:
+            _loading = Image.new("RGB", (WIDTH, HEIGHT), "black")
+            _ld = ScaledDraw(_loading)
+            _ld.rectangle((0, 0, 127, 12), fill="#111")
+            _ld.text((2, 1), "MAP", font=font_sm, fill="#00CCFF")
+            _ld.text((10, 50), "Loading tiles...", font=font_sm, fill="#FFAA00")
+            _ld.text((10, 65), f"{cur_lat:.4f}, {cur_lon:.4f}", font=font_sm, fill="#666")
+            lcd.LCD_ShowImage(_loading, 0, 0)
         try:
             _map_bg, _map_bbox = _build_map_bg(cur_lat, cur_lon, WIDTH, HEIGHT)
         except Exception:
-            _map_bg = None
-            _map_bbox = None
+            pass
 
     if _map_bg is not None and _map_bbox is not None:
         img = _map_bg.copy()
