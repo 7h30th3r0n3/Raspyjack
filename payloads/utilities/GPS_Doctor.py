@@ -86,7 +86,10 @@ GPS_TRACKER_PATH = "/root/Raspyjack/payloads/hardware/gps_tracker.py"
 GPSD_DEFAULT     = "/etc/default/gpsd"
 
 # ── Display ───────────────────────────────────────────────────────────────────
-MAX_VISIBLE = 8   # log lines visible at once (below header, above footer)
+LINE_H      = 10   # line height for log entries
+LOG_Y_START = 20   # first log line Y position
+LOG_Y_END   = 116  # footer starts here
+MAX_VISIBLE = (LOG_Y_END - LOG_Y_START) // LINE_H  # ~9 lines
 
 
 def _render():
@@ -95,8 +98,8 @@ def _render():
     d   = ScaledDraw(img)
 
     # Header bar
-    d.rectangle((0, 0, 127, 13), fill="#081828")
-    d.text((2, 2), "GPS SETUP DOCTOR", font=font_bold, fill=C["title"])
+    d.rectangle((0, 0, 127, 12), fill="#081828")
+    d.text((2, 1), "GPS SETUP DOCTOR", font=font_bold, fill=C["title"])
 
     # Progress bar
     with _lock:
@@ -105,24 +108,24 @@ def _render():
     err_count = sum(1 for _, col in lines if col == C["err"])
     bar_w  = 124
     filled = int(bar_w * ok_count / TOTAL_STEPS)
-    d.rectangle((2, 14, 2 + bar_w, 18), fill=C["bar_off"])
+    d.rectangle((2, 13, 2 + bar_w, 17), fill=C["bar_off"])
     if filled:
         bar_col = C["bar_err"] if err_count else C["bar_ok"]
-        d.rectangle((2, 14, 2 + filled, 18), fill=bar_col)
+        d.rectangle((2, 13, 2 + filled, 17), fill=bar_col)
 
     # Log lines
     start   = _scroll_idx if _review_mode else max(0, len(lines) - MAX_VISIBLE)
     visible = lines[start: start + MAX_VISIBLE]
-    y = 22
+    y = LOG_Y_START
     for text, color in visible:
-        d.text((2, y), text[:21], font=font_tiny, fill=color)
-        y += 13
+        d.text((2, y), text[:24], font=font_tiny, fill=color)
+        y += LINE_H
 
     # Footer bar
-    d.rectangle((0, 117, 127, 127), fill="#081828")
+    d.rectangle((0, LOG_Y_END, 127, 127), fill="#081828")
     if _done:
         if _review_mode:
-            d.text((2, 118), "^v:scroll  OK:sum  K3:exit", font=font_tiny, fill=C["dim"])
+            d.text((2, 118), "^v:scroll OK:sum K3:exit", font=font_tiny, fill=C["dim"])
         else:
             d.text((2, 118), "OK:log  K3:exit", font=font_tiny, fill=C["dim"])
     else:
@@ -585,24 +588,24 @@ def show_summary(results):
     img = Image.new("RGB", (WIDTH, HEIGHT), C["bg"])
     d   = ScaledDraw(img)
 
-    d.rectangle((0, 0, 127, 13), fill="#081828")
-    d.text((2, 2), "GPS SETUP SUMMARY", font=font_bold, fill=C["title"])
+    d.rectangle((0, 0, 127, 12), fill="#081828")
+    d.text((2, 1), "GPS SETUP SUMMARY", font=font_bold, fill=C["title"])
 
-    y = 16
-    for i, (label, ok) in enumerate(zip(labels, results)):
+    y = 14
+    for label, ok in zip(labels, results):
         icon  = "OK" if ok else "!!"
         color = C["ok"] if ok else C["err"]
-        d.text((2, y), f"{icon} {label[:17]}", font=font_tiny, fill=color)
-        y += 12
-        if y > 110:
+        d.text((2, y), f"{icon} {label[:19]}", font=font_tiny, fill=color)
+        y += LINE_H
+        if y > 104:
             break
 
     all_ok = all(results)
     status_text  = "ALL GOOD" if all_ok else "CHECK ERRORS"
     status_color = C["ok"]   if all_ok else C["warn"]
-    d.rectangle((0, 111, 127, 116), fill="#081828")
-    d.text((2, 112), status_text, font=font_tiny, fill=status_color)
-    d.rectangle((0, 117, 127, 127), fill="#081828")
+    d.rectangle((0, 106, 127, 115), fill="#081828")
+    d.text((2, 107), status_text, font=font_tiny, fill=status_color)
+    d.rectangle((0, LOG_Y_END, 127, 127), fill="#081828")
     d.text((2, 118), "OK:log  K3:exit", font=font_tiny, fill=C["dim"])
 
     LCD.LCD_ShowImage(img, 0, 0)
