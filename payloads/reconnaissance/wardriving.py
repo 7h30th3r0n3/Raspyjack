@@ -255,17 +255,13 @@ def _gps_updater():
     global gps_data, gps_ready
 
     if not GPSD_OK:
-        print("[GPS] gpsd-py3 not available", flush=True)
         return
 
-    ok = _start_gpsd()
-    print(f"[GPS] _start_gpsd returned: {ok}", flush=True)
+    _start_gpsd()
 
     try:
         gpsd_mod.connect()
-        print("[GPS] gpsd connect OK", flush=True)
-    except Exception as e:
-        print(f"[GPS] gpsd connect FAILED: {e}", flush=True)
+    except Exception:
         return
 
     gps_ready = True
