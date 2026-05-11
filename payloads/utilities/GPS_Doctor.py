@@ -79,7 +79,10 @@ _done         = False   # setup finished -> KEY3 active
 _lock         = threading.Lock()
 _log_lines    = []      # list of (text, color)
 _scroll_idx   = 0       # scroll offset (review mode)
-_review_mode  = False   # True after completion
+_view_mode    = 0       # 0=summary, 1=log/review, 2=live GPS
+_live_gps     = {}      # latest parsed GPS fields
+_live_nmea    = []      # last few raw NMEA lines
+_last_results = []      # final step results for re-display
 
 TOTAL_STEPS      = 9
 GPS_TRACKER_PATH = "/root/Raspyjack/payloads/hardware/gps_tracker.py"
@@ -87,6 +90,7 @@ GPSD_DEFAULT     = "/etc/default/gpsd"
 
 # ── Display ───────────────────────────────────────────────────────────────────
 MAX_VISIBLE = 8   # log lines visible at once (below header, above footer)
+LIVE_NMEA_MAX = 6  # raw NMEA lines shown in live view
 
 
 def _render():
@@ -121,14 +125,162 @@ def _render():
     # Footer bar
     d.rectangle((0, 117, 127, 127), fill="#081828")
     if _done:
-        if _review_mode:
-            d.text((2, 118), "^v:scroll  K3:exit", font=font_tiny, fill=C["dim"])
-        else:
-            d.text((2, 118), "OK:review  K3:exit", font=font_tiny, fill=C["dim"])
+        d.text((2, 118), "^v:scroll OK:back K3:exit", font=font_tiny, fill=C["dim"])
     else:
         d.text((2, 118), "Running setup...", font=font_tiny, fill=C["dim"])
 
     LCD.LCD_ShowImage(img, 0, 0)
+
+
+def _parse_gga(parts):
+    """Parse $GNGGA / $GPGGA sentence into _live_gps fields."""
+    if len(parts) < 10:
+        return
+    lat_raw, lat_ns = parts[2], parts[3]
+    lon_raw, lon_ns = parts[4], parts[5]
+    fix_q = parts[6]
+    sats = parts[7]
+    alt = parts[9]
+    lat = lon = 0.0
+    try:
+        lat = float(lat_raw[:2]) + float(lat_raw[2:]) / 60.0
+        if lat_ns == "S":
+            lat = -lat
+        lon = float(lon_raw[:3]) + float(lon_raw[3:]) / 60.0
+        if lon_ns == "W":
+            lon = -lon
+    except (ValueError, IndexError):
+        pass
+    _live_gps["lat"] = lat
+    _live_gps["lon"] = lon
+    _live_gps["fix"] = int(fix_q) if fix_q.isdigit() else 0
+    _live_gps["sats"] = sats
+    _live_gps["alt"] = alt
+
+
+def _parse_rmc(parts):
+    """Parse $GNRMC / $GPRMC sentence for speed and status."""
+    if len(parts) < 8:
+        return
+    status = parts[2]
+    speed_kn = parts[7]
+    _live_gps["status"] = "FIX" if status == "A" else "NO FIX"
+    try:
+        _live_gps["speed"] = f"{float(speed_kn) * 1.852:.1f}"
+    except (ValueError, IndexError):
+        _live_gps["speed"] = "0.0"
+
+
+def _render_live():
+    """Render the live GPS data screen."""
+    img = Image.new("RGB", (WIDTH, HEIGHT), C["bg"])
+    d = ScaledDraw(img)
+
+    d.rectangle((0, 0, 127, 13), fill="#081828")
+    fix_status = _live_gps.get("status", "---")
+    fix_col = C["ok"] if fix_status == "FIX" else C["err"]
+    d.text((2, 2), "LIVE GPS", font=font_bold, fill=C["title"])
+    d.text((68, 2), fix_status, font=font_bold, fill=fix_col)
+
+    y = 16
+    lat = _live_gps.get("lat", 0.0)
+    lon = _live_gps.get("lon", 0.0)
+    sats = _live_gps.get("sats", "0")
+    alt = _live_gps.get("alt", "---")
+    spd = _live_gps.get("speed", "0.0")
+    fix_q = _live_gps.get("fix", 0)
+
+    sats_col = C["ok"] if int(sats or "0") >= 4 else C["warn"]
+    d.text((2, y), f"Sat: {sats}", font=font, fill=sats_col)
+    d.text((68, y), f"Q:{fix_q}", font=font, fill=C["info"])
+    y += 13
+
+    d.text((2, y), f"Lat: {lat:+.6f}", font=font, fill="#ffffff")
+    y += 13
+    d.text((2, y), f"Lon: {lon:+.6f}", font=font, fill="#ffffff")
+    y += 13
+    d.text((2, y), f"Alt: {alt}m", font=font, fill=C["info"])
+    d.text((68, y), f"{spd}km/h", font=font, fill=C["info"])
+    y += 15
+
+    # Raw NMEA scroll
+    d.rectangle((0, y, 127, y), fill=C["dim"])
+    y += 2
+    with _lock:
+        lines = list(_live_nmea[-LIVE_NMEA_MAX:])
+    for nmea in lines:
+        tag = nmea.split(",")[0] if "," in nmea else nmea
+        short = nmea[:21]
+        col = C["ok"] if "GGA" in tag or "RMC" in tag else C["dim"]
+        d.text((2, y), short, font=font_tiny, fill=col)
+        y += 10
+        if y > 116:
+            break
+
+    d.rectangle((0, 117, 127, 127), fill="#081828")
+    d.text((2, 118), "OK:back  K3:exit", font=font_tiny, fill=C["dim"])
+    LCD.LCD_ShowImage(img, 0, 0)
+
+
+_live_thread_running = False
+
+
+def _live_reader():
+    """Background thread: read NMEA from detected GPS and update _live_gps."""
+    global _live_thread_running
+    try:
+        import serial as _serial
+        from payloads._gps_helper import get_detected_info
+    except ImportError:
+        return
+
+    dev, baud = get_detected_info()
+    if not dev:
+        try:
+            from payloads._gps_helper import detect_gps
+            dev, baud = detect_gps()
+        except Exception:
+            pass
+    if not dev:
+        return
+
+    # Stop gpsd to access port directly
+    run("systemctl stop gpsd gpsd.socket 2>/dev/null")
+    run("pkill -x gpsd 2>/dev/null")
+    time.sleep(0.5)
+
+    try:
+        ser = _serial.Serial(dev, baud or 9600, timeout=1.5)
+    except Exception:
+        return
+
+    while _live_thread_running:
+        try:
+            raw = ser.readline().decode("ascii", errors="ignore").strip()
+        except Exception:
+            break
+        if not raw.startswith("$"):
+            continue
+        with _lock:
+            _live_nmea.append(raw)
+            if len(_live_nmea) > 50:
+                del _live_nmea[:20]
+        parts = raw.split(",")
+        tag = parts[0]
+        if "GGA" in tag:
+            _parse_gga(parts)
+        elif "RMC" in tag:
+            _parse_rmc(parts)
+        if _view_mode == 2:
+            _render_live()
+
+    ser.close()
+    # Restart gpsd when leaving live mode
+    try:
+        from payloads._gps_helper import start_gps
+        start_gps()
+    except Exception:
+        run("systemctl start gpsd 2>/dev/null")
 
 
 def log(text, color=None):
@@ -603,7 +755,7 @@ def show_summary(results):
     d.rectangle((0, 111, 127, 116), fill="#081828")
     d.text((2, 112), status_text, font=font_tiny, fill=status_color)
     d.rectangle((0, 117, 127, 127), fill="#081828")
-    d.text((2, 118), "OK:log  K3:exit", font=font_tiny, fill=C["dim"])
+    d.text((2, 118), "OK:live  K1:log  K3:exit", font=font_tiny, fill=C["dim"])
 
     LCD.LCD_ShowImage(img, 0, 0)
 
@@ -611,7 +763,7 @@ def show_summary(results):
 # ── Setup runner (background thread) ─────────────────────────────────────────
 
 def run_setup():
-    global _done
+    global _done, _last_results
 
     results = []
 
@@ -631,7 +783,7 @@ def run_setup():
     r8 = step8_patch_gps_tracker();   results.append(r8)
     r9 = step9_test_gps(port);        results.append(r9)
 
-    # Brief pause so user can read last log line
+    _last_results = list(results)
     time.sleep(1.5)
     show_summary(results)
     _done = True
@@ -640,17 +792,17 @@ def run_setup():
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
-    global _review_mode, _scroll_idx, _done
+    global _view_mode, _scroll_idx, _done, _live_thread_running
 
     log("GPS SETUP DOCTOR", C["title"])
     log("Checking dependencies...", C["info"])
     time.sleep(0.5)
 
-    # Run setup in background so the LCD stays responsive
     t = threading.Thread(target=run_setup, daemon=True)
     t.start()
 
-    debounce   = 0.25
+    live_thread = None
+    debounce = 0.25
     last_press = 0.0
 
     while True:
@@ -663,12 +815,38 @@ def main():
             if btn == "KEY3" and _done:
                 break
 
-            if btn == "OK" and _done:
-                _review_mode = not _review_mode
-                _scroll_idx  = max(0, len(_log_lines) - MAX_VISIBLE)
-                _render()
+            if _done and btn == "OK":
+                if _view_mode == 0:
+                    # Summary → Live GPS
+                    _view_mode = 2
+                    _live_thread_running = True
+                    live_thread = threading.Thread(target=_live_reader, daemon=True)
+                    live_thread.start()
+                    _render_live()
+                elif _view_mode == 2:
+                    # Live → Summary
+                    _live_thread_running = False
+                    if live_thread:
+                        live_thread.join(timeout=3)
+                        live_thread = None
+                    _view_mode = 0
+                    show_summary(_last_results)
+                elif _view_mode == 1:
+                    _view_mode = 0
+                    show_summary(_last_results)
 
-            if _review_mode:
+            if _done and btn == "KEY1":
+                if _view_mode != 1:
+                    if _view_mode == 2:
+                        _live_thread_running = False
+                        if live_thread:
+                            live_thread.join(timeout=3)
+                            live_thread = None
+                    _view_mode = 1
+                    _scroll_idx = max(0, len(_log_lines) - MAX_VISIBLE)
+                    _render()
+
+            if _view_mode == 1:
                 with _lock:
                     total = len(_log_lines)
                 if btn == "UP":
@@ -681,6 +859,9 @@ def main():
         time.sleep(0.05)
 
     # Cleanup
+    _live_thread_running = False
+    if live_thread:
+        live_thread.join(timeout=3)
     t.join(timeout=2)
     LCD.LCD_Clear()
     GPIO.cleanup()
