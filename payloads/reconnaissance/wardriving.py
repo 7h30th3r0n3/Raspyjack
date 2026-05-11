@@ -167,29 +167,37 @@ signal.signal(signal.SIGTERM, _cleanup_signal)
 
 
 def _detect_gps_device():
-    """Auto-detect GPS device path."""
-    for dev in ["/dev/ttyACM0", "/dev/ttyACM1", "/dev/ttyUSB0",
-                "/dev/ttyUSB1", "/dev/ttyAMA0"]:
-        if os.path.exists(dev):
-            return dev
-    return None
+    """Auto-detect GPS device path (delegates to _gps_helper)."""
+    try:
+        from payloads._gps_helper import detect_gps
+        dev, baud = detect_gps()
+        return dev
+    except ImportError:
+        for dev in ["/dev/ttyACM0", "/dev/ttyACM1", "/dev/ttyUSB0",
+                    "/dev/ttyUSB1", "/dev/ttyAMA0", "/dev/ttyS0"]:
+            if os.path.exists(dev):
+                return dev
+        return None
 
 
 def _start_gpsd():
-    """Start gpsd daemon if not running."""
+    """Start gpsd with auto-detected GPS (delegates to _gps_helper)."""
+    try:
+        from payloads._gps_helper import start_gps
+        return start_gps()
+    except ImportError:
+        pass
     try:
         r = subprocess.run(["pgrep", "-x", "gpsd"], capture_output=True)
         if r.returncode == 0:
-            return True  # already running
-
+            return True
         dev = _detect_gps_device()
         if not dev:
             return False
-
-        subprocess.run(["sudo", "killall", "gpsd"], capture_output=True)
+        subprocess.run(["killall", "-9", "gpsd"], capture_output=True)
         time.sleep(0.5)
         subprocess.Popen(
-            ["sudo", "gpsd", "-n", dev],
+            ["gpsd", "-n", dev],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
         time.sleep(2)
