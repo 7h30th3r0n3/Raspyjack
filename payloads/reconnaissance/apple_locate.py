@@ -56,7 +56,7 @@ font_bold = scaled_font(10)
 TILE_CACHE = "/root/Raspyjack/loot/wardriving/.tilecache"
 TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
 APPLE_URL = "https://gs-loc.apple.com/clls/wloc"
-APPLE_UA = "locationd/1753.17 CFNetwork/711.1.12 Darwin/14.0.0"
+APPLE_UA = "locationd/1756.1.15 CFNetwork/711.5.6 Darwin/14.0.0"
 
 
 # ---------------------------------------------------------------------------
@@ -278,11 +278,11 @@ def _query_apple(bssids):
     payload = _encode_apple_request(bssids)
 
     header = (
-        b"\x00\x01\x00\x05" + b"en_US"
-        + b"\x00\x13" + b"com.apple.locationd"
-        + b"\x00\x0c" + b"17.4.1.21G101"
-        + b"\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00"
-        + b"\x00\x00\x00\x01\x00\x00\x00"
+        b"\x00\x01\x00\x05en_US"
+        b"\x00\x13com.apple.locationd"
+        b"\x00\x0c8.4.1.12H321"
+        b"\x00\x00\x00\x01\x00\x00"
+        b"\x00\x00\x00\x01"
         + struct.pack(">H", len(payload))
     )
     body = header + payload
@@ -528,20 +528,20 @@ def main():
             return
 
         top = scanned[:10]
-        bssids = [ap["bssid"] for ap in top]
+        bssids = [ap["bssid"].upper() for ap in top]
 
         _draw_status("Querying Apple...", f"{len(bssids)} BSSIDs")
 
         apple_data = _query_apple(bssids)
         if not apple_data:
-            _draw_no_result("Apple API failed")
+            _draw_no_result("APs not in Apple DB")
             return
 
         _draw_status("Triangulating...", f"{len(apple_data)} results")
         result = _triangulate(top, apple_data)
 
         if not result:
-            _draw_no_result("No match in DB")
+            _draw_no_result("No match for tri.")
             return
 
         if view == 0:
