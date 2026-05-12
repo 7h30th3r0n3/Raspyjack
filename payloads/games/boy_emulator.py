@@ -57,6 +57,31 @@ ROMS_DIR = "/root/Raspyjack/roms"
 ROM_EXTENSIONS = (".gb", ".gbc")
 KEY3_HOLD_EXIT = 1.0  # seconds to hold KEY3 for exit
 
+# Emulator settings (persisted in roms/.pyboy_settings.json)
+SETTINGS_FILE = os.path.join(ROMS_DIR, ".pyboy_settings.json")
+SPEED_OPTIONS = [("1x", 1.0), ("1.5x", 1.5), ("2x", 2.0), ("3x", 3.0), ("Turbo", 0)]
+_emu_settings = {"speed": 0, "render_skip": 4}  # speed index, render_skip
+
+
+def _load_settings():
+    global _emu_settings
+    try:
+        import json
+        with open(SETTINGS_FILE, "r") as f:
+            _emu_settings.update(json.load(f))
+    except Exception:
+        pass
+
+
+def _save_settings():
+    try:
+        import json
+        os.makedirs(os.path.dirname(SETTINGS_FILE), exist_ok=True)
+        with open(SETTINGS_FILE, "w") as f:
+            json.dump(_emu_settings, f)
+    except Exception:
+        pass
+
 # Game Boy resolution
 GB_W, GB_H = 160, 144
 
@@ -86,7 +111,8 @@ def _list_roms():
 
 
 def _draw_browser(roms, cursor, scroll):
-    """Draw ROM selection screen."""
+    """Draw ROM selection screen with Settings as first item."""
+    display_list = ["⚙ Settings"] + roms
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
     d = ScaledDraw(img)
 
@@ -95,16 +121,15 @@ def _draw_browser(roms, cursor, scroll):
     d.text((2, 1), "GAME BOY", font=font, fill=(0, 200, 0))
     d.text((65, 1), f"{len(roms)} ROMs", font=font, fill=(0, 120, 0))
 
-    if not roms:
+    if not roms and cursor > 0:
         d.text((4, 30), "No ROMs found!", font=font, fill=(255, 100, 100))
         d.text((4, 45), "Place .gb/.gbc in:", font=font, fill=(150, 150, 150))
         d.text((4, 58), "/root/Raspyjack/", font=font, fill=(0, 200, 0))
         d.text((4, 70), "  roms/", font=font, fill=(0, 200, 0))
         d.text((4, 95), "KEY3 = Exit", font=font, fill=(100, 100, 100))
     else:
-        # ROM list (7 visible)
         visible = 7
-        for i in range(min(visible, len(roms) - scroll)):
+        for i in range(min(visible, len(display_list) - scroll)):
             idx = scroll + i
             y = 16 + i * 14
             is_sel = idx == cursor
@@ -113,20 +138,21 @@ def _draw_browser(roms, cursor, scroll):
                 d.rectangle((0, y - 1, 127, y + 11), fill=(0, 40, 0))
                 d.rectangle((0, y - 1, 2, y + 11), fill=(0, 200, 0))
 
-            name = roms[idx]
-            # Remove extension, truncate
-            display = os.path.splitext(name)[0][:18]
-            col = (0, 255, 0) if is_sel else (0, 120, 0)
-            d.text((5, y), display, font=font, fill=col)
+            item = display_list[idx]
+            if idx == 0:
+                col = (100, 180, 255) if is_sel else (60, 120, 180)
+                d.text((5, y), item[:18], font=font, fill=col)
+            else:
+                name = item
+                display = os.path.splitext(name)[0][:18]
+                col = (0, 255, 0) if is_sel else (0, 120, 0)
+                d.text((5, y), display, font=font, fill=col)
+                if name.lower().endswith(".gbc"):
+                    d.text((115, y), "C", font=font, fill=(200, 100, 255))
 
-            # GBC badge
-            if name.lower().endswith(".gbc"):
-                d.text((115, y), "C", font=font, fill=(200, 100, 255))
-
-        # Scrollbar
-        if len(roms) > visible:
-            bar_h = max(5, int(100 * visible / len(roms)))
-            bar_y = 16 + int((100 - bar_h) * scroll / max(1, len(roms) - visible))
+        if len(display_list) > visible:
+            bar_h = max(5, int(100 * visible / len(display_list)))
+            bar_y = 16 + int((100 - bar_h) * scroll / max(1, len(display_list) - visible))
             d.rectangle((125, bar_y, 127, bar_y + bar_h), fill=(0, 80, 0))
 
     # Footer
@@ -136,11 +162,79 @@ def _draw_browser(roms, cursor, scroll):
     LCD.LCD_ShowImage(img, 0, 0)
 
 
+def _settings_screen():
+    """PyBoy settings menu."""
+    _load_settings()
+    cursor = 0
+    items = [
+        ("Speed", "speed", [s[0] for s in SPEED_OPTIONS]),
+        ("Frame skip", "render_skip", ["2", "3", "4", "6", "8"]),
+    ]
+    skip_vals = [2, 3, 4, 6, 8]
+
+    while running:
+        img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+        d = ScaledDraw(img)
+        d.rectangle((0, 0, 127, 12), fill=(20, 20, 40))
+        d.text((2, 1), "SETTINGS", font=font, fill=(100, 180, 255))
+
+        for i, (label, key, opts) in enumerate(items):
+            y = 20 + i * 18
+            is_sel = i == cursor
+            if is_sel:
+                d.rectangle((0, y - 1, 127, y + 13), fill=(0, 30, 60))
+            col = (255, 255, 255) if is_sel else (100, 180, 255)
+
+            if key == "speed":
+                val_str = SPEED_OPTIONS[_emu_settings.get("speed", 0)][0]
+            elif key == "render_skip":
+                val_str = str(_emu_settings.get("render_skip", 4))
+            else:
+                val_str = str(_emu_settings.get(key, "?"))
+
+            d.text((5, y), f"{label}:", font=font, fill=col)
+            d.text((75, y), f"< {val_str} >", font=font, fill=(0, 255, 0) if is_sel else (0, 150, 0))
+
+        d.rectangle((0, 117, 127, 127), fill=(10, 10, 20))
+        d.text((2, 118), "L/R:Change K3:Back", font=font, fill=(60, 60, 100))
+        LCD.LCD_ShowImage(img, 0, 0)
+
+        btn = get_button(PINS, GPIO)
+        if btn == "KEY3" or btn == "LEFT":
+            _save_settings()
+            return
+        elif btn == "UP":
+            cursor = max(0, cursor - 1)
+            time.sleep(0.2)
+        elif btn == "DOWN":
+            cursor = min(len(items) - 1, cursor + 1)
+            time.sleep(0.2)
+        elif btn in ("RIGHT", "OK"):
+            key = items[cursor][1]
+            if key == "speed":
+                _emu_settings["speed"] = (_emu_settings.get("speed", 0) + 1) % len(SPEED_OPTIONS)
+            elif key == "render_skip":
+                cur_idx = skip_vals.index(_emu_settings.get("render_skip", 4)) if _emu_settings.get("render_skip", 4) in skip_vals else 2
+                _emu_settings["render_skip"] = skip_vals[(cur_idx + 1) % len(skip_vals)]
+            time.sleep(0.25)
+        elif btn == "KEY1":
+            key = items[cursor][1]
+            if key == "speed":
+                _emu_settings["speed"] = (_emu_settings.get("speed", 0) - 1) % len(SPEED_OPTIONS)
+            elif key == "render_skip":
+                cur_idx = skip_vals.index(_emu_settings.get("render_skip", 4)) if _emu_settings.get("render_skip", 4) in skip_vals else 2
+                _emu_settings["render_skip"] = skip_vals[(cur_idx - 1) % len(skip_vals)]
+            time.sleep(0.25)
+
+
 def _rom_browser():
     """ROM selection menu. Returns selected ROM path or None."""
     roms = _list_roms()
     cursor = 0
     scroll = 0
+
+    # Prepend Settings entry
+    display_list = ["⚙ Settings"] + roms
 
     while running:
         _draw_browser(roms, cursor, scroll)
@@ -153,15 +247,18 @@ def _rom_browser():
             if cursor < scroll:
                 scroll = cursor
         elif btn == "DOWN":
-            cursor = min(len(roms) - 1, cursor + 1)
+            cursor = min(len(roms), cursor + 1)
             if cursor >= scroll + 7:
                 scroll = cursor - 6
-        elif btn == "OK" and roms:
-            return os.path.join(ROMS_DIR, roms[cursor])
+        elif btn == "OK":
+            if cursor == 0:
+                _settings_screen()
+            elif roms:
+                return os.path.join(ROMS_DIR, roms[cursor - 1])
         elif btn == "KEY1":
-            # Refresh ROM list
             roms = _list_roms()
-            cursor = min(cursor, max(0, len(roms) - 1))
+            display_list = ["⚙ Settings"] + roms
+            cursor = min(cursor, max(0, len(display_list) - 1))
 
     return None
 
@@ -221,7 +318,15 @@ def _run_emulator(rom_path):
         return
 
     frame_count = 0
-    RENDER_EVERY = 4  # render 1 frame out of N to LCD (~15 FPS display, 60 FPS emulation)
+    _load_settings()
+    speed_idx = _emu_settings.get("speed", 0)
+    speed_mult = SPEED_OPTIONS[min(speed_idx, len(SPEED_OPTIONS) - 1)][1]
+    RENDER_EVERY = _emu_settings.get("render_skip", 4)
+    GB_FPS = 59.7
+    if speed_mult > 0:
+        frame_target = 1.0 / (GB_FPS * speed_mult)
+    else:
+        frame_target = 0  # turbo - no limit
 
     # Pre-allocate canvas for LCD output
     _canvas = Image.new("RGB", (WIDTH, HEIGHT), (0, 0, 0))
@@ -276,6 +381,12 @@ def _run_emulator(rom_path):
                 _canvas.paste((0, 0, 0), (0, 0, WIDTH, HEIGHT))
                 _canvas.paste(scaled, (_ox, _oy))
                 LCD.LCD_ShowImage(_canvas, 0, 0)
+
+            # Frame timing
+            if frame_target > 0:
+                elapsed = time.time() - t0
+                if elapsed < frame_target:
+                    time.sleep(frame_target - elapsed)
 
     finally:
         try:

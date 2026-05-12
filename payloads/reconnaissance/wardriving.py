@@ -36,7 +36,7 @@ import signal
 import threading
 import subprocess
 from datetime import datetime
-from collections import Counter
+from collections import Counter, deque
 
 sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..", "..")))
 
@@ -89,7 +89,7 @@ VIEWS = ["live", "map", "gps", "cards", "channels", "stats", "networks", "export
 AUTOSAVE_INTERVAL = 15   # autosave tick interval (seconds)
 DB_SAVE_TICKS     = 4    # save DB every N ticks (60s)
 WIGLE_SAVE_TICKS  = 8    # rewrite session Wigle CSV every N ticks (120s)
-MAX_NETWORKS = 50000     # prune oldest networks above this limit (safety valve for OOM)
+MAX_NETWORKS = 8000      # keep recent APs in RAM, old ones live in CSV/DB only
 AUTO_MODE = "--auto" in sys.argv
 
 # Known monitor drivers (from _iface_helper)
@@ -134,6 +134,7 @@ _scanning = threading.Event()
 
 # Scan data
 networks = {}          # bssid -> {ssid, channel, signal, security, ...}
+_seen_bssids = set()   # all BSSIDs ever seen (lightweight dedup for evicted APs)
 probes = {}            # client_mac -> {ssids: set, count, last_seen, signal}
 gps_data = None        # {lat, lon, alt, speed, sats, mode, ts}
 gps_ready = False
@@ -141,6 +142,17 @@ current_channel = 0
 scan_start_time = 0
 total_beacons = 0
 total_probes = 0
+
+# Incremental counters (O(1) updates, replaces O(n) scans)
+_inc_sec_count = {}    # security_type -> count
+_inc_ch_count = {}     # channel -> count
+_inc_wigle_count = 0   # APs with GPS
+
+# Ring buffers for O(1) display (replaces O(n) heapq/sort per frame)
+_recent_bssids = deque(maxlen=64)   # (timestamp, bssid) for recent view
+_top_signals = []                    # top 8 by signal, maintained incrementally
+_insertion_order = deque()           # FIFO for O(1) prune (no sort)
+_gps_bssids = deque(maxlen=200)     # recent GPS-bearing BSSIDs for map
 
 # Interfaces
 mon_ifaces = []        # list of active monitor interfaces
@@ -452,13 +464,31 @@ def _get_vendor(mac):
     return OUI_DB.get(prefix, "")
 
 
+def _update_top_signals(bssid, signal):
+    """Maintain top 8 BSSIDs by signal. Minimal alloc."""
+    if len(_top_signals) < 8:
+        _top_signals.append((signal, bssid))
+        return
+    min_idx = 0
+    min_sig = _top_signals[0][0]
+    for i in range(1, len(_top_signals)):
+        if _top_signals[i][0] < min_sig:
+            min_sig = _top_signals[i][0]
+            min_idx = i
+        if _top_signals[i][1] == bssid:
+            _top_signals[i] = (signal, bssid)
+            return
+    if signal > min_sig:
+        _top_signals[min_idx] = (signal, bssid)
+
+
 # ---------------------------------------------------------------------------
 # Packet handler
 # ---------------------------------------------------------------------------
 
 
 def _packet_handler(pkt):
-    global total_beacons, total_probes
+    global total_beacons, total_probes, _inc_wigle_count
 
     if not pkt.haslayer(Dot11):
         return
@@ -477,6 +507,7 @@ def _packet_handler(pkt):
             sig = getattr(pkt, "dBm_AntSignal", -99)
             now = datetime.now().isoformat()
 
+            now_ts_p = time.time()
             with lock:
                 total_probes += 1
                 if client_mac not in probes:
@@ -485,10 +516,12 @@ def _packet_handler(pkt):
                         "count": 0,
                         "last_seen": now,
                         "signal": sig,
+                        "_ts": now_ts_p,
                     }
                 p = probes[client_mac]
                 p["count"] += 1
                 p["last_seen"] = now
+                p["_ts"] = now_ts_p
                 if probe_ssid:
                     p["ssids"].add(probe_ssid)
                 # Signal averaging (rolling)
@@ -538,20 +571,25 @@ def _packet_handler(pkt):
         vendor = _get_vendor(bssid)
 
         now = datetime.now().isoformat()
+        now_ts = time.time()
 
+        csv_snap = None
         with lock:
             total_beacons += 1
-            gps_snap = dict(gps_data) if gps_data else None
+
+            if bssid in _seen_bssids and bssid not in networks:
+                return
+            gps_pos = {"lat": gps_data["lat"], "lon": gps_data["lon"],
+                       "alt": gps_data.get("alt", 0)} if gps_data else None
 
             is_new = bssid not in networks
             if is_new:
-                networks[bssid] = {
+                _seen_bssids.add(bssid)
+                net_entry = {
                     "ssid": ssid,
                     "bssid": bssid,
                     "channel": channel,
                     "signal": sig,
-                    "_sig_sum": sig,
-                    "_sig_count": 1,
                     "security": sec["security"],
                     "cipher": sec["cipher"],
                     "auth": sec["auth"],
@@ -559,24 +597,35 @@ def _packet_handler(pkt):
                     "vendor": vendor,
                     "first_seen": now,
                     "last_seen": now,
-                    "gps": gps_snap,
+                    "gps": gps_pos,
                     "beacon_count": 1,
                 }
-                _append_live_csv(bssid, networks[bssid])
+                networks[bssid] = net_entry
                 _dirty_bssids.add(bssid)
+                _insertion_order.append(bssid)
+                _inc_sec_count[sec["security"]] = _inc_sec_count.get(sec["security"], 0) + 1
+                _inc_ch_count[channel] = _inc_ch_count.get(channel, 0) + 1
+                if gps_pos:
+                    _inc_wigle_count += 1
+                    _gps_bssids.append(bssid)
+                _recent_bssids.append((now_ts, bssid))
+                _update_top_signals(bssid, sig)
+                csv_snap = net_entry
             else:
                 net = networks[bssid]
                 net["last_seen"] = now
                 net["beacon_count"] += 1
-                _dirty_bssids.add(bssid)
-                # Signal averaging (rolling average)
-                net["_sig_sum"] += sig
-                net["_sig_count"] += 1
-                net["signal"] = int(net["_sig_sum"] / net["_sig_count"])
-                if gps_snap and not net["gps"]:
-                    net["gps"] = gps_snap
+                net["signal"] = (net["signal"] * 3 + sig) >> 2
+                if gps_pos and not net["gps"]:
+                    net["gps"] = gps_pos
+                    _inc_wigle_count += 1
+                    _gps_bssids.append(bssid)
+                    _dirty_bssids.add(bssid)
                 if ssid != "<hidden>" and net["ssid"] == "<hidden>":
                     net["ssid"] = ssid
+
+        if csv_snap:
+            _append_live_csv(bssid, csv_snap)
 
     except Exception:
         pass
@@ -698,6 +747,7 @@ def _sniffer(iface):
         scapy_sniff(
             iface=iface,
             prn=_counted_handler,
+            filter="type mgt",
             stop_filter=lambda _: _shutdown.is_set() or not _scanning.is_set(),
             store=0,
             timeout=300,
@@ -810,27 +860,32 @@ def _parse_iw_scan(output):
 def _merge_iw_network(bssid, ssid, channel, signal, security,
                        cipher, wps, now):
     """Merge iw scan result into networks dict."""
-    global total_beacons
+    global total_beacons, _inc_wigle_count
     if not bssid or bssid == "FF:FF:FF:FF:FF:FF":
         return
     if not ssid:
         ssid = "<hidden>"
 
     vendor = _get_vendor(bssid)
+    csv_snap = None
+    now_ts = time.time()
 
     with lock:
         total_beacons += 1
-        gps_snap = dict(gps_data) if gps_data else None
+
+        if bssid in _seen_bssids and bssid not in networks:
+            return
+        gps_pos = {"lat": gps_data["lat"], "lon": gps_data["lon"],
+                   "alt": gps_data.get("alt", 0)} if gps_data else None
 
         is_new = bssid not in networks
         if is_new:
-            networks[bssid] = {
+            _seen_bssids.add(bssid)
+            net_entry = {
                 "ssid": ssid,
                 "bssid": bssid,
                 "channel": channel,
                 "signal": signal,
-                "_sig_sum": signal,
-                "_sig_count": 1,
                 "security": security,
                 "cipher": cipher,
                 "auth": "",
@@ -838,21 +893,33 @@ def _merge_iw_network(bssid, ssid, channel, signal, security,
                 "vendor": vendor,
                 "first_seen": now,
                 "last_seen": now,
-                "gps": gps_snap,
+                "gps": gps_pos,
                 "beacon_count": 1,
             }
-            _append_live_csv(bssid, networks[bssid])
+            networks[bssid] = net_entry
+            _insertion_order.append(bssid)
+            _inc_sec_count[security] = _inc_sec_count.get(security, 0) + 1
+            _inc_ch_count[channel] = _inc_ch_count.get(channel, 0) + 1
+            if gps_pos:
+                _inc_wigle_count += 1
+                _gps_bssids.append(bssid)
+            _recent_bssids.append((now_ts, bssid))
+            _update_top_signals(bssid, signal)
+            csv_snap = net_entry
         else:
             net = networks[bssid]
             net["last_seen"] = now
             net["beacon_count"] += 1
-            net["_sig_sum"] += signal
-            net["_sig_count"] += 1
-            net["signal"] = int(net["_sig_sum"] / net["_sig_count"])
-            if gps_snap and not net["gps"]:
-                net["gps"] = gps_snap
+            net["signal"] = (net["signal"] * 3 + signal) >> 2
+            if gps_pos and not net["gps"]:
+                net["gps"] = gps_pos
+                _inc_wigle_count += 1
+                _gps_bssids.append(bssid)
             if ssid != "<hidden>" and net["ssid"] == "<hidden>":
                 net["ssid"] = ssid
+
+    if csv_snap:
+        _append_live_csv(bssid, csv_snap)
 
 
 # ---------------------------------------------------------------------------
@@ -864,6 +931,7 @@ def _init_db():
     os.makedirs(LOOT_DIR, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
+    c.execute("PRAGMA journal_mode=WAL")
     c.execute("""CREATE TABLE IF NOT EXISTS networks (
         bssid TEXT PRIMARY KEY, ssid TEXT, channel INTEGER,
         signal INTEGER, security TEXT, cipher TEXT, auth TEXT,
@@ -878,30 +946,35 @@ _dirty_bssids = set()  # networks modified since last save
 
 
 def _save_to_db():
-    """Save only dirty (modified) networks to SQLite."""
+    """Save only dirty networks to SQLite. Batch copy under short lock."""
     global _db_saved_count
     try:
         with lock:
             if not _dirty_bssids:
                 return
-            to_save = {b: networks[b] for b in _dirty_bssids if b in networks}
+            batch = []
+            for b in _dirty_bssids:
+                n = networks.get(b)
+                if not n:
+                    continue
+                gps = n.get("gps")
+                batch.append((
+                    b, n["ssid"], n["channel"], n["signal"],
+                    n["security"], n["cipher"], n["auth"], n["wps"],
+                    n["vendor"], n["first_seen"], n["last_seen"],
+                    gps["lat"] if gps else None,
+                    gps["lon"] if gps else None,
+                    gps.get("alt") if gps else None,
+                    n["beacon_count"],
+                ))
             _dirty_bssids.clear()
             _db_saved_count = len(networks)
         conn = sqlite3.connect(DB_PATH, timeout=5)
         c = conn.cursor()
-        for bssid, n in to_save.items():
-            gps = n.get("gps")
-            lat = gps["lat"] if gps else None
-            lon = gps["lon"] if gps else None
-            alt = gps.get("alt") if gps else None
-            c.execute("""INSERT OR REPLACE INTO networks
-                (bssid, ssid, channel, signal, security, cipher, auth,
-                 wps, vendor, first_seen, last_seen, lat, lon, alt, beacon_count)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                (bssid, n["ssid"], n["channel"], n["signal"],
-                 n["security"], n["cipher"], n["auth"], n["wps"],
-                 n["vendor"], n["first_seen"], n["last_seen"],
-                 lat, lon, alt, n["beacon_count"]))
+        c.executemany("""INSERT OR REPLACE INTO networks
+            (bssid, ssid, channel, signal, security, cipher, auth,
+             wps, vendor, first_seen, last_seen, lat, lon, alt, beacon_count)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", batch)
         conn.commit()
         conn.close()
     except Exception:
@@ -1073,25 +1146,29 @@ def _draw_live(lcd, font, font_sm):
 
     LIVE_SORTS = ["Signal", "Recent", "Name", "Open"]
 
-    import heapq
     with lock:
-        net_count = len(networks)
+        net_count = len(_seen_bssids)
         cli_count = len(probes)
         beacons = total_beacons
         ch = current_channel
         gps_snap = dict(gps_data) if gps_data else None
-        # Only extract top 6 — O(n) instead of O(n log n) sort
-        vals = networks.values()
+
         if live_sort == 0:
-            recent = heapq.nlargest(6, vals, key=lambda n: n["signal"])
-        elif live_sort == 1:
-            recent = heapq.nlargest(6, vals, key=lambda n: n["last_seen"])
-        elif live_sort == 2:
-            recent = heapq.nsmallest(6, vals, key=lambda n: n["ssid"].lower())
-        elif live_sort == 3:
-            recent = heapq.nsmallest(6, vals, key=lambda n: (0 if "OPN" in n["security"] or "OPEN" in n["security"] or n["security"] == "" else 1, -n["signal"]))
+            recent = [networks[b] for _, b in sorted(_top_signals, reverse=True)[:6]
+                      if b in networks]
         else:
-            recent = list(vals)[:6]
+            seen = set()
+            recent = []
+            for _, b in reversed(_recent_bssids):
+                if b not in seen and b in networks:
+                    seen.add(b)
+                    recent.append(networks[b])
+                    if len(recent) >= 6:
+                        break
+            if live_sort == 2:
+                recent.sort(key=lambda n: n["ssid"].lower())
+            elif live_sort == 3:
+                recent.sort(key=lambda n: (0 if n["security"] == "Open" else 1, -n["signal"]))
 
     scanning = _scanning.is_set()
     dm = dual_mode
@@ -1218,13 +1295,13 @@ def _refresh_stats_cache():
     if now - _stats_cache_ts < 2.0 and _stats_cache:
         return _stats_cache
     with lock:
-        total = len(networks)
+        total = len(_seen_bssids)
         cli_count = len(probes)
         probe_count = total_probes
         gps_snap = dict(gps_data) if gps_data else None
-        wigle_ready = sum(1 for n in networks.values() if n.get("gps"))
-        sec_count = Counter(n["security"] for n in networks.values())
-        ch_count = Counter(n["channel"] for n in networks.values())
+        wigle_ready = _inc_wigle_count
+        sec_count = dict(_inc_sec_count)
+        ch_count = dict(_inc_ch_count)
     _stats_cache = {
         "total": total, "cli": cli_count, "probes": probe_count,
         "gps": gps_snap, "wigle": wigle_ready,
@@ -1377,10 +1454,8 @@ def _draw_channels(lcd, font, font_sm):
     d.text((2, 1), "CHANNELS", font=font_sm, fill="#FFAA00")
 
     with lock:
-        nets = list(networks.values())
-
-    ch_count = Counter(n["channel"] for n in nets)
-    total = len(nets)
+        ch_count = dict(_inc_ch_count)
+        total = len(_seen_bssids)
 
     d.text((80, 1), f"AP:{total}", font=font_sm, fill="#00FF00")
 
@@ -1472,7 +1547,12 @@ def _draw_networks(lcd, font, font_sm, scroll_pos, sort):
     now = time.time()
     if now - _nets_cache_ts > 2.0 or sort != _nets_cache_sort:
         with lock:
-            nets = list(networks.values())
+            seen = set()
+            nets = []
+            for _, b in reversed(_recent_bssids):
+                if b not in seen and b in networks:
+                    seen.add(b)
+                    nets.append(networks[b])
         if sort == 0:
             nets.sort(key=lambda n: n["signal"], reverse=True)
         elif sort == 1:
@@ -1608,10 +1688,17 @@ def _draw_map(lcd, font, font_sm):
 
     with lock:
         gps_snap = dict(gps_data) if gps_data else None
-        nets = list(networks.values())
+        net_count = len(_seen_bssids)
+        gps_nets_snap = []
+        seen_b = set()
+        for b in reversed(_gps_bssids):
+            if b not in seen_b and b in networks:
+                seen_b.add(b)
+                n = networks[b]
+                if n.get("gps"):
+                    gps_nets_snap.append(n)
 
     scanning = _scanning.is_set()
-    net_count = len(nets)
 
     # No GPS → show message
     if not gps_snap:
@@ -1662,7 +1749,7 @@ def _draw_map(lcd, font, font_sm):
                            _map_overlay_count != net_count or
                            _map_overlay_cache is None)
         if rebuild_overlay:
-            gps_nets = [n for n in nets if n.get("gps")]
+            gps_nets = list(gps_nets_snap)
             gps_nets.sort(key=lambda n: n.get("first_seen", ""))
             overlay = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
             od = ImageDraw.Draw(overlay)
@@ -1737,10 +1824,8 @@ def _draw_export(lcd, font, font_sm, export_files):
     d.text((2, 1), "EXPORT", font=font_sm, fill="#FFAA00")
 
     with lock:
-        nets = list(networks.values())
-
-    total = len(nets)
-    wigle_ready = sum(1 for n in nets if n.get("gps"))
+        total = len(_seen_bssids)
+        wigle_ready = _inc_wigle_count
 
     y = 16
     d.text((4, y), f"Networks: {total}", font=font_sm, fill="#FFFFFF")
@@ -1807,17 +1892,39 @@ def _init_session():
 
 
 def _prune_networks():
-    """Remove oldest networks if over MAX_NETWORKS to prevent OOM."""
+    """Remove oldest-inserted networks via FIFO. O(k) instead of O(n log n)."""
+    global _inc_wigle_count
     with lock:
         over = len(networks) - MAX_NETWORKS
         if over <= 0:
             return
-        sorted_bssids = sorted(networks, key=lambda b: networks[b].get("last_seen", ""))
-        for b in sorted_bssids[:over]:
+        evicted = 0
+        while evicted < over and _insertion_order:
+            b = _insertion_order.popleft()
+            if b not in networks:
+                continue
+            net = networks[b]
+            sec = net["security"]
+            ch = net["channel"]
+            _inc_sec_count[sec] = max(0, _inc_sec_count.get(sec, 1) - 1)
+            _inc_ch_count[ch] = max(0, _inc_ch_count.get(ch, 1) - 1)
+            if net.get("gps"):
+                _inc_wigle_count = max(0, _inc_wigle_count - 1)
+            _dirty_bssids.discard(b)
             del networks[b]
+            evicted += 1
 
 
 _autosave_counter = 0
+
+
+def _prune_probes():
+    """Evict probes not seen in 5 minutes to bound memory."""
+    cutoff = time.time() - 300
+    with lock:
+        stale = [k for k, v in probes.items() if v.get("_ts", 0) < cutoff]
+        for k in stale:
+            del probes[k]
 
 
 def _autosave_thread():
@@ -1829,12 +1936,14 @@ def _autosave_thread():
         if not _scanning.is_set():
             continue
         _autosave_counter += 1
+        _flush_csv_buffer()
+        _prune_networks()
         _save_session_meta()
         if _autosave_counter % DB_SAVE_TICKS == 0:
             _save_to_db()
-        if _autosave_counter % WIGLE_SAVE_TICKS == 0:
-            _prune_networks()
+            _prune_probes()
     # Final save on shutdown
+    _flush_csv_buffer()
     _save_to_db()
     _save_session_meta()
 
@@ -1844,8 +1953,8 @@ def _save_session_meta():
     if not _session_json_path:
         return
     with lock:
-        total = len(networks)
-        wigle = sum(1 for n in networks.values() if n.get("gps"))
+        total = len(_seen_bssids)
+        wigle = total
     try:
         meta = {
             "session_id": _session_id,
@@ -1870,27 +1979,37 @@ _WIGLE_COLS = ("MAC,SSID,AuthMode,FirstSeen,Channel,RSSI,"
                "AccuracyMeters,Type\n")
 
 
+_csv_buffer = deque()
+
+
 def _append_live_csv(bssid, net):
-    """Append a single network to the session Wigle CSV. Skip if no GPS."""
+    """Queue a network for CSV write. Flushed periodically by autosave."""
     gps = net.get("gps")
     if not gps:
         return
-    session_path = _session_wigle_path
-    if not session_path:
+    auth = _security_to_wigle(net["security"], net["cipher"], net.get("auth", ""))
+    _csv_buffer.append([
+        bssid, net["ssid"], auth, net["first_seen"],
+        net["channel"], net["signal"],
+        f"{gps['lat']:.6f}", f"{gps['lon']:.6f}",
+        f"{gps.get('alt', 0):.1f}", "10", "WIFI",
+    ])
+
+
+def _flush_csv_buffer():
+    """Write buffered CSV rows to session file. Called from autosave thread."""
+    if not _csv_buffer or not _session_wigle_path:
         return
     try:
-        is_new = not os.path.isfile(session_path) or os.path.getsize(session_path) < 10
-        with open(session_path, "a", newline="") as f:
+        path = _session_wigle_path
+        is_new = not os.path.isfile(path) or os.path.getsize(path) < 10
+        with open(path, "a", newline="") as f:
             if is_new:
                 f.write(_WIGLE_HEADER)
                 f.write(_WIGLE_COLS)
-            auth = _security_to_wigle(net["security"], net["cipher"], net.get("auth", ""))
-            csv.writer(f).writerow([
-                bssid, net["ssid"], auth, net["first_seen"],
-                net["channel"], net["signal"],
-                f"{gps['lat']:.6f}", f"{gps['lon']:.6f}",
-                f"{gps.get('alt', 0):.1f}", "10", "WIFI",
-            ])
+            writer = csv.writer(f)
+            while _csv_buffer:
+                writer.writerow(_csv_buffer.popleft())
     except Exception:
         pass
 
@@ -1933,6 +2052,7 @@ def _write_wigle_csv(path, nets):
 def _emergency_save(signum=None, frame=None):
     """Emergency save on crash or signal."""
     try:
+        _flush_csv_buffer()
         _save_to_db()
         _save_session_meta()
     except Exception:
