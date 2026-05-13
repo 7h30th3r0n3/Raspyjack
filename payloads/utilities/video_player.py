@@ -20,8 +20,10 @@ sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..", "..")))
 import RPi.GPIO as GPIO
 import LCD_1in44
 import LCD_Config
-from PIL import Image
+from PIL import Image, ImageDraw
 from payloads._display_helper import ScaledDraw, scaled_font, S
+import struct
+import numpy as np
 from payloads._input_helper import get_button
 
 try:
@@ -47,7 +49,7 @@ font_sm = scaled_font(7)
 VIDEO_EXTENSIONS = {".mp4", ".avi", ".mkv", ".mov", ".webm", ".flv", ".m4v"}
 START_DIR = "/root/Raspyjack/loot"
 DEBOUNCE = 0.18
-FB_DEVICE = "/dev/fb0"
+FB_DEVICE = "/dev/fb1" if os.path.exists("/dev/fb1") else "/dev/fb0"
 FB_SIZE = WIDTH * HEIGHT * 2
 
 _running = True
@@ -74,9 +76,9 @@ def _check_button():
 def _set_volume(vol):
     global _volume
     _volume = max(0, min(100, vol))
-    subprocess.Popen(["amixer", "-c", "1", "sset", "Headphone", str(int(_volume * 63 / 100))], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    subprocess.Popen(["amixer", "-c", "1", "sset", "DACL", "180"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    subprocess.Popen(["amixer", "-c", "1", "sset", "DACR", "180"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.Popen(["amixer", "-c", "0", "sset", "Headphone", str(int(_volume * 63 / 100))], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.Popen(["amixer", "-c", "0", "sset", "DACL", "180"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.Popen(["amixer", "-c", "0", "sset", "DACR", "180"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def _format_time(seconds):
@@ -169,106 +171,233 @@ def _show_info_screen(filepath):
     get_button(PINS, GPIO)
 
 
-def _play_video(filepath):
-    global _loop
+def _get_duration(filepath):
+    """Get video duration in seconds via ffprobe."""
+    try:
+        r = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
+             "-of", "csv=p=0", filepath],
+            capture_output=True, text=True, timeout=5)
+        return float(r.stdout.strip())
+    except Exception:
+        return 0
 
-    # volume set after loading
-    target_fps = 15
 
-    # Single ffmpeg: video to pipe (RGB565) + audio to ALSA
-    # ffmpeg handles A/V sync internally
+def _read_frame(proc):
+    """Read exactly one RGB565 frame from pipe. Returns bytes or None."""
+    raw = b""
+    while len(raw) < FB_SIZE:
+        chunk = proc.stdout.read(FB_SIZE - len(raw))
+        if not chunk:
+            return None
+        raw += chunk
+    return raw
+
+
+_osd_img = None
+_osd_raw = None
+
+
+def _build_osd(fname, paused, elapsed, duration):
+    """Build OSD overlay as PIL image."""
+    global _osd_img
+    h = 16
+    img = Image.new("RGBA", (WIDTH, h), (0, 0, 0, 150))
+    d = ImageDraw.Draw(img)
+
+    # Line 1: [>||] filename     LP V40  00:12/02:26
+    icon = ">" if paused else "||"
+    x = 2
+    d.text((x, 1), icon, font=font_sm, fill=(255, 255, 255))
+    x = 16
+    d.text((x, 1), fname[:12], font=font_sm, fill=(220, 220, 220))
+
+    # Right side: loop + volume + time
+    right = ""
+    if _loop:
+        right += "LP "
+    right += f"V{_volume}"
+    if duration > 0:
+        right += f" {_format_time(elapsed)}/{_format_time(duration)}"
+    rw = len(right) * 6
+    d.text((WIDTH - rw - 2, 1), right, font=font_sm, fill=(100, 200, 255))
+
+    # Progress bar at bottom of OSD
+    d.rectangle((0, h - 3, WIDTH, h - 1), fill=(40, 40, 40, 180))
+    if duration > 0:
+        prog = min(1.0, elapsed / duration)
+        px = int(WIDTH * prog)
+        d.rectangle((0, h - 3, px, h - 1), fill=(0, 200, 255))
+
+    _osd_img = img
+
+
+def _write_frame_with_osd(fb_map, frame_raw, show_osd):
+    """Write frame to framebuffer, compositing OSD if needed."""
+    if not show_osd or _osd_img is None:
+        fb_map.seek(0)
+        fb_map.write(frame_raw)
+        return
+
+    arr = np.frombuffer(frame_raw, dtype=np.uint16).reshape(HEIGHT, WIDTH).copy()
+    osd_h = _osd_img.height
+    osd_y = HEIGHT - osd_h
+
+    osd_rgba = np.array(_osd_img)
+    alpha = osd_rgba[:, :, 3:4].astype(np.float32) / 255.0
+
+    vid_r = ((arr[osd_y:, :] >> 11) & 0x1F).astype(np.float32) * 8
+    vid_g = ((arr[osd_y:, :] >> 5) & 0x3F).astype(np.float32) * 4
+    vid_b = (arr[osd_y:, :] & 0x1F).astype(np.float32) * 8
+
+    osd_r = osd_rgba[:, :, 0].astype(np.float32)
+    osd_g = osd_rgba[:, :, 1].astype(np.float32)
+    osd_b = osd_rgba[:, :, 2].astype(np.float32)
+
+    a = alpha[:, :, 0]
+    r = (osd_r * a + vid_r * (1 - a)).astype(np.uint16) >> 3
+    g = (osd_g * a + vid_g * (1 - a)).astype(np.uint16) >> 2
+    b = (osd_b * a + vid_b * (1 - a)).astype(np.uint16) >> 3
+
+    arr[osd_y:, :] = (r << 11) | (g << 5) | b
+
+    fb_map.seek(0)
+    fb_map.write(arr.tobytes())
+
+
+def _start_playback(filepath, seek=0):
+    """Start ffmpeg with video pipe + audio output, synced from seek position."""
     cmd = [
         "ffmpeg", "-hide_banner", "-loglevel", "quiet",
         "-re",
-        "-ss", "0",
+        "-ss", str(seek),
         "-fflags", "+nobuffer+fastseek",
         "-analyzeduration", "0", "-probesize", "32768",
         "-i", filepath,
         "-map", "0:v:0",
-        "-vf", f"scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=decrease,pad={WIDTH}:{HEIGHT}:(ow-iw)/2:(oh-ih)/2,fps={target_fps}",
+        "-vf", f"scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=decrease,pad={WIDTH}:{HEIGHT}:(ow-iw)/2:(oh-ih)/2,fps=15",
         "-pix_fmt", "rgb565le",
         "-f", "rawvideo", "pipe:1",
         "-map", "0:a:0?",
         "-ac", "2", "-ar", "44100",
-        "-f", "alsa", "plughw:1,0",
+        "-f", "alsa", "default",
     ]
+    return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=FB_SIZE)
 
-    # Loading screen
-    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-    d = ScaledDraw(img)
-    d.text((64, 50), "Loading...", font=font, fill=(0, 200, 255), anchor="mm")
+
+def _kill_proc(p):
+    if p:
+        try:
+            p.kill()
+            p.wait(timeout=2)
+        except Exception:
+            pass
+
+
+def _play_video(filepath):
+    global _loop
+
     fname = os.path.splitext(os.path.basename(filepath))[0]
-    d.text((64, 68), fname[:20], font=font_sm, fill=(150, 150, 150), anchor="mm")
-    LCD.LCD_ShowImage(img, 0, 0)
+    duration = _get_duration(filepath)
     _set_volume(_volume)
 
-    proc = subprocess.Popen(
-        cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-        bufsize=FB_SIZE,
-    )
+    proc = _start_playback(filepath)
 
     fb_fd = os.open(FB_DEVICE, os.O_RDWR)
     fb_map = mmap.mmap(fb_fd, FB_SIZE, mmap.MAP_SHARED, mmap.PROT_WRITE | mmap.PROT_READ)
     paused = False
+    start_time = time.time()
+    pause_offset = 0
+    osd_until = time.time() + 3.0
+    last_osd_rebuild = 0
+    last_frame = None
 
     try:
         while _running:
             btn = _check_button()
+            now = time.time()
 
             if btn == "KEY3":
                 break
             elif btn == "OK":
                 paused = not paused
+                osd_until = now + 3.0
+                last_osd_rebuild = 0
                 if paused:
-                    proc.send_signal(signal.SIGSTOP)
+                    pause_offset = now - start_time
+                    _kill_proc(proc)
+                    proc = None
+                    if last_frame:
+                        _build_osd(fname, True, pause_offset, duration)
+                        _write_frame_with_osd(fb_map, last_frame, True)
                 else:
-                    proc.send_signal(signal.SIGCONT)
+                    proc = _start_playback(filepath, pause_offset)
+                    start_time = now - pause_offset
                 time.sleep(DEBOUNCE)
                 continue
             elif btn == "UP":
                 _set_volume(_volume + 10)
+                osd_until = now + 2.0
+                last_osd_rebuild = 0
                 time.sleep(DEBOUNCE)
             elif btn == "DOWN":
                 _set_volume(_volume - 10)
+                osd_until = now + 2.0
+                last_osd_rebuild = 0
                 time.sleep(DEBOUNCE)
             elif btn == "LEFT":
-                # Restart 10s earlier
-                proc.kill()
-                proc.wait()
-                proc = subprocess.Popen(
-                    cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                    bufsize=FB_SIZE,
-                )
+                elapsed = now - start_time
+                seek_to = max(0, elapsed - 10)
+                _kill_proc(proc)
+                proc = _start_playback(filepath, seek_to)
+                start_time = now - seek_to
+                osd_until = now + 2.0
+                last_osd_rebuild = 0
+                time.sleep(DEBOUNCE)
+            elif btn == "RIGHT":
+                elapsed = now - start_time
+                seek_to = min(duration, elapsed + 10) if duration else elapsed + 10
+                _kill_proc(proc)
+                proc = _start_playback(filepath, seek_to)
+                start_time = now - seek_to
+                osd_until = now + 2.0
+                last_osd_rebuild = 0
                 time.sleep(DEBOUNCE)
             elif btn == "KEY1":
                 _loop = not _loop
+                osd_until = now + 2.0
+                last_osd_rebuild = 0
                 time.sleep(DEBOUNCE)
+            elif btn:
+                osd_until = now + 2.0
 
             if paused:
                 time.sleep(0.05)
                 continue
 
-            raw = proc.stdout.read(FB_SIZE)
-            if not raw or len(raw) < FB_SIZE:
+            raw = _read_frame(proc)
+            if raw is None:
                 if _loop:
-                    proc.kill()
-                    proc.wait()
-                    proc = subprocess.Popen(
-                        cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                        bufsize=FB_SIZE,
-                    )
+                    _kill_proc(proc)
+                    proc = _start_playback(filepath)
+                    start_time = now
                     continue
                 break
 
-            fb_map.seek(0)
-            fb_map.write(raw)
+            last_frame = raw
+            show_osd = now < osd_until
+
+            if show_osd:
+                if now - last_osd_rebuild > 0.5:
+                    _build_osd(fname, paused, now - start_time, duration)
+                    last_osd_rebuild = now
+                _write_frame_with_osd(fb_map, raw, True)
+            else:
+                fb_map.seek(0)
+                fb_map.write(raw)
 
     finally:
-        try:
-            proc.kill()
-            proc.wait(timeout=2)
-        except Exception:
-            pass
+        _kill_proc(proc)
         fb_map.close()
         os.close(fb_fd)
         subprocess.run(["pkill", "-9", "ffmpeg"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -303,14 +432,22 @@ def main():
                         current_dir, cursor, scroll = parent, 0, 0
                 time.sleep(DEBOUNCE)
             elif btn == "UP":
-                cursor = max(0, cursor - 1)
-                if cursor < scroll:
-                    scroll = cursor
+                if cursor == 0 and items:
+                    cursor = len(items) - 1
+                    scroll = max(0, cursor - 6)
+                else:
+                    cursor -= 1
+                    if cursor < scroll:
+                        scroll = cursor
                 time.sleep(DEBOUNCE)
             elif btn == "DOWN":
-                cursor = min(max(0, len(items) - 1), cursor + 1)
-                if cursor >= scroll + 7:
-                    scroll = cursor - 6
+                if items and cursor >= len(items) - 1:
+                    cursor = 0
+                    scroll = 0
+                else:
+                    cursor += 1
+                    if cursor >= scroll + 7:
+                        scroll = cursor - 6
                 time.sleep(DEBOUNCE)
             elif btn in ("OK", "RIGHT") and items and cursor < len(items):
                 item = items[cursor]
