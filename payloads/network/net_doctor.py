@@ -426,8 +426,8 @@ def main():
         GPIO.cleanup()
         return 1
 
-    iface = select_interface(LCD, font, font_sm, PINS, GPIO,
-                             modes=["managed", "monitor"], title="NET DOCTOR")
+    iface = select_interface(LCD, font, PINS, GPIO,
+                             iface_type="any", title="NET DOCTOR")
     if not iface:
         GPIO.cleanup()
         return 0
