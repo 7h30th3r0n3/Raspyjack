@@ -1853,31 +1853,16 @@ def main() -> None:
             server.server_close()
         return
 
-    # Default: bind only to eth0 + wlan0 (+ localhost).  wlan1+ stay untouched.
-    bind_addrs = _get_webui_bind_addrs()
-    servers: list[ThreadingHTTPServer] = []
-
-    for addr, iface in bind_addrs:
-        try:
-            srv = ThreadingHTTPServer((addr, PORT), RaspyJackHandler)
-            servers.append(srv)
-            threading.Thread(target=srv.serve_forever, daemon=True).start()
-            print(f"[WebUI] Serving on http://{addr}:{PORT} ({iface})")
-        except Exception as exc:
-            print(f"[WebUI] Could not bind {addr}:{PORT} ({iface}): {exc}")
-
-    if not servers:
-        # Last resort — fall back to all interfaces so the WebUI is not dead
-        print("[WebUI] WARNING: No WebUI interfaces available, falling back to 0.0.0.0")
-        srv = ThreadingHTTPServer(("0.0.0.0", PORT), RaspyJackHandler)
-        print(f"[WebUI] Serving on http://0.0.0.0:{PORT}")
-        try:
-            srv.serve_forever()
-        except KeyboardInterrupt:
-            pass
-        finally:
-            srv.server_close()
-        return
+    # Bind on all interfaces — always reachable on any IP (eth, wlan, tailscale)
+    server = ThreadingHTTPServer(("0.0.0.0", PORT), RaspyJackHandler)
+    print(f"[WebUI] Serving on http://0.0.0.0:{PORT}")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+    return
 
     try:
         while True:

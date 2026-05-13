@@ -123,24 +123,38 @@ def _key_thread(doom_proc):
         "RIGHT": "Right",
         "OK": "Return",
         "KEY1": "ctrl",
-        "KEY2": "space",
     }
     env = os.environ.copy()
     env["DISPLAY"] = DISPLAY_NUM
     pressed_set = set()
     last_press = {}
+    k2_down_time = 0
 
     while _running and doom_proc.poll() is None:
         now = time.time()
+
+        # KEY2: short press = Space (use/open), long press (>0.5s) = Escape
+        k2_down = GPIO.input(PINS["KEY2"]) == 0
+        if k2_down and "KEY2" not in pressed_set:
+            pressed_set.add("KEY2")
+            k2_down_time = now
+        elif not k2_down and "KEY2" in pressed_set:
+            pressed_set.discard("KEY2")
+            held = now - k2_down_time
+            key = "Escape" if held > 0.5 else "space"
+            subprocess.Popen(
+                ["xdotool", "key", key],
+                env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            last_press["KEY2"] = now
+
         for name, pin in PINS.items():
+            if name in ("KEY2", "KEY3"):
+                continue
             is_down = GPIO.input(pin) == 0
             xkey = key_map.get(name)
             if not xkey:
                 continue
             if is_down and name not in pressed_set:
-                debounce = 0.4 if name == "OK" else 0.02
-                if now - last_press.get(name, 0) < debounce:
-                    continue
                 pressed_set.add(name)
                 last_press[name] = now
                 subprocess.Popen(
@@ -177,11 +191,27 @@ def main():
     env["SDL_VIDEODRIVER"] = "x11"
     env["SDL_VIDEO_WINDOW_POS"] = "0,0"
 
+    # Set volume low for headphone jack
+    subprocess.run(["amixer", "-c", "0", "sset", "Headphone", "30"], capture_output=True)
+    subprocess.run(["amixer", "-c", "0", "sset", "DACL", "160"], capture_output=True)
+    subprocess.run(["amixer", "-c", "0", "sset", "DACR", "160"], capture_output=True)
+
     doom = subprocess.Popen(
         [DOOM_BIN, "-iwad", wad, "-nomusic", "-nomouse",
          "-1", "-window", "-geometry", f"{DOOM_W}x{DOOM_H}+0+0"],
         env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(2)
+
+    # Hide X cursor by creating a blank cursor
+    subprocess.run(
+        ["xdotool", "mousemove", "--screen", "0", str(DOOM_W + 10), str(DOOM_H + 10)],
+        env=env, capture_output=True)
+    try:
+        subprocess.run(
+            ["xsetroot", "-cursor_name", "none"],
+            env=env, capture_output=True, timeout=2)
+    except Exception:
+        pass
 
     # Scale Doom to LCD size, fill entire screen
     capture = subprocess.Popen(
