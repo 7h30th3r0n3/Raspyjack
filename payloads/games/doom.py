@@ -71,6 +71,30 @@ def _find_wad():
     return None
 
 
+def _ensure_deps():
+    """Install missing dependencies. Returns True if all OK."""
+    missing = []
+    if not os.path.isfile(DOOM_BIN):
+        missing.append("chocolate-doom")
+    if not _find_wad():
+        missing.append("freedoom")
+    if not os.path.isfile("/usr/bin/Xvfb"):
+        missing.append("xvfb")
+    if not os.path.isfile("/usr/bin/xdotool"):
+        missing.append("xdotool")
+    if not missing:
+        return True
+    _show_msg("Installing...", " ".join(missing), (255, 180, 0))
+    r = subprocess.run(
+        ["apt-get", "install", "-y"] + missing,
+        capture_output=True, timeout=180)
+    if not os.path.isfile(DOOM_BIN) or not _find_wad():
+        _show_msg("Install failed", "Check internet", (255, 50, 50))
+        time.sleep(3)
+        return False
+    return True
+
+
 def _show_msg(text, sub="", color=(0, 200, 255)):
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
     d = ScaledDraw(img)
@@ -133,49 +157,39 @@ def _key_thread(doom_proc):
 def main():
     global _running
 
+    if not _ensure_deps():
+        GPIO.cleanup()
+        return 1
+
     wad = _find_wad()
-    if not wad:
-        _show_msg("No WAD found", "Install: apt install freedoom", (255, 50, 50))
-        time.sleep(3)
-        GPIO.cleanup()
-        return 1
-
-    if not os.path.isfile(DOOM_BIN):
-        _show_msg("chocolate-doom", "not installed", (255, 50, 50))
-        time.sleep(3)
-        GPIO.cleanup()
-        return 1
-
-    has_xdotool = os.path.isfile("/usr/bin/xdotool")
-    if not has_xdotool:
-        _show_msg("Installing xdotool...", "", (255, 180, 0))
-        subprocess.run(["apt-get", "install", "-y", "xdotool"],
-                       capture_output=True, timeout=60)
-
     _show_msg("DOOM", "Starting...", (255, 50, 0))
 
+    # Doom renders 320x200. Xvfb matches exactly.
+    DOOM_W, DOOM_H = 320, 200
+
     xvfb = subprocess.Popen(
-        ["Xvfb", DISPLAY_NUM, "-screen", "0", "320x200x24", "-ac", "-nocursor"],
+        ["Xvfb", DISPLAY_NUM, "-screen", "0", f"{DOOM_W}x{DOOM_H}x24", "-ac", "-nocursor"],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(1)
 
     env = os.environ.copy()
     env["DISPLAY"] = DISPLAY_NUM
     env["SDL_VIDEODRIVER"] = "x11"
-
-    env["SDL_VIDEO_X11_WMCLASS"] = "doom"
     env["SDL_VIDEO_WINDOW_POS"] = "0,0"
+
     doom = subprocess.Popen(
-        [DOOM_BIN, "-iwad", wad, "-nomusic", "-nomouse", "-window", "-geometry", "320x200"],
+        [DOOM_BIN, "-iwad", wad, "-nomusic", "-nomouse",
+         "-1", "-window", "-geometry", f"{DOOM_W}x{DOOM_H}+0+0"],
         env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(2)
 
+    # Scale Doom to LCD size, fill entire screen
     capture = subprocess.Popen(
         ["ffmpeg", "-hide_banner", "-loglevel", "quiet",
          "-f", "x11grab", "-framerate", "15",
-         "-video_size", "320x200",
+         "-video_size", f"{DOOM_W}x{DOOM_H}",
          "-i", DISPLAY_NUM,
-         "-vf", f"scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=decrease,pad={WIDTH}:{HEIGHT}:(ow-iw)/2:(oh-ih)/2",
+         "-vf", f"scale={WIDTH}:{HEIGHT}",
          "-pix_fmt", "rgb565le",
          "-f", "rawvideo", "pipe:1"],
         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=FB_SIZE)
