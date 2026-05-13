@@ -246,7 +246,7 @@ def _play_video(video_id, title):
     cmd = ["ffmpeg", "-hide_banner", "-loglevel", "quiet", "-re"]
     cmd += ["-i", video_url]
     if audio_url:
-        cmd += ["-i", audio_url]
+        cmd += ["-itsoffset", "0.1", "-i", audio_url]
     cmd += ["-map", "0:v:0",
             "-vf", f"scale={W}:{H}:force_original_aspect_ratio=decrease,pad={W}:{H}:(ow-iw)/2:(oh-ih)/2",
             "-pix_fmt", "rgb565le", "-f", "rawvideo", "pipe:1"]
