@@ -334,6 +334,8 @@ def _read_frame(proc):
 def _play_video(video_id, title):
     url = f"https://www.youtube.com/watch?v={video_id}"
 
+    # Re-init LCD to ensure clean SPI state
+    LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
     _show_msg("Loading...", title[:20], C["red"])
     time.sleep(0.1)
     _show_msg("Fetching stream...", title[:20], C["red"])
@@ -362,17 +364,34 @@ def _play_video(video_id, title):
 
     _show_msg("Buffering...", title[:20], C["red"])
 
+    # Check if ALSA audio works
+    has_audio = False
+    try:
+        r = subprocess.run(["aplay", "-l"], capture_output=True, text=True, timeout=3)
+        has_audio = "card" in r.stdout.lower()
+    except Exception:
+        pass
+
+    target_fps = 8 if not IS_WIDE else 24
     cmd = ["ffmpeg", "-hide_banner", "-loglevel", "quiet", "-re"]
     cmd += ["-i", video_url]
-    if audio_url:
-        cmd += ["-itsoffset", "0.1", "-i", audio_url]
+    if audio_url and has_audio:
+        cmd += ["-i", audio_url]
     cmd += ["-map", "0:v:0",
-            "-vf", f"scale={W}:{H}:force_original_aspect_ratio=decrease,pad={W}:{H}:(ow-iw)/2:(oh-ih)/2",
+            "-vf", f"scale={W}:{H}:force_original_aspect_ratio=decrease,pad={W}:{H}:(ow-iw)/2:(oh-ih)/2,fps={target_fps}",
             "-pix_fmt", "rgb565le", "-f", "rawvideo", "pipe:1"]
-    if audio_url:
+    if audio_url and has_audio:
         cmd += ["-map", "1:a:0", "-ac", "2", "-ar", "44100", "-f", "alsa", "default"]
 
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=FB_SIZE)
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=FB_SIZE * 16)
+
+    # Increase kernel pipe buffer to avoid stalls on slow SPI displays
+    try:
+        import fcntl
+        F_SETPIPE_SZ = 1031
+        fcntl.fcntl(proc.stdout, F_SETPIPE_SZ, FB_SIZE * 32)
+    except Exception:
+        pass
 
     # Wait a moment for ffmpeg to start
     time.sleep(0.5)
@@ -441,7 +460,7 @@ def _play_video(video_id, title):
                 fb_map.write(raw)
             else:
                 import numpy as np
-                arr = np.frombuffer(raw, dtype=np.uint16).reshape(H, W)
+                arr = np.frombuffer(raw, dtype='<u2').reshape(H, W)
                 r = ((arr >> 11) & 0x1F) << 3
                 g = ((arr >> 5) & 0x3F) << 2
                 b = (arr & 0x1F) << 3
