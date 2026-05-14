@@ -309,7 +309,83 @@ def _play_video(video_id, title):
         _show_msg("YouTube", "Ready", C["red"])
 
 
+def _check_internet():
+    """Check internet connectivity."""
+    try:
+        r = subprocess.run(["ping", "-c", "1", "-W", "2", "8.8.8.8"],
+                           capture_output=True, timeout=5)
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+def _check_deps():
+    """Check and install missing dependencies. Returns True if all OK."""
+    missing_apt = []
+    missing_pip = []
+
+    if not os.path.isfile("/usr/bin/ffmpeg"):
+        missing_apt.append("ffmpeg")
+
+    yt_ok = False
+    try:
+        r = subprocess.run(["yt-dlp", "--version"], capture_output=True, timeout=5)
+        yt_ok = r.returncode == 0
+    except Exception:
+        pass
+    if not yt_ok:
+        missing_apt.append("yt-dlp")
+
+    if missing_apt:
+        _show_msg("Installing...", " ".join(missing_apt), C["red"])
+        subprocess.run(["apt-get", "install", "-y"] + missing_apt,
+                       capture_output=True, timeout=120)
+
+    # Always try to upgrade yt-dlp (YouTube breaks old versions)
+    if yt_ok:
+        try:
+            r = subprocess.run(["yt-dlp", "--version"], capture_output=True, text=True, timeout=5)
+            ver = r.stdout.strip()
+            # If older than 2026, upgrade
+            if ver < "2026":
+                _show_msg("Updating...", "yt-dlp", C["red"])
+                subprocess.run(
+                    ["pip3", "install", "--upgrade", "yt-dlp",
+                     "--break-system-packages", "--ignore-installed", "yt-dlp"],
+                    capture_output=True, timeout=120)
+        except Exception:
+            pass
+
+    # Final check
+    has_ffmpeg = os.path.isfile("/usr/bin/ffmpeg")
+    has_ytdlp = False
+    try:
+        r = subprocess.run(["yt-dlp", "--version"], capture_output=True, timeout=5)
+        has_ytdlp = r.returncode == 0
+    except Exception:
+        pass
+
+    return has_ffmpeg and has_ytdlp
+
+
 def main():
+    _show_msg("YouTube", "Checking...", C["red"])
+
+    if not _check_internet():
+        _show_msg("No Internet", "Connect WiFi/Ethernet", (255, 50, 50))
+        time.sleep(3)
+        GPIO.cleanup()
+        return 1
+
+    if not _check_deps():
+        _show_msg("Missing deps", "ffmpeg / yt-dlp", (255, 50, 50))
+        time.sleep(3)
+        GPIO.cleanup()
+        return 1
+
+    _show_msg("YouTube", "Ready!", C["red"])
+    time.sleep(0.5)
+
     query = ""
     results = []
     cursor = 0
