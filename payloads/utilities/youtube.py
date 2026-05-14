@@ -55,6 +55,10 @@ font_sm = scaled_font(7)
 
 FB_DEVICE = "/dev/fb1" if os.path.exists("/dev/fb1") else "/dev/fb0"
 FB_SIZE = W * H * 2
+IS_WIDE = W > 200  # CardputerZero 320x170
+font_lg = scaled_font(14) if IS_WIDE else font
+TITLE_MAX = 35 if IS_WIDE else 20
+CHAN_MAX = 18 if IS_WIDE else 12
 
 C = {
     "bg": "#0a0a0a", "head": "#1a0000", "red": "#ff0000",
@@ -84,9 +88,14 @@ signal.signal(signal.SIGTERM, _sig)
 def _show_msg(text, sub="", color=C["red"]):
     img = Image.new("RGB", (W, H), C["bg"])
     d = ScaledDraw(img)
-    d.text((20, 60), text, font=font, fill=color)
-    if sub:
-        d.text((20, 80), sub, font=font_sm, fill=C["sub"])
+    if IS_WIDE:
+        d.text((40, 55), text, font=font_lg, fill=color)
+        if sub:
+            d.text((40, 80), sub, font=font, fill=C["sub"])
+    else:
+        d.text((20, 50), text, font=font, fill=color)
+        if sub:
+            d.text((20, 68), sub, font=font_sm, fill=C["sub"])
     LCD.LCD_ShowImage(img, 0, 0)
 
 
@@ -190,10 +199,10 @@ def _draw_results(d, results, cursor, scroll, query):
             sel = i == cursor
             if sel:
                 d.rectangle((0, y, 127, y + 16), fill=C["sel"])
-            d.text((3, y + 1), r["title"][:20], font=font_sm,
+            d.text((3, y + 1), r["title"][:TITLE_MAX], font=font_sm,
                    fill=C["white"] if sel else C["sub"])
             dur = _format_dur(r["duration"])
-            d.text((3, y + 9), r["channel"][:12], font=font_sm, fill=C["dim"])
+            d.text((3, y + 9), r["channel"][:CHAN_MAX], font=font_sm, fill=C["dim"])
             d.text((85, y + 9), dur, font=font_sm, fill=C["dim"])
             y += 18
 
@@ -290,8 +299,12 @@ def _play_video(video_id, title):
                     proc.send_signal(signal.SIGSTOP)
                     img = Image.new("RGB", (W, H), C["bg"])
                     d = ScaledDraw(img)
-                    d.text((40, 70), "PAUSED", font=font, fill=C["red"])
-                    d.text((20, 90), title[:20], font=font_sm, fill=C["dim"])
+                    if IS_WIDE:
+                        d.text((50, 60), "PAUSED", font=font_lg, fill=C["red"])
+                        d.text((20, 85), title[:30], font=font, fill=C["dim"])
+                    else:
+                        d.text((30, 50), "PAUSED", font=font, fill=C["red"])
+                        d.text((10, 70), title[:18], font=font_sm, fill=C["dim"])
                     LCD.LCD_ShowImage(img, 0, 0)
                 else:
                     proc.send_signal(signal.SIGCONT)
