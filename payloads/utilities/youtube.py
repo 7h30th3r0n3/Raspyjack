@@ -78,7 +78,13 @@ C = {
     "title": "#ff4444", "sub": "#aaaaaa", "sel": "#2a0a0a",
 }
 
+HISTORY_DIR = "/root/Raspyjack/loot/YouTube"
+HISTORY_FILE = os.path.join(HISTORY_DIR, "history.json")
+LIKED_FILE = os.path.join(HISTORY_DIR, "liked.json")
+HISTORY_MAX = 20
+
 _running = True
+_audio_offset = [0.0]
 _EVDEV_CHARS = {
     2: '1', 3: '2', 4: '3', 5: '4', 6: '5', 7: '6', 8: '7', 9: '8', 10: '9', 11: '0',
     16: 'q', 17: 'w', 18: 'e', 19: 'r', 20: 't', 21: 'y', 22: 'u', 23: 'i', 24: 'o', 25: 'p',
@@ -117,6 +123,243 @@ def _show_msg(text, sub="", color=C["red"]):
         if sub:
             d.text((20, 68), sub, font=font_sm, fill=C["sub"])
     LCD.LCD_ShowImage(img, 0, 0)
+
+
+def _load_history():
+    try:
+        with open(HISTORY_FILE) as f:
+            return json.load(f)[:HISTORY_MAX]
+    except Exception:
+        return []
+
+
+def _save_history(query):
+    history = _load_history()
+    history = [q for q in history if q != query]
+    history.insert(0, query)
+    history = history[:HISTORY_MAX]
+    try:
+        os.makedirs(HISTORY_DIR, exist_ok=True)
+        with open(HISTORY_FILE, "w") as f:
+            json.dump(history, f)
+    except Exception:
+        pass
+
+
+def _load_liked():
+    try:
+        with open(LIKED_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+
+def _save_liked(liked):
+    try:
+        os.makedirs(HISTORY_DIR, exist_ok=True)
+        with open(LIKED_FILE, "w") as f:
+            json.dump(liked, f)
+    except Exception:
+        pass
+
+
+def _like_video(video):
+    liked = _load_liked()
+    if any(v["id"] == video["id"] for v in liked):
+        return
+    liked.insert(0, video)
+    _save_liked(liked)
+
+
+def _play_audio(playlist, start_idx=0):
+    """Audio-only player with dashboard. L=like, LEFT/RIGHT=skip, UP/DOWN=vol."""
+    idx = start_idx
+    while idx < len(playlist) and _running:
+        v = playlist[idx]
+        url = f"https://www.youtube.com/watch?v={v['id']}"
+        _show_msg("Loading...", v["title"][:25], C["red"])
+
+        try:
+            r = subprocess.run(
+                ["yt-dlp", "-f", "139/worst", "--get-url", url],
+                capture_output=True, text=True, timeout=30)
+            audio_url = r.stdout.strip()
+        except Exception:
+            audio_url = ""
+
+        if not audio_url:
+            _show_msg("Error", "No audio", (255, 50, 50))
+            time.sleep(1)
+            idx += 1
+            continue
+
+        proc = subprocess.Popen(
+            ["ffmpeg", "-hide_banner", "-loglevel", "quiet", "-re",
+             "-i", audio_url, "-ac", "2", "-ar", "44100", "-f", "alsa", "default"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        _vol = 40
+        subprocess.Popen(["amixer", "-c", "0", "sset", "Headphone", str(_vol)],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        start_time = time.time()
+        duration = v.get("duration", 0)
+        result = "next"
+        liked_this = False
+
+        while _running:
+            btn = get_button(PINS, GPIO)
+            now = time.time()
+            elapsed = now - start_time
+
+            if proc.poll() is not None:
+                result = "next"
+                break
+
+            if btn == "KEY3":
+                result = "stop"
+                break
+            elif btn == "RIGHT":
+                result = "next"
+                break
+            elif btn == "LEFT":
+                result = "prev"
+                break
+            elif btn == "UP":
+                _vol = min(63, _vol + 5)
+                subprocess.Popen(["amixer", "-c", "0", "sset", "Headphone", str(_vol)],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                time.sleep(0.1)
+            elif btn == "DOWN":
+                _vol = max(0, _vol - 5)
+                subprocess.Popen(["amixer", "-c", "0", "sset", "Headphone", str(_vol)],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                time.sleep(0.1)
+
+            # Check "L" key on TCA8418 (evdev code 38)
+            if EVDEV_OK and evdev_keys.is_key_pressed(38) and not liked_this:
+                liked_this = True
+                _like_video(v)
+
+            # Draw dashboard
+            img = Image.new("RGB", (W, H), C["bg"])
+            d = _draw(img)
+
+            if IS_WIDE:
+                # Header
+                d.rectangle((0, 0, W, 28), fill=C["head"])
+                mode = "MUSIC" if not liked_this else "MUSIC  L"
+                d.text((8, 4), mode, font=font_lg, fill=C["red"])
+                d.text((200, 8), f"{idx+1}/{len(playlist)}", font=font_sm, fill=C["dim"])
+
+                # Title + channel
+                d.text((15, 42), v["title"][:30], font=font, fill=C["white"])
+                d.text((15, 62), v.get("channel", "")[:25], font=font_sm, fill=C["sub"])
+
+                # Controls
+                ctrl_y = 85
+                d.text((40, ctrl_y), "<<", font=font, fill=C["dim"])
+                d.text((130, ctrl_y), "||", font=font_lg, fill=C["white"])
+                d.text((240, ctrl_y), ">>", font=font, fill=C["dim"])
+
+                # Progress bar
+                bar_y = 115
+                d.rectangle((15, bar_y, W - 15, bar_y + 6), fill="#222")
+                if duration > 0:
+                    prog = min(1.0, elapsed / duration)
+                    px = int(15 + (W - 30) * prog)
+                    d.rectangle((15, bar_y, px, bar_y + 6), fill=C["red"])
+
+                # Time
+                d.text((15, bar_y + 10), _format_dur(int(elapsed)), font=font_sm, fill=C["white"])
+                if duration > 0:
+                    d.text((W - 60, bar_y + 10), _format_dur(duration), font=font_sm, fill=C["dim"])
+
+                # Volume
+                d.text((W - 50, 42), f"Vol:{_vol}", font=font_sm, fill=C["dim"])
+
+                # Liked indicator
+                if liked_this:
+                    d.text((W - 30, 65), "L", font=font, fill=C["red"])
+
+                # Footer
+                d.rectangle((0, H - 18, W, H), fill=C["head"])
+                d.text((6, H - 16), "<>:Skip ^v:Vol L:Like K3:Stop", font=font_sm, fill=C["dim"])
+            else:
+                d.rectangle((0, 0, 127, 13), fill=C["head"])
+                d.text((2, 2), "MUSIC", font=font, fill=C["red"])
+                d.text((80, 2), f"{idx+1}/{len(playlist)}", font=font_sm, fill=C["dim"])
+                d.text((4, 20), v["title"][:18], font=font_sm, fill=C["white"])
+                d.text((4, 34), v.get("channel", "")[:16], font=font_sm, fill=C["dim"])
+                d.rectangle((4, 55, 123, 59), fill="#222")
+                if duration > 0:
+                    prog = min(1.0, elapsed / duration)
+                    d.rectangle((4, 55, 4 + int(119 * prog), 59), fill=C["red"])
+                d.text((4, 64), _format_dur(int(elapsed)), font=font_sm, fill=C["white"])
+                if duration > 0:
+                    d.text((80, 64), _format_dur(duration), font=font_sm, fill=C["dim"])
+                if liked_this:
+                    d.text((110, 20), "L", font=font, fill=C["red"])
+                d.rectangle((0, 117, 127, 127), fill=C["head"])
+                d.text((2, 118), "<>:Skip ^v:Vol K3:X", font=font_sm, fill=C["dim"])
+
+            LCD.LCD_ShowImage(img, 0, 0)
+            time.sleep(0.15)
+
+        proc.kill()
+        subprocess.run(["pkill", "-9", "ffmpeg"], capture_output=True)
+        time.sleep(0.2)
+
+        if result == "stop":
+            break
+        elif result == "prev":
+            idx = max(0, idx - 1)
+        else:
+            idx += 1
+
+    LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
+
+
+def _fetch_playlist(url, max_results=20):
+    """Fetch videos from a YouTube playlist URL."""
+    _show_msg("Loading...", "Playlist", C["red"])
+    try:
+        r = subprocess.run(
+            ["yt-dlp", "--flat-playlist", "--no-download",
+             "-j", url],
+            capture_output=True, text=True, timeout=60)
+        if r.returncode != 0:
+            _show_msg("Playlist error", (r.stderr or "")[:20], (255, 50, 50))
+            time.sleep(2)
+            return []
+        results = []
+        for line in r.stdout.strip().split('\n'):
+            if not line:
+                continue
+            try:
+                data = json.loads(line)
+                results.append({
+                    "title": data.get("title", "?")[:40],
+                    "id": data.get("id", ""),
+                    "duration": int(data.get("duration") or 0),
+                    "channel": data.get("channel", data.get("uploader", ""))[:20],
+                })
+            except Exception:
+                continue
+            if len(results) >= max_results:
+                break
+        if not results:
+            _show_msg("Empty playlist", "", (255, 180, 0))
+            time.sleep(2)
+        return results
+    except subprocess.TimeoutExpired:
+        _show_msg("Timeout", "Playlist too long", (255, 50, 50))
+        time.sleep(2)
+        return []
+    except Exception as e:
+        _show_msg("Error", str(e)[:20], (255, 50, 50))
+        time.sleep(2)
+        return []
 
 
 def _get_typed_char():
@@ -240,8 +483,10 @@ def _draw_search(d, query, cursor_blink):
         d.text((10, y + 4), f"{query}{cur}", font=font, fill=C["white"])
         y += 32
         d.text((10, y), "Type to search, OK to submit", font=font_sm, fill=C["dim"])
+        y += 16
+        d.text((10, y), "K3:Back to menu", font=font_sm, fill=C["dim"])
         d.rectangle((0, H - 22, W, H), fill=C["head"])
-        d.text((6, H - 18), "Type:Search  OK:Go  K3:Exit", font=font_sm, fill=C["dim"])
+        d.text((6, H - 18), "OK:Search  K3:Back", font=font_sm, fill=C["dim"])
     else:
         d.rectangle((0, 0, 127, 13), fill=C["head"])
         d.text((2, 2), "YouTube", font=font, fill=C["red"])
@@ -252,10 +497,8 @@ def _draw_search(d, query, cursor_blink):
         d.text((4, y + 2), f"{query}{cur}", font=font_sm, fill=C["white"])
         y += 18
         d.text((4, y), "Type to search", font=font_sm, fill=C["dim"])
-        y += 12
-        d.text((4, y), "OK to submit", font=font_sm, fill=C["dim"])
         d.rectangle((0, 117, 127, 127), fill=C["head"])
-        d.text((2, 118), "Type:Search OK:Go K3:X", font=font_sm, fill=C["dim"])
+        d.text((2, 118), "OK:Search K3:Back", font=font_sm, fill=C["dim"])
 
 
 def _draw_results(d, results, cursor, scroll, query):
@@ -280,35 +523,47 @@ def _draw_results(d, results, cursor, scroll, query):
         d.text((68, 2), query[:8], font=font_sm, fill=C["dim"])
         y = HDR_H
 
-    st = max(0, min(scroll, max(0, len(results) - vis)))
+    total_items = len(results) + 1  # +1 for "Load more"
+    st = max(0, min(scroll, max(0, total_items - vis)))
 
     if not results:
         d.text((10, 50), "No results", font=font_sm, fill=C["dim"])
     else:
-        for i in range(st, min(st + vis, len(results))):
-            r = results[i]
-            sel = i == cursor
-            if IS_WIDE:
-                if sel:
-                    d.rectangle((0, y, W, y + ITEM_H - 2), fill=C["sel"])
-                d.text((8, y + 2), r["title"][:TITLE_MAX], font=font,
-                       fill=C["white"] if sel else C["sub"])
-                dur = _format_dur(r["duration"])
-                d.text((8, y + 16), r["channel"][:CHAN_MAX], font=font_sm, fill=C["dim"])
-                d.text((220, y + 16), dur, font=font_sm, fill=C["dim"])
+        for i in range(st, min(st + vis, total_items)):
+            if i < len(results):
+                r = results[i]
+                sel = i == cursor
+                if IS_WIDE:
+                    if sel:
+                        d.rectangle((0, y, W, y + ITEM_H - 2), fill=C["sel"])
+                    d.text((8, y + 2), r["title"][:TITLE_MAX], font=font,
+                           fill=C["white"] if sel else C["sub"])
+                    dur = _format_dur(r["duration"])
+                    d.text((8, y + 16), r["channel"][:CHAN_MAX], font=font_sm, fill=C["dim"])
+                    d.text((220, y + 16), dur, font=font_sm, fill=C["dim"])
+                else:
+                    if sel:
+                        d.rectangle((0, y, 127, y + ITEM_H - 2), fill=C["sel"])
+                    d.text((3, y + 1), r["title"][:TITLE_MAX], font=font_sm,
+                           fill=C["white"] if sel else C["sub"])
+                    dur = _format_dur(r["duration"])
+                    d.text((3, y + 9), r["channel"][:CHAN_MAX], font=font_sm, fill=C["dim"])
+                    d.text((85, y + 9), dur, font=font_sm, fill=C["dim"])
             else:
-                if sel:
-                    d.rectangle((0, y, 127, y + ITEM_H - 2), fill=C["sel"])
-                d.text((3, y + 1), r["title"][:TITLE_MAX], font=font_sm,
-                       fill=C["white"] if sel else C["sub"])
-                dur = _format_dur(r["duration"])
-                d.text((3, y + 9), r["channel"][:CHAN_MAX], font=font_sm, fill=C["dim"])
-                d.text((85, y + 9), dur, font=font_sm, fill=C["dim"])
+                sel = i == cursor
+                if IS_WIDE:
+                    if sel:
+                        d.rectangle((0, y, W, y + ITEM_H - 2), fill=C["sel"])
+                    d.text((8, y + 6), "Load more...", font=font, fill=C["red"] if sel else C["dim"])
+                else:
+                    if sel:
+                        d.rectangle((0, y, 127, y + ITEM_H - 2), fill=C["sel"])
+                    d.text((3, y + 3), "Load more...", font=font_sm, fill=C["red"] if sel else C["dim"])
             y += ITEM_H
 
     if IS_WIDE:
         d.rectangle((0, H - FTR_H, W, H), fill=C["head"])
-        d.text((6, H - 18), "OK:Play  LEFT:Back  K3:Exit", font=font_sm, fill=C["dim"])
+        d.text((6, H - 18), "OK:Play(auto-next) L:Back K3:X", font=font_sm, fill=C["dim"])
     else:
         d.rectangle((0, 117, 127, 127), fill=C["head"])
         d.text((2, 118), "OK:Play L:Back K3:X", font=font_sm, fill=C["dim"])
@@ -331,7 +586,43 @@ def _read_frame(proc):
     return raw
 
 
-def _play_video(video_id, title):
+def _apply_osd(raw, title, elapsed, duration=0):
+    """Apply OSD overlay directly on RGB565 buffer. CardputerZero only."""
+    if not IS_WIDE:
+        return raw
+    import numpy as np
+    arr = np.frombuffer(raw, dtype=np.uint16).reshape(H, W).copy()
+    osd_h = 16
+    arr[H - osd_h:, :] = arr[H - osd_h:, :] >> 2
+    # White text via pixel drawing is too slow — just darken the bar
+    # The title/time info is visible enough from the darkened video
+    # Progress bar
+    if duration > 0:
+        prog = min(1.0, elapsed / duration)
+        px = int(W * prog)
+        arr[H - 2:, :px] = 0x07FF  # cyan
+    return arr.tobytes()
+
+
+def _play_playlist(playlist, start_idx=0):
+    """Play all videos in sequence. LEFT/RIGHT to skip. KEY3 to stop."""
+    idx = start_idx
+    while idx < len(playlist) and _running:
+        v = playlist[idx]
+        _show_msg(f"[{idx+1}/{len(playlist)}]", v["title"][:25], C["red"])
+        time.sleep(0.5)
+        result = _play_video(v["id"], v["title"], playlist_mode=True)
+        if result == "next":
+            idx += 1
+        elif result == "prev":
+            idx = max(0, idx - 1)
+        elif result == "stop":
+            break
+        else:
+            idx += 1
+
+
+def _play_video(video_id, title, playlist_mode=False):
     url = f"https://www.youtube.com/watch?v={video_id}"
 
     # Re-init LCD to ensure clean SPI state
@@ -350,17 +641,17 @@ def _play_video(video_id, title):
     except subprocess.TimeoutExpired:
         _show_msg("Timeout", "Server too slow", (255, 50, 50))
         time.sleep(2)
-        return
+        return "next" if playlist_mode else None
     except Exception as e:
         _show_msg("yt-dlp error", str(e)[:20], (255, 50, 50))
         time.sleep(2)
-        return
+        return "next" if playlist_mode else None
 
     if not video_url:
         err = r.stderr[:40] if r.stderr else "No URL returned"
         _show_msg("Stream error", err[:20], (255, 50, 50))
         time.sleep(2)
-        return
+        return "next" if playlist_mode else None
 
     _show_msg("Buffering...", title[:20], C["red"])
 
@@ -381,7 +672,7 @@ def _play_video(video_id, title):
             "-vf", f"scale={W}:{H}:force_original_aspect_ratio=decrease,pad={W}:{H}:(ow-iw)/2:(oh-ih)/2,fps={target_fps}",
             "-pix_fmt", "rgb565le", "-f", "rawvideo", "pipe:1"]
     if audio_url and has_audio:
-        cmd += ["-map", "1:a:0", "-ac", "2", "-ar", "44100", "-f", "alsa", "default"]
+        cmd += ["-map", "1:a:0", "-af", "aresample=async=1", "-ac", "2", "-ar", "44100", "-f", "alsa", "default"]
 
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=FB_SIZE * 16)
 
@@ -399,7 +690,7 @@ def _play_video(video_id, title):
         err = proc.stderr.read(200).decode(errors="replace") if proc.stderr else ""
         _show_msg("ffmpeg error", err[:20], (255, 50, 50))
         time.sleep(2)
-        return
+        return "next" if playlist_mode else None
 
     use_fb = IS_WIDE
     fb_fd = None
@@ -414,15 +705,38 @@ def _play_video(video_id, title):
     start_time = time.time()
     paused = False
     pause_offset = 0
+    _vol = 40
+    _result = "done"
+
+    def _set_vol(v):
+        nonlocal _vol
+        _vol = max(0, min(63, v))
+        subprocess.Popen(["amixer", "-c", "0", "sset", "Headphone", str(_vol)],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    _set_vol(_vol)
 
     try:
         while _running:
             btn = get_button(PINS, GPIO)
 
             if btn == "KEY3":
+                _result = "stop"
                 break
-            elif btn == "LEFT":
+            elif btn == "RIGHT" and playlist_mode:
+                _result = "next"
                 break
+            elif btn == "LEFT" and playlist_mode:
+                _result = "prev"
+                break
+            elif btn == "LEFT" and not playlist_mode:
+                break
+            elif btn == "UP":
+                _set_vol(_vol + 5)
+                time.sleep(0.1)
+            elif btn == "DOWN":
+                _set_vol(_vol - 5)
+                time.sleep(0.1)
             elif btn == "KEY1" or btn == "OK":
                 paused = not paused
                 if paused:
@@ -441,6 +755,13 @@ def _play_video(video_id, title):
                     proc.send_signal(signal.SIGCONT)
                 time.sleep(0.3)
                 continue
+
+            # "L" key to like during video playback
+            if EVDEV_OK and evdev_keys.is_key_pressed(38):
+                _like_video({"id": video_id, "title": title,
+                             "channel": "", "duration": 0})
+                _show_msg("Liked!", title[:20], C["red"])
+                time.sleep(0.5)
 
             if paused:
                 time.sleep(0.05)
@@ -481,7 +802,9 @@ def _play_video(video_id, title):
         subprocess.run(["pkill", "-9", "ffmpeg"], capture_output=True)
         time.sleep(0.3)
         LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-        _show_msg("YouTube", "Ready", C["red"])
+        if not playlist_mode:
+            _show_msg("YouTube", "Ready", C["red"])
+    return _result
 
 
 def _check_internet():
@@ -565,10 +888,52 @@ def main():
     results = []
     cursor = 0
     scroll = 0
-    state = "search"
+    state = "menu"  # menu → search/history/trending → results
     last_press = 0.0
     last_char_time = 0.0
     kb_row, kb_col = 0, 0
+    history = _load_history()
+    menu_sel = 0
+    hist_sel = 0
+
+    DEFAULT_PRESETS = [
+        "talking sasquatch",
+        "sn0ren",
+        "Valleytechsolutions",
+        "hacking tutorial 2026",
+        "cybersecurity news",
+        "CTF writeup",
+        "bug bounty",
+        "pentest red team",
+    ]
+    PRESETS_FILE = os.path.join(HISTORY_DIR, "presets.json")
+
+    def _load_presets():
+        try:
+            with open(PRESETS_FILE) as f:
+                return json.load(f)
+        except Exception:
+            return list(DEFAULT_PRESETS)
+
+    def _save_presets(presets):
+        try:
+            os.makedirs(HISTORY_DIR, exist_ok=True)
+            with open(PRESETS_FILE, "w") as f:
+                json.dump(presets, f)
+        except Exception:
+            pass
+
+    presets = _load_presets()
+    MENU_ITEMS = ["Search", "Quick Search", "Music", "Liked", "History"]
+
+    def _do_search(q):
+        nonlocal results, cursor, scroll, state
+        _save_history(q)
+        _show_msg("Searching...", q[:20], C["red"])
+        results = _search_youtube(q)
+        cursor = 0
+        scroll = 0
+        state = "results"
 
     try:
         while _running:
@@ -577,35 +942,430 @@ def main():
             typed = _get_typed_char() if EVDEV_OK else None
 
             if btn == "KEY3":
-                if state == "results":
-                    state = "search"
-                    continue
-                break
+                if state == "menu":
+                    break
+                elif state == "preset_add":
+                    state = "presets"
+                elif state == "music_results":
+                    state = "music_search"
+                else:
+                    state = "menu"
+                continue
 
-            if state == "search":
-                # Physical keyboard (CardputerZero)
+            if state == "menu":
+                if btn and now - last_press > 0.2:
+                    last_press = now
+                    if btn == "UP":
+                        menu_sel = (menu_sel - 1) % len(MENU_ITEMS)
+                    elif btn == "DOWN":
+                        menu_sel = (menu_sel + 1) % len(MENU_ITEMS)
+                    elif btn == "OK":
+                        if menu_sel == 0:
+                            query = ""
+                            state = "search"
+                        elif menu_sel == 1:
+                            preset_sel = 0
+                            state = "presets"
+                        elif menu_sel == 2:
+                            query = ""
+                            state = "music_search"
+                        elif menu_sel == 3:
+                            liked = _load_liked()
+                            cursor = 0
+                            scroll = 0
+                            state = "liked"
+                        elif menu_sel == 4:
+                            history = _load_history()
+                            hist_sel = 0
+                            state = "history"
+
+                img = Image.new("RGB", (W, H), C["bg"])
+                d = _draw(img)
+                if IS_WIDE:
+                    d.rectangle((0, 0, W, 28), fill=C["head"])
+                    d.text((8, 4), "YouTube", font=font_lg, fill=C["red"])
+                    y = 36
+                    for i, item in enumerate(MENU_ITEMS):
+                        sel = i == menu_sel
+                        if sel:
+                            d.rectangle((6, y, W - 6, y + 19), fill=C["sel"])
+                        d.text((20, y + 2), item, font=font, fill=C["white"] if sel else C["sub"])
+                        y += 21
+                    d.rectangle((0, H - 22, W, H), fill=C["head"])
+                    d.text((6, H - 18), "OK:Select  K3:Exit", font=font_sm, fill=C["dim"])
+                else:
+                    d.rectangle((0, 0, 127, 13), fill=C["head"])
+                    d.text((2, 2), "YouTube", font=font, fill=C["red"])
+                    y = 20
+                    for i, item in enumerate(MENU_ITEMS):
+                        sel = i == menu_sel
+                        if sel:
+                            d.rectangle((2, y, 125, y + 14), fill=C["sel"])
+                        d.text((6, y + 2), item, font=font_sm, fill=C["white"] if sel else C["sub"])
+                        y += 16
+                    d.rectangle((0, 117, 127, 127), fill=C["head"])
+                    d.text((2, 118), "OK:Select K3:Exit", font=font_sm, fill=C["dim"])
+                LCD.LCD_ShowImage(img, 0, 0)
+
+            elif state == "history":
+                if btn and now - last_press > 0.2:
+                    last_press = now
+                    if btn == "UP":
+                        if history:
+                            hist_sel = (hist_sel - 1) % len(history)
+                    elif btn == "DOWN":
+                        if history:
+                            hist_sel = (hist_sel + 1) % len(history)
+                    elif btn == "OK" and history and hist_sel < len(history):
+                        query = history[hist_sel]
+                        _do_search(query)
+                    elif btn == "LEFT":
+                        state = "menu"
+
+                img = Image.new("RGB", (W, H), C["bg"])
+                d = _draw(img)
+                if IS_WIDE:
+                    ITEM_H = 22
+                    HDR_H = 28
+                    FTR_H = 22
+                    vis = (H - HDR_H - FTR_H) // ITEM_H
+                    d.rectangle((0, 0, W, HDR_H), fill=C["head"])
+                    d.text((8, 4), "History", font=font_lg, fill=C["red"])
+                    d.text((130, 8), f"{len(history)}", font=font, fill=C["white"])
+                    y = HDR_H + 2
+                    if not history:
+                        d.text((20, 70), "No history yet", font=font, fill=C["dim"])
+                    else:
+                        hs = max(0, min(hist_sel - vis // 2, max(0, len(history) - vis)))
+                        for i in range(hs, min(hs + vis, len(history))):
+                            sel = i == hist_sel
+                            if sel:
+                                d.rectangle((6, y, W - 6, y + ITEM_H - 2), fill=C["sel"])
+                            d.text((10, y + 3), history[i][:30], font=font,
+                                   fill=C["white"] if sel else C["sub"])
+                            y += ITEM_H
+                    d.rectangle((0, H - FTR_H, W, H), fill=C["head"])
+                    d.text((6, H - 18), "OK:Search  K3:Back", font=font_sm, fill=C["dim"])
+                else:
+                    ITEM_H = 14
+                    HDR_H = 16
+                    FTR_H = 11
+                    vis = (117 - HDR_H) // ITEM_H
+                    d.rectangle((0, 0, 127, 13), fill=C["head"])
+                    d.text((2, 2), "History", font=font, fill=C["red"])
+                    y = HDR_H
+                    if not history:
+                        d.text((4, 50), "No history", font=font_sm, fill=C["dim"])
+                    else:
+                        hs = max(0, min(hist_sel - vis // 2, max(0, len(history) - vis)))
+                        for i in range(hs, min(hs + vis, len(history))):
+                            sel = i == hist_sel
+                            if sel:
+                                d.rectangle((2, y, 125, y + ITEM_H - 2), fill=C["sel"])
+                            d.text((4, y + 1), history[i][:18], font=font_sm,
+                                   fill=C["white"] if sel else C["dim"])
+                            y += ITEM_H
+                    d.rectangle((0, 117, 127, 127), fill=C["head"])
+                    d.text((2, 118), "OK:Go K3:Back", font=font_sm, fill=C["dim"])
+                LCD.LCD_ShowImage(img, 0, 0)
+
+            elif state == "presets":
+                if btn and now - last_press > 0.2:
+                    last_press = now
+                    if btn == "UP":
+                        if presets:
+                            preset_sel = (preset_sel - 1) % len(presets)
+                    elif btn == "DOWN":
+                        if presets:
+                            preset_sel = (preset_sel + 1) % len(presets)
+                    elif btn == "OK" and presets and preset_sel < len(presets):
+                        query = presets[preset_sel]
+                        _do_search(query)
+                    elif btn == "KEY1" and presets and preset_sel < len(presets):
+                        presets.pop(preset_sel)
+                        _save_presets(presets)
+                        if preset_sel >= len(presets) and presets:
+                            preset_sel = len(presets) - 1
+                    elif btn == "KEY2":
+                        query = ""
+                        state = "preset_add"
+
+                img = Image.new("RGB", (W, H), C["bg"])
+                d = _draw(img)
+                if IS_WIDE:
+                    ITEM_H = 22
+                    HDR_H = 28
+                    FTR_H = 22
+                    vis = (H - HDR_H - FTR_H) // ITEM_H
+                    d.rectangle((0, 0, W, HDR_H), fill=C["head"])
+                    d.text((8, 4), "Quick Search", font=font_lg, fill=C["red"])
+                    d.text((200, 8), f"{len(presets)}", font=font_sm, fill=C["dim"])
+                    y = HDR_H + 2
+                    ps = max(0, min(preset_sel - vis // 2, max(0, len(presets) - vis)))
+                    for i in range(ps, min(ps + vis, len(presets))):
+                        sel = i == preset_sel
+                        if sel:
+                            d.rectangle((6, y, W - 6, y + ITEM_H - 2), fill=C["sel"])
+                        d.text((12, y + 3), presets[i][:30], font=font,
+                               fill=C["white"] if sel else C["sub"])
+                        y += ITEM_H
+                    if not presets:
+                        d.text((20, 70), "No presets", font=font, fill=C["dim"])
+                    d.rectangle((0, H - FTR_H, W, H), fill=C["head"])
+                    d.text((6, H - 18), "OK:Go K1:Del K2:Add K3:Back", font=font_sm, fill=C["dim"])
+                else:
+                    ITEM_H = 14
+                    HDR_H = 16
+                    FTR_H = 11
+                    vis = (117 - HDR_H) // ITEM_H
+                    d.rectangle((0, 0, 127, 13), fill=C["head"])
+                    d.text((2, 2), "Quick Search", font=font, fill=C["red"])
+                    y = HDR_H
+                    ps = max(0, min(preset_sel - vis // 2, max(0, len(presets) - vis)))
+                    for i in range(ps, min(ps + vis, len(presets))):
+                        sel = i == preset_sel
+                        if sel:
+                            d.rectangle((2, y, 125, y + ITEM_H - 2), fill=C["sel"])
+                        d.text((4, y + 1), presets[i][:18], font=font_sm,
+                               fill=C["white"] if sel else C["dim"])
+                        y += ITEM_H
+                    if not presets:
+                        d.text((4, 50), "No presets", font=font_sm, fill=C["dim"])
+                    d.rectangle((0, 117, 127, 127), fill=C["head"])
+                    d.text((2, 118), "OK K1:Del K2:Add K3:X", font=font_sm, fill=C["dim"])
+                LCD.LCD_ShowImage(img, 0, 0)
+
+            elif state == "preset_add":
+                if typed and now - last_char_time > 0.15:
+                    last_char_time = now
+                    if typed == '\b':
+                        query = query[:-1]
+                    elif typed == '\n' and query.strip():
+                        if query.strip() not in presets:
+                            presets.append(query.strip())
+                            _save_presets(presets)
+                        preset_sel = len(presets) - 1
+                        state = "presets"
+                    elif len(query) < 40:
+                        query += typed
+
+                if IS_WIDE and btn == "OK" and query.strip() and now - last_press > 0.2:
+                    last_press = now
+                    presets.append(query.strip())
+                    _save_presets(presets)
+                    preset_sel = len(presets) - 1
+                    state = "presets"
+
+                img = Image.new("RGB", (W, H), C["bg"])
+                d = _draw(img)
+                if IS_WIDE:
+                    d.rectangle((0, 0, W, 28), fill=C["head"])
+                    d.text((8, 4), "Add Preset", font=font_lg, fill=C["red"])
+                    y = 42
+                    d.rectangle((6, y, W - 6, y + 24), fill=C["card"])
+                    blink = int(now * 2) % 2 == 0
+                    cur = "|" if blink else ""
+                    d.text((10, y + 4), f"{query}{cur}", font=font, fill=C["white"])
+                    d.rectangle((0, H - 22, W, H), fill=C["head"])
+                    d.text((6, H - 18), "OK:Save  K3:Cancel", font=font_sm, fill=C["dim"])
+                else:
+                    d.rectangle((0, 0, 127, 13), fill=C["head"])
+                    d.text((2, 2), "Add Preset", font=font, fill=C["red"])
+                    d.rectangle((2, 20, 125, 32), fill=C["card"])
+                    blink = int(now * 2) % 2 == 0
+                    cur = "|" if blink else ""
+                    d.text((4, 22), f"{query}{cur}", font=font_sm, fill=C["white"])
+                    d.rectangle((0, 117, 127, 127), fill=C["head"])
+                    d.text((2, 118), "OK:Save K3:Cancel", font=font_sm, fill=C["dim"])
+                LCD.LCD_ShowImage(img, 0, 0)
+
+            elif state == "music_search":
+                if typed and now - last_char_time > 0.15:
+                    last_char_time = now
+                    if typed == '\b':
+                        query = query[:-1]
+                    elif typed == '\n' and query.strip():
+                        _save_history(query)
+                        _show_msg("Searching...", query[:20], C["red"])
+                        results = _search_youtube(query, max_results=15)
+                        cursor = 0
+                        scroll = 0
+                        state = "music_results"
+                    elif len(query) < 40:
+                        query += typed
+
+                if IS_WIDE and btn == "OK" and query.strip() and now - last_press > 0.2:
+                    last_press = now
+                    _save_history(query)
+                    _show_msg("Searching...", query[:20], C["red"])
+                    results = _search_youtube(query, max_results=15)
+                    cursor = 0
+                    scroll = 0
+                    state = "music_results"
+
+                img = Image.new("RGB", (W, H), C["bg"])
+                d = _draw(img)
+                if IS_WIDE:
+                    d.rectangle((0, 0, W, 28), fill=C["head"])
+                    d.text((8, 4), "Music", font=font_lg, fill=C["red"])
+                    y = 38
+                    d.rectangle((6, y, W - 6, y + 24), fill=C["card"])
+                    blink = int(now * 2) % 2 == 0
+                    cur = "|" if blink else ""
+                    d.text((10, y + 4), f"{query}{cur}", font=font, fill=C["white"])
+                    y += 32
+                    d.text((10, y), "Audio only - search & play", font=font_sm, fill=C["dim"])
+                    d.rectangle((0, H - 22, W, H), fill=C["head"])
+                    d.text((6, H - 18), "OK:Play  K3:Back", font=font_sm, fill=C["dim"])
+                else:
+                    d.rectangle((0, 0, 127, 13), fill=C["head"])
+                    d.text((2, 2), "Music", font=font, fill=C["red"])
+                    d.rectangle((2, 20, 125, 32), fill=C["card"])
+                    blink = int(now * 2) % 2 == 0
+                    cur = "|" if blink else ""
+                    d.text((4, 22), f"{query}{cur}", font=font_sm, fill=C["white"])
+                    d.text((4, 38), "Audio only", font=font_sm, fill=C["dim"])
+                    d.rectangle((0, 117, 127, 127), fill=C["head"])
+                    d.text((2, 118), "OK:Play K3:Back", font=font_sm, fill=C["dim"])
+                LCD.LCD_ShowImage(img, 0, 0)
+
+            elif state == "music_results":
+                if btn and now - last_press > 0.2:
+                    last_press = now
+                    if btn == "UP" and results:
+                        cursor = (cursor - 1) % len(results)
+                    elif btn == "DOWN" and results:
+                        cursor = (cursor + 1) % len(results)
+                    elif btn == "OK" and results and cursor < len(results):
+                        _play_audio(results, start_idx=cursor)
+
+                img = Image.new("RGB", (W, H), C["bg"])
+                d = _draw(img)
+                if IS_WIDE:
+                    ITEM_H = 22
+                    HDR_H = 28
+                    FTR_H = 22
+                    vis = (H - HDR_H - FTR_H) // ITEM_H
+                    d.rectangle((0, 0, W, HDR_H), fill=C["head"])
+                    d.text((8, 4), "Music", font=font_lg, fill=C["red"])
+                    d.text((100, 8), f"{len(results)}", font=font_sm, fill=C["white"])
+                    d.text((130, 8), query[:12], font=font_sm, fill=C["dim"])
+                    y = HDR_H + 2
+                    ms = max(0, min(cursor - vis // 2, max(0, len(results) - vis)))
+                    for i in range(ms, min(ms + vis, len(results))):
+                        r = results[i]
+                        sel = i == cursor
+                        if sel:
+                            d.rectangle((6, y, W - 6, y + ITEM_H - 2), fill=C["sel"])
+                        dur = _format_dur(r["duration"])
+                        d.text((12, y + 3), r["title"][:28], font=font,
+                               fill=C["white"] if sel else C["sub"])
+                        d.text((W - 55, y + 3), dur, font=font_sm, fill=C["dim"])
+                        y += ITEM_H
+                    d.rectangle((0, H - FTR_H, W, H), fill=C["head"])
+                    d.text((6, H - 18), "OK:Play(auto-next) K3:Back", font=font_sm, fill=C["dim"])
+                else:
+                    ITEM_H = 14
+                    HDR_H = 16
+                    FTR_H = 11
+                    vis = (117 - HDR_H) // ITEM_H
+                    d.rectangle((0, 0, 127, 13), fill=C["head"])
+                    d.text((2, 2), "Music", font=font, fill=C["red"])
+                    d.text((50, 2), f"{len(results)}", font=font_sm, fill=C["white"])
+                    y = HDR_H
+                    ms = max(0, min(cursor - vis // 2, max(0, len(results) - vis)))
+                    for i in range(ms, min(ms + vis, len(results))):
+                        r = results[i]
+                        sel = i == cursor
+                        if sel:
+                            d.rectangle((2, y, 125, y + ITEM_H - 2), fill=C["sel"])
+                        d.text((4, y + 1), r["title"][:18], font=font_sm,
+                               fill=C["white"] if sel else C["dim"])
+                        y += ITEM_H
+                    d.rectangle((0, 117, 127, 127), fill=C["head"])
+                    d.text((2, 118), "OK:Play K3:Back", font=font_sm, fill=C["dim"])
+                LCD.LCD_ShowImage(img, 0, 0)
+
+            elif state == "liked":
+                liked = _load_liked()
+                if btn and now - last_press > 0.2:
+                    last_press = now
+                    if btn == "UP" and liked:
+                        cursor = (cursor - 1) % len(liked)
+                    elif btn == "DOWN" and liked:
+                        cursor = (cursor + 1) % len(liked)
+                    elif btn == "OK" and liked and cursor < len(liked):
+                        _play_playlist(liked, start_idx=cursor)
+                    elif btn == "KEY1" and liked and cursor < len(liked):
+                        liked.pop(cursor)
+                        _save_liked(liked)
+                        if cursor >= len(liked) and liked:
+                            cursor = len(liked) - 1
+
+                img = Image.new("RGB", (W, H), C["bg"])
+                d = _draw(img)
+                if IS_WIDE:
+                    ITEM_H = 22
+                    HDR_H = 28
+                    FTR_H = 22
+                    vis = (H - HDR_H - FTR_H) // ITEM_H
+                    d.rectangle((0, 0, W, HDR_H), fill=C["head"])
+                    d.text((8, 4), "Liked", font=font_lg, fill=C["red"])
+                    d.text((100, 8), f"{len(liked)}", font=font_sm, fill=C["white"])
+                    y = HDR_H + 2
+                    if not liked:
+                        d.text((20, 70), "No liked videos", font=font, fill=C["dim"])
+                        d.text((20, 95), "Press L during playback", font=font_sm, fill=C["dim"])
+                    else:
+                        ls = max(0, min(cursor - vis // 2, max(0, len(liked) - vis)))
+                        for i in range(ls, min(ls + vis, len(liked))):
+                            sel = i == cursor
+                            if sel:
+                                d.rectangle((6, y, W - 6, y + ITEM_H - 2), fill=C["sel"])
+                            d.text((12, y + 3), liked[i]["title"][:30], font=font,
+                                   fill=C["white"] if sel else C["sub"])
+                            y += ITEM_H
+                    d.rectangle((0, H - FTR_H, W, H), fill=C["head"])
+                    d.text((6, H - 18), "OK:Play K1:Remove K3:Back", font=font_sm, fill=C["dim"])
+                else:
+                    ITEM_H = 14
+                    HDR_H = 16
+                    FTR_H = 11
+                    vis = (117 - HDR_H) // ITEM_H
+                    d.rectangle((0, 0, 127, 13), fill=C["head"])
+                    d.text((2, 2), "Liked", font=font, fill=C["red"])
+                    d.text((50, 2), f"{len(liked)}", font=font_sm, fill=C["white"])
+                    y = HDR_H
+                    if not liked:
+                        d.text((4, 50), "No liked videos", font=font_sm, fill=C["dim"])
+                    else:
+                        ls = max(0, min(cursor - vis // 2, max(0, len(liked) - vis)))
+                        for i in range(ls, min(ls + vis, len(liked))):
+                            sel = i == cursor
+                            if sel:
+                                d.rectangle((2, y, 125, y + ITEM_H - 2), fill=C["sel"])
+                            d.text((4, y + 1), liked[i]["title"][:18], font=font_sm,
+                                   fill=C["white"] if sel else C["dim"])
+                            y += ITEM_H
+                    d.rectangle((0, 117, 127, 127), fill=C["head"])
+                    d.text((2, 118), "OK K1:Del K3:Back", font=font_sm, fill=C["dim"])
+                LCD.LCD_ShowImage(img, 0, 0)
+
+            elif state == "search":
                 if typed and now - last_char_time > 0.15:
                     last_char_time = now
                     if typed == '\b':
                         query = query[:-1]
                     elif typed == '\n':
                         if query.strip():
-                            _show_msg("Searching...", query[:20], C["red"])
-                            results = _search_youtube(query)
-                            cursor = 0
-                            scroll = 0
-                            state = "results"
+                            _do_search(query)
                     elif len(query) < 40:
                         query += typed
 
-                # On-screen keyboard (128/240) or OK on CardputerZero
                 if IS_WIDE:
-                    if btn == "OK" and query.strip():
-                        _show_msg("Searching...", query[:20], C["red"])
-                        results = _search_youtube(query)
-                        cursor = 0
-                        scroll = 0
-                        state = "results"
+                    if btn == "OK" and query.strip() and now - last_press > 0.2:
+                        last_press = now
+                        _do_search(query)
                 else:
                     if btn and now - last_press > 0.18:
                         last_press = now
@@ -628,19 +1388,9 @@ def main():
                                     query += ch
                             else:
                                 if query.strip():
-                                    _show_msg("Searching...", query[:16], C["red"])
-                                    results = _search_youtube(query)
-                                    cursor = 0
-                                    scroll = 0
-                                    state = "results"
-                        elif btn == "KEY1":
+                                    _do_search(query)
+                        elif btn == "KEY2":
                             query = query[:-1]
-                        elif btn == "KEY2" and query.strip():
-                            _show_msg("Searching...", query[:16], C["red"])
-                            results = _search_youtube(query)
-                            cursor = 0
-                            scroll = 0
-                            state = "results"
 
                 img = Image.new("RGB", (W, H), C["bg"])
                 d = _draw(img)
@@ -667,7 +1417,8 @@ def main():
                             if cursor < scroll:
                                 scroll = cursor
                     elif btn == "DOWN":
-                        if results and cursor >= len(results) - 1:
+                        max_idx = len(results)  # len = last real, +1 = "Load more"
+                        if cursor >= max_idx:
                             cursor = 0
                             scroll = 0
                         else:
@@ -679,10 +1430,19 @@ def main():
                         if cursor >= scroll + vis:
                             scroll = cursor - vis + 1
                     elif btn == "LEFT":
-                        state = "search"
-                    elif btn == "OK" and results and cursor < len(results):
-                        r = results[cursor]
-                        _play_video(r["id"], r["title"])
+                        state = "menu"
+                    elif btn == "OK" and results:
+                        if cursor >= len(results):
+                            # Load more
+                            _show_msg("Loading more...", query[:20], C["red"])
+                            more = _search_youtube(query, max_results=10)
+                            existing_ids = {r["id"] for r in results}
+                            for m in more:
+                                if m["id"] not in existing_ids:
+                                    results.append(m)
+                        elif cursor < len(results):
+                            # Play from this position, auto-play next
+                            _play_playlist(results, start_idx=cursor)
 
                 img = Image.new("RGB", (W, H), C["bg"])
                 d = _draw(img)
