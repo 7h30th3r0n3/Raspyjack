@@ -84,24 +84,10 @@ signal.signal(signal.SIGTERM, _sig)
 def _show_msg(text, sub="", color=C["red"]):
     img = Image.new("RGB", (W, H), C["bg"])
     d = ScaledDraw(img)
-    d.text((W // 2, H // 2 - 10), text, font=font, fill=color, anchor="mm")
+    d.text((20, 60), text, font=font, fill=color)
     if sub:
-        d.text((W // 2, H // 2 + 10), sub, font=font_sm, fill=C["sub"], anchor="mm")
+        d.text((20, 80), sub, font=font_sm, fill=C["sub"])
     LCD.LCD_ShowImage(img, 0, 0)
-    # Also write to framebuffer in case fbtft is active
-    try:
-        import numpy as np
-        arr = np.array(img)
-        r = (arr[:, :, 0].astype(np.uint16) >> 3) << 11
-        g = (arr[:, :, 1].astype(np.uint16) >> 2) << 5
-        b = arr[:, :, 2].astype(np.uint16) >> 3
-        rgb565 = (r | g | b).astype(np.uint16)
-        fb = os.open(FB_DEVICE, os.O_RDWR)
-        os.lseek(fb, 0, os.SEEK_SET)
-        os.write(fb, rgb565.tobytes())
-        os.close(fb)
-    except Exception:
-        pass
 
 
 def _get_typed_char():
@@ -276,8 +262,8 @@ def _play_video(video_id, title):
                     proc.send_signal(signal.SIGSTOP)
                     img = Image.new("RGB", (W, H), C["bg"])
                     d = ScaledDraw(img)
-                    d.text((W // 2, H // 2), "PAUSED", font=font, fill=C["red"], anchor="mm")
-                    d.text((W // 2, H // 2 + 15), title[:20], font=font_sm, fill=C["dim"], anchor="mm")
+                    d.text((40, 70), "PAUSED", font=font, fill=C["red"])
+                    d.text((20, 90), title[:20], font=font_sm, fill=C["dim"])
                     LCD.LCD_ShowImage(img, 0, 0)
                 else:
                     proc.send_signal(signal.SIGCONT)
