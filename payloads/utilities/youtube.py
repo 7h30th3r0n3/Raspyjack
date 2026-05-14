@@ -111,6 +111,11 @@ def _search_youtube(query, max_results=8):
             ["yt-dlp", "--flat-playlist", "--no-download",
              "-j", f"ytsearch{max_results}:{query}"],
             capture_output=True, text=True, timeout=30)
+        if r.returncode != 0:
+            err = r.stderr[:100] if r.stderr else "Unknown error"
+            _show_msg("Search error", err[:20], (255, 50, 50))
+            time.sleep(2)
+            return []
         results = []
         for line in r.stdout.strip().split('\n'):
             if not line:
@@ -125,8 +130,17 @@ def _search_youtube(query, max_results=8):
                 })
             except Exception:
                 continue
+        if not results:
+            _show_msg("No results", f'"{query[:15]}"', (255, 180, 0))
+            time.sleep(2)
         return results
-    except Exception:
+    except subprocess.TimeoutExpired:
+        _show_msg("Timeout", "Search took too long", (255, 50, 50))
+        time.sleep(2)
+        return []
+    except Exception as e:
+        _show_msg("Error", str(e)[:20], (255, 50, 50))
+        time.sleep(2)
         return []
 
 
@@ -217,13 +231,18 @@ def _play_video(video_id, title):
         urls = r.stdout.strip().split('\n')
         video_url = urls[0] if urls else ""
         audio_url = urls[1] if len(urls) > 1 else ""
-    except Exception:
-        _show_msg("Error", "yt-dlp failed", C["red"])
+    except subprocess.TimeoutExpired:
+        _show_msg("Timeout", "Server too slow", (255, 50, 50))
+        time.sleep(2)
+        return
+    except Exception as e:
+        _show_msg("yt-dlp error", str(e)[:20], (255, 50, 50))
         time.sleep(2)
         return
 
     if not video_url:
-        _show_msg("Error", "No stream URL", C["red"])
+        err = r.stderr[:40] if r.stderr else "No URL returned"
+        _show_msg("Stream error", err[:20], (255, 50, 50))
         time.sleep(2)
         return
 
@@ -239,7 +258,15 @@ def _play_video(video_id, title):
     if audio_url:
         cmd += ["-map", "1:a:0", "-ac", "2", "-ar", "44100", "-f", "alsa", "default"]
 
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=FB_SIZE)
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=FB_SIZE)
+
+    # Wait a moment for ffmpeg to start
+    time.sleep(0.5)
+    if proc.poll() is not None:
+        err = proc.stderr.read(200).decode(errors="replace") if proc.stderr else ""
+        _show_msg("ffmpeg error", err[:20], (255, 50, 50))
+        time.sleep(2)
+        return
 
     fb_fd = os.open(FB_DEVICE, os.O_RDWR)
     fb_map = mmap.mmap(fb_fd, FB_SIZE, mmap.MAP_SHARED, mmap.PROT_WRITE | mmap.PROT_READ)
@@ -276,6 +303,11 @@ def _play_video(video_id, title):
 
             raw = _read_frame(proc)
             if raw is None:
+                if proc.poll() is not None and proc.returncode != 0:
+                    _show_msg("Stream ended", "Connection lost?", (255, 180, 0))
+                else:
+                    _show_msg("Video ended", title[:20], C["white"])
+                time.sleep(2)
                 break
 
             fb_map.seek(0)
