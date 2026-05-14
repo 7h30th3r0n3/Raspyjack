@@ -50,13 +50,25 @@ for p in PINS.values():
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
 W, H = LCD.width, LCD.height
-font = scaled_font(9)
-font_sm = scaled_font(7)
+IS_WIDE = W > 200
+
+if IS_WIDE:
+    from PIL import ImageFont
+    try:
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 16)
+        font_sm = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 12)
+        font_lg = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 22)
+    except Exception:
+        font = scaled_font(9)
+        font_sm = scaled_font(7)
+        font_lg = scaled_font(14)
+else:
+    font = scaled_font(9)
+    font_sm = scaled_font(7)
+    font_lg = font
 
 FB_DEVICE = "/dev/fb1" if os.path.exists("/dev/fb1") else "/dev/fb0"
 FB_SIZE = W * H * 2
-IS_WIDE = W > 200  # CardputerZero 320x170
-font_lg = scaled_font(14) if IS_WIDE else font
 TITLE_MAX = 35 if IS_WIDE else 20
 CHAN_MAX = 18 if IS_WIDE else 12
 
@@ -85,13 +97,21 @@ signal.signal(signal.SIGINT, _sig)
 signal.signal(signal.SIGTERM, _sig)
 
 
+def _draw(img):
+    """Get a draw context — raw ImageDraw on wide, ScaledDraw on small."""
+    if IS_WIDE:
+        from PIL import ImageDraw
+        return ImageDraw.Draw(img)
+    return ScaledDraw(img)
+
+
 def _show_msg(text, sub="", color=C["red"]):
     img = Image.new("RGB", (W, H), C["bg"])
-    d = ScaledDraw(img)
+    d = _draw(img)
     if IS_WIDE:
-        d.text((40, 55), text, font=font_lg, fill=color)
+        d.text((60, 55), text, font=font_lg, fill=color)
         if sub:
-            d.text((40, 80), sub, font=font, fill=C["sub"])
+            d.text((60, 85), sub, font=font, fill=C["sub"])
     else:
         d.text((20, 50), text, font=font, fill=color)
         if sub:
@@ -118,7 +138,6 @@ def _search_youtube(query, max_results=10):
     try:
         r = subprocess.run(
             ["yt-dlp", "--flat-playlist", "--no-download",
-             "--sort", "date",
              "-j", f"ytsearch{max_results}:{query}"],
             capture_output=True, text=True, timeout=30)
         if r.returncode != 0:
@@ -163,32 +182,56 @@ def _format_dur(sec):
 
 
 def _draw_search(d, query, cursor_blink):
-    d.rectangle((0, 0, 127, 13), fill=C["head"])
-    d.text((2, 2), "YouTube", font=font, fill=C["red"])
-    d.text((60, 2), "Search", font=font_sm, fill=C["dim"])
-
-    y = 20
-    d.rectangle((2, y, 125, y + 14), fill=C["card"])
-    cursor = "|" if cursor_blink else ""
-    d.text((4, y + 2), f"{query}{cursor}", font=font_sm, fill=C["white"])
-    y += 18
-
-    d.text((4, y), "Type to search", font=font_sm, fill=C["dim"])
-    y += 12
-    d.text((4, y), "OK to submit", font=font_sm, fill=C["dim"])
-
-    d.rectangle((0, 117, 127, 127), fill=C["head"])
-    d.text((2, 118), "Type:Search OK:Go K3:X", font=font_sm, fill=C["dim"])
+    if IS_WIDE:
+        d.rectangle((0, 0, W, 28), fill=C["head"])
+        d.text((8, 4), "YouTube", font=font_lg, fill=C["red"])
+        d.text((150, 8), "Search", font=font, fill=C["dim"])
+        y = 38
+        d.rectangle((6, y, W - 6, y + 24), fill=C["card"])
+        cur = "|" if cursor_blink else ""
+        d.text((10, y + 4), f"{query}{cur}", font=font, fill=C["white"])
+        y += 32
+        d.text((10, y), "Type to search, OK to submit", font=font_sm, fill=C["dim"])
+        d.rectangle((0, H - 22, W, H), fill=C["head"])
+        d.text((6, H - 18), "Type:Search  OK:Go  K3:Exit", font=font_sm, fill=C["dim"])
+    else:
+        d.rectangle((0, 0, 127, 13), fill=C["head"])
+        d.text((2, 2), "YouTube", font=font, fill=C["red"])
+        d.text((60, 2), "Search", font=font_sm, fill=C["dim"])
+        y = 20
+        d.rectangle((2, y, 125, y + 14), fill=C["card"])
+        cur = "|" if cursor_blink else ""
+        d.text((4, y + 2), f"{query}{cur}", font=font_sm, fill=C["white"])
+        y += 18
+        d.text((4, y), "Type to search", font=font_sm, fill=C["dim"])
+        y += 12
+        d.text((4, y), "OK to submit", font=font_sm, fill=C["dim"])
+        d.rectangle((0, 117, 127, 127), fill=C["head"])
+        d.text((2, 118), "Type:Search OK:Go K3:X", font=font_sm, fill=C["dim"])
 
 
 def _draw_results(d, results, cursor, scroll, query):
-    d.rectangle((0, 0, 127, 13), fill=C["head"])
-    d.text((2, 2), "Results", font=font, fill=C["red"])
-    d.text((55, 2), f"{len(results)}", font=font_sm, fill=C["white"])
-    d.text((68, 2), query[:8], font=font_sm, fill=C["dim"])
+    if IS_WIDE:
+        ITEM_H = 28
+        HDR_H = 28
+        FTR_H = 22
+        vis = (H - HDR_H - FTR_H) // ITEM_H
+        d.rectangle((0, 0, W, HDR_H), fill=C["head"])
+        d.text((8, 4), "Results", font=font_lg, fill=C["red"])
+        d.text((130, 8), f"{len(results)}", font=font, fill=C["white"])
+        d.text((160, 8), query[:12], font=font_sm, fill=C["dim"])
+        y = HDR_H + 2
+    else:
+        ITEM_H = 18
+        HDR_H = 16
+        FTR_H = 11
+        vis = (117 - 16) // ITEM_H
+        d.rectangle((0, 0, 127, 13), fill=C["head"])
+        d.text((2, 2), "Results", font=font, fill=C["red"])
+        d.text((55, 2), f"{len(results)}", font=font_sm, fill=C["white"])
+        d.text((68, 2), query[:8], font=font_sm, fill=C["dim"])
+        y = HDR_H
 
-    y = 16
-    vis = (117 - 16) // 18  # 128-base: header=16, footer=117, item=18px
     st = max(0, min(scroll, max(0, len(results) - vis)))
 
     if not results:
@@ -197,17 +240,30 @@ def _draw_results(d, results, cursor, scroll, query):
         for i in range(st, min(st + vis, len(results))):
             r = results[i]
             sel = i == cursor
-            if sel:
-                d.rectangle((0, y, 127, y + 16), fill=C["sel"])
-            d.text((3, y + 1), r["title"][:TITLE_MAX], font=font_sm,
-                   fill=C["white"] if sel else C["sub"])
-            dur = _format_dur(r["duration"])
-            d.text((3, y + 9), r["channel"][:CHAN_MAX], font=font_sm, fill=C["dim"])
-            d.text((85, y + 9), dur, font=font_sm, fill=C["dim"])
-            y += 18
+            if IS_WIDE:
+                if sel:
+                    d.rectangle((0, y, W, y + ITEM_H - 2), fill=C["sel"])
+                d.text((8, y + 2), r["title"][:TITLE_MAX], font=font,
+                       fill=C["white"] if sel else C["sub"])
+                dur = _format_dur(r["duration"])
+                d.text((8, y + 16), r["channel"][:CHAN_MAX], font=font_sm, fill=C["dim"])
+                d.text((220, y + 16), dur, font=font_sm, fill=C["dim"])
+            else:
+                if sel:
+                    d.rectangle((0, y, 127, y + ITEM_H - 2), fill=C["sel"])
+                d.text((3, y + 1), r["title"][:TITLE_MAX], font=font_sm,
+                       fill=C["white"] if sel else C["sub"])
+                dur = _format_dur(r["duration"])
+                d.text((3, y + 9), r["channel"][:CHAN_MAX], font=font_sm, fill=C["dim"])
+                d.text((85, y + 9), dur, font=font_sm, fill=C["dim"])
+            y += ITEM_H
 
-    d.rectangle((0, 117, 127, 127), fill=C["head"])
-    d.text((2, 118), "OK:Play L:Back K3:X", font=font_sm, fill=C["dim"])
+    if IS_WIDE:
+        d.rectangle((0, H - FTR_H, W, H), fill=C["head"])
+        d.text((6, H - 18), "OK:Play  LEFT:Back  K3:Exit", font=font_sm, fill=C["dim"])
+    else:
+        d.rectangle((0, 117, 127, 127), fill=C["head"])
+        d.text((2, 118), "OK:Play L:Back K3:X", font=font_sm, fill=C["dim"])
 
 
 def _draw_playing(d, title, elapsed):
@@ -298,7 +354,7 @@ def _play_video(video_id, title):
                     pause_offset = time.time() - start_time
                     proc.send_signal(signal.SIGSTOP)
                     img = Image.new("RGB", (W, H), C["bg"])
-                    d = ScaledDraw(img)
+                    d = _draw(img)
                     if IS_WIDE:
                         d.text((50, 60), "PAUSED", font=font_lg, fill=C["red"])
                         d.text((20, 85), title[:30], font=font, fill=C["dim"])
@@ -461,7 +517,7 @@ def main():
                     state = "results"
 
                 img = Image.new("RGB", (W, H), C["bg"])
-                d = ScaledDraw(img)
+                d = _draw(img)
                 blink = int(now * 2) % 2 == 0
                 _draw_search(d, query, blink)
                 LCD.LCD_ShowImage(img, 0, 0)
@@ -472,17 +528,25 @@ def main():
                     if btn == "UP":
                         if cursor == 0 and results:
                             cursor = len(results) - 1
+                            if IS_WIDE:
+                                vis = (H - 28 - 22) // 28
+                            else:
+                                vis = (117 - 16) // 18
+                            scroll = max(0, cursor - vis + 1)
                         else:
                             cursor = max(0, cursor - 1)
-                        if cursor < scroll:
-                            scroll = cursor
+                            if cursor < scroll:
+                                scroll = cursor
                     elif btn == "DOWN":
                         if results and cursor >= len(results) - 1:
                             cursor = 0
                             scroll = 0
                         else:
                             cursor += 1
-                        vis = (H - 32) // 18
+                        if IS_WIDE:
+                            vis = (H - 28 - 22) // 28
+                        else:
+                            vis = (117 - 16) // 18
                         if cursor >= scroll + vis:
                             scroll = cursor - vis + 1
                     elif btn == "LEFT":
@@ -492,7 +556,7 @@ def main():
                         _play_video(r["id"], r["title"])
 
                 img = Image.new("RGB", (W, H), C["bg"])
-                d = ScaledDraw(img)
+                d = _draw(img)
                 _draw_results(d, results, cursor, scroll, query)
                 LCD.LCD_ShowImage(img, 0, 0)
 

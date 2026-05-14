@@ -176,6 +176,17 @@ def main():
         return 1
 
     wad = _find_wad()
+
+    # Check framebuffer is usable
+    try:
+        test_fd = os.open(FB_DEVICE, os.O_RDWR)
+        os.close(test_fd)
+    except Exception:
+        _show_msg("No framebuffer", f"{FB_DEVICE} not available", (255, 50, 50))
+        time.sleep(3)
+        GPIO.cleanup()
+        return 1
+
     _show_msg("DOOM", "Starting...", (255, 50, 0))
 
     # Doom renders 320x200. Xvfb matches exactly.
@@ -185,13 +196,17 @@ def main():
         ["Xvfb", DISPLAY_NUM, "-screen", "0", f"{DOOM_W}x{DOOM_H}x24", "-ac", "-nocursor"],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(1)
+    if xvfb.poll() is not None:
+        _show_msg("Xvfb failed", "Cannot start display", (255, 50, 50))
+        time.sleep(3)
+        GPIO.cleanup()
+        return 1
 
     env = os.environ.copy()
     env["DISPLAY"] = DISPLAY_NUM
     env["SDL_VIDEODRIVER"] = "x11"
     env["SDL_VIDEO_WINDOW_POS"] = "0,0"
 
-    # Set volume low for headphone jack
     subprocess.run(["amixer", "-c", "0", "sset", "Headphone", "30"], capture_output=True)
     subprocess.run(["amixer", "-c", "0", "sset", "DACL", "160"], capture_output=True)
     subprocess.run(["amixer", "-c", "0", "sset", "DACR", "160"], capture_output=True)
@@ -199,8 +214,15 @@ def main():
     doom = subprocess.Popen(
         [DOOM_BIN, "-iwad", wad, "-nomusic", "-nomouse",
          "-1", "-window", "-geometry", f"{DOOM_W}x{DOOM_H}+0+0"],
-        env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     time.sleep(2)
+    if doom.poll() is not None:
+        err = doom.stderr.read(200).decode(errors="replace") if doom.stderr else ""
+        _show_msg("DOOM crashed", err[:20], (255, 50, 50))
+        time.sleep(3)
+        xvfb.kill()
+        GPIO.cleanup()
+        return 1
 
     # Hide X cursor by creating a blank cursor
     subprocess.run(
