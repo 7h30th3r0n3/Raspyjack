@@ -104,11 +104,12 @@ def _get_typed_char():
     return None
 
 
-def _search_youtube(query, max_results=8):
+def _search_youtube(query, max_results=10):
     """Search YouTube via yt-dlp, return list of {title, id, duration, channel}."""
     try:
         r = subprocess.run(
             ["yt-dlp", "--flat-playlist", "--no-download",
+             "--sort", "date",
              "-j", f"ytsearch{max_results}:{query}"],
             capture_output=True, text=True, timeout=30)
         if r.returncode != 0:
@@ -178,7 +179,7 @@ def _draw_results(d, results, cursor, scroll, query):
     d.text((68, 2), query[:8], font=font_sm, fill=C["dim"])
 
     y = 16
-    vis = (H - 32) // 18
+    vis = (117 - 16) // 18  # 128-base: header=16, footer=117, item=18px
     st = max(0, min(scroll, max(0, len(results) - vis)))
 
     if not results:
