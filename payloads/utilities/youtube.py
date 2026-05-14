@@ -173,6 +173,54 @@ def _search_youtube(query, max_results=10):
         return []
 
 
+# On-screen keyboard for 128/240 displays (no physical keyboard)
+_KB_ROWS = [
+    "abcdefghij",
+    "klmnopqrst",
+    "uvwxyz0123",
+    "456789 .<-",
+]
+_KB_SPECIAL = {"<-": '\b', " ": ' ', ".": '.'}
+
+
+def _draw_osk(d, query, kb_row, kb_col):
+    """Draw on-screen keyboard for small displays."""
+    d.rectangle((0, 0, 127, 13), fill=C["head"])
+    d.text((2, 2), "YouTube", font=font, fill=C["red"])
+
+    # Query field
+    d.rectangle((2, 16, 125, 26), fill=C["card"])
+    cur_text = query[-16:] if len(query) > 16 else query
+    d.text((4, 17), f"{cur_text}_", font=font_sm, fill=C["white"])
+
+    # Keyboard grid
+    y = 30
+    cell_w = 12
+    for r, row in enumerate(_KB_ROWS):
+        x = 2
+        for c_idx in range(0, len(row), 1):
+            ch = row[c_idx]
+            sel = r == kb_row and c_idx == kb_col
+            if sel:
+                d.rectangle((x, y, x + cell_w - 1, y + 12), fill="#440000")
+            d.text((x + 2, y + 1), ch, font=font_sm,
+                   fill=C["white"] if sel else C["dim"])
+            x += cell_w
+        y += 14
+
+    # Special keys row
+    actions = [("OK", "search"), ("DEL", "delete")]
+    x = 2
+    for label, _ in actions:
+        sel_sp = kb_row == len(_KB_ROWS)
+        d.text((x, y + 1), label, font=font_sm,
+               fill=C["red"] if sel_sp else C["dim"])
+        x += 30
+
+    d.rectangle((0, 117, 127, 127), fill=C["head"])
+    d.text((2, 118), "^v<>:Move OK:Select", font=font_sm, fill=C["dim"])
+
+
 def _format_dur(sec):
     if sec <= 0:
         return "?"
@@ -334,8 +382,16 @@ def _play_video(video_id, title):
         time.sleep(2)
         return
 
-    fb_fd = os.open(FB_DEVICE, os.O_RDWR)
-    fb_map = mmap.mmap(fb_fd, FB_SIZE, mmap.MAP_SHARED, mmap.PROT_WRITE | mmap.PROT_READ)
+    use_fb = IS_WIDE
+    fb_fd = None
+    fb_map = None
+    if use_fb:
+        try:
+            fb_fd = os.open(FB_DEVICE, os.O_RDWR)
+            fb_map = mmap.mmap(fb_fd, FB_SIZE, mmap.MAP_SHARED, mmap.PROT_WRITE | mmap.PROT_READ)
+        except Exception:
+            use_fb = False
+
     start_time = time.time()
     paused = False
     pause_offset = 0
@@ -380,8 +436,18 @@ def _play_video(video_id, title):
                 time.sleep(2)
                 break
 
-            fb_map.seek(0)
-            fb_map.write(raw)
+            if use_fb:
+                fb_map.seek(0)
+                fb_map.write(raw)
+            else:
+                import numpy as np
+                arr = np.frombuffer(raw, dtype=np.uint16).reshape(H, W)
+                r = ((arr >> 11) & 0x1F) << 3
+                g = ((arr >> 5) & 0x3F) << 2
+                b = (arr & 0x1F) << 3
+                rgb = np.stack([r.astype(np.uint8), g.astype(np.uint8), b.astype(np.uint8)], axis=-1)
+                frame = Image.fromarray(rgb, "RGB")
+                LCD.LCD_ShowImage(frame, 0, 0)
 
     finally:
         try:
@@ -389,8 +455,10 @@ def _play_video(video_id, title):
             proc.wait(timeout=2)
         except Exception:
             pass
-        fb_map.close()
-        os.close(fb_fd)
+        if fb_map:
+            fb_map.close()
+        if fb_fd is not None:
+            os.close(fb_fd)
         subprocess.run(["pkill", "-9", "ffmpeg"], capture_output=True)
         time.sleep(0.3)
         LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
@@ -481,6 +549,7 @@ def main():
     state = "search"
     last_press = 0.0
     last_char_time = 0.0
+    kb_row, kb_col = 0, 0
 
     try:
         while _running:
@@ -495,6 +564,7 @@ def main():
                 break
 
             if state == "search":
+                # Physical keyboard (CardputerZero)
                 if typed and now - last_char_time > 0.15:
                     last_char_time = now
                     if typed == '\b':
@@ -509,17 +579,57 @@ def main():
                     elif len(query) < 40:
                         query += typed
 
-                if btn == "OK" and query.strip():
-                    _show_msg("Searching...", query[:20], C["red"])
-                    results = _search_youtube(query)
-                    cursor = 0
-                    scroll = 0
-                    state = "results"
+                # On-screen keyboard (128/240) or OK on CardputerZero
+                if IS_WIDE:
+                    if btn == "OK" and query.strip():
+                        _show_msg("Searching...", query[:20], C["red"])
+                        results = _search_youtube(query)
+                        cursor = 0
+                        scroll = 0
+                        state = "results"
+                else:
+                    if btn and now - last_press > 0.18:
+                        last_press = now
+                        if btn == "UP":
+                            kb_row = (kb_row - 1) % (len(_KB_ROWS) + 1)
+                        elif btn == "DOWN":
+                            kb_row = (kb_row + 1) % (len(_KB_ROWS) + 1)
+                        elif btn == "LEFT":
+                            if kb_row < len(_KB_ROWS):
+                                kb_col = (kb_col - 1) % len(_KB_ROWS[kb_row])
+                        elif btn == "RIGHT":
+                            if kb_row < len(_KB_ROWS):
+                                kb_col = (kb_col + 1) % len(_KB_ROWS[kb_row])
+                        elif btn == "OK":
+                            if kb_row < len(_KB_ROWS):
+                                ch = _KB_ROWS[kb_row][kb_col]
+                                if ch == '<' and kb_col + 1 < len(_KB_ROWS[kb_row]) and _KB_ROWS[kb_row][kb_col:kb_col+2] == '<-':
+                                    query = query[:-1]
+                                elif len(query) < 40:
+                                    query += ch
+                            else:
+                                if query.strip():
+                                    _show_msg("Searching...", query[:16], C["red"])
+                                    results = _search_youtube(query)
+                                    cursor = 0
+                                    scroll = 0
+                                    state = "results"
+                        elif btn == "KEY1":
+                            query = query[:-1]
+                        elif btn == "KEY2" and query.strip():
+                            _show_msg("Searching...", query[:16], C["red"])
+                            results = _search_youtube(query)
+                            cursor = 0
+                            scroll = 0
+                            state = "results"
 
                 img = Image.new("RGB", (W, H), C["bg"])
                 d = _draw(img)
-                blink = int(now * 2) % 2 == 0
-                _draw_search(d, query, blink)
+                if IS_WIDE:
+                    blink = int(now * 2) % 2 == 0
+                    _draw_search(d, query, blink)
+                else:
+                    _draw_osk(d, query, kb_row, kb_col)
                 LCD.LCD_ShowImage(img, 0, 0)
 
             elif state == "results":
