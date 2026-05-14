@@ -192,12 +192,13 @@ PACKAGES=(
   aircrack-ng wireless-tools wpasupplicant iw \
   hostapd dnsmasq-base sshpass bridge-utils john autossh reaver ebtables \
   firmware-linux-nonfree firmware-realtek firmware-atheros \
-  git i2c-tools rtl-sdr
+  git i2c-tools rtl-sdr \
+  ffmpeg yt-dlp gpsd gpsd-clients
 )
 
 # CardputerZero extra packages
 if [[ "$DISPLAY_TYPE" == "CARDPUTER_320" ]]; then
-  PACKAGES+=( mpv rtl-433 bluez-alsa-utils )
+  PACKAGES+=( mpv rtl-433 bluez-alsa-utils chocolate-doom freedoom xvfb xdotool )
 fi
 
 # Fix missing GPG keys before apt update
@@ -236,6 +237,15 @@ sudo pip3 install --break-system-packages smbus2 2>/dev/null \
   || sudo pip3 install smbus2 2>/dev/null \
   || warn "smbus2 pip install failed – i2c_scanner payload may not work"
 
+# Upgrade yt-dlp to latest (apt version is often outdated, YouTube breaks compatibility)
+step "Upgrading yt-dlp to latest version …"
+sudo pip3 install --upgrade yt-dlp --break-system-packages --ignore-installed yt-dlp 2>/dev/null \
+  || warn "yt-dlp upgrade failed – YouTube payload may not work"
+
+# GPS python library
+step "Installing gpsd-py3 …"
+sudo pip3 install --break-system-packages gpsd-py3 2>/dev/null \
+  || warn "gpsd-py3 install failed – wardriving GPS may not work"
 
 # Disable hostapd/dnsmasq auto-start (only used on-demand by payloads)
 sudo systemctl disable --now hostapd 2>/dev/null || true
