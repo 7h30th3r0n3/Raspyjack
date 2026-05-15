@@ -37,6 +37,7 @@ try:
     from PIL import Image, ImageDraw, ImageFont
     from payloads._display_helper import ScaledDraw, scaled_font
     from payloads._input_helper import get_virtual_button
+    from payloads._input_helper import _flip as _flip_btn
     
     # Import WiFi integration functions
     from wifi.raspyjack_integration import (
@@ -194,7 +195,7 @@ class FastWiFiSwitcher:
             if self.button_states[pin] == 1 and current_state == 0:
                 # Debouncing - ignore if pressed too recently
                 if current_time - self.last_press_time[pin] > 0.1:  # 100ms debounce
-                    pressed_buttons.append(button_name)
+                    pressed_buttons.append(_flip_btn(button_name))
                     self.last_press_time[pin] = current_time
             
             self.button_states[pin] = current_state
