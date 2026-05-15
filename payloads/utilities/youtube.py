@@ -702,10 +702,18 @@ def _draw_playing(d, title, elapsed):
 
 def _read_frame(proc):
     raw = b""
+    retries = 0
     while len(raw) < FB_SIZE:
         chunk = proc.stdout.read(FB_SIZE - len(raw))
         if not chunk:
-            return None
+            if proc.poll() is not None:
+                return None
+            retries += 1
+            if retries > 10:
+                return None
+            time.sleep(0.05)
+            continue
+        retries = 0
         raw += chunk
     return raw
 
@@ -757,7 +765,7 @@ def _play_video(video_id, title, playlist_mode=False):
 
     try:
         r = subprocess.run(
-            ["yt-dlp", "-f", "160+139/18/worst[ext=mp4]/worst", "--get-url", url],
+            ["yt-dlp", "-f", "160+139/134+139/160/worst", "--get-url", url],
             capture_output=True, text=True, timeout=30)
         urls = r.stdout.strip().split('\n')
         video_url = urls[0] if urls else ""
@@ -790,11 +798,10 @@ def _play_video(video_id, title, playlist_mode=False):
     target_fps = 8 if not IS_WIDE else 24
     cmd = ["ffmpeg", "-hide_banner", "-loglevel", "quiet",
            "-reconnect", "1", "-reconnect_streamed", "1",
-           "-reconnect_delay_max", "5", "-re"]
+           "-reconnect_delay_max", "5",
+           "-bufsize", "5M", "-re"]
     cmd += ["-i", video_url]
     if audio_url and has_audio:
-        cmd += ["-reconnect", "1", "-reconnect_streamed", "1",
-                "-reconnect_delay_max", "5"]
         cmd += ["-i", audio_url]
     cmd += ["-map", "0:v:0",
             "-vf", f"scale={W}:{H}:force_original_aspect_ratio=decrease,pad={W}:{H}:(ow-iw)/2:(oh-ih)/2,fps={target_fps}",
