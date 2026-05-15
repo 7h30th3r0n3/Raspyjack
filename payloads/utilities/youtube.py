@@ -163,124 +163,6 @@ def _save_liked(liked):
         pass
 
 
-def _download_video(video_id, title, fmt="mp4"):
-    """Download video/audio with progress on screen. Blocks until done."""
-    url = f"https://www.youtube.com/watch?v={video_id}"
-    if fmt == "mp3":
-        out_dir = "/root/Raspyjack/loot/Music"
-        os.makedirs(out_dir, exist_ok=True)
-        cmd = ["yt-dlp", "-f", "139/bestaudio", "-x", "--audio-format", "mp3",
-               "-o", f"{out_dir}/%(title)s.%(ext)s", "--no-playlist", "--newline", url]
-    else:
-        out_dir = "/root/Raspyjack/loot"
-        cmd = ["yt-dlp", "-f", "160+139/worst", "--merge-output-format", "mp4",
-               "-o", f"{out_dir}/%(title)s.%(ext)s", "--no-playlist", "--newline", url]
-
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-    percent = 0.0
-    status = "Starting..."
-
-    while proc.poll() is None:
-        line = proc.stdout.readline()
-        if not line:
-            break
-        line = line.strip()
-        if "%" in line:
-            try:
-                pct_str = line.split("%")[0].split()[-1]
-                percent = float(pct_str)
-                status = f"{percent:.0f}%"
-            except Exception:
-                pass
-        elif "Merging" in line:
-            status = "Merging..."
-        elif "Destination" in line:
-            status = "Writing..."
-
-        img = Image.new("RGB", (W, H), C["bg"])
-        d = _draw(img)
-        if IS_WIDE:
-            d.rectangle((0, 0, W, 28), fill=C["head"])
-            d.text((8, 4), "Downloading", font=font_lg, fill=C["red"])
-            d.text((15, 40), title[:28], font=font_sm, fill=C["sub"])
-            d.text((15, 58), f"{fmt.upper()} - {status}", font=font, fill=C["white"])
-            d.rectangle((15, 85, W - 15, 93), fill="#222")
-            bar_w = int((W - 30) * percent / 100)
-            if bar_w > 0:
-                d.rectangle((15, 85, 15 + bar_w, 93), fill=C["red"])
-            d.rectangle((0, H - 22, W, H), fill=C["head"])
-            d.text((6, H - 18), "Please wait...", font=font_sm, fill=C["dim"])
-        else:
-            d.rectangle((0, 0, 127, 13), fill=C["head"])
-            d.text((2, 2), "Download", font=font, fill=C["red"])
-            d.text((4, 20), title[:18], font=font_sm, fill=C["sub"])
-            d.text((4, 38), f"{fmt.upper()} {status}", font=font_sm, fill=C["white"])
-            d.rectangle((4, 55, 123, 61), fill="#222")
-            bar_w = int(119 * percent / 100)
-            if bar_w > 0:
-                d.rectangle((4, 55, 4 + bar_w, 61), fill=C["red"])
-            d.rectangle((0, 117, 127, 127), fill=C["head"])
-            d.text((2, 118), "Please wait...", font=font_sm, fill=C["dim"])
-        LCD.LCD_ShowImage(img, 0, 0)
-
-    proc.wait()
-    if proc.returncode == 0:
-        loc = "Music/" if fmt == "mp3" else "loot/"
-        _show_msg("Done!", f"{fmt.upper()} saved to {loc}", (0, 255, 50))
-    else:
-        _show_msg("Download failed", "", (255, 50, 50))
-    time.sleep(1.5)
-
-
-def _show_download_menu(video_id, title):
-    """Show MP4/MP3 choice and start download."""
-    sel = 0
-    options = ["MP4 (Video)", "MP3 (Music)"]
-    while True:
-        img = Image.new("RGB", (W, H), C["bg"])
-        d = _draw(img)
-        if IS_WIDE:
-            d.rectangle((0, 0, W, 28), fill=C["head"])
-            d.text((8, 4), "Download", font=font_lg, fill=C["red"])
-            d.text((15, 38), title[:28], font=font_sm, fill=C["sub"])
-            y = 60
-            for i, opt in enumerate(options):
-                s = i == sel
-                if s:
-                    d.rectangle((6, y, W - 6, y + 24), fill=C["sel"])
-                d.text((20, y + 4), opt, font=font, fill=C["white"] if s else C["sub"])
-                y += 28
-            d.rectangle((0, H - 22, W, H), fill=C["head"])
-            d.text((6, H - 18), "OK:Download  K3:Cancel", font=font_sm, fill=C["dim"])
-        else:
-            d.rectangle((0, 0, 127, 13), fill=C["head"])
-            d.text((2, 2), "Download", font=font, fill=C["red"])
-            d.text((4, 18), title[:18], font=font_sm, fill=C["sub"])
-            y = 35
-            for i, opt in enumerate(options):
-                s = i == sel
-                if s:
-                    d.rectangle((2, y, 125, y + 14), fill=C["sel"])
-                d.text((6, y + 2), opt, font=font_sm, fill=C["white"] if s else C["dim"])
-                y += 16
-            d.rectangle((0, 117, 127, 127), fill=C["head"])
-            d.text((2, 118), "OK:DL K3:Cancel", font=font_sm, fill=C["dim"])
-        LCD.LCD_ShowImage(img, 0, 0)
-
-        btn = get_button(PINS, GPIO)
-        if btn == "UP":
-            sel = (sel - 1) % 2
-        elif btn == "DOWN":
-            sel = (sel + 1) % 2
-        elif btn == "OK":
-            fmt = "mp4" if sel == 0 else "mp3"
-            _download_video(video_id, title, fmt)
-            return
-        elif btn == "KEY3":
-            return
-        time.sleep(0.08)
-
-
 def _like_video(video):
     liked = _load_liked()
     if any(v["id"] == video["id"] for v in liked):
@@ -358,12 +240,6 @@ def _play_audio(playlist, start_idx=0):
             if EVDEV_OK and evdev_keys.is_key_pressed(38) and not liked_this:
                 liked_this = True
                 _like_video(v)
-
-            # Check "D" key (evdev code 32) to download
-            if EVDEV_OK and evdev_keys.is_key_pressed(32):
-                proc.send_signal(signal.SIGSTOP)
-                _show_download_menu(v["id"], v["title"])
-                proc.send_signal(signal.SIGCONT)
 
             # Draw dashboard
             img = Image.new("RGB", (W, H), C["bg"])
@@ -702,18 +578,10 @@ def _draw_playing(d, title, elapsed):
 
 def _read_frame(proc):
     raw = b""
-    retries = 0
     while len(raw) < FB_SIZE:
         chunk = proc.stdout.read(FB_SIZE - len(raw))
         if not chunk:
-            if proc.poll() is not None:
-                return None
-            retries += 1
-            if retries > 10:
-                return None
-            time.sleep(0.05)
-            continue
-        retries = 0
+            return None
         raw += chunk
     return raw
 
@@ -765,7 +633,7 @@ def _play_video(video_id, title, playlist_mode=False):
 
     try:
         r = subprocess.run(
-            ["yt-dlp", "-f", "160+139/134+139/160/worst", "--get-url", url],
+            ["yt-dlp", "-f", "160+139/160/worst", "--get-url", url],
             capture_output=True, text=True, timeout=30)
         urls = r.stdout.strip().split('\n')
         video_url = urls[0] if urls else ""
@@ -796,10 +664,7 @@ def _play_video(video_id, title, playlist_mode=False):
         pass
 
     target_fps = 8 if not IS_WIDE else 24
-    cmd = ["ffmpeg", "-hide_banner", "-loglevel", "quiet",
-           "-reconnect", "1", "-reconnect_streamed", "1",
-           "-reconnect_delay_max", "5",
-           "-bufsize", "5M", "-re"]
+    cmd = ["ffmpeg", "-hide_banner", "-loglevel", "quiet", "-re"]
     cmd += ["-i", video_url]
     if audio_url and has_audio:
         cmd += ["-i", audio_url]
@@ -891,16 +756,12 @@ def _play_video(video_id, title, playlist_mode=False):
                 time.sleep(0.3)
                 continue
 
-            # "L" key to like, "D" key to download during video playback
+            # "L" key to like during video playback
             if EVDEV_OK and evdev_keys.is_key_pressed(38):
                 _like_video({"id": video_id, "title": title,
                              "channel": "", "duration": 0})
                 _show_msg("Liked!", title[:20], C["red"])
                 time.sleep(0.5)
-            if EVDEV_OK and evdev_keys.is_key_pressed(32):
-                proc.send_signal(signal.SIGSTOP)
-                _show_download_menu(video_id, title)
-                proc.send_signal(signal.SIGCONT)
 
             if paused:
                 time.sleep(0.05)
@@ -984,7 +845,7 @@ def _check_deps():
             r = subprocess.run(["yt-dlp", "--version"], capture_output=True, text=True, timeout=5)
             ver = r.stdout.strip()
             # If older than 2026, upgrade
-            if ver < "2026.03":
+            if ver < "2026":
                 _show_msg("Updating...", "yt-dlp", C["red"])
                 subprocess.run(
                     ["pip3", "install", "--upgrade", "yt-dlp",
