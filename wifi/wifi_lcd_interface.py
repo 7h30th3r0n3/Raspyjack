@@ -28,12 +28,17 @@ try:
     import LCD_1in44, LCD_Config
     from PIL import Image, ImageDraw, ImageFont
     import RPi.GPIO as GPIO
+    from payloads._input_helper import get_button
     from wifi_manager import WiFiManager
     from payloads._display_helper import ScaledDraw, scaled_font
     LCD_AVAILABLE = True
 except Exception as e:
     print(f"LCD not available: {e}")
     LCD_AVAILABLE = False
+
+PINS = {"UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
+        "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16}
+
 
 class WiFiLCDInterface:
     def __init__(self):
@@ -507,25 +512,11 @@ class WiFiLCDInterface:
         time.sleep(duration)
 
     def check_buttons(self):
-        """Check for button presses with non-blocking debouncing."""
-        if not hasattr(self, '_last_pressed'):
-            self._last_pressed = {}
-            self._button_states = {name: 1 for name in self.buttons.keys()}
-
-        current_time = time.time()
-        for name, pin in self.buttons.items():
-            current_state = GPIO.input(pin)
-
-            # Detect falling edge (1 -> 0)
-            if self._button_states[name] == 1 and current_state == 0:
-                if current_time - self._last_pressed.get(name, 0) > 0.15:
-                    self._last_pressed[name] = current_time
-                    self._button_states[name] = current_state
-                    return name
-
-            self._button_states[name] = current_state
-
-        return None
+        """Check for button presses, respects flip setting."""
+        btn = get_button(PINS, GPIO)
+        if btn == "OK":
+            return "CENTER"
+        return btn
 
     def update_display(self):
         """Update the LCD display based on current menu."""
