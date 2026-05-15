@@ -984,7 +984,7 @@ def _check_deps():
             r = subprocess.run(["yt-dlp", "--version"], capture_output=True, text=True, timeout=5)
             ver = r.stdout.strip()
             # If older than 2026, upgrade
-            if ver < "2026":
+            if ver < "2026.03":
                 _show_msg("Updating...", "yt-dlp", C["red"])
                 subprocess.run(
                     ["pip3", "install", "--upgrade", "yt-dlp",
