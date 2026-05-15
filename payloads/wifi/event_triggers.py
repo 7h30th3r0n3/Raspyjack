@@ -6,17 +6,22 @@ Author: 7h30th3r0n3
 
 Configurable event monitoring system. Watches for WiFi events and triggers
 alerts: deauth floods, new client connections, specific MAC detection,
-and authentication captures.
+authentication captures, beacon floods, and probe request monitoring.
+
+Per-trigger actions: custom shell commands and webhook/Discord notifications.
 
 Controls:
-  UP/DOWN  -- Navigate triggers
-  OK       -- Toggle trigger on/off
+  UP/DOWN  -- Navigate triggers / config keys
+  OK       -- Toggle trigger / edit string config value
+  LEFT/RIGHT -- Adjust numeric config value
   KEY1     -- View alert log
   KEY2     -- Configure selected trigger
   KEY3     -- Exit (triggers keep running in background)
 """
 import os, sys, time, signal, subprocess, threading, json, re
 from datetime import datetime
+from urllib.request import Request, urlopen
+
 
 sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..", "..")))
 
@@ -25,6 +30,14 @@ import LCD_1in44, LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._keyboard_helper import lcd_keyboard
+
+try:
+    from scapy.all import (Dot11, Dot11Elt, Dot11ProbeReq,
+                            sniff as scapy_sniff)
+    SCAPY_OK = True
+except ImportError:
+    SCAPY_OK = False
 
 PINS = {"UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
         "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16}
@@ -43,8 +56,10 @@ CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
 ALERT_LOG_FILE = os.path.join(CONFIG_DIR, "alerts.log")
 RESPONDER_LOG_DIR = "/root/Raspyjack/Responder/logs"
 LOOT_DIR = "/root/Raspyjack/loot"
-TRIGGER_NAMES = ["deauth_flood", "client_connected", "mac_trigger", "auth_capture"]
-TRIGGER_LABELS = ["Deauth Flood", "Client Conn", "MAC Trigger", "Auth Capture"]
+TRIGGER_NAMES = ["deauth_flood", "client_connected", "mac_trigger",
+                 "auth_capture", "beacon_flood", "probe_request"]
+TRIGGER_LABELS = ["Deauth Flood", "Client Conn", "MAC Trigger",
+                  "Auth Capture", "Beacon Flood", "Probe Request"]
 
 # ── OUI lookup (~50 common vendors) ─────────────────────────────────────────
 OUI_BUILTIN = {
@@ -96,16 +111,25 @@ def _oui_lookup(mac):
 
 lock = threading.Lock()
 config = {
-    "deauth_flood": {"enabled": False, "threshold": 20, "window": 10},
-    "client_connected": {"enabled": False, "interval": 5},
-    "mac_trigger": {"enabled": False, "target_mac": ""},
-    "auth_capture": {"enabled": False},
+    "deauth_flood": {"enabled": False, "threshold": 20, "window": 10,
+                     "command": "", "webhook_url": "", "action_cooldown": 0},
+    "client_connected": {"enabled": False, "interval": 5,
+                          "command": "", "webhook_url": "", "action_cooldown": 0},
+    "mac_trigger": {"enabled": False, "target_mac": "",
+                    "command": "", "webhook_url": "", "action_cooldown": 0},
+    "auth_capture": {"enabled": False,
+                     "command": "", "webhook_url": "", "action_cooldown": 0},
+    "beacon_flood": {"enabled": False, "threshold": 30, "window": 10,
+                     "command": "", "webhook_url": "", "action_cooldown": 0},
+    "probe_request": {"enabled": False, "target_ssid": "",
+                      "command": "", "webhook_url": "", "action_cooldown": 0},
 }
 alerts = []
 cursor_pos = 0
+config_key_cursor = 0
 view_mode = "main"
 log_scroll = 0
-log_category = 0  # 0 = all, 1..4 = per trigger category
+log_category = 0  # 0 = all, 1..N = per trigger category
 LOG_CATEGORIES = ["ALL"] + TRIGGER_NAMES
 LOG_CATEGORY_LABELS = ["ALL"] + TRIGGER_LABELS
 # Prefixes used by each trigger when appending alerts
@@ -114,12 +138,15 @@ _CATEGORY_PREFIXES = {
     "client_connected": "NEW CLIENT",
     "mac_trigger": "MAC DETECTED",
     "auth_capture": ("HANDSHAKE CAPTURED", "AUTH CAPTURE"),
+    "beacon_flood": "BEACON FLOOD",
+    "probe_request": ("PROBE TARGET", "PROBES"),
 }
 known_neighbors = set()
 known_loot_files = set()
 known_resp_lines = 0
 _running = True
 _threads = {}
+_last_action_time = {}
 
 
 def _sig_handler(_s, _f):
@@ -141,7 +168,9 @@ def _load_config():
         with lock:
             for key in TRIGGER_NAMES:
                 if key in data:
-                    config[key] = dict(data[key])
+                    merged = dict(config[key])
+                    merged.update(data[key])
+                    config[key] = merged
     except Exception:
         pass
 
@@ -163,6 +192,64 @@ def _append_alert(msg):
         os.makedirs(CONFIG_DIR, exist_ok=True)
         with open(ALERT_LOG_FILE, "a") as fh:
             fh.write(line + "\n")
+    except Exception:
+        pass
+
+def _fire_trigger(name, msg):
+    with lock:
+        cfg = dict(config.get(name, {}))
+        cooldown = cfg.get("action_cooldown", 0)
+        now = time.time()
+        last = _last_action_time.get(name, 0)
+        if cooldown > 0 and (now - last) < cooldown:
+            return
+        if cooldown > 0:
+            _last_action_time[name] = now
+    _append_alert(msg)
+    cmd = cfg.get("command", "").strip()
+    webhook = cfg.get("webhook_url", "").strip()
+    if cmd:
+        try:
+            subprocess.Popen(cmd, shell=True,
+                             stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+    if webhook:
+        _fire_webhook(webhook, name, msg)
+
+def _fire_webhook(url, name, msg):
+    ts = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    label = name
+    try:
+        idx = TRIGGER_NAMES.index(name)
+        label = TRIGGER_LABELS[idx]
+    except ValueError:
+        pass
+    is_discord = "discord.com/api/webhooks/" in url or "discordapp.com/api/webhooks/" in url
+    if is_discord:
+        payload = {
+            "content": "",
+            "embeds": [{
+                "title": f"RaspyJack: {label}",
+                "description": msg,
+                "color": 15158332,
+                "timestamp": ts,
+            }],
+        }
+    else:
+        payload = {
+            "trigger": name,
+            "label": label,
+            "message": msg,
+            "timestamp": ts,
+            "source": "RaspyJack",
+        }
+    try:
+        data = json.dumps(payload).encode()
+        req = Request(url, data=data,
+                      headers={"Content-Type": "application/json"})
+        urlopen(req, timeout=10)
     except Exception:
         pass
 
@@ -227,7 +314,7 @@ def _deauth_flood_worker():
                 if len(macs) >= 2:
                     dst_macs.add(macs[1].upper())
         if deauth_count > threshold:
-            _append_alert(
+            _fire_trigger("deauth_flood",
                 f"DEAUTH FLOOD: {deauth_count} frames/{window}s "
                 f"src={','.join(list(src_macs)[:3]) or '?'} "
                 f"dst={','.join(list(dst_macs)[:3]) or '?'}")
@@ -260,8 +347,9 @@ def _client_connected_worker():
             prev = set(known_neighbors)
         if not initial:
             for mac in set(current) - prev:
-                _append_alert(f"NEW CLIENT: {mac} vendor={_oui_lookup(mac)} "
-                              f"ip={current.get(mac, '?')}")
+                _fire_trigger("client_connected",
+                    f"NEW CLIENT: {mac} vendor={_oui_lookup(mac)} "
+                    f"ip={current.get(mac, '?')}")
         with lock:
             known_neighbors = set(current)
         initial = False
@@ -289,7 +377,7 @@ def _mac_trigger_worker():
                 if target in line.upper():
                     ip = line.split()[0] if line.split() else "?"
                     break
-            _append_alert(f"MAC DETECTED: {target} ip={ip}")
+            _fire_trigger("mac_trigger", f"MAC DETECTED: {target} ip={ip}")
         last_seen = found
         time.sleep(10)
 
@@ -324,7 +412,7 @@ def _auth_capture_worker():
                 new = cur - known_loot_files
             for f in new:
                 if any(f.endswith(e) for e in cap_exts):
-                    _append_alert(f"HANDSHAKE CAPTURED: {f}")
+                    _fire_trigger("auth_capture", f"HANDSHAKE CAPTURED: {f}")
             with lock:
                 known_loot_files = cur
         if os.path.isdir(RESPONDER_LOG_DIR):
@@ -332,16 +420,109 @@ def _auth_capture_worker():
             with lock:
                 prev = known_resp_lines
             if total > prev:
-                _append_alert(f"AUTH CAPTURE: {total - prev} new cred line(s)")
+                _fire_trigger("auth_capture",
+                    f"AUTH CAPTURE: {total - prev} new cred line(s)")
             with lock:
                 known_resp_lines = total
         time.sleep(5)
+
+def _beacon_flood_worker():
+    if not SCAPY_OK:
+        _append_alert("BEACON FLOOD: Requires scapy")
+        return
+    iface = _find_monitor_iface()
+    if not iface:
+        _append_alert("BEACON FLOOD: No monitor iface found")
+        return
+    while _running:
+        with lock:
+            if not config["beacon_flood"]["enabled"]:
+                break
+            threshold = config["beacon_flood"].get("threshold", 30)
+            window = config["beacon_flood"].get("window", 10)
+        seen = set()
+        def _pkt_cb(pkt):
+            try:
+                if Dot11Elt in pkt:
+                    elt = pkt[Dot11Elt]
+                    if elt.ID == 0:
+                        ssid = elt.info.decode("utf-8", errors="replace").strip()
+                        if ssid:
+                            seen.add(ssid)
+            except Exception:
+                pass
+        try:
+            scapy_sniff(iface=iface, prn=_pkt_cb, store=0, timeout=window)
+        except Exception:
+            time.sleep(2)
+            continue
+        if len(seen) > threshold:
+            _fire_trigger("beacon_flood",
+                f"BEACON FLOOD: {len(seen)} unique SSIDs in {window}s")
+        time.sleep(1)
+
+def _probe_request_worker():
+    if not SCAPY_OK:
+        _append_alert("PROBE REQ: Requires scapy")
+        return
+    iface = _find_monitor_iface()
+    if not iface:
+        _append_alert("PROBE REQ: No monitor iface found")
+        return
+    while _running:
+        with lock:
+            if not config["probe_request"]["enabled"]:
+                break
+            target = config["probe_request"].get("target_ssid", "").strip()
+        probes = {}
+        target_hit = False
+        target_clients = set()
+        def _pkt_cb(pkt):
+            nonlocal target_hit
+            try:
+                if not pkt.haslayer(Dot11ProbeReq):
+                    return
+                elt = pkt[Dot11Elt]
+                ssid = ""
+                if elt and elt.ID == 0:
+                    ssid = elt.info.decode("utf-8", errors="replace").strip()
+                if not ssid:
+                    return
+                client = pkt[Dot11].addr2.upper()
+                if target:
+                    if ssid == target:
+                        target_hit = True
+                        target_clients.add(client)
+                else:
+                    if ssid not in probes:
+                        probes[ssid] = set()
+                    probes[ssid].add(client)
+            except Exception:
+                pass
+        try:
+            scapy_sniff(iface=iface, prn=_pkt_cb, store=0, timeout=5,
+                        filter="type mgt subtype probe-req")
+        except Exception:
+            time.sleep(2)
+            continue
+        if target and target_hit:
+            macs = ",".join(list(target_clients)[:3])
+            _fire_trigger("probe_request",
+                f"PROBE TARGET: {target} from {macs}")
+        elif not target and probes:
+            total = sum(len(c) for c in probes.values())
+            top = sorted(probes.items(), key=lambda x: len(x[1]), reverse=True)[:3]
+            summary = " ".join(f"{s}({len(c)})" for s, c in top)
+            _fire_trigger("probe_request",
+                f"PROBES: {total} reqs for {len(probes)} SSIDs {summary}")
 
 _WORKERS = {
     "deauth_flood": _deauth_flood_worker,
     "client_connected": _client_connected_worker,
     "mac_trigger": _mac_trigger_worker,
     "auth_capture": _auth_capture_worker,
+    "beacon_flood": _beacon_flood_worker,
+    "probe_request": _probe_request_worker,
 }
 
 def _start_trigger(name):
@@ -367,6 +548,11 @@ def _is_active(name):
     with lock:
         enabled = config[name]["enabled"]
     return enabled and name in _threads and _threads[name].is_alive()
+
+def _get_cfg_keys(name):
+    with lock:
+        cfg = dict(config.get(name, {}))
+    return [k for k in cfg if k != "enabled"]
 
 def _draw_main():
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
@@ -454,38 +640,46 @@ def _draw_config():
     d.text((2, 1), f"CFG: {TRIGGER_LABELS[cursor_pos]}", font=font,
            fill="#00CCFF")
 
+    keys = _get_cfg_keys(name)
     with lock:
         cfg = dict(config[name])
     y = 20
-    for key, val in cfg.items():
-        if key == "enabled":
-            continue
-        d.text((2, y), f"{key}:", font=font, fill="#888")
-        d.text((2, y + ROW_H), f"  {str(val)[:14]}", font=font, fill="#FFF")
-        y += ROW_H * 2 + 2
-    if not any(k != "enabled" for k in cfg):
-        d.text((2, y), "No config options", font=font, fill="#555")
+    for i, key in enumerate(keys):
+        val = str(cfg.get(key, ""))
+        if len(val) > 10:
+            display = f"{key}={val[:10]}.."
+        else:
+            display = f"{key}={val}" if val else f"{key}="
+        if i == config_key_cursor:
+            d.rectangle((0, y, 127, y + ROW_H - 1), fill="#222")
+        d.text((4, y), display[:22], font=font,
+               fill="#FFF" if i == config_key_cursor else "#AAA")
+        y += ROW_H
+    if not keys:
+        d.text((2, 30), "No config options", font=font, fill="#555")
 
-    d.text((2, 90), "UP/DN: adjust value", font=font, fill="#666")
-    d.text((2, 102), "OK: save & back", font=font, fill="#666")
     d.rectangle((0, 116, 127, 127), fill="#111")
-    d.text((2, 117), "OK:Save  K3:Back", font=font, fill="#AAA")
+    d.text((2, 117), "UP/DN:Nav LR:Adj OK:Edit K3:Bk", font=font, fill="#AAA")
     LCD.LCD_ShowImage(img, 0, 0)
 
 def _config_adjust(direction):
     name = TRIGGER_NAMES[cursor_pos]
+    keys = _get_cfg_keys(name)
+    if config_key_cursor >= len(keys):
+        return
+    key = keys[config_key_cursor]
     with lock:
-        for key, val in config[name].items():
-            if key == "enabled":
-                continue
-            if isinstance(val, (int, float)):
-                step = 5 if key == "threshold" else 1
+        val = config[name].get(key)
+        if isinstance(val, (int, float)):
+            step = 5 if key == "threshold" else 1
+            if key == "action_cooldown":
+                config[name][key] = max(0, val + step * direction)
+            else:
                 config[name][key] = max(1, val + step * direction)
-                break
     _save_config()
 
 def main():
-    global cursor_pos, view_mode, log_scroll, log_category, _running
+    global cursor_pos, config_key_cursor, view_mode, log_scroll, log_category, _running
 
     _load_config()
 
@@ -542,6 +736,7 @@ def main():
                     view_mode, log_scroll = "log", 0
                     time.sleep(0.2)
                 elif btn == "KEY2":
+                    config_key_cursor = 0
                     view_mode = "config"
                     time.sleep(0.2)
             elif view_mode == "log":
@@ -566,13 +761,38 @@ def main():
                 elif btn == "OK":
                     view_mode = "main"
                     time.sleep(0.2)
+
             elif view_mode == "config":
                 if btn == "UP":
-                    _config_adjust(1); time.sleep(0.2)
+                    keys = _get_cfg_keys(TRIGGER_NAMES[cursor_pos])
+                    if keys:
+                        config_key_cursor = (config_key_cursor - 1) % len(keys)
+                    time.sleep(0.2)
                 elif btn == "DOWN":
+                    keys = _get_cfg_keys(TRIGGER_NAMES[cursor_pos])
+                    if keys:
+                        config_key_cursor = (config_key_cursor + 1) % len(keys)
+                    time.sleep(0.2)
+                elif btn == "LEFT":
                     _config_adjust(-1); time.sleep(0.2)
+                elif btn == "RIGHT":
+                    _config_adjust(1); time.sleep(0.2)
                 elif btn == "OK":
-                    view_mode = "main"; time.sleep(0.2)
+                    name = TRIGGER_NAMES[cursor_pos]
+                    keys = _get_cfg_keys(name)
+                    if config_key_cursor < len(keys):
+                        key = keys[config_key_cursor]
+                        with lock:
+                            val = config[name].get(key, "")
+                        if isinstance(val, str):
+                            result = lcd_keyboard(LCD, font, PINS, GPIO,
+                                                  title=f"Edit {key}",
+                                                  default=str(val))
+                            if result is not None:
+                                with lock:
+                                    config[name][key] = result
+                                _save_config()
+                    time.sleep(0.2)
 
             {"main": _draw_main, "log": _draw_log, "config": _draw_config
              }.get(view_mode, _draw_main)()
