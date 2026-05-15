@@ -85,6 +85,24 @@ HISTORY_MAX = 20
 
 _running = True
 _audio_offset = [0.0]
+_alsa_dev = "default"
+
+def _detect_alsa_dev():
+    global _alsa_dev
+    try:
+        r = subprocess.run(["aplay", "-l"], capture_output=True, text=True, timeout=3)
+        for line in r.stdout.split('\n'):
+            if 'card' in line.lower() and ':' in line:
+                card_num = line.split(':')[0].replace('card', '').strip()
+                if any(k in line.upper() for k in ['ES8388', 'ES8389', 'ES8390']):
+                    _alsa_dev = f"plughw:{card_num},0"
+                    return
+                elif 'HDMI' not in line.upper():
+                    _alsa_dev = f"plughw:{card_num},0"
+    except Exception:
+        pass
+
+_detect_alsa_dev()
 _EVDEV_CHARS = {
     2: '1', 3: '2', 4: '3', 5: '4', 6: '5', 7: '6', 8: '7', 9: '8', 10: '9', 11: '0',
     16: 'q', 17: 'w', 18: 'e', 19: 'r', 20: 't', 21: 'y', 22: 'u', 23: 'i', 24: 'o', 25: 'p',
@@ -195,7 +213,7 @@ def _play_audio(playlist, start_idx=0):
 
         proc = subprocess.Popen(
             ["ffmpeg", "-hide_banner", "-loglevel", "quiet", "-re",
-             "-i", audio_url, "-ac", "2", "-ar", "44100", "-f", "alsa", "default"],
+             "-i", audio_url, "-ac", "2", "-ar", "44100", "-f", "alsa", _alsa_dev],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
         _vol = 40
@@ -655,11 +673,23 @@ def _play_video(video_id, title, playlist_mode=False):
 
     _show_msg("Buffering...", title[:20], C["red"])
 
-    # Check if ALSA audio works
+    # Find the right ALSA audio device (prefer ES8388/ES8389, skip HDMI)
     has_audio = False
+    alsa_dev = "default"
     try:
         r = subprocess.run(["aplay", "-l"], capture_output=True, text=True, timeout=3)
-        has_audio = "card" in r.stdout.lower()
+        for line in r.stdout.split('\n'):
+            if 'card' in line.lower() and ':' in line:
+                card_num = line.split(':')[0].replace('card', '').strip()
+                if any(k in line.upper() for k in ['ES8388', 'ES8389', 'ES8390']):
+                    alsa_dev = f"plughw:{card_num},0"
+                    has_audio = True
+                    break
+                elif 'HDMI' not in line.upper() and 'hdmi' not in line:
+                    alsa_dev = f"plughw:{card_num},0"
+                    has_audio = True
+        if not has_audio and "card" in r.stdout.lower():
+            has_audio = True
     except Exception:
         pass
 
@@ -672,7 +702,7 @@ def _play_video(video_id, title, playlist_mode=False):
             "-vf", f"scale={W}:{H}:force_original_aspect_ratio=decrease,pad={W}:{H}:(ow-iw)/2:(oh-ih)/2,fps={target_fps}",
             "-pix_fmt", "rgb565le", "-f", "rawvideo", "pipe:1"]
     if audio_url and has_audio:
-        cmd += ["-map", "1:a:0", "-af", "aresample=async=1", "-ac", "2", "-ar", "44100", "-f", "alsa", "default"]
+        cmd += ["-map", "1:a:0", "-af", "aresample=async=1", "-ac", "2", "-ar", "44100", "-f", "alsa", alsa_dev]
 
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=FB_SIZE * 16)
 
