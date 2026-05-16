@@ -1657,10 +1657,10 @@ def main():
                         elif cursor < len(results):
                             _play_playlist(results, start_idx=cursor)
 
-                    # "D" key (evdev code 32) to download
-                    if EVDEV_OK and evdev_keys.is_key_pressed(32) and results and cursor < len(results):
-                        r = results[cursor]
-                        _show_download_menu(r["id"], r["title"])
+                # "D" key to download
+                if typed == 'd' and results and cursor < len(results):
+                    r = results[cursor]
+                    _show_download_menu(r["id"], r["title"])
 
                 img = Image.new("RGB", (W, H), C["bg"])
                 d = _draw(img)
