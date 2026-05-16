@@ -88,6 +88,8 @@ Check the WIKI for more ! https://github.com/7h30th3r0n3/Raspyjack/wiki
 </table>
 <p><em>Note:</em> Raspyjack on RPI 0w1/2 can run headless trough WebUi, but need an ethernet module at least.</p>
 
+more raspberry pi option :  <a href="https://rpilocator.com/?cat=PIZERO2">Search</a>
+
 ---
 
 ## ➕ Other Hardware (Not Mandatory)
@@ -404,6 +406,112 @@ If you submit UI changes, please include:
 - short description + screenshots/gifs,
 - any changed routes/workflows,
 - output of `./scripts/check_webui_js.sh`.
+
+---
+
+## 🎬 Community Content
+
+Videos made by the community about RaspyJack:
+
+### Videos
+
+<div align="center">
+
+[![](https://img.youtube.com/vi/i4CnRoA7Mt4/mqdefault.jpg)](https://www.youtube.com/watch?v=i4CnRoA7Mt4)<br>
+**RASPYJACK - A Network Swiss Army Toolkit Based on the Raspberry Pi 2W**<br>
+*Zeek*
+
+[![](https://img.youtube.com/vi/tnyolkq7x8Y/mqdefault.jpg)](https://www.youtube.com/watch?v=tnyolkq7x8Y)<br>
+**Raspyjack - Small Offensive Network Toolkit for Raspberry Pi**<br>
+*HackedExistence*
+
+[![](https://img.youtube.com/vi/YacMgTcv3wY/mqdefault.jpg)](https://www.youtube.com/watch?v=YacMgTcv3wY)<br>
+**Raspyjack DIY Pentesting - Full Guide**<br>
+*Valleytech Custom Solutions*
+
+[![](https://img.youtube.com/vi/GJaftS1josM/mqdefault.jpg)](https://www.youtube.com/watch?v=GJaftS1josM)<br>
+**Meet The RaspyJack, WiFi 5 GHz And Ethernet!**<br>
+*Adventures of Illya*
+
+[![](https://img.youtube.com/vi/tMegqVVEbhE/mqdefault.jpg)](https://www.youtube.com/watch?v=tMegqVVEbhE)<br>
+**How to Auto Update Your RaspyJack + 135 Brand New Payloads**<br>
+*UAgain Shadow*
+
+[![](https://img.youtube.com/vi/DtClLoVjn5o/mqdefault.jpg)](https://www.youtube.com/watch?v=DtClLoVjn5o)<br>
+**Raspyjack WebUI Payload Upload SUPER EASY**<br>
+*UAgain Shadow*
+
+[![](https://img.youtube.com/vi/JVVah3QnvH4/mqdefault.jpg)](https://www.youtube.com/watch?v=JVVah3QnvH4)<br>
+**RaspyJack Just Got a MASSIVE Update... 135 NEW Payloads?!**<br>
+*UAgain Shadow*
+
+[![](https://img.youtube.com/vi/BHkWpldi5hs/mqdefault.jpg)](https://www.youtube.com/watch?v=BHkWpldi5hs)<br>
+**This $22 Adapter Unlocks Hidden Potential in Your RaspyJack**<br>
+*Anubis Darkwatch (The Anubis Project)*
+
+[![](https://img.youtube.com/vi/dv1O_OE2_M4/mqdefault.jpg)](https://www.youtube.com/watch?v=dv1O_OE2_M4)<br>
+**RaspyJack - A Full Featured Network Testing Multi-tool**<br>
+*Anubis Darkwatch (The Anubis Project)*
+
+[![](https://img.youtube.com/vi/WHJHB-T4IsI/mqdefault.jpg)](https://www.youtube.com/watch?v=WHJHB-T4IsI)<br>
+**How to Build a RaspyJack - Complete Guide Pi Zero 2W Setup**<br>
+*UAgain Shadow*
+
+[![](https://img.youtube.com/vi/Puj0P42V0yI/mqdefault.jpg)](https://www.youtube.com/watch?v=Puj0P42V0yI)<br>
+**RaspyJack project - Watch as I build!**<br>
+*Hackazillarex*
+
+</div>
+
+### Shorts
+
+<div align="center">
+
+[![](https://img.youtube.com/vi/ApOcld565kM/mqdefault.jpg)](https://www.youtube.com/shorts/ApOcld565kM)<br>
+**Best Linux Pentesting Tool 2026** - *Valleytech Custom Solutions*
+
+[![](https://img.youtube.com/vi/knZrws2JcLQ/mqdefault.jpg)](https://www.youtube.com/shorts/knZrws2JcLQ)<br>
+**Raspyjack Pentest Tool** - *Valleytech Custom Solutions*
+
+[![](https://img.youtube.com/vi/p8x7pUi0JKE/mqdefault.jpg)](https://www.youtube.com/shorts/p8x7pUi0JKE)<br>
+**Raspyjack Wardriving** - *Valleytech Custom Solutions*
+
+[![](https://img.youtube.com/vi/4Ab6uLjFpXo/mqdefault.jpg)](https://www.youtube.com/shorts/4Ab6uLjFpXo)<br>
+**Wardriving 2 - Full Build Vid Available Now** - *Valleytech Custom Solutions*
+
+[![](https://img.youtube.com/vi/Ye6zDHK9Diw/mqdefault.jpg)](https://www.youtube.com/shorts/Ye6zDHK9Diw)<br>
+**My Raspyjack Build** - *Valleytech Custom Solutions*
+
+[![](https://img.youtube.com/vi/QMbCb2RfNRI/mqdefault.jpg)](https://www.youtube.com/shorts/QMbCb2RfNRI)<br>
+**RaspyJack X305 & X306** - *Valleytech Custom Solutions*
+
+[![](https://img.youtube.com/vi/yfecCug97tc/mqdefault.jpg)](https://www.youtube.com/shorts/yfecCug97tc)<br>
+**RaspyJack Cardputer Zero** - *Valleytech Custom Solutions*
+
+[![](https://img.youtube.com/vi/7O4izk9IfPA/mqdefault.jpg)](https://www.youtube.com/shorts/7O4izk9IfPA)<br>
+**M5stack Cardputer Zero** - *Valleytech Custom Solutions*
+
+[![](https://img.youtube.com/vi/9VvDdgp-e7c/mqdefault.jpg)](https://www.youtube.com/shorts/9VvDdgp-e7c)<br>
+**Raspy Jack Is Flashed - WebUI feature!** - *Valleytech Custom Solutions*
+
+[![](https://img.youtube.com/vi/__QNkm_jSWM/mqdefault.jpg)](https://www.youtube.com/shorts/__QNkm_jSWM)<br>
+**Major Raspyjack Update** - *Valleytech Custom Solutions*
+
+[![](https://img.youtube.com/vi/kXTqybQdVMM/mqdefault.jpg)](https://www.youtube.com/shorts/kXTqybQdVMM)<br>
+**How to Auto Update Your RaspyJack + 135 Payloads** - *UAgain Shadow*
+
+[![](https://img.youtube.com/vi/iT5EMMX8VBE/mqdefault.jpg)](https://www.youtube.com/shorts/iT5EMMX8VBE)<br>
+**RaspyJack CCTV Viewer** - *Valleytech Custom Solutions*
+
+[![](https://img.youtube.com/vi/nIggdr4mOb4/mqdefault.jpg)](https://www.youtube.com/shorts/nIggdr4mOb4)<br>
+**RaspyJack MAJOR Update!** - *Valleytech Custom Solutions*
+
+</div>
+
+---
+
+> 📹 Made a video or short about RaspyJack? Open an issue or PR to get featured here!
+
 
 ---
 
