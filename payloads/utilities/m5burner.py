@@ -61,9 +61,9 @@ if IS_WIDE:
         font_sm = scaled_font(7)
         font_lg = scaled_font(12)
 else:
-    font = scaled_font(9)
-    font_sm = scaled_font(7)
-    font_lg = font
+    font = scaled_font(10)
+    font_sm = scaled_font(8)
+    font_lg = scaled_font(12)
 
 CDN_BASE = "https://m5burner-cdn.m5stack.com/firmware/"
 API_URL = "http://m5burner-api-fc-hk-cdn.m5stack.com/api/firmware"
@@ -245,7 +245,7 @@ def _show_status(msg, color=C_PURPLE):
                anchor="mm") if hasattr(d, 'textbbox') else d.text(
                    (10, H // 2 - 7), msg, font=font, fill=color)
     else:
-        d.text((64, 60), msg[:18], font=font_sm, fill=color)
+        d.text((64, 55), msg[:16], font=font, fill=color)
     LCD.LCD_ShowImage(img, 0, 0)
 
 
@@ -270,12 +270,14 @@ def _draw_progress(msg, pct):
                anchor="mm") if hasattr(d, 'textbbox') else d.text(
                    (W // 2 - 12, bar_y + 22), f"{pct}%", font=font, fill=C_WHITE)
     else:
-        d.rectangle([0, 0, 128, 14], fill=C_HEAD)
-        d.text((64, 1), "FLASH", font=font, fill=C_ORANGE)
-        d.text((64, 30), msg[:16], font=font_sm, fill=C_WHITE)
-        d.rectangle([10, 60, 118, 70], fill=C_DARK)
-        d.rectangle([10, 60, 10 + int(108 * pct / 100), 70], fill=C_PURPLE)
-        d.text((64, 80), f"{pct}%", font=font, fill=C_WHITE)
+        d.rectangle([0, 0, 128, 16], fill=C_HEAD)
+        d.text((64, 1), "FLASHING", font=font_lg, fill=C_ORANGE)
+        d.text((64, 28), msg[:14], font=font, fill=C_WHITE)
+        d.rectangle([10, 55, 118, 68], fill=C_DARK)
+        fill_w = int(108 * pct / 100)
+        if fill_w > 0:
+            d.rectangle([10, 55, 10 + fill_w, 68], fill=C_PURPLE)
+        d.text((64, 75), f"{pct}%", font=font_lg, fill=C_WHITE)
     LCD.LCD_ShowImage(img, 0, 0)
 
 
@@ -336,23 +338,28 @@ def _draw_main(port, chip, cat_names, cat_idx, firmwares, sel, page_offset):
                anchor="mm") if hasattr(d, 'textbbox') else d.text(
                    (2, H - 13), bar[:44], font=font_sm, fill=C_DIM)
     else:
-        d.rectangle([0, 0, 128, 12], fill=C_HEAD)
-        d.text((64, 0), "M5BURNER", font=font_sm, fill=C_PURPLE)
-        d.text((64, 13), f"{current_cat}({len(firmwares)})", font=font_sm, fill=C_CYAN)
-        y = 26
-        row_h = 14
-        max_visible = 5
-        for i in range(max_visible):
-            idx = page_offset + i
-            if idx >= len(firmwares):
-                break
-            fw = firmwares[idx]
-            ry = y + i * row_h
-            is_sel = idx == sel
-            name = fw.get("name", "?")[:16]
-            color = C_WHITE if is_sel else C_DIM
-            d.text((4, ry), name, font=font_sm, fill=color)
-        d.text((64, 115), "OK:Flash K3:Exit", font=font_sm, fill=C_DIM)
+        d.rectangle([0, 0, 128, 16], fill=C_HEAD)
+        d.text((64, 1), "M5BURNER", font=font_lg, fill=C_PURPLE)
+        d.text((64, 18), f"< {current_cat} ({len(firmwares)}) >", font=font_sm, fill=C_CYAN)
+        y = 32
+        row_h = 17
+        max_visible = 4
+        if not firmwares:
+            d.text((64, 64), "No firmwares", font=font, fill=C_DIM)
+        else:
+            for i in range(max_visible):
+                idx = page_offset + i
+                if idx >= len(firmwares):
+                    break
+                fw = firmwares[idx]
+                ry = y + i * row_h
+                is_sel = idx == sel
+                if is_sel:
+                    d.rectangle([2, ry, 126, ry + row_h - 2], fill=C_SEL)
+                name = fw.get("name", "?")[:14]
+                color = C_WHITE if is_sel else C_DIM
+                d.text((64, ry + 1), name, font=font, fill=color)
+        d.text((64, 112), "OK K1:Srch K3:Exit", font=font_sm, fill=C_DIM)
 
     LCD.LCD_ShowImage(img, 0, 0)
 
@@ -428,13 +435,18 @@ def _search_screen(catalog):
                    anchor="mm") if hasattr(d, 'textbbox') else d.text(
                        (2, H - 13), "Type|Enter:Sel|K3:Back", font=font_sm, fill=C_DIM)
         else:
-            d.rectangle([0, 0, 128, 12], fill=(30, 30, 0))
-            d.text((64, 0), "SEARCH", font=font_sm, fill=C_YELLOW)
-            d.text((4, 14), f"{query}_", font=font_sm, fill=C_WHITE)
-            y = 28
-            for i, fw in enumerate(results[:4]):
-                d.text((4, y + i * 14), fw.get("name", "?")[:16], font=font_sm,
-                       fill=C_WHITE if i == 0 else C_DIM)
+            d.rectangle([0, 0, 128, 16], fill=(30, 30, 0))
+            d.text((64, 1), "SEARCH", font=font_lg, fill=C_YELLOW)
+            cursor = "_" if int(time.time() * 3) % 2 else " "
+            d.rectangle([4, 19, 124, 33], fill=C_DARK)
+            d.text((64, 20), f"{query}{cursor}", font=font, fill=C_WHITE)
+            d.text((64, 35), f"{len(results)} results", font=font_sm, fill=C_DIM)
+            y = 48
+            for i, fw in enumerate(results[:3]):
+                name = fw.get("name", "?")[:14]
+                color = C_WHITE if i == 0 else C_DIM
+                d.text((64, y + i * 18), name, font=font, fill=color)
+            d.text((64, 112), "Enter:Sel K3:Back", font=font_sm, fill=C_DIM)
 
         LCD.LCD_ShowImage(img, 0, 0)
 
@@ -529,16 +541,23 @@ def _detail_screen(fw, port):
                        (10, H - 13), f"{flash_ok} K3:Back", font=font_sm,
                        fill=C_GREEN if port else C_RED)
         else:
-            d.rectangle([0, 0, 128, 12], fill=C_HEAD)
-            d.text((64, 0), fw.get("name", "?")[:16], font=font_sm, fill=C_PURPLE)
-            y = 14
-            d.text((4, y), f"v{latest.get('version','?')}", font=font_sm, fill=C_WHITE)
+            d.rectangle([0, 0, 128, 16], fill=C_HEAD)
+            name = fw.get("name", "?")
+            d.text((64, 1), name[:14], font=font, fill=C_PURPLE)
+            y = 20
+            ver = latest.get("version", "?")
+            d.text((64, y), f"v{ver}", font=font, fill=C_WHITE)
+            y += 18
+            author = fw.get("author", "?")
+            d.text((64, y), author[:14], font=font_sm, fill=C_CYAN)
+            y += 16
+            desc = fw.get("description", "")
+            d.text((64, y), desc[:14], font=font_sm, fill=C_DIM)
             y += 14
-            d.text((4, y), fw.get("author", "?")[:16], font=font_sm, fill=C_CYAN)
-            y += 14
-            desc = fw.get("description", "")[:32]
-            d.text((4, y), desc[:16], font=font_sm, fill=C_DIM)
-            d.text((64, 110), "OK:Flash K3:Back", font=font_sm, fill=C_DIM)
+            d.text((64, y), desc[14:28], font=font_sm, fill=C_DIM)
+            flash_ok = "OK:Flash" if port else "No device"
+            d.text((64, 108), f"{flash_ok} K3:Back", font=font_sm,
+                   fill=C_GREEN if port else C_RED)
 
         LCD.LCD_ShowImage(img, 0, 0)
 
