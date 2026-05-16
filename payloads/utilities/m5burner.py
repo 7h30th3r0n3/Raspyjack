@@ -195,7 +195,7 @@ def _download_firmware(file_hash):
 
 def _flash(port, fw_path, progress_cb):
     cmd = ["esptool.py", "--port", port, "--baud", "460800",
-           "--no-stub", "write_flash", "0x0", fw_path]
+           "write_flash", "0x0", fw_path]
     proc = subprocess.Popen(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, bufsize=1)

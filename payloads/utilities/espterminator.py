@@ -402,7 +402,7 @@ def _list_firmwares():
 
 def _flash_firmware(port, fw_path, offset, progress_cb):
     cmd = ["esptool.py", "--port", port, "--baud", "460800",
-           "--no-stub", "write_flash", offset, fw_path]
+           "write_flash", offset, fw_path]
     proc = subprocess.Popen(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, bufsize=1)
