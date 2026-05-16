@@ -57,18 +57,29 @@ except ImportError:
     SCAPY_OK = False
 
 # ---------------------------------------------------------------------------
-# GPS (optional -- uses gpsd)
+# GPS (optional -- auto-detect USB + GPIO via _gps_helper, then use gpsd)
 # ---------------------------------------------------------------------------
+GPS_OK = False
 try:
-    import gpsd as gpsd_module
-    gpsd_module.connect()
-    GPS_OK = True
+    from payloads._gps_helper import start_gps, detect_gps
+    if start_gps():
+        import gpsd as gpsd_module
+        gpsd_module.connect()
+        GPS_OK = True
 except Exception:
-    GPS_OK = False
+    pass
+
+if not GPS_OK:
+    try:
+        import gpsd as gpsd_module
+        gpsd_module.connect()
+        GPS_OK = True
+    except Exception:
+        pass
 
 
 class GpsReader:
-    """Thread-safe GPS reader using gpsd."""
+    """Thread-safe GPS reader using gpsd (auto-detects USB + GPIO GPS)."""
 
     def __init__(self):
         self.lat = 0.0
