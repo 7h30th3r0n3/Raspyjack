@@ -405,32 +405,36 @@ def _flash_firmware(port, fw_path, offset, progress_cb):
            "write_flash", offset, fw_path]
     proc = subprocess.Popen(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        text=True, bufsize=1)
+        bufsize=0)
+    buf = b""
     output_lines = []
     while proc.poll() is None:
-        line = proc.stdout.readline()
-        if not line:
-            continue
-        output_lines.append(line.strip())
-        if "%" in line:
-            try:
-                for part in line.split():
-                    if "%" in part:
-                        pct = int(part.replace("%", "").strip("(").strip(")"))
+        ch = proc.stdout.read(1)
+        if not ch:
+            break
+        if ch == b"\r" or ch == b"\n":
+            line = buf.decode(errors="replace")
+            buf = b""
+            if not line:
+                continue
+            output_lines.append(line)
+            if "%" in line:
+                try:
+                    idx = line.index("%")
+                    num_str = ""
+                    i = idx - 1
+                    while i >= 0 and (line[i].isdigit() or line[i] == '.'):
+                        num_str = line[i] + num_str
+                        i -= 1
+                    if num_str:
+                        pct = int(float(num_str))
                         progress_cb(min(pct, 100))
-                        break
-            except Exception:
-                pass
-        elif "Writing" in line and "/" in line:
-            try:
-                parts = line.split("(")
-                if len(parts) > 1:
-                    pct = int(parts[1].split("%")[0])
-                    progress_cb(min(pct, 100))
-            except Exception:
-                pass
-        elif "Hash" in line or "Leaving" in line:
-            progress_cb(100)
+                except Exception:
+                    pass
+            elif "Hash" in line or "Leaving" in line:
+                progress_cb(100)
+        else:
+            buf += ch
     proc.wait()
     return proc.returncode == 0, "\n".join(output_lines[-5:])
 
