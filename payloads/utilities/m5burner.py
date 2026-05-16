@@ -66,7 +66,7 @@ else:
     font_lg = font
 
 CDN_BASE = "https://m5burner-cdn.m5stack.com/firmware/"
-CATALOG_PATH = "/root/Raspyjack/models/m5burner/catalog.json"
+API_URL = "http://m5burner-api-fc-hk-cdn.m5stack.com/api/firmware"
 FW_DIR = "/root/Raspyjack/loot/Firmwares/M5Stack"
 DEBOUNCE = 0.20
 
@@ -115,12 +115,16 @@ def _ensure_esptool():
     return r.returncode == 0
 
 
-def _load_catalog():
-    if not os.path.isfile(CATALOG_PATH):
-        return []
+def _fetch_catalog():
+    """Fetch firmware catalog from M5Stack API."""
+    import urllib.request
     try:
-        with open(CATALOG_PATH, "r") as f:
-            return json.load(f)
+        req = urllib.request.Request(API_URL, headers={"User-Agent": "M5Burner-Raspyjack"})
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            data = json.loads(resp.read().decode())
+        if isinstance(data, list):
+            return data
+        return data.get("list", data.get("options", []))
     except Exception:
         return []
 
@@ -554,9 +558,10 @@ def main():
         GPIO.cleanup()
         return 1
 
-    catalog = _load_catalog()
+    _show_status("Fetching catalog...", C_PURPLE)
+    catalog = _fetch_catalog()
     if not catalog:
-        _show_status("No catalog! Copy catalog.json", C_RED)
+        _show_status("Fetch failed! Check internet", C_RED)
         time.sleep(3)
         GPIO.cleanup()
         return 1
