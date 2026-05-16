@@ -383,7 +383,13 @@
     " hdmi_mirror": "",
     "doom": "🔥",
     "net_doctor": "🩺",
-    "youtube": "▶"
+    "youtube": "▶",
+    "tape_recorder": "",
+    "birdnet": "♪",
+    "espterminator": "⚡",
+    "m5burner": "",
+    "serial_terminal": ">",
+    "gps_check": ""
   },
   "fallbacks": {
     "__scan__": "",
