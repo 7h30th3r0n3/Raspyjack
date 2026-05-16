@@ -117,7 +117,10 @@
     " Nfc Rfid": "",
     " SDR/Radio": "",
     " Sdr": "",
-    " Sdr Radio": ""
+    " Sdr Radio": "",
+    " AI": "",
+    " Ai": "",
+    " ai": ""
   },
   "payloads": {
     " ad_recon": "",
@@ -392,7 +395,10 @@
     " gps_check": "",
     " sdr_subghz": "",
     " gps_live": "",
-    " iss_tracker": ""
+    " iss_tracker": "",
+    " network_anomaly": "",
+    " speech_to_text": "",
+    " camera": ""
   },
   "fallbacks": {
     "__scan__": "",
