@@ -391,7 +391,8 @@
     " serial_terminal": "",
     " gps_check": "",
     " sdr_subghz": "",
-    " gps_live": ""
+    " gps_live": "",
+    " iss_tracker": ""
   },
   "fallbacks": {
     "__scan__": "",

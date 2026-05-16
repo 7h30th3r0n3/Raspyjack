@@ -208,7 +208,7 @@ def _play_audio(playlist, start_idx=0):
 
         try:
             r = subprocess.run(
-                ["yt-dlp", "-f", "139/worst", "--get-url", url],
+                ["yt-dlp", "-f", "bestaudio", "--get-url", url],
                 capture_output=True, text=True, timeout=30)
             audio_url = r.stdout.strip()
         except Exception:
@@ -267,6 +267,14 @@ def _play_audio(playlist, start_idx=0):
             if EVDEV_OK and evdev_keys.is_key_pressed(38) and not liked_this:
                 liked_this = True
                 _like_video(v)
+
+            # "D" key to download as MP3 directly
+            if EVDEV_OK and evdev_keys.is_key_pressed(32):
+                proc.send_signal(signal.SIGSTOP)
+                _show_msg("Downloading MP3...", v["title"][:20], C["red"])
+                _download_video(v["id"], v["title"], "mp3", "320k", "320")
+                proc.send_signal(signal.SIGCONT)
+                time.sleep(0.3)
 
             # Draw dashboard
             img = Image.new("RGB", (W, H), C["bg"])
