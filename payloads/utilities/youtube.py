@@ -896,6 +896,191 @@ def _check_deps():
     return has_ffmpeg and has_ytdlp
 
 
+DOWNLOAD_DIR = "/root/Raspyjack/loot/YouTube/Downloads"
+
+MP4_QUALITIES = [
+    ("Best", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]"),
+    ("720p", "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720]"),
+    ("480p", "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480]"),
+    ("360p", "bestvideo[height<=360][ext=mp4]+bestaudio[ext=m4a]/best[height<=360]"),
+]
+
+MP3_QUALITIES = [
+    ("320k", "320"),
+    ("192k", "192"),
+    ("128k", "128"),
+    ("64k", "64"),
+]
+
+
+def _download_video(video_id, title, fmt, quality_label, quality_val):
+    """Download video/audio with progress display."""
+    os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+    safe_title = "".join(c for c in title if c.isalnum() or c in " -_")[:40].strip()
+    url = f"https://www.youtube.com/watch?v={video_id}"
+
+    if fmt == "mp4":
+        ext = "mp4"
+        cmd = ["yt-dlp", "-f", quality_val,
+               "--merge-output-format", "mp4",
+               "-o", os.path.join(DOWNLOAD_DIR, f"{safe_title}.%(ext)s"),
+               "--no-playlist", url]
+    else:
+        ext = "mp3"
+        cmd = ["yt-dlp", "-x", "--audio-format", "mp3",
+               "--audio-quality", quality_val,
+               "-o", os.path.join(DOWNLOAD_DIR, f"{safe_title}.%(ext)s"),
+               "--no-playlist", url]
+
+    _show_msg("Downloading...", f"{quality_label} {ext.upper()}", C["red"])
+
+    proc = subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, bufsize=1)
+
+    while proc.poll() is None:
+        line = proc.stdout.readline()
+        if not line:
+            continue
+        if "%" in line and "ETA" in line:
+            try:
+                pct_str = line.split("%")[0].strip().split()[-1]
+                pct = float(pct_str)
+                img = Image.new("RGB", (W, H), C["bg"])
+                d = _draw(img)
+                if IS_WIDE:
+                    d.text((W // 2, 30), f"Downloading {ext.upper()} {quality_label}",
+                           font=font_sm, fill=C["white"], anchor="mm")
+                    d.text((W // 2, 50), safe_title[:30], font=font_sm,
+                           fill=C["dim"], anchor="mm")
+                    bar_x, bar_w = 20, W - 40
+                    d.rectangle([bar_x, 80, bar_x + bar_w, 94], fill="#1a1a1a")
+                    fill_w = int(bar_w * pct / 100)
+                    if fill_w > 0:
+                        d.rectangle([bar_x, 80, bar_x + fill_w, 94], fill=C["red"])
+                    d.text((W // 2, 110), f"{pct:.0f}%", font=font,
+                           fill=C["white"], anchor="mm")
+                else:
+                    d.text((4, 20), f"DL {ext} {quality_label}", font=font_sm, fill=C["white"])
+                    d.text((4, 38), safe_title[:16], font=font_sm, fill=C["dim"])
+                    d.rectangle([10, 60, 118, 72], fill="#1a1a1a")
+                    fill_w = int(108 * pct / 100)
+                    if fill_w > 0:
+                        d.rectangle([10, 60, 10 + fill_w, 72], fill=C["red"])
+                    d.text((50, 80), f"{pct:.0f}%", font=font, fill=C["white"])
+                LCD.LCD_ShowImage(img, 0, 0)
+            except Exception:
+                pass
+
+    proc.wait()
+    if proc.returncode == 0:
+        _show_msg("Downloaded!", f"{safe_title[:20]}.{ext}", C["white"])
+    else:
+        _show_msg("Download failed!", "Check connection", (255, 50, 50))
+    time.sleep(1.5)
+
+
+def _show_download_menu(video_id, title):
+    """Show format (MP3/MP4) then quality selection menu."""
+    fmt_sel = 0
+    formats = ["MP4 Video", "MP3 Audio"]
+    last_btn = 0
+
+    while _running:
+        img = Image.new("RGB", (W, H), C["bg"])
+        d = _draw(img)
+        if IS_WIDE:
+            d.rectangle([0, 0, W, 26], fill=C["head"])
+            d.text((W // 2, 13), "DOWNLOAD", font=font_lg, fill=C["red"], anchor="mm")
+            d.text((W // 2, 45), title[:30], font=font_sm, fill=C["dim"], anchor="mm")
+            for i, f in enumerate(formats):
+                y = 70 + i * 30
+                if i == fmt_sel:
+                    d.rectangle([40, y, W - 40, y + 26], fill=C["sel"])
+                d.text((W // 2, y + 13), f, font=font,
+                       fill=C["white"] if i == fmt_sel else C["dim"], anchor="mm")
+            d.text((W // 2, H - 12), "UP/DN:Select OK:Choose KEY3:Back",
+                   font=font_sm, fill=C["dim"], anchor="mm")
+        else:
+            d.rectangle([0, 0, 128, 16], fill=C["head"])
+            d.text((4, 1), "DOWNLOAD", font=font, fill=C["red"])
+            for i, f in enumerate(formats):
+                y = 40 + i * 25
+                if i == fmt_sel:
+                    d.rectangle([4, y, 124, y + 22], fill=C["sel"])
+                d.text((4, y + 4), f, font=font,
+                       fill=C["white"] if i == fmt_sel else C["dim"])
+            d.text((4, 110), "OK:Choose K3:Back", font=font_sm, fill=C["dim"])
+        LCD.LCD_ShowImage(img, 0, 0)
+
+        btn = get_button(PINS, GPIO)
+        now = time.time()
+        if btn == "KEY3" and now - last_btn > 0.2:
+            return
+        if btn == "UP" and now - last_btn > 0.2:
+            last_btn = now
+            fmt_sel = (fmt_sel - 1) % len(formats)
+        if btn == "DOWN" and now - last_btn > 0.2:
+            last_btn = now
+            fmt_sel = (fmt_sel + 1) % len(formats)
+        if btn == "OK" and now - last_btn > 0.2:
+            last_btn = now
+            fmt = "mp4" if fmt_sel == 0 else "mp3"
+            qualities = MP4_QUALITIES if fmt == "mp4" else MP3_QUALITIES
+            quality = _show_quality_menu(fmt, qualities)
+            if quality:
+                _download_video(video_id, title, fmt, quality[0], quality[1])
+            return
+        time.sleep(0.08)
+
+
+def _show_quality_menu(fmt, qualities):
+    """Show quality selection. Returns (label, value) or None."""
+    sel = 0
+    last_btn = 0
+
+    while _running:
+        img = Image.new("RGB", (W, H), C["bg"])
+        d = _draw(img)
+        if IS_WIDE:
+            d.rectangle([0, 0, W, 26], fill=C["head"])
+            d.text((W // 2, 13), f"{fmt.upper()} QUALITY", font=font_lg,
+                   fill=C["red"], anchor="mm")
+            for i, (label, _) in enumerate(qualities):
+                y = 40 + i * 28
+                if i == sel:
+                    d.rectangle([40, y, W - 40, y + 24], fill=C["sel"])
+                d.text((W // 2, y + 12), label, font=font,
+                       fill=C["white"] if i == sel else C["dim"], anchor="mm")
+            d.text((W // 2, H - 12), "UP/DN:Select OK:Download KEY3:Back",
+                   font=font_sm, fill=C["dim"], anchor="mm")
+        else:
+            d.rectangle([0, 0, 128, 16], fill=C["head"])
+            d.text((4, 1), f"{fmt.upper()} QUALITY", font=font, fill=C["red"])
+            for i, (label, _) in enumerate(qualities):
+                y = 24 + i * 22
+                if i == sel:
+                    d.rectangle([4, y, 124, y + 20], fill=C["sel"])
+                d.text((4, y + 3), label, font=font,
+                       fill=C["white"] if i == sel else C["dim"])
+            d.text((4, 112), "OK:DL K3:Back", font=font_sm, fill=C["dim"])
+        LCD.LCD_ShowImage(img, 0, 0)
+
+        btn = get_button(PINS, GPIO)
+        now = time.time()
+        if btn == "KEY3" and now - last_btn > 0.2:
+            return None
+        if btn == "UP" and now - last_btn > 0.2:
+            last_btn = now
+            sel = (sel - 1) % len(qualities)
+        if btn == "DOWN" and now - last_btn > 0.2:
+            last_btn = now
+            sel = (sel + 1) % len(qualities)
+        if btn == "OK" and now - last_btn > 0.2:
+            return qualities[sel]
+        time.sleep(0.08)
+
+
 def main():
     _show_msg("YouTube", "Checking...", C["red"])
 
@@ -1463,7 +1648,6 @@ def main():
                         state = "menu"
                     elif btn == "OK" and results:
                         if cursor >= len(results):
-                            # Load more
                             _show_msg("Loading more...", query[:20], C["red"])
                             more = _search_youtube(query, max_results=10)
                             existing_ids = {r["id"] for r in results}
@@ -1471,8 +1655,12 @@ def main():
                                 if m["id"] not in existing_ids:
                                     results.append(m)
                         elif cursor < len(results):
-                            # Play from this position, auto-play next
                             _play_playlist(results, start_idx=cursor)
+
+                    # "D" key (evdev code 32) to download
+                    if EVDEV_OK and evdev_keys.is_key_pressed(32) and results and cursor < len(results):
+                        r = results[cursor]
+                        _show_download_menu(r["id"], r["title"])
 
                 img = Image.new("RGB", (W, H), C["bg"])
                 d = _draw(img)
