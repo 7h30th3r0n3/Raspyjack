@@ -28,17 +28,13 @@ try:
     import LCD_1in44, LCD_Config
     from PIL import Image, ImageDraw, ImageFont
     import RPi.GPIO as GPIO
-    from payloads._input_helper import get_button
+    from payloads._input_helper import get_virtual_button, _flip
     from wifi_manager import WiFiManager
     from payloads._display_helper import ScaledDraw, scaled_font
     LCD_AVAILABLE = True
 except Exception as e:
     print(f"LCD not available: {e}")
     LCD_AVAILABLE = False
-
-PINS = {"UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
-        "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16}
-
 
 class WiFiLCDInterface:
     def __init__(self):
@@ -109,6 +105,8 @@ class WiFiLCDInterface:
 
         for pin in self.buttons.values():
             GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+        self._button_states = {pin: 1 for pin in self.buttons.values()}
+        self._last_pressed = {}
 
     def refresh_data(self):
         """Refresh networks and profiles."""
@@ -512,11 +510,26 @@ class WiFiLCDInterface:
         time.sleep(duration)
 
     def check_buttons(self):
-        """Check for button presses, respects flip setting."""
-        btn = get_button(PINS, GPIO)
-        if btn == "OK":
-            return "CENTER"
-        return btn
+        """Check for button presses with falling-edge detection, respects flip setting."""
+        virtual = get_virtual_button()
+        if virtual:
+            if virtual == "OK":
+                return "CENTER"
+            return virtual
+
+        now = time.time()
+        for name, pin in self.buttons.items():
+            state = GPIO.input(pin)
+            if self._button_states[pin] == 1 and state == 0:
+                if now - self._last_pressed.get(pin, 0) > 0.15:
+                    self._last_pressed[pin] = now
+                    self._button_states[pin] = state
+                    flipped = _flip(name)
+                    if flipped == "OK":
+                        return "CENTER"
+                    return flipped
+            self._button_states[pin] = state
+        return None
 
     def update_display(self):
         """Update the LCD display based on current menu."""
