@@ -61,9 +61,9 @@ if IS_WIDE:
         font_sm = scaled_font(7)
         font_lg = scaled_font(14)
 else:
-    font = scaled_font(9)
-    font_sm = scaled_font(7)
-    font_lg = font
+    font = scaled_font(10)
+    font_sm = scaled_font(8)
+    font_lg = scaled_font(12)
 
 FW_DIR = "/root/Raspyjack/loot/Firmwares"
 MANIFEST_URL = "https://dagnazty.github.io/esp-terminator/firmware/manifest.json"
@@ -180,12 +180,12 @@ def _serial_monitor(port):
                            (W // 2 - 25, H - 16), "KEY3: Exit", font=font_sm, fill=C_DIM)
             else:
                 d.rectangle([0, 0, 128, 12], fill=(20, 20, 40))
-                d.text((64, 0), "SERIAL", font=font_sm, fill=C_BLUE)
+                d.text((4, 0), "SERIAL", font=font_sm, fill=C_BLUE)
                 y = 14
                 visible = lines[-max_lines:] if lines else []
                 for i, ln in enumerate(visible):
                     d.text((2, y + i * 16), ln[:18], font=font_sm, fill=C_GREEN)
-                d.text((64, 115), "K3:Exit", font=font_sm, fill=C_DIM)
+                d.text((4, 115), "K3:Exit", font=font_sm, fill=C_DIM)
 
             LCD.LCD_ShowImage(img, 0, 0)
             time.sleep(0.1)
@@ -308,7 +308,7 @@ def _show_download_menu(chip):
                        font=font_sm, fill=C_DIM)
         else:
             d.rectangle([0, 0, 128, 14], fill=(30, 30, 0))
-            d.text((64, 1), "DOWNLOAD", font=font, fill=C_YELLOW)
+            d.text((20, 1), "DOWNLOAD", font=font, fill=C_YELLOW)
             y = 18
             row_h = 16
             for i in range(max_vis):
@@ -320,7 +320,7 @@ def _show_download_menu(chip):
                 name = unique[idx]["name"][:16]
                 color = C_WHITE if is_sel else C_DIM
                 d.text((4, ry), name, font=font_sm, fill=color)
-            d.text((64, 110), "OK:DL K3:Back", font=font_sm, fill=C_DIM)
+            d.text((4, 110), "OK:DL K3:Back", font=font_sm, fill=C_DIM)
 
         LCD.LCD_ShowImage(img, 0, 0)
 
@@ -467,7 +467,7 @@ def _show_status(msg, color=C_BLUE):
                anchor="mm") if hasattr(d, 'textbbox') else d.text(
                    (10, H // 2 - 8), msg, font=font, fill=color)
     else:
-        d.text((64, 60), msg, font=font_sm, fill=color)
+        d.text((4, 55), msg, font=font_sm, fill=color)
     LCD.LCD_ShowImage(img, 0, 0)
 
 
@@ -493,13 +493,13 @@ def _draw_progress(msg, pct):
                    (W // 2 - 15, bar_y + 20), f"{pct}%", font=font, fill=C_WHITE)
     else:
         d.rectangle([0, 0, 128, 14], fill=C_HEAD)
-        d.text((64, 1), "FLASH", font=font, fill=C_ORANGE)
-        d.text((64, 30), msg[:18], font=font_sm, fill=C_WHITE)
+        d.text((20, 1), "FLASH", font=font, fill=C_ORANGE)
+        d.text((4, 28), msg[:17], font=font_sm, fill=C_WHITE)
         d.rectangle([10, 60, 118, 70], fill=C_DARK)
         fill_w = int(108 * pct / 100)
         if fill_w > 0:
             d.rectangle([10, 60, 10 + fill_w, 70], fill=C_ORANGE)
-        d.text((64, 80), f"{pct}%", font=font, fill=C_WHITE)
+        d.text((50, 78), f"{pct}%", font=font, fill=C_WHITE)
     LCD.LCD_ShowImage(img, 0, 0)
 
 
@@ -568,17 +568,17 @@ def _draw_main(port, chip, firmwares, sel, offset_idx, page_offset):
                anchor="mm") if hasattr(d, 'textbbox') else d.text(
                    (2, H - 15), bar[:42], font=font_sm, fill=C_DIM)
     else:
-        d.rectangle([0, 0, 128, 14], fill=C_HEAD)
-        d.text((64, 1), "ESP FLASH", font=font, fill=C_BLUE)
+        d.rectangle([0, 0, 128, 16], fill=C_HEAD)
+        d.text((15, 1), "ESP FLASH", font=font_lg, fill=C_BLUE)
         if port and chip:
-            d.text((64, 16), chip[:16], font=font_sm, fill=C_GREEN)
+            d.text((4, 18), chip[:16], font=font_sm, fill=C_GREEN)
         else:
-            d.text((64, 16), "No device", font=font_sm, fill=C_RED)
-        y = 30
-        row_h = 14
-        max_visible = 5
+            d.text((4, 18), "No device-K1:Scan", font=font_sm, fill=C_RED)
+        y = 32
+        row_h = 17
+        max_visible = 4
         if not firmwares:
-            d.text((64, 60), "No .bin files", font=font_sm, fill=C_DIM)
+            d.text((4, 60), "No .bin files", font=font, fill=C_DIM)
         else:
             for i in range(max_visible):
                 idx = page_offset + i
@@ -587,10 +587,12 @@ def _draw_main(port, chip, firmwares, sel, offset_idx, page_offset):
                 fw = firmwares[idx]
                 ry = y + i * row_h
                 is_sel = idx == sel
+                if is_sel:
+                    d.rectangle([2, ry, 126, ry + row_h - 2], fill=C_SEL)
                 name = os.path.basename(fw)[:16]
                 color = C_WHITE if is_sel else C_DIM
-                d.text((4, ry), name, font=font_sm, fill=color)
-        d.text((64, 115), "OK:Flash K3:Exit", font=font_sm, fill=C_DIM)
+                d.text((4, ry + 1), name, font=font, fill=color)
+        d.text((4, 112), "OK:Flash L:DL K3:Exit", font=font_sm, fill=C_DIM)
 
     LCD.LCD_ShowImage(img, 0, 0)
 
@@ -612,10 +614,10 @@ def _draw_confirm(fw_name, port, offset):
                anchor="mm") if hasattr(d, 'textbbox') else d.text(
                    (W // 2 - 55, 112), "OK: Yes   KEY3: No", font=font, fill=C_DIM)
     else:
-        d.text((64, 20), "Flash?", font=font, fill=C_YELLOW)
-        d.text((64, 40), fw_name[:16], font=font_sm, fill=C_WHITE)
-        d.text((64, 56), f"{os.path.basename(port)}", font=font_sm, fill=C_BLUE)
-        d.text((64, 90), "OK:Yes K3:No", font=font_sm, fill=C_DIM)
+        d.text((20, 20), "Flash?", font=font, fill=C_YELLOW)
+        d.text((4, 40), fw_name[:16], font=font_sm, fill=C_WHITE)
+        d.text((4, 56), f"{os.path.basename(port)}", font=font_sm, fill=C_BLUE)
+        d.text((4, 90), "OK:Yes K3:No", font=font_sm, fill=C_DIM)
     LCD.LCD_ShowImage(img, 0, 0)
 
 
