@@ -426,6 +426,10 @@ Videos made by the community about RaspyJack:
 **Raspyjack DIY Pentesting - Full Guide**<br>
 *Valleytech Custom Solutions*
 
+[![](https://img.youtube.com/vi/lhS0trmBAAU/mqdefault.jpg)](https://youtu.be/lhS0trmBAAU?t=388)<br>
+**Linux in your palm / CardputerZero prototype sneak peek**<br>
+*Sn0ren*
+
 [![](https://img.youtube.com/vi/GJaftS1josM/mqdefault.jpg)](https://www.youtube.com/watch?v=GJaftS1josM)<br>
 **Meet The RaspyJack, WiFi 5 GHz And Ethernet!**<br>
 *Adventures of Illya*
