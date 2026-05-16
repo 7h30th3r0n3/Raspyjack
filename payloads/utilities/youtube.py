@@ -87,6 +87,15 @@ _running = True
 _audio_offset = [0.0]
 _alsa_dev = "default"
 
+STREAM_QUALITIES = [
+    ("144p", "160+139/160/worst"),
+    ("240p", "133+139/133/worst"),
+    ("360p", "134+139/134/worst"),
+    ("480p", "135+139/135/worst"),
+    ("720p", "136+139/136/worst"),
+]
+_stream_quality_idx = 2
+
 def _detect_alsa_dev():
     global _alsa_dev
     try:
@@ -625,12 +634,17 @@ def _apply_osd(raw, title, elapsed, duration=0):
 def _play_playlist(playlist, start_idx=0):
     """Play all videos in sequence. LEFT/RIGHT to skip. KEY3 to stop."""
     idx = start_idx
+    offset = 0
     while idx < len(playlist) and _running:
         v = playlist[idx]
         _show_msg(f"[{idx+1}/{len(playlist)}]", v["title"][:25], C["red"])
         time.sleep(0.5)
-        result = _play_video(v["id"], v["title"], playlist_mode=True)
-        if result == "next":
+        result = _play_video(v["id"], v["title"], playlist_mode=True, start_offset=offset)
+        offset = 0
+        if isinstance(result, tuple) and result[0] == "restart":
+            offset = result[1]
+            continue
+        elif result == "next":
             idx += 1
         elif result == "prev":
             idx = max(0, idx - 1)
@@ -640,18 +654,87 @@ def _play_playlist(playlist, start_idx=0):
             idx += 1
 
 
-def _play_video(video_id, title, playlist_mode=False):
+def _show_stream_settings():
+    """Show stream quality settings menu. Press S during playback."""
+    global _stream_quality_idx
+    sel = _stream_quality_idx
+    last_btn = 0
+
+    while _running:
+        img = Image.new("RGB", (W, H), C["bg"])
+        d = _draw(img)
+        if IS_WIDE:
+            d.rectangle((0, 0, W, 28), fill=C["head"])
+            d.text((W // 2, 14), "STREAM QUALITY", font=font_lg, fill=C["red"], anchor="mm")
+            for i, (label, _) in enumerate(STREAM_QUALITIES):
+                y = 38 + i * 24
+                if i == sel:
+                    d.rectangle([30, y, W - 30, y + 22], fill=C["sel"])
+                mark = " *" if i == _stream_quality_idx else ""
+                d.text((W // 2, y + 11), f"{label}{mark}", font=font,
+                       fill=C["white"] if i == sel else C["dim"], anchor="mm")
+            d.text((W // 2, H - 14), "UP/DN:Select OK:Apply KEY3:Back",
+                   font=font_sm, fill=C["dim"], anchor="mm")
+        else:
+            d.rectangle((0, 0, 128, 14), fill=C["head"])
+            d.text((4, 1), "QUALITY", font=font, fill=C["red"])
+            for i, (label, _) in enumerate(STREAM_QUALITIES):
+                y = 18 + i * 18
+                if i == sel:
+                    d.rectangle([2, y, 126, y + 16], fill=C["sel"])
+                mark = "*" if i == _stream_quality_idx else ""
+                d.text((4, y + 2), f"{label} {mark}", font=font,
+                       fill=C["white"] if i == sel else C["dim"])
+            d.text((4, 112), "OK:Apply K3:Back", font=font_sm, fill=C["dim"])
+        LCD.LCD_ShowImage(img, 0, 0)
+
+        btn = get_button(PINS, GPIO)
+        now = time.time()
+        if btn == "KEY3" and now - last_btn > 0.2:
+            return
+        if btn == "UP" and now - last_btn > 0.2:
+            last_btn = now
+            sel = (sel - 1) % len(STREAM_QUALITIES)
+        if btn == "DOWN" and now - last_btn > 0.2:
+            last_btn = now
+            sel = (sel + 1) % len(STREAM_QUALITIES)
+        if btn == "OK" and now - last_btn > 0.2:
+            _stream_quality_idx = sel
+            _show_msg("Quality set!", STREAM_QUALITIES[sel][0], C["white"])
+            time.sleep(0.5)
+            return
+        time.sleep(0.08)
+
+
+def _play_video(video_id, title, playlist_mode=False, start_offset=0):
     url = f"https://www.youtube.com/watch?v={video_id}"
+    quality_label, quality_fmt = STREAM_QUALITIES[_stream_quality_idx]
 
     # Re-init LCD to ensure clean SPI state
     LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-    _show_msg("Loading...", title[:20], C["red"])
-    time.sleep(0.1)
-    _show_msg("Fetching stream...", title[:20], C["red"])
+
+    # Show loading with hints
+    img = Image.new("RGB", (W, H), C["bg"])
+    d = _draw(img)
+    if IS_WIDE:
+        d.rectangle((0, 0, W, 28), fill=C["head"])
+        d.text((W // 2, 14), "Loading...", font=font_lg, fill=C["red"], anchor="mm")
+        d.text((W // 2, 50), title[:30], font=font_sm, fill=C["dim"], anchor="mm")
+        d.text((W // 2, 75), f"Quality: {quality_label}", font=font_sm, fill=C["sub"], anchor="mm")
+        d.text((W // 2, H - 40), "D: Download  S: Settings  L: Like", font=font_sm, fill=C["dim"], anchor="mm")
+        d.text((W // 2, H - 22), "KEY1: Pause  KEY3: Stop", font=font_sm, fill=C["dim"], anchor="mm")
+    else:
+        d.rectangle((0, 0, 128, 14), fill=C["head"])
+        d.text((4, 1), "Loading...", font=font, fill=C["red"])
+        d.text((4, 20), title[:16], font=font_sm, fill=C["dim"])
+        d.text((4, 38), f"Quality: {quality_label}", font=font_sm, fill=C["sub"])
+        d.text((4, 60), "D:DL S:Set L:Like", font=font_sm, fill=C["dim"])
+        d.text((4, 76), "K1:Pause K3:Stop", font=font_sm, fill=C["dim"])
+    LCD.LCD_ShowImage(img, 0, 0)
 
     try:
         r = subprocess.run(
-            ["yt-dlp", "-f", "160+139/160/worst", "--get-url", url],
+            ["yt-dlp", "-f", quality_fmt, "--get-url", url],
             capture_output=True, text=True, timeout=30)
         urls = r.stdout.strip().split('\n')
         video_url = urls[0] if urls else ""
@@ -670,8 +753,6 @@ def _play_video(video_id, title, playlist_mode=False):
         _show_msg("Stream error", err[:20], (255, 50, 50))
         time.sleep(2)
         return "next" if playlist_mode else None
-
-    _show_msg("Buffering...", title[:20], C["red"])
 
     # Find the right ALSA audio device (prefer ES8388/ES8389, skip HDMI)
     has_audio = False
@@ -695,6 +776,8 @@ def _play_video(video_id, title, playlist_mode=False):
 
     target_fps = 8 if not IS_WIDE else 24
     cmd = ["ffmpeg", "-hide_banner", "-loglevel", "quiet", "-re"]
+    if start_offset > 0:
+        cmd += ["-ss", str(int(start_offset))]
     cmd += ["-i", video_url]
     if audio_url and has_audio:
         cmd += ["-i", audio_url]
@@ -732,7 +815,7 @@ def _play_video(video_id, title, playlist_mode=False):
         except Exception:
             use_fb = False
 
-    start_time = time.time()
+    start_time = time.time() - start_offset
     paused = False
     pause_offset = 0
     _vol = 40
@@ -793,6 +876,31 @@ def _play_video(video_id, title, playlist_mode=False):
                 _show_msg("Liked!", title[:20], C["red"])
                 time.sleep(0.5)
 
+            # "D" key to download during playback
+            if EVDEV_OK and evdev_keys.is_key_pressed(32):
+                proc.send_signal(signal.SIGSTOP)
+                _show_download_menu(video_id, title)
+                proc.send_signal(signal.SIGCONT)
+                time.sleep(0.3)
+
+            # "S" key to change stream quality - restart video at current position
+            if EVDEV_OK and evdev_keys.is_key_pressed(31):
+                proc.send_signal(signal.SIGSTOP)
+                old_quality = _stream_quality_idx
+                _show_stream_settings()
+                if _stream_quality_idx != old_quality:
+                    proc.kill()
+                    proc.wait()
+                    if use_fb and fb_map:
+                        fb_map.close()
+                        fb_map = None
+                    if fb_fd is not None:
+                        os.close(fb_fd)
+                        fb_fd = None
+                    return ("restart", 0)
+                proc.send_signal(signal.SIGCONT)
+                time.sleep(0.3)
+
             if paused:
                 time.sleep(0.05)
                 continue
@@ -825,10 +933,16 @@ def _play_video(video_id, title, playlist_mode=False):
             proc.wait(timeout=2)
         except Exception:
             pass
-        if fb_map:
-            fb_map.close()
-        if fb_fd is not None:
-            os.close(fb_fd)
+        try:
+            if fb_map:
+                fb_map.close()
+        except Exception:
+            pass
+        try:
+            if fb_fd is not None:
+                os.close(fb_fd)
+        except Exception:
+            pass
         subprocess.run(["pkill", "-9", "ffmpeg"], capture_output=True)
         time.sleep(0.3)
         LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
@@ -938,31 +1052,48 @@ def _download_video(video_id, title, fmt, quality_label, quality_val):
         cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, bufsize=1)
 
+    step = 1
+    last_pct = -1
     while proc.poll() is None:
         line = proc.stdout.readline()
         if not line:
+            continue
+        if "[download]" in line and "100%" in line:
+            step += 1
+        if "Merging" in line or "Post-process" in line:
+            _show_msg("Merging...", safe_title[:20], C["white"])
             continue
         if "%" in line and "ETA" in line:
             try:
                 pct_str = line.split("%")[0].strip().split()[-1]
                 pct = float(pct_str)
+                if pct == last_pct:
+                    continue
+                last_pct = pct
+                step_label = "Video" if step == 1 and fmt == "mp4" else "Audio" if step == 2 else ""
                 img = Image.new("RGB", (W, H), C["bg"])
                 d = _draw(img)
                 if IS_WIDE:
-                    d.text((W // 2, 30), f"Downloading {ext.upper()} {quality_label}",
+                    d.text((W // 2, 25), f"Downloading {ext.upper()} {quality_label}",
                            font=font_sm, fill=C["white"], anchor="mm")
-                    d.text((W // 2, 50), safe_title[:30], font=font_sm,
+                    d.text((W // 2, 45), safe_title[:30], font=font_sm,
                            fill=C["dim"], anchor="mm")
+                    if step_label:
+                        d.text((W // 2, 65), step_label, font=font_sm,
+                               fill=C["sub"], anchor="mm")
                     bar_x, bar_w = 20, W - 40
-                    d.rectangle([bar_x, 80, bar_x + bar_w, 94], fill="#1a1a1a")
+                    bar_y = 80
+                    d.rectangle([bar_x, bar_y, bar_x + bar_w, bar_y + 14], fill="#1a1a1a")
                     fill_w = int(bar_w * pct / 100)
                     if fill_w > 0:
-                        d.rectangle([bar_x, 80, bar_x + fill_w, 94], fill=C["red"])
-                    d.text((W // 2, 110), f"{pct:.0f}%", font=font,
+                        d.rectangle([bar_x, bar_y, bar_x + fill_w, bar_y + 14], fill=C["red"])
+                    d.text((W // 2, 115), f"{pct:.0f}%", font=font,
                            fill=C["white"], anchor="mm")
                 else:
-                    d.text((4, 20), f"DL {ext} {quality_label}", font=font_sm, fill=C["white"])
-                    d.text((4, 38), safe_title[:16], font=font_sm, fill=C["dim"])
+                    d.text((4, 15), f"DL {ext} {quality_label}", font=font_sm, fill=C["white"])
+                    d.text((4, 30), safe_title[:16], font=font_sm, fill=C["dim"])
+                    if step_label:
+                        d.text((4, 45), step_label, font=font_sm, fill=C["dim"])
                     d.rectangle([10, 60, 118, 72], fill="#1a1a1a")
                     fill_w = int(108 * pct / 100)
                     if fill_w > 0:
@@ -1657,10 +1788,6 @@ def main():
                         elif cursor < len(results):
                             _play_playlist(results, start_idx=cursor)
 
-                # "D" key to download
-                if typed == 'd' and results and cursor < len(results):
-                    r = results[cursor]
-                    _show_download_menu(r["id"], r["title"])
 
                 img = Image.new("RGB", (W, H), C["bg"])
                 d = _draw(img)
