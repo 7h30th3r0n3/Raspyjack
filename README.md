@@ -414,10 +414,6 @@ Videos made by the community about RaspyJack:
 
 <div align="center">
 
-[![](https://img.youtube.com/vi/dv1O_OE2_M4/mqdefault.jpg)](https://www.youtube.com/watch?v=dv1O_OE2_M4)<br>
-**RaspyJack - A Full Featured Network Testing Multi-tool**<br>
-*Anubis Darkwatch (The Anubis Project)*
-
 [![](https://img.youtube.com/vi/i4CnRoA7Mt4/mqdefault.jpg)](https://www.youtube.com/watch?v=i4CnRoA7Mt4)<br>
 **RASPYJACK - A Network Swiss Army Toolkit Based on the Raspberry Pi 2W**<br>
 *Zeek*
@@ -446,6 +442,10 @@ Videos made by the community about RaspyJack:
 **RaspyJack Just Got a MASSIVE Update... 135 NEW Payloads?!**<br>
 *UAgain Shadow*
 
+[![](https://img.youtube.com/vi/WHJHB-T4IsI/mqdefault.jpg)](https://www.youtube.com/watch?v=WHJHB-T4IsI)<br>
+**How to Build a RaspyJack - Complete Guide Pi Zero 2W Setup**<br>
+*UAgain Shadow*
+
 [![](https://img.youtube.com/vi/ebhYca-BVCo/mqdefault.jpg)](https://www.youtube.com/watch?v=ebhYca-BVCo)<br>
 **The M5Stack Cardputer Zero is INSANE For Pentesting**<br>
 *Valleytech Custom Solutions*
@@ -454,9 +454,9 @@ Videos made by the community about RaspyJack:
 **This $22 Adapter Unlocks Hidden Potential in Your RaspyJack**<br>
 *Anubis Darkwatch (The Anubis Project)*
 
-[![](https://img.youtube.com/vi/WHJHB-T4IsI/mqdefault.jpg)](https://www.youtube.com/watch?v=WHJHB-T4IsI)<br>
-**How to Build a RaspyJack - Complete Guide Pi Zero 2W Setup**<br>
-*UAgain Shadow*
+[![](https://img.youtube.com/vi/dv1O_OE2_M4/mqdefault.jpg)](https://www.youtube.com/watch?v=dv1O_OE2_M4)<br>
+**RaspyJack - A Full Featured Network Testing Multi-tool**<br>
+*Anubis Darkwatch (The Anubis Project)*
 
 [![](https://img.youtube.com/vi/Puj0P42V0yI/mqdefault.jpg)](https://www.youtube.com/watch?v=Puj0P42V0yI)<br>
 **RaspyJack project - Watch as I build!**<br>
