@@ -466,6 +466,9 @@ Videos made by the community about RaspyJack:
 **RaspyJack project - Watch as I build!**<br>
 *Hackazillarex*
 
+[![](https://img.youtube.com/vi/YRK4447BMrs/mqdefault.jpg)](https://www.youtube.com/watch?v=YRK4447BMrs)<br>
+**RaspyJack offensive tool kit.** - *m0usem0use*
+
 </div>
 
 ### Shorts
