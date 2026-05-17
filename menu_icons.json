@@ -403,7 +403,8 @@
     " timelapse": "",
     " surveillance": "",
     " object_detector": "",
-    " camera_setup": ""
+    " camera_setup": "",
+    " brightness": ""
   },
   "fallbacks": {
     "__scan__": "",
