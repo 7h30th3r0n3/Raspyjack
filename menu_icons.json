@@ -402,7 +402,8 @@
     " qr_scanner": "",
     " timelapse": "",
     " surveillance": "",
-    " object_detector": ""
+    " object_detector": "",
+    " camera_setup": ""
   },
   "fallbacks": {
     "__scan__": "",
