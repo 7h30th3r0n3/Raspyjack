@@ -206,15 +206,18 @@ def main():
     # Doom renders 320x200. Xvfb matches exactly.
     DOOM_W, DOOM_H = 320, 200
 
+    print("[DOOM] launching Xvfb...")
     xvfb = subprocess.Popen(
         ["Xvfb", DISPLAY_NUM, "-screen", "0", f"{DOOM_W}x{DOOM_H}x24", "-ac", "-nocursor"],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(1)
     if xvfb.poll() is not None:
+        print("[DOOM] FAIL: Xvfb died")
         _show_msg("Xvfb failed", "Cannot start display", (255, 50, 50))
         time.sleep(3)
         GPIO.cleanup()
         return 1
+    print("[DOOM] Xvfb OK")
 
     env = os.environ.copy()
     env["DISPLAY"] = DISPLAY_NUM
@@ -225,6 +228,7 @@ def main():
     subprocess.run(["amixer", "-c", "0", "sset", "DACL", "160"], capture_output=True)
     subprocess.run(["amixer", "-c", "0", "sset", "DACR", "160"], capture_output=True)
 
+    print("[DOOM] launching chocolate-doom...")
     doom = subprocess.Popen(
         [DOOM_BIN, "-iwad", wad, "-nomusic", "-nomouse",
          "-1", "-window", "-geometry", f"{DOOM_W}x{DOOM_H}+0+0"],
@@ -232,11 +236,13 @@ def main():
     time.sleep(2)
     if doom.poll() is not None:
         err = doom.stderr.read(200).decode(errors="replace") if doom.stderr else ""
+        print(f"[DOOM] FAIL: chocolate-doom crashed: {err}")
         _show_msg("DOOM crashed", err[:20], (255, 50, 50))
         time.sleep(3)
         xvfb.kill()
         GPIO.cleanup()
         return 1
+    print("[DOOM] chocolate-doom running")
 
     # Hide X cursor by creating a blank cursor
     subprocess.run(
