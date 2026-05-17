@@ -347,39 +347,39 @@ def _play_video(path):
 # ─── Draw screens ───
 
 def _draw_menu(sel):
-    items = [" Photo", " Video", " Gallery", " Settings"]
+    items = [" Photo", " Video", " Timelapse", " Gallery", " Settings"]
     img = Image.new("RGB", (W, H), C_BG)
     d = ImageDraw.Draw(img) if IS_WIDE else ScaledDraw(img)
 
     if IS_WIDE:
-        d.rectangle([0, 0, W, 24], fill=C_HEAD)
-        d.text((W // 2, 12), "CAMERA", font=font_lg, fill=C_CYAN,
+        d.rectangle([0, 0, W, 22], fill=C_HEAD)
+        d.text((W // 2, 11), "CAMERA", font=font_lg, fill=C_CYAN,
                anchor="mm") if hasattr(d, 'textbbox') else d.text(
-                   (W // 2 - 30, 3), "CAMERA", font=font_lg, fill=C_CYAN)
-        y = 38
+                   (W // 2 - 30, 2), "CAMERA", font=font_lg, fill=C_CYAN)
+        y = 26
         for i, item in enumerate(items):
-            ry = y + i * 28
+            ry = y + i * 24
             if i == sel:
-                d.rectangle([30, ry, W - 30, ry + 26], fill=C_DARK)
+                d.rectangle([30, ry, W - 30, ry + 22], fill=C_DARK)
             color = C_WHITE if i == sel else C_DIM
-            d.text((W // 2, ry + 13), item, font=font, fill=color,
+            d.text((W // 2, ry + 11), item, font=font, fill=color,
                    anchor="mm") if hasattr(d, 'textbbox') else d.text(
-                       (50, ry + 5), item, font=font, fill=color)
+                       (50, ry + 4), item, font=font, fill=color)
         d.rectangle([0, H - 16, W, H], fill=C_DARK)
         d.text((W // 2, H - 8), "UP/DN:Select  OK:Enter  K3:Exit",
                font=font_sm, fill=C_DIM,
                anchor="mm") if hasattr(d, 'textbbox') else d.text(
                    (5, H - 13), "UP/DN OK K3:Exit", font=font_sm, fill=C_DIM)
     else:
-        d.rectangle([0, 0, 128, 16], fill=C_HEAD)
+        d.rectangle([0, 0, 128, 14], fill=C_HEAD)
         d.text((30, 1), "CAMERA", font=font_lg, fill=C_CYAN)
-        y = 22
+        y = 18
         for i, item in enumerate(items):
-            ry = y + i * 22
+            ry = y + i * 18
             if i == sel:
-                d.rectangle([4, ry, 124, ry + 20], fill=C_DARK)
+                d.rectangle([4, ry, 124, ry + 17], fill=C_DARK)
             color = C_WHITE if i == sel else C_DIM
-            d.text((4, ry + 3), item, font=font, fill=color)
+            d.text((4, ry + 2), item, font=font_sm, fill=color)
         d.text((4, 112), "OK:Enter K3:Exit", font=font_sm, fill=C_DIM)
 
     LCD.LCD_ShowImage(img, 0, 0)
@@ -529,6 +529,9 @@ def main():
     os.makedirs(PHOTO_DIR, exist_ok=True)
     os.makedirs(VIDEO_DIR, exist_ok=True)
 
+    INTERVALS = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600]
+    INTERVAL_LABELS = ["1s", "2s", "5s", "10s", "15s", "30s", "1min", "2min", "5min", "10min"]
+
     state = "menu"
     menu_sel = 0
     gallery_sel = 0
@@ -536,6 +539,11 @@ def main():
     res_idx = 3
     last_btn = 0
     rec_start = 0
+    tl_active = False
+    tl_interval_idx = 3
+    tl_frame_count = 0
+    tl_last_capture = 0
+    tl_session_dir = ""
 
     while _running:
         btn = _get_btn()
@@ -547,10 +555,10 @@ def main():
                 break
             if btn == "UP" and now - last_btn > DEBOUNCE:
                 last_btn = now
-                menu_sel = (menu_sel - 1) % 4
+                menu_sel = (menu_sel - 1) % 5
             if btn == "DOWN" and now - last_btn > DEBOUNCE:
                 last_btn = now
-                menu_sel = (menu_sel + 1) % 4
+                menu_sel = (menu_sel + 1) % 5
             if btn == "OK" and now - last_btn > DEBOUNCE:
                 last_btn = now
                 if menu_sel == 0:
@@ -560,9 +568,11 @@ def main():
                     state = "video"
                     _start_preview()
                 elif menu_sel == 2:
+                    state = "timelapse"
+                elif menu_sel == 3:
                     state = "gallery"
                     gallery_sel = 0
-                elif menu_sel == 3:
+                elif menu_sel == 4:
                     state = "settings"
                     settings_sel = 0
                 continue
@@ -614,6 +624,96 @@ def main():
                     _start_preview()
             if _recording:
                 _draw_rec_screen(now - rec_start, res_idx)
+
+        # ── Timelapse ──
+        elif state == "timelapse":
+            if btn == "KEY3" and not tl_active:
+                state = "menu"
+                continue
+            if btn == "OK" and now - last_btn > 0.3:
+                last_btn = now
+                if not tl_active:
+                    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    tl_session_dir = os.path.join(LOOT_DIR, "Timelapse", f"session_{ts}")
+                    os.makedirs(tl_session_dir, exist_ok=True)
+                    tl_active = True
+                    tl_frame_count = 0
+                    tl_last_capture = 0
+                    rec_start = now
+                else:
+                    tl_active = False
+                    _show_msg("Compiling video...", f"{tl_frame_count} frames", C_YELLOW)
+                    fps = min(30, max(5, tl_frame_count // 30))
+                    output = os.path.join(tl_session_dir, "timelapse.mp4")
+                    subprocess.run(
+                        ["ffmpeg", "-hide_banner", "-loglevel", "quiet",
+                         "-framerate", str(fps),
+                         "-i", os.path.join(tl_session_dir, "frame_%05d.jpg"),
+                         "-vf", "scale=1280:720",
+                         "-c:v", "libx264", "-preset", "ultrafast",
+                         "-pix_fmt", "yuv420p", "-crf", "28", output],
+                        capture_output=True, timeout=600)
+                    if os.path.isfile(output) and os.path.getsize(output) > 100:
+                        sz = os.path.getsize(output) // 1024
+                        _show_msg(f"Video OK! {sz}KB", "", C_GREEN)
+                    else:
+                        _show_msg("Video failed!", "", C_RED)
+                    time.sleep(2)
+
+            if not tl_active:
+                if btn == "UP" and now - last_btn > DEBOUNCE:
+                    last_btn = now
+                    tl_interval_idx = (tl_interval_idx + 1) % len(INTERVALS)
+                if btn == "DOWN" and now - last_btn > DEBOUNCE:
+                    last_btn = now
+                    tl_interval_idx = (tl_interval_idx - 1) % len(INTERVALS)
+
+            if tl_active and now - tl_last_capture >= INTERVALS[tl_interval_idx]:
+                tl_last_capture = now
+                _, w, h = RESOLUTIONS[min(res_idx, 2)]
+                path = os.path.join(tl_session_dir, f"frame_{tl_frame_count:05d}.jpg")
+                subprocess.run(
+                    ["rpicam-still", "-o", path, "--width", str(w), "--height", str(h),
+                     "-t", "300", "--nopreview", "-q", "85", "--rotation", "180"],
+                    capture_output=True, timeout=10)
+                if os.path.isfile(path):
+                    tl_frame_count += 1
+
+            img = Image.new("RGB", (W, H), C_BG)
+            d = ImageDraw.Draw(img) if IS_WIDE else ScaledDraw(img)
+            if IS_WIDE:
+                d.rectangle([0, 0, W, 22], fill=C_HEAD)
+                d.text((W // 2, 11), "TIMELAPSE", font=font_lg, fill=C_YELLOW,
+                       anchor="mm") if hasattr(d, 'textbbox') else d.text(
+                           (W // 2 - 40, 2), "TIMELAPSE", font=font_lg, fill=C_YELLOW)
+                y = 30
+                st = "CAPTURING" if tl_active else "READY"
+                sc = C_GREEN if tl_active else C_DIM
+                d.text((8, y), f"Status: {st}", font=font, fill=sc)
+                y += 18
+                d.text((8, y), f"Interval: {INTERVAL_LABELS[tl_interval_idx]}", font=font, fill=C_WHITE)
+                y += 18
+                d.text((8, y), f"Frames: {tl_frame_count}", font=font, fill=C_CYAN)
+                if tl_active:
+                    y += 18
+                    elapsed = now - rec_start
+                    m = int(elapsed) // 60
+                    s = int(elapsed) % 60
+                    d.text((8, y), f"Elapsed: {m}m{s:02d}s", font=font_sm, fill=C_DIM)
+                d.rectangle([0, H - 16, W, H], fill=C_DARK)
+                d.text((W // 2, H - 8), f"OK:{'Stop' if tl_active else 'Start'}  UP/DN:Interval  K3:Back",
+                       font=font_sm, fill=C_DIM,
+                       anchor="mm") if hasattr(d, 'textbbox') else d.text(
+                           (2, H - 13), f"OK:{'Stp' if tl_active else 'Go'} UP/DN K3:Back", font=font_sm, fill=C_DIM)
+            else:
+                d.rectangle([0, 0, 128, 14], fill=C_HEAD)
+                d.text((15, 1), "TIMELAPSE", font=font_lg, fill=C_YELLOW)
+                y = 18
+                d.text((4, y), f"{'ON' if tl_active else 'OFF'} {INTERVAL_LABELS[tl_interval_idx]}", font=font, fill=C_GREEN if tl_active else C_DIM)
+                y += 16
+                d.text((4, y), f"Frames: {tl_frame_count}", font=font_sm, fill=C_CYAN)
+                d.text((4, 108), "OK K3:Back", font=font_sm, fill=C_DIM)
+            LCD.LCD_ShowImage(img, 0, 0)
 
         # ── Gallery ──
         elif state == "gallery":

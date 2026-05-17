@@ -398,7 +398,11 @@
     " iss_tracker": "",
     " network_anomaly": "",
     " speech_to_text": "",
-    " camera": ""
+    " camera": "",
+    " qr_scanner": "",
+    " timelapse": "",
+    " surveillance": "",
+    " object_detector": ""
   },
   "fallbacks": {
     "__scan__": "",

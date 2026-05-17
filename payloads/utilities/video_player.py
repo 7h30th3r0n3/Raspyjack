@@ -265,6 +265,18 @@ def _write_frame_with_osd(fb_map, frame_raw, show_osd):
     fb_map.write(arr.tobytes())
 
 
+def _has_audio(filepath):
+    """Check if file has an audio stream."""
+    try:
+        r = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "a",
+             "-show_entries", "stream=codec_type", "-of", "csv=p=0", filepath],
+            capture_output=True, text=True, timeout=5)
+        return "audio" in r.stdout
+    except Exception:
+        return False
+
+
 def _start_playback(filepath, seek=0):
     """Start ffmpeg with video pipe + audio output, synced from seek position."""
     cmd = [
@@ -278,10 +290,9 @@ def _start_playback(filepath, seek=0):
         "-vf", f"scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=decrease,pad={WIDTH}:{HEIGHT}:(ow-iw)/2:(oh-ih)/2,fps=15",
         "-pix_fmt", "rgb565le",
         "-f", "rawvideo", "pipe:1",
-        "-map", "0:a:0?",
-        "-ac", "2", "-ar", "44100",
-        "-f", "alsa", "default",
     ]
+    if _has_audio(filepath):
+        cmd += ["-map", "0:a:0", "-ac", "2", "-ar", "44100", "-f", "alsa", "default"]
     return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=FB_SIZE)
 
 
