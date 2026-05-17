@@ -208,7 +208,7 @@ def main():
 
     print("[DOOM] launching Xvfb...")
     xvfb = subprocess.Popen(
-        ["Xvfb", DISPLAY_NUM, "-screen", "0", f"{DOOM_W}x{DOOM_H}x24", "-ac", "-nocursor"],
+        ["Xvfb", DISPLAY_NUM, "-screen", "0", f"{DOOM_W}x{DOOM_H}x16", "-ac", "-nocursor"],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(1)
     if xvfb.poll() is not None:
