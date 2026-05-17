@@ -207,17 +207,22 @@ def main():
     DOOM_W, DOOM_H = 320, 200
 
     print("[DOOM] launching Xvfb...")
-    xvfb = subprocess.Popen(
-        ["Xvfb", DISPLAY_NUM, "-screen", "0", f"{DOOM_W}x{DOOM_H}x16", "-ac", "-nocursor"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    time.sleep(1)
-    if xvfb.poll() is not None:
-        print("[DOOM] FAIL: Xvfb died")
+    xvfb = None
+    for depth in [24, 16, 8]:
+        xvfb = subprocess.Popen(
+            ["Xvfb", DISPLAY_NUM, "-screen", "0", f"{DOOM_W}x{DOOM_H}x{depth}", "-ac", "-nocursor"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(1)
+        if xvfb.poll() is None:
+            print(f"[DOOM] Xvfb OK (depth={depth})")
+            break
+        print(f"[DOOM] Xvfb depth {depth} failed, trying next...")
+    if xvfb is None or xvfb.poll() is not None:
+        print("[DOOM] FAIL: Xvfb all depths failed")
         _show_msg("Xvfb failed", "Cannot start display", (255, 50, 50))
         time.sleep(3)
         GPIO.cleanup()
         return 1
-    print("[DOOM] Xvfb OK")
 
     env = os.environ.copy()
     env["DISPLAY"] = DISPLAY_NUM
