@@ -177,23 +177,31 @@ def _key_thread(doom_proc):
 def main():
     global _running
 
+    print(f"[DOOM] FB_DEVICE={FB_DEVICE} exists={os.path.exists(FB_DEVICE)} LCD={WIDTH}x{HEIGHT}")
+
     if not _ensure_deps():
+        print("[DOOM] FAIL: deps missing")
         GPIO.cleanup()
         return 1
+    print("[DOOM] deps OK")
 
     wad = _find_wad()
+    print(f"[DOOM] WAD={wad}")
 
     # Check framebuffer is usable
     try:
         test_fd = os.open(FB_DEVICE, os.O_RDWR)
         os.close(test_fd)
-    except Exception:
+    except Exception as e:
+        print(f"[DOOM] FAIL: framebuffer {FB_DEVICE}: {e}")
         _show_msg("No framebuffer", f"{FB_DEVICE} not available", (255, 50, 50))
         time.sleep(3)
         GPIO.cleanup()
         return 1
+    print("[DOOM] framebuffer OK")
 
     _show_msg("DOOM", "Starting...", (255, 50, 0))
+    print("[DOOM] starting...")
 
     # Doom renders 320x200. Xvfb matches exactly.
     DOOM_W, DOOM_H = 320, 200
