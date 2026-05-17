@@ -98,9 +98,15 @@ def _ensure_deps():
 def _show_msg(text, sub="", color=(0, 200, 255)):
     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
     d = ScaledDraw(img)
-    d.text((WIDTH // 2, HEIGHT // 2 - 10), text, font=font, fill=color, anchor="mm")
+    try:
+        d.text((WIDTH // 2, HEIGHT // 2 - 10), text, font=font, fill=color, anchor="mm")
+    except Exception:
+        d.text((10, HEIGHT // 2 - 10), text, font=font, fill=color)
     if sub:
-        d.text((WIDTH // 2, HEIGHT // 2 + 10), sub, font=font_sm, fill=(150, 150, 150), anchor="mm")
+        try:
+            d.text((WIDTH // 2, HEIGHT // 2 + 10), sub, font=font_sm, fill=(150, 150, 150), anchor="mm")
+        except Exception:
+            d.text((10, HEIGHT // 2 + 10), sub, font=font_sm, fill=(150, 150, 150))
     LCD.LCD_ShowImage(img, 0, 0)
 
 
