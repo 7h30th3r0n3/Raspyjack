@@ -244,7 +244,7 @@ def main():
         return 1
     print("[DOOM] chocolate-doom running")
 
-    # Hide X cursor by creating a blank cursor
+    print("[DOOM] hiding cursor...")
     subprocess.run(
         ["xdotool", "mousemove", "--screen", "0", str(DOOM_W + 10), str(DOOM_H + 10)],
         env=env, capture_output=True)
@@ -255,7 +255,7 @@ def main():
     except Exception:
         pass
 
-    # Scale Doom to LCD size, fill entire screen
+    print("[DOOM] launching ffmpeg capture...")
     capture = subprocess.Popen(
         ["ffmpeg", "-hide_banner", "-loglevel", "quiet",
          "-f", "x11grab", "-framerate", "15",
@@ -265,13 +265,28 @@ def main():
          "-pix_fmt", "rgb565le",
          "-f", "rawvideo", "pipe:1"],
         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=FB_SIZE)
+    print("[DOOM] ffmpeg started")
 
+    print("[DOOM] starting key thread...")
     kt = threading.Thread(target=_key_thread, args=(doom,), daemon=True)
     kt.start()
 
-    fb_fd = os.open(FB_DEVICE, os.O_RDWR)
-    fb_map = mmap.mmap(fb_fd, FB_SIZE, mmap.MAP_SHARED, mmap.PROT_WRITE | mmap.PROT_READ)
+    print(f"[DOOM] opening framebuffer {FB_DEVICE} (FB_SIZE={FB_SIZE})...")
+    try:
+        fb_fd = os.open(FB_DEVICE, os.O_RDWR)
+        fb_map = mmap.mmap(fb_fd, FB_SIZE, mmap.MAP_SHARED, mmap.PROT_WRITE | mmap.PROT_READ)
+    except Exception as e:
+        print(f"[DOOM] FAIL: mmap {FB_DEVICE}: {e}")
+        for p in [capture, doom, xvfb]:
+            try:
+                p.kill()
+            except Exception:
+                pass
+        GPIO.cleanup()
+        return 1
+    print("[DOOM] framebuffer mmap OK, entering render loop...")
 
+    frame_count = 0
     try:
         while _running:
             btn = None
@@ -279,19 +294,30 @@ def main():
                 if GPIO.input(pin) == 0 and name == "KEY3":
                     btn = "KEY3"
             if btn == "KEY3":
+                print("[DOOM] KEY3 pressed, exiting")
                 break
 
             if doom.poll() is not None:
+                print(f"[DOOM] chocolate-doom exited with code {doom.returncode}")
                 break
 
             raw = _read_frame(capture)
             if raw is None:
+                print(f"[DOOM] ffmpeg stream ended after {frame_count} frames")
+                if capture.poll() is not None:
+                    print(f"[DOOM] ffmpeg exited with code {capture.returncode}")
                 break
 
             fb_map.seek(0)
             fb_map.write(raw)
+            frame_count += 1
+            if frame_count == 1:
+                print("[DOOM] first frame rendered!")
 
+    except Exception as e:
+        print(f"[DOOM] render loop error: {e}")
     finally:
+        print(f"[DOOM] cleanup after {frame_count} frames")
         _running = False
         for p in [capture, doom, xvfb]:
             try:
@@ -299,8 +325,11 @@ def main():
                 p.wait(timeout=2)
             except Exception:
                 pass
-        fb_map.close()
-        os.close(fb_fd)
+        try:
+            fb_map.close()
+            os.close(fb_fd)
+        except Exception:
+            pass
         subprocess.run(["pkill", "-9", "chocolate"], capture_output=True)
         subprocess.run(["pkill", "-9", "Xvfb"], capture_output=True)
         subprocess.run(["pkill", "-9", "ffmpeg"], capture_output=True)
