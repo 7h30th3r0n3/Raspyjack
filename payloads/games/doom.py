@@ -306,4 +306,11 @@ def main():
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    import traceback
+    try:
+        raise SystemExit(main())
+    except SystemExit:
+        pass
+    except Exception:
+        traceback.print_exc()
+        input("Press Enter to exit...")
