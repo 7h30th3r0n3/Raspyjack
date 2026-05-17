@@ -120,7 +120,9 @@
     " Sdr Radio": "",
     " AI": "",
     " Ai": "",
-    " ai": ""
+    " ai": "",
+    " nfc_rfid": "",
+    " remote_access": ""
   },
   "payloads": {
     " ad_recon": "",
@@ -403,8 +405,21 @@
     " timelapse": "",
     " surveillance": "",
     " object_detector": "",
-    " camera_setup": "",
-    " brightness": ""
+    " camera_setup": "",
+    " brightness": "",
+    " nfc_amiibo": "",
+    " nfc_bruteforce": "",
+    " nfc_cloner": "",
+    " nfc_crack": "",
+    " nfc_emv": "",
+    " nfc_format": "",
+    " nfc_fuzzer": "",
+    " nfc_hotel": "",
+    " nfc_magic": "",
+    " nfc_ndef_writer": "",
+    " nfc_saved": "",
+    " nfc_scanner": "",
+    " nfc_transport": ""
   },
   "fallbacks": {
     "__scan__": "",
