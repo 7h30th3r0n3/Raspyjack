@@ -419,7 +419,11 @@
     " nfc_ndef_writer": "",
     " nfc_saved": "",
     " nfc_scanner": "",
-    " nfc_transport": ""
+    " nfc_transport": "",
+    " lemmings": "",
+    " opentyrian": "",
+    " bomberman": "",
+    " caveexpress": ""
   },
   "fallbacks": {
     "__scan__": "",
