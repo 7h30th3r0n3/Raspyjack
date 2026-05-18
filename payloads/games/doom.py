@@ -266,7 +266,7 @@ def main():
          "-f", "x11grab", "-framerate", "15",
          "-video_size", f"{DOOM_W}x{DOOM_H}",
          "-i", DISPLAY_NUM,
-         "-vf", f"scale={WIDTH}:{HEIGHT}",
+         "-vf", f"crop={DOOM_W}:{DOOM_H - 30}:0:30,scale={WIDTH}:{HEIGHT}",
          "-pix_fmt", "rgb565le",
          "-f", "rawvideo", "pipe:1"],
         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=FB_SIZE)
