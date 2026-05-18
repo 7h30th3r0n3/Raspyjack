@@ -203,8 +203,20 @@ def main():
     _show_msg("DOOM", "Starting...", (255, 50, 0))
     print("[DOOM] starting...")
 
-    # Doom renders 320x200. Xvfb matches exactly.
-    DOOM_W, DOOM_H = 320, 200
+    # Check LCD framebuffer
+    if not os.path.exists("/dev/fb1"):
+        try:
+            with open("/proc/fb") as f:
+                if "st7789v" not in f.read() and "fbtft" not in f.read():
+                    _show_msg("CardputerZero only", "No LCD framebuffer", (255, 50, 50))
+                    time.sleep(3)
+                    GPIO.cleanup()
+                    return 1
+        except Exception:
+            pass
+
+    # Match LCD size for proper display
+    DOOM_W, DOOM_H = WIDTH, HEIGHT
 
     print("[DOOM] launching Xvfb...")
     xvfb = None

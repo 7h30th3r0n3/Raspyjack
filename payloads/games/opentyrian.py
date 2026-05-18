@@ -115,6 +115,19 @@ def _key_thread(game_proc):
 
 def main():
     global _running
+    # Check LCD framebuffer
+    if not os.path.exists("/dev/fb1"):
+        try:
+            with open("/proc/fb") as f:
+                content = f.read()
+            if "st7789v" not in content and "fbtft" not in content:
+                _show_msg("CardputerZero only", "No LCD framebuffer", (255, 50, 50))
+                time.sleep(3)
+                GPIO.cleanup()
+                return 1
+        except Exception:
+            pass
+
     if not _ensure_deps():
         _show_msg("Install failed", "", (255, 50, 50)); time.sleep(3); GPIO.cleanup(); return 1
     try:
