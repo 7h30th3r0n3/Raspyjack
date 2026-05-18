@@ -25,6 +25,7 @@ import LCD_Config
 from PIL import Image
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._audio_helper import get_audio_card, get_alsa_dev
 
 PINS = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
@@ -215,8 +216,8 @@ def main():
         except Exception:
             pass
 
-    # Match LCD size for proper display
-    DOOM_W, DOOM_H = WIDTH, HEIGHT
+    # DOOM minimum is 320x200, LCD is 320x170
+    DOOM_W, DOOM_H = 320, 200
 
     print("[DOOM] launching Xvfb...")
     xvfb = None
@@ -241,9 +242,9 @@ def main():
     env["SDL_VIDEODRIVER"] = "x11"
     env["SDL_VIDEO_WINDOW_POS"] = "0,0"
 
-    subprocess.run(["amixer", "-c", "0", "sset", "Headphone", "30"], capture_output=True)
-    subprocess.run(["amixer", "-c", "0", "sset", "DACL", "160"], capture_output=True)
-    subprocess.run(["amixer", "-c", "0", "sset", "DACR", "160"], capture_output=True)
+    subprocess.run(["amixer", "-c", get_audio_card(), "sset", "Headphone", "30"], capture_output=True)
+    subprocess.run(["amixer", "-c", get_audio_card(), "sset", "DACL", "160"], capture_output=True)
+    subprocess.run(["amixer", "-c", get_audio_card(), "sset", "DACR", "160"], capture_output=True)
 
     print("[DOOM] launching chocolate-doom...")
     doom = subprocess.Popen(

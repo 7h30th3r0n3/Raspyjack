@@ -34,6 +34,7 @@ import LCD_Config
 from PIL import Image, ImageDraw
 from payloads._display_helper import ScaledDraw, scaled_font, SX, SY
 from payloads._input_helper import get_button
+from payloads._audio_helper import get_audio_card, get_alsa_dev
 
 try:
     import evdev_keys
@@ -132,19 +133,19 @@ def _enable_mic():
         ["i2cset", "-f", "-y", "1", "0x4f", "0x06", "0x01"],
         capture_output=True, timeout=2)
     subprocess.run(
-        ["amixer", "-c", "0", "cset", "name=ADC MUX", "0"],
+        ["amixer", "-c", get_audio_card(), "cset", "name=ADC MUX", "0"],
         capture_output=True, timeout=2)
     subprocess.run(
-        ["amixer", "-c", "0", "cset", "name=ADCL PGA Volume", "12"],
+        ["amixer", "-c", get_audio_card(), "cset", "name=ADCL PGA Volume", "12"],
         capture_output=True, timeout=2)
     subprocess.run(
-        ["amixer", "-c", "0", "cset", "name=ADCR PGA Volume", "12"],
+        ["amixer", "-c", get_audio_card(), "cset", "name=ADCR PGA Volume", "12"],
         capture_output=True, timeout=2)
     subprocess.run(
-        ["amixer", "-c", "0", "cset", "name=ADCL Capture Volume", "220"],
+        ["amixer", "-c", get_audio_card(), "cset", "name=ADCL Capture Volume", "220"],
         capture_output=True, timeout=2)
     subprocess.run(
-        ["amixer", "-c", "0", "cset", "name=ADCR Capture Volume", "220"],
+        ["amixer", "-c", get_audio_card(), "cset", "name=ADCR Capture Volume", "220"],
         capture_output=True, timeout=2)
 
 
@@ -275,7 +276,7 @@ def _set_volume(vol):
     global _volume
     _volume = max(0, min(63, vol))
     subprocess.run(
-        ["amixer", "-c", "0", "sset", "Headphone", str(_volume)],
+        ["amixer", "-c", get_audio_card(), "sset", "Headphone", str(_volume)],
         capture_output=True, timeout=2)
 
 
@@ -284,10 +285,10 @@ def _start_playback(path):
     _disable_mic()
     _set_volume(_volume)
     subprocess.run(
-        ["amixer", "-c", "0", "sset", "DACL", "180"],
+        ["amixer", "-c", get_audio_card(), "sset", "DACL", "180"],
         capture_output=True, timeout=2)
     subprocess.run(
-        ["amixer", "-c", "0", "sset", "DACR", "180"],
+        ["amixer", "-c", get_audio_card(), "sset", "DACR", "180"],
         capture_output=True, timeout=2)
     _play_proc = subprocess.Popen(
         ["aplay", "-D", _alsa_dev, path],

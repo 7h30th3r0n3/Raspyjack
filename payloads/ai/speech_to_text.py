@@ -35,6 +35,7 @@ import LCD_Config
 from PIL import Image, ImageDraw
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._audio_helper import get_audio_card, get_alsa_dev
 
 PINS = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
@@ -180,13 +181,13 @@ def _enable_mic():
         ["i2cset", "-f", "-y", "1", "0x4f", "0x06", "0x01"],
         capture_output=True, timeout=2)
     subprocess.run(
-        ["amixer", "-c", "0", "cset", "name=ADC MUX", "0"],
+        ["amixer", "-c", get_audio_card(), "cset", "name=ADC MUX", "0"],
         capture_output=True, timeout=2)
     subprocess.run(
-        ["amixer", "-c", "0", "cset", "name=ADCL PGA Volume", "12"],
+        ["amixer", "-c", get_audio_card(), "cset", "name=ADCL PGA Volume", "12"],
         capture_output=True, timeout=2)
     subprocess.run(
-        ["amixer", "-c", "0", "cset", "name=ADCL Capture Volume", "220"],
+        ["amixer", "-c", get_audio_card(), "cset", "name=ADCL Capture Volume", "220"],
         capture_output=True, timeout=2)
 
 

@@ -31,6 +31,7 @@ import LCD_Config
 from PIL import Image, ImageDraw
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._audio_helper import get_audio_card, get_alsa_dev
 
 PINS = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
@@ -86,7 +87,7 @@ def _get_btn():
     return get_button(PINS, GPIO)
 
 
-def _draw(title, results, current_test="", hint="OK:Next  KEY3:Skip/Exit"):
+def _draw(title, results, current_test="", hint="OK:Next  KEY3:Skip/Exit", scroll=0):
     img = Image.new("RGB", (W, H), C_BG)
     d = ImageDraw.Draw(img) if IS_WIDE else ScaledDraw(img)
 
@@ -96,8 +97,13 @@ def _draw(title, results, current_test="", hint="OK:Next  KEY3:Skip/Exit"):
                anchor="mm") if hasattr(d, 'textbbox') else d.text(
                    (W // 2 - 50, 1), title, font=font_lg, fill=C_CYAN)
 
+        max_visible = (H - 50) // 14
         y = 24
-        for name, status, detail in results:
+        for i in range(max_visible):
+            idx = scroll + i
+            if idx >= len(results):
+                break
+            name, status, detail = results[idx]
             if status == "PASS":
                 icon, color = "+", C_PASS
             elif status == "FAIL":
@@ -109,8 +115,6 @@ def _draw(title, results, current_test="", hint="OK:Next  KEY3:Skip/Exit"):
             line = f"{icon} {name}: {detail[:28]}"
             d.text((8, y), line, font=font_sm, fill=color)
             y += 14
-            if y > H - 30:
-                break
 
         if current_test:
             d.text((W // 2, H - 28), current_test, font=font_sm, fill=C_WHITE,
@@ -124,14 +128,17 @@ def _draw(title, results, current_test="", hint="OK:Next  KEY3:Skip/Exit"):
     else:
         d.rectangle([0, 0, 128, 14], fill=C_HEAD)
         d.text((15, 1), title[:14], font=font_lg, fill=C_CYAN)
+        max_visible = 6
         y = 18
-        for name, status, detail in results:
+        for i in range(max_visible):
+            idx = scroll + i
+            if idx >= len(results):
+                break
+            name, status, detail = results[idx]
             icon = "+" if status == "PASS" else "X" if status == "FAIL" else "!"
             color = C_PASS if status == "PASS" else C_FAIL if status == "FAIL" else C_WARN
             d.text((4, y), f"{icon} {name[:8]}:{detail[:8]}", font=font_sm, fill=color)
             y += 12
-            if y > 100:
-                break
         if current_test:
             d.text((4, 102), current_test[:17], font=font_sm, fill=C_WHITE)
         d.text((4, 114), hint[:17], font=font_sm, fill=C_DIM)
@@ -242,13 +249,13 @@ def test_microphone():
     """Test microphone input."""
     try:
         subprocess.run(["i2cset", "-f", "-y", "1", "0x4f", "0x06", "0x01"], capture_output=True, timeout=2)
-        subprocess.run(["amixer", "-c", "0", "cset", "name=ADC MUX", "0"], capture_output=True, timeout=2)
-        subprocess.run(["amixer", "-c", "0", "cset", "name=ADCL PGA Volume", "12"], capture_output=True, timeout=2)
-        subprocess.run(["amixer", "-c", "0", "cset", "name=ADCL Capture Volume", "220"], capture_output=True, timeout=2)
+        subprocess.run(["amixer", "-c", get_audio_card(), "cset", "name=ADC MUX", "0"], capture_output=True, timeout=2)
+        subprocess.run(["amixer", "-c", get_audio_card(), "cset", "name=ADCL PGA Volume", "12"], capture_output=True, timeout=2)
+        subprocess.run(["amixer", "-c", get_audio_card(), "cset", "name=ADCL Capture Volume", "220"], capture_output=True, timeout=2)
         time.sleep(0.3)
 
         r = subprocess.run(
-            ["arecord", "-D", "plughw:0,0", "-f", "S16_LE", "-r", "16000", "-c", "1", "-d", "2", "-t", "raw"],
+            ["arecord", "-D", get_alsa_dev(), "-f", "S16_LE", "-r", "16000", "-c", "1", "-d", "2", "-t", "raw"],
             capture_output=True, timeout=5)
         subprocess.run(["i2cset", "-f", "-y", "1", "0x4f", "0x06", "0x03"], capture_output=True, timeout=2)
 
@@ -440,10 +447,35 @@ def main():
     failed = 0
     warned = 0
 
-    for i, (name, test_fn) in enumerate(tests):
-        if not _running:
-            break
-        _draw("HW TEST", results, f"Testing {name}... ({i+1}/{len(tests)})")
+    test_idx = 0
+    scroll = 0
+
+    while test_idx < len(tests) and _running:
+        name, test_fn = tests[test_idx]
+        _draw("HW TEST", results, f"Next: {name} ({test_idx+1}/{len(tests)})", "OK:Run  KEY3:Skip", scroll)
+
+        while _running:
+            btn = _get_btn()
+            if btn == "OK":
+                break
+            if btn == "KEY3":
+                results.append((name, "SKIP", "Skipped"))
+                test_idx += 1
+                break
+            if btn == "UP":
+                scroll = max(0, scroll - 1)
+                _draw("HW TEST", results, f"Next: {name} ({test_idx+1}/{len(tests)})", "OK:Run  KEY3:Skip", scroll)
+            if btn == "DOWN":
+                scroll = min(max(0, len(results) - 5), scroll + 1)
+                _draw("HW TEST", results, f"Next: {name} ({test_idx+1}/{len(tests)})", "OK:Run  KEY3:Skip", scroll)
+            time.sleep(0.08)
+        else:
+            continue
+
+        if btn == "KEY3":
+            continue
+
+        _draw("HW TEST", results, f"Testing {name}...", "", scroll)
         try:
             status, detail = test_fn()
         except Exception as e:
@@ -455,23 +487,52 @@ def main():
             failed += 1
         else:
             warned += 1
-        _draw("HW TEST", results, f"{name}: {status}")
-        time.sleep(0.3)
+        scroll = max(0, len(results) - 8)
+        _draw("HW TEST", results, f"{name}: {status} - {detail}", "OK:Next", scroll)
+        time.sleep(0.5)
+        test_idx += 1
 
     summary = f"{passed} PASS  {failed} FAIL  {warned} WARN"
-    _draw("HW TEST", results, summary, "OK:Retest  KEY3:Exit")
+    _draw("HW TEST", results, summary, "UP/DN:Scroll OK:Retest K3:Exit", scroll)
+    last_btn = 0
 
     while _running:
         btn = _get_btn()
+        now = time.time()
         if btn == "KEY3":
             break
-        if btn == "OK":
+        if btn == "UP" and now - last_btn > 0.15:
+            last_btn = now
+            scroll = max(0, scroll - 1)
+            _draw("HW TEST", results, summary, "UP/DN:Scroll OK:Retest K3:Exit", scroll)
+        if btn == "DOWN" and now - last_btn > 0.15:
+            last_btn = now
+            scroll = min(max(0, len(results) - 5), scroll + 1)
+            _draw("HW TEST", results, summary, "UP/DN:Scroll OK:Retest K3:Exit", scroll)
+        if btn == "OK" and now - last_btn > 0.3:
+            last_btn = now
+            # Rerun all tests
             results.clear()
             passed = failed = warned = 0
-            for i, (name, test_fn) in enumerate(tests):
-                if not _running:
-                    break
-                _draw("HW TEST", results, f"Testing {name}... ({i+1}/{len(tests)})")
+            scroll = 0
+            test_idx = 0
+            while test_idx < len(tests) and _running:
+                name, test_fn = tests[test_idx]
+                _draw("HW TEST", results, f"Next: {name} ({test_idx+1}/{len(tests)})", "OK:Run  KEY3:Skip", scroll)
+                while _running:
+                    b = _get_btn()
+                    if b == "OK":
+                        break
+                    if b == "KEY3":
+                        results.append((name, "SKIP", "Skipped"))
+                        test_idx += 1
+                        break
+                    time.sleep(0.08)
+                else:
+                    continue
+                if b == "KEY3":
+                    continue
+                _draw("HW TEST", results, f"Testing {name}...", "", scroll)
                 try:
                     status, detail = test_fn()
                 except Exception as e:
@@ -483,10 +544,12 @@ def main():
                     failed += 1
                 else:
                     warned += 1
-                _draw("HW TEST", results, f"{name}: {status}")
-                time.sleep(0.3)
+                scroll = max(0, len(results) - 8)
+                _draw("HW TEST", results, f"{name}: {status}", "OK:Next", scroll)
+                time.sleep(0.5)
+                test_idx += 1
             summary = f"{passed} PASS  {failed} FAIL  {warned} WARN"
-            _draw("HW TEST", results, summary, "OK:Retest  KEY3:Exit")
+            _draw("HW TEST", results, summary, "UP/DN:Scroll OK:Retest K3:Exit", scroll)
         time.sleep(0.1)
 
     LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)

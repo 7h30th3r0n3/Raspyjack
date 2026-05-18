@@ -53,6 +53,16 @@ FB_DEVICE = "/dev/fb1" if os.path.exists("/dev/fb1") else "/dev/fb0"
 FB_SIZE = WIDTH * HEIGHT * 2
 
 _running = True
+def _get_card():
+    try:
+        r = subprocess.run(["aplay", "-l"], capture_output=True, text=True, timeout=3)
+        for line in r.stdout.split("\n"):
+            if "ES8388" in line or "ES8389" in line:
+                return line.split(":")[0].replace("card", "").strip()
+    except Exception:
+        pass
+    return "0"
+
 _volume = 40
 _loop = False
 
@@ -76,9 +86,9 @@ def _check_button():
 def _set_volume(vol):
     global _volume
     _volume = max(0, min(100, vol))
-    subprocess.Popen(["amixer", "-c", "0", "sset", "Headphone", str(int(_volume * 63 / 100))], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    subprocess.Popen(["amixer", "-c", "0", "sset", "DACL", "180"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    subprocess.Popen(["amixer", "-c", "0", "sset", "DACR", "180"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.Popen(["amixer", "-c", _get_card(), "sset", "Headphone", str(int(_volume * 63 / 100))], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.Popen(["amixer", "-c", _get_card(), "sset", "DACL", "180"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.Popen(["amixer", "-c", _get_card(), "sset", "DACR", "180"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def _format_time(seconds):
