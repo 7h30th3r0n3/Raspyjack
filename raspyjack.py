@@ -361,13 +361,13 @@ class Defaults():
 ### Color scheme class ###
 class template():
     # Color values
-    border = "#0e0e6b"
+    border = "#05ff00"
     background = "#000000"
-    text = "#9c9ccc"
-    selected_text = "#EEEEEE"
-    select = "#141494"
-    gamepad = select
-    gamepad_fill = selected_text
+    text = "#05ff00"
+    selected_text = "#00ff55"
+    select = "#2d0fff"
+    gamepad = "#141494"
+    gamepad_fill = "#eeeeee"
 
     # Render the border
     def DrawBorder(self):
@@ -458,14 +458,22 @@ _KEY_CHARS = {
     57:' ',
 }
 
+# Edge-triggered key state tracking (detect press, not hold)
+_prev_key_state = {}
+
 def _menu_filter_reset():
-    global _menu_filter, _menu_filter_active
+    global _menu_filter, _menu_filter_active, _prev_key_state
     _menu_filter = ""
     _menu_filter_active = False
+    _prev_key_state = {}
 
 def _menu_filter_activate():
-    global _menu_filter_active
+    global _menu_filter_active, _prev_key_state
     _menu_filter_active = True
+    _prev_key_state = {}
+    if _HAS_EVDEV:
+        for code in _KEY_CHARS:
+            _prev_key_state[code] = _evdev.is_key_pressed(code)
 
 def _menu_filter_add(char):
     global _menu_filter
@@ -478,19 +486,47 @@ def _menu_filter_backspace():
         _menu_filter_active = False
 
 def _check_search_trigger():
-    """Check if S key is pressed to enter search mode (CardputerZero only)."""
+    """Check if S key was just pressed (edge-triggered, CardputerZero only)."""
     if not _HAS_EVDEV:
         return False
-    return _evdev.is_key_pressed(31)  # S key
+    code = 31  # S key
+    now_pressed = _evdev.is_key_pressed(code)
+    was_pressed = _prev_key_state.get(code, False)
+    _prev_key_state[code] = now_pressed
+    return now_pressed and not was_pressed
 
 def _check_search_key():
-    """Check if a letter key is pressed during search mode. Returns char or None."""
+    """Check if a letter key was just pressed (edge-triggered). Returns char or None."""
+    global _prev_key_state
     if not _HAS_EVDEV:
         return None
     for code, char in _KEY_CHARS.items():
-        if _evdev.is_key_pressed(code):
+        now_pressed = _evdev.is_key_pressed(code)
+        was_pressed = _prev_key_state.get(code, False)
+        _prev_key_state[code] = now_pressed
+        if now_pressed and not was_pressed:
             return char
     return None
+
+def _check_search_backspace():
+    """Check if backspace (evdev code 14) was just pressed (edge-triggered)."""
+    if not _HAS_EVDEV:
+        return False
+    code = 14
+    now_pressed = _evdev.is_key_pressed(code)
+    was_pressed = _prev_key_state.get(code, False)
+    _prev_key_state[code] = now_pressed
+    return now_pressed and not was_pressed
+
+def _check_search_escape():
+    """Check if ESC (evdev code 1) was just pressed (edge-triggered)."""
+    if not _HAS_EVDEV:
+        return False
+    code = 1
+    now_pressed = _evdev.is_key_pressed(code)
+    was_pressed = _prev_key_state.get(code, False)
+    _prev_key_state[code] = now_pressed
+    return now_pressed and not was_pressed
 
 def _filter_menu_items(inlist, query):
     """Filter menu items by search query. Returns filtered list."""
@@ -498,6 +534,102 @@ def _filter_menu_items(inlist, query):
         return inlist
     q = query.lower()
     return [item for item in inlist if q in item.lower()]
+
+# Flat payload list for global search (built lazily)
+_flat_payload_list = None
+_flat_payload_map = {}
+
+def _build_flat_payload_list():
+    """Build a flat list of all payload labels + exec mappings for global search."""
+    global _flat_payload_list, _flat_payload_map
+    all_payloads = list_payloads()
+    labels = []
+    _flat_payload_map.clear()
+    for rel_path in all_payloads:
+        name = os.path.splitext(os.path.basename(rel_path))[0]
+        label = f" {name}"
+        labels.append(label)
+        _flat_payload_map[label] = rel_path
+    _flat_payload_list = labels
+    return labels
+
+def _get_flat_payload_list():
+    """Get the flat payload list, building it if needed."""
+    global _flat_payload_list
+    if _flat_payload_list is None:
+        return _build_flat_payload_list()
+    return _flat_payload_list
+
+def _invalidate_flat_payload_list():
+    """Force rebuild on next access (call after adding/removing payloads)."""
+    global _flat_payload_list
+    _flat_payload_list = None
+
+def _draw_search_bar():
+    """Draw a search bar at the bottom of the screen when search is active."""
+    if not _menu_filter_active:
+        return
+    bar_h = S(14)
+    y = _SCR_H - bar_h
+    draw.rectangle((0, y, _SCR_W, _SCR_H), fill="#1a1a2e")
+    draw.line([(0, y), (_SCR_W, y)], fill="#00E5FF", width=1)
+    try:
+        _search_icon_font = ImageFont.truetype('/usr/share/fonts/truetype/fontawesome/fa-solid-900.ttf', S(8))
+        draw.text((S(3), y + S(2)), "", fill="#00E5FF", font=_search_icon_font)
+    except Exception:
+        draw.text((S(3), y + S(2)), ">", fill="#00E5FF", font=font)
+    query_text = _menu_filter if _menu_filter else ""
+    cursor = "|" if int(time.time() * 2) % 2 == 0 else " "
+    draw.text((S(14), y + S(2)), query_text + cursor, fill="#FFFFFF", font=font)
+    filtered_count = ""
+    if _menu_filter:
+        filtered_count = f"({_menu_filter_match_count})"
+    draw.text((_SCR_W - S(2), y + S(2)), filtered_count, fill="#888888", font=font, anchor="ra")
+
+_menu_filter_match_count = 0
+
+def _apply_search_filter(inlist_original):
+    """Apply current search filter and return (filtered_list, total). Updates match count."""
+    global _menu_filter_match_count
+    if _menu_filter:
+        filtered = _filter_menu_items(inlist_original, _menu_filter)
+        _menu_filter_match_count = len(filtered)
+        return filtered if filtered else inlist_original, len(filtered) if filtered else len(inlist_original)
+    _menu_filter_match_count = len(inlist_original)
+    return list(inlist_original), len(inlist_original)
+
+def _handle_search_input(inlist_original, use_global=False):
+    """Process search keyboard input. Returns (changed, new_inlist, new_total, new_index) or None if no search input.
+    If use_global=True, search across ALL payloads (not just the current menu list)."""
+    global _menu_filter_active
+    if not _HAS_EVDEV:
+        return None
+
+    search_source = _get_flat_payload_list() if (use_global and _menu_filter_active) else inlist_original
+
+    if _menu_filter_active:
+        if _check_search_escape():
+            _menu_filter_reset()
+            inlist = list(inlist_original)
+            return True, inlist, len(inlist), 0
+        if _check_search_backspace():
+            _menu_filter_backspace()
+            if not _menu_filter:
+                inlist = list(inlist_original)
+                return True, inlist, len(inlist), 0
+            inlist, total = _apply_search_filter(search_source)
+            return True, inlist, total, 0
+        ch = _check_search_key()
+        if ch is not None:
+            _menu_filter_add(ch)
+            inlist, total = _apply_search_filter(search_source)
+            return True, inlist, total, 0
+    else:
+        if _check_search_trigger():
+            _menu_filter_activate()
+            return True, None, None, None
+
+    return None
 
 ####### Simple methods #######
 ### Get any button press ###
@@ -2348,49 +2480,25 @@ def GetMenuString(inlist, duplicates=False):
                         font=text_font,
                         fill=fill
                     )
+            if _menu_filter_active:
+                _draw_search_bar()
         finally:
             draw_lock.release()
-
-        # Display current view mode indicator (only on main menu)
-        # if m.which == "a":
-        #     draw.text((2, 2), "List", font=text_font, fill=color.text)
 
         time.sleep(0.12)
 
         # -- 4/ Lecture des boutons -----------------------------------------
-        # S key enters search mode (CardputerZero keyboard)
-        if not _menu_filter_active and _check_search_trigger():
-            _menu_filter_activate()
-            time.sleep(0.2)
+        search_result = _handle_search_input(inlist_original, use_global=True)
+        if search_result is not None:
+            changed, new_list, new_total, new_idx = search_result
+            if new_list is not None:
+                inlist = new_list
+                total = new_total
+                index = min(new_idx, max(0, new_total - 1))
+                offset = 0
             continue
-
-        # In search mode, capture letter keys for the query
-        if _menu_filter_active:
-            search_char = _check_search_key()
-            if search_char is not None:
-                _menu_filter_add(search_char)
-                filtered = _filter_menu_items(inlist_original, _menu_filter)
-                if filtered:
-                    inlist = filtered
-                    total = len(inlist)
-                    index = 0
-                time.sleep(0.15)
-                continue
 
         btn = getButton()
-
-        # Backspace clears one char from filter
-        if btn == "KEY2_PIN" and _menu_filter_active:
-            _menu_filter_backspace()
-            if _menu_filter:
-                filtered = _filter_menu_items(inlist_original, _menu_filter)
-                inlist = filtered if filtered else inlist_original
-            else:
-                inlist = inlist_original
-            total = len(inlist)
-            index = min(index, total - 1) if total > 0 else 0
-            time.sleep(0.15)
-            continue
 
         if m.which == "a":
             if _cv(btn):
@@ -2407,12 +2515,16 @@ def GetMenuString(inlist, duplicates=False):
             raw = inlist[index]
             if empty:
                 return (-2, "") if duplicates else ""
+            if _menu_filter_active and raw in _flat_payload_map:
+                _menu_filter_reset()
+                exec_payload(_flat_payload_map[raw])
+                return (-1, "") if duplicates else ""
             if duplicates:
                 idx, txt = raw.split('#', 1)
                 return int(idx), txt
             return raw
         elif btn == "KEY1_PIN" and m.which == "a":
-            # Toggle to grid view (only on main menu)
+            _menu_filter_reset()
             toggle_view_mode()
             return (-1, "") if duplicates else ""
         elif btn == "KEY_LEFT_PIN":
@@ -4508,6 +4620,8 @@ def GetMenuCarousel(inlist, duplicates=False):
     if duplicates:
         inlist = [f"{i}#{txt}" for i, txt in enumerate(inlist)]
 
+    inlist_original = list(inlist)
+    _menu_filter_reset()
     total = len(inlist)
     index = m.select if m.select < total else 0
 
@@ -4545,36 +4659,52 @@ def GetMenuCarousel(inlist, duplicates=False):
                 draw.text((S(20), main_y), "◀", font=arrow_font, fill=color.text, anchor="mm")
                 # Right arrow (always show for wraparound)
                 draw.text((_SCR_W - S(20), main_y), "▶", font=arrow_font, fill=color.text, anchor="mm")
+
+            if _menu_filter_active:
+                _draw_search_bar()
         finally:
             draw_lock.release()
 
         time.sleep(0.08)
 
+        # Search input (edge-triggered)
+        search_result = _handle_search_input(inlist_original, use_global=True)
+        if search_result is not None:
+            changed, new_list, new_total, new_idx = search_result
+            if new_list is not None:
+                inlist = new_list
+                total = new_total
+                index = min(new_idx, max(0, new_total - 1))
+            continue
+
         # Handle button input
         btn = getButton()
         if btn == "KEY_LEFT_PIN":
-            # Wraparound navigation - go to last item if at first
             index = (index - 1) % total
         elif btn == "KEY_RIGHT_PIN":
-            # Wraparound navigation - go to first item if at last
             index = (index + 1) % total
         elif btn == "KEY_UP_PIN":
-            # Fine adjustment - same as left
             index = (index - 1) % total
         elif btn == "KEY_DOWN_PIN":
-            # Fine adjustment - same as right
             index = (index + 1) % total
         elif btn == "KEY_PRESS_PIN":
             if index < total:
+                selected = inlist[index] if not duplicates else inlist[index].split('#', 1)[1]
+                if _menu_filter_active and selected in _flat_payload_map:
+                    _menu_filter_reset()
+                    exec_payload(_flat_payload_map[selected])
+                    return ""
                 m.select = index
-                return inlist[index] if not duplicates else inlist[index].split('#', 1)[1]
+                _menu_filter_reset()
+                return selected
         elif btn == "KEY1_PIN":
-            # Toggle to next view mode
+            _menu_filter_reset()
             toggle_view_mode()
             return ""
         elif btn == "KEY3_PIN":
             if m.which == "a" and _handle_main_menu_key3_double_click():
                 continue
+            _menu_filter_reset()
             return ""  # Go back
 
 
@@ -4600,6 +4730,8 @@ def GetMenuGrid(inlist, duplicates=False):
     if duplicates:
         inlist = [f"{i}#{txt}" for i, txt in enumerate(inlist)]
 
+    inlist_original = list(inlist)
+    _menu_filter_reset()
     total = len(inlist)
     index = m.select if m.select < total else 0
 
@@ -4653,13 +4785,23 @@ def GetMenuGrid(inlist, duplicates=False):
                     # Draw text only
                     short_text = txt.strip()[:10]
                     draw.text((x, y + S(8)), short_text, font=text_font, fill=fill_color)
+
+            if _menu_filter_active:
+                _draw_search_bar()
         finally:
             draw_lock.release()
 
-        # Display current view mode indicator
-        # draw.text((2, 2), "Grid", font=text_font, fill=color.text)
-
         time.sleep(0.08)
+
+        # Search input (edge-triggered)
+        search_result = _handle_search_input(inlist_original, use_global=True)
+        if search_result is not None:
+            changed, new_list, new_total, new_idx = search_result
+            if new_list is not None:
+                inlist = new_list
+                total = new_total
+                index = min(new_idx, max(0, new_total - 1))
+            continue
 
         # Handle button input
         btn = getButton()
@@ -4677,15 +4819,22 @@ def GetMenuGrid(inlist, duplicates=False):
                 index += 1
         elif btn == "KEY_PRESS_PIN":
             if index < total:
+                selected = inlist[index] if not duplicates else inlist[index].split('#', 1)[1]
+                if _menu_filter_active and selected in _flat_payload_map:
+                    _menu_filter_reset()
+                    exec_payload(_flat_payload_map[selected])
+                    return ""
                 m.select = index
-                return inlist[index] if not duplicates else inlist[index].split('#', 1)[1]
+                _menu_filter_reset()
+                return selected
         elif btn == "KEY1_PIN":
-            # Toggle to list view
+            _menu_filter_reset()
             toggle_view_mode()
             return ""
         elif btn == "KEY3_PIN":
             if m.which == "a" and _handle_main_menu_key3_double_click():
                 continue
+            _menu_filter_reset()
             return ""  # Go back
 
 
