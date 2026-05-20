@@ -28,6 +28,7 @@ try:
     import LCD_1in44, LCD_Config
     from PIL import Image, ImageDraw, ImageFont
     import RPi.GPIO as GPIO
+    from payloads._input_helper import get_virtual_button, _flip
     from wifi_manager import WiFiManager
     from payloads._display_helper import ScaledDraw, scaled_font
     LCD_AVAILABLE = True
@@ -104,6 +105,8 @@ class WiFiLCDInterface:
 
         for pin in self.buttons.values():
             GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+        self._button_states = {pin: 1 for pin in self.buttons.values()}
+        self._last_pressed = {}
 
     def refresh_data(self):
         """Refresh networks and profiles."""
@@ -507,24 +510,25 @@ class WiFiLCDInterface:
         time.sleep(duration)
 
     def check_buttons(self):
-        """Check for button presses with non-blocking debouncing."""
-        if not hasattr(self, '_last_pressed'):
-            self._last_pressed = {}
-            self._button_states = {name: 1 for name in self.buttons.keys()}
+        """Check for button presses with falling-edge detection, respects flip setting."""
+        virtual = get_virtual_button()
+        if virtual:
+            if virtual == "OK":
+                return "CENTER"
+            return virtual
 
-        current_time = time.time()
+        now = time.time()
         for name, pin in self.buttons.items():
-            current_state = GPIO.input(pin)
-
-            # Detect falling edge (1 -> 0)
-            if self._button_states[name] == 1 and current_state == 0:
-                if current_time - self._last_pressed.get(name, 0) > 0.15:
-                    self._last_pressed[name] = current_time
-                    self._button_states[name] = current_state
-                    return name
-
-            self._button_states[name] = current_state
-
+            state = GPIO.input(pin)
+            if self._button_states[pin] == 1 and state == 0:
+                if now - self._last_pressed.get(pin, 0) > 0.15:
+                    self._last_pressed[pin] = now
+                    self._button_states[pin] = state
+                    flipped = _flip(name)
+                    if flipped == "OK":
+                        return "CENTER"
+                    return flipped
+            self._button_states[pin] = state
         return None
 
     def update_display(self):

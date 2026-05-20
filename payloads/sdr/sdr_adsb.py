@@ -62,14 +62,13 @@ _shutdown = threading.Event()
 
 def _btn():
     global _last_btn
-    for name, pin in PINS.items():
-        if GPIO.input(pin) == 0:
-            now = time.time()
-            if now - _last_btn < DEBOUNCE:
-                return None
-            _last_btn = now
-            return name
-    return None
+    btn = get_button(PINS, GPIO)
+    if btn:
+        now = time.time()
+        if now - _last_btn < DEBOUNCE:
+            return None
+        _last_btn = now
+    return btn
 
 
 # ---------------------------------------------------------------------------

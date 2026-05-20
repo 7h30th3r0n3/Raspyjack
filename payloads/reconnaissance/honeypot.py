@@ -60,7 +60,7 @@ DEBUG_LOG = LOOT_DIR / "honeypot_debug.log"
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from payloads._input_helper import get_virtual_button
+from payloads._input_helper import get_button, get_virtual_button
 from payloads._display_helper import ScaledDraw, scaled_font
 
 # ---------------------------------------------------------------------------
@@ -826,12 +826,8 @@ class HoneypotLCD:
 
     def _pressed(self, name: str) -> bool:
         now = time.time()
-        virtual = get_virtual_button()
-        if virtual == name and (now - self._last_pressed[name]) > self._debounce_s:
-            self._last_pressed[name] = now
-            return True
-        pin = self.PINS[name]
-        if GPIO.input(pin) == 0 and (now - self._last_pressed[name]) > self._debounce_s:
+        btn = get_button(self.PINS, GPIO)
+        if btn == name and (now - self._last_pressed[name]) > self._debounce_s:
             self._last_pressed[name] = now
             return True
         return False
