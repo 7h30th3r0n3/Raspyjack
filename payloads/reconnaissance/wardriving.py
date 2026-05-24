@@ -1047,12 +1047,45 @@ def _raw_monitor_worker(iface):
         pass
 
 
+def _build_probe_request(src_mac):
+    """Build a raw 802.11 probe request broadcast frame with radiotap header."""
+    mac_bytes = bytes.fromhex(src_mac.replace(":", ""))
+    bcast = b'\xff\xff\xff\xff\xff\xff'
+    radiotap = struct.pack('<BBHI', 0, 0, 8, 0)
+    fc = struct.pack('<H', 0x0040)
+    duration = b'\x00\x00'
+    seq = b'\x00\x00'
+    header = fc + duration + bcast + mac_bytes + bcast + seq
+    ssid_ie = struct.pack('BB', 0, 0)
+    rates_ie = struct.pack('BB', 1, 8) + b'\x82\x84\x8b\x96\x0c\x12\x18\x24'
+    return radiotap + header + ssid_ie + rates_ie
+
+
 def _monitor_channel_hopper(iface):
-    """Single-card channel hopper for the raw monitor interface."""
+    """Single-card channel hopper with probe injection."""
     channels = CHANNELS_24 + CHANNELS_5
+
+    try:
+        r = subprocess.run(["cat", f"/sys/class/net/{iface}/address"],
+                           capture_output=True, text=True, timeout=3)
+        mac = r.stdout.strip().upper()
+    except Exception:
+        mac = "00:11:22:33:44:55"
+
+    probe_frame = _build_probe_request(mac)
+
+    try:
+        inject_sock = socket.socket(socket.AF_PACKET, socket.SOCK_RAW,
+                                    socket.htons(0x0003))
+        inject_sock.bind((iface, 0))
+    except OSError:
+        inject_sock = None
+
     while not _shutdown.is_set() and _scanning.is_set():
         for ch in channels:
             if _shutdown.is_set() or not _scanning.is_set():
+                if inject_sock:
+                    inject_sock.close()
                 return
             r = subprocess.run(
                 ["sudo", "iw", "dev", iface, "set", "channel", str(ch)],
@@ -1063,8 +1096,15 @@ def _monitor_channel_hopper(iface):
             with lock:
                 if iface in card_state:
                     card_state[iface]["channel"] = ch
+            if inject_sock:
+                try:
+                    inject_sock.send(probe_frame)
+                except Exception:
+                    pass
             dwell = 0.2 if ch <= 14 else 0.3
             if _shutdown.wait(timeout=dwell):
+                if inject_sock:
+                    inject_sock.close()
                 return
 
 
