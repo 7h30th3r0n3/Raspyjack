@@ -35,6 +35,8 @@ import sqlite3
 import signal
 import threading
 import subprocess
+import struct
+import socket
 from datetime import datetime
 from collections import Counter, deque
 
@@ -139,6 +141,7 @@ probes = {}            # client_mac -> {ssids: set, count, last_seen, signal}
 gps_data = None        # {lat, lon, alt, speed, sats, mode, ts}
 gps_ready = False
 current_channel = 0
+_per_iface_channel = {}  # {iface: current_ch} — avoids cross-card channel confusion
 scan_start_time = 0
 total_beacons = 0
 total_probes = 0
@@ -387,6 +390,131 @@ def _monitor_down(iface):
         subprocess.run(cmd, capture_output=True, timeout=5)
 
 
+def _restart_monitor_mode(iface):
+    """Re-enable monitor mode on a card that stopped receiving."""
+    if not os.path.isdir(f"/sys/class/net/{iface}"):
+        return
+    for cmd in [
+        ["sudo", "ip", "link", "set", iface, "down"],
+        ["sudo", "iw", iface, "set", "monitor", "none"],
+        ["sudo", "ip", "link", "set", iface, "up"],
+    ]:
+        subprocess.run(cmd, capture_output=True, timeout=5)
+
+
+def _read_rx_dropped(iface):
+    try:
+        with open(f"/sys/class/net/{iface}/statistics/rx_dropped") as f:
+            return int(f.read().strip())
+    except Exception:
+        return 0
+
+
+# ---------------------------------------------------------------------------
+# Raw 802.11 frame parsing (replaces scapy hot path)
+# ---------------------------------------------------------------------------
+
+_SUBTYPE_PROBE_REQ = 4
+_SUBTYPE_PROBE_RESP = 5
+_SUBTYPE_BEACON = 8
+
+_RTAP_FIELD_SIZES = {
+    0: 8, 1: 1, 2: 1, 3: 4, 4: 2, 5: 1, 6: 1, 7: 1,
+    8: 2, 9: 2, 10: 1, 11: 1, 12: 1, 13: 1, 14: 8, 15: 8,
+    16: 8, 17: 3, 18: 4, 19: 2,
+}
+_RTAP_FIELD_ALIGN = {
+    0: 8, 3: 2, 4: 2, 8: 2, 9: 2, 14: 8, 15: 8, 16: 8, 18: 4,
+}
+
+
+def _parse_radiotap(raw):
+    if len(raw) < 8:
+        return 0, -99
+    hdr_len = struct.unpack_from('<H', raw, 2)[0]
+    present = struct.unpack_from('<I', raw, 4)[0]
+
+    offset = 8
+    while present & (1 << 31):
+        if offset + 4 > len(raw):
+            return hdr_len, -99
+        present = struct.unpack_from('<I', raw, offset)[0]
+        offset += 4
+
+    present = struct.unpack_from('<I', raw, 4)[0]
+    signal = -99
+    for bit in range(32):
+        if not (present & (1 << bit)):
+            continue
+        align = _RTAP_FIELD_ALIGN.get(bit, 1)
+        if align > 1:
+            offset = (offset + align - 1) & ~(align - 1)
+        if bit == 5:
+            if offset < len(raw):
+                signal = struct.unpack_from('b', raw, offset)[0]
+            break
+        size = _RTAP_FIELD_SIZES.get(bit, 0)
+        if size == 0:
+            break
+        offset += size
+    return hdr_len, signal
+
+
+def _parse_80211_mgmt(raw, rtap_len):
+    if len(raw) < rtap_len + 24:
+        return None
+    fc = struct.unpack_from('<H', raw, rtap_len)[0]
+    ftype = (fc >> 2) & 0x03
+    subtype = (fc >> 4) & 0x0F
+    if ftype != 0:
+        return None
+    addr2 = raw[rtap_len + 10: rtap_len + 16]
+    addr3 = raw[rtap_len + 16: rtap_len + 22]
+    return {
+        'subtype': subtype,
+        'sa': ':'.join(f'{b:02X}' for b in addr2),
+        'bssid': ':'.join(f'{b:02X}' for b in addr3),
+        'body_offset': rtap_len + 24,
+    }
+
+
+def _parse_ies(raw, offset):
+    result = {'ssid': '', 'channel': 0, 'security': 'Open', 'cipher': '', 'wps': False}
+    pos = offset
+    end = len(raw)
+    while pos + 2 <= end:
+        ie_id = raw[pos]
+        ie_len = raw[pos + 1]
+        pos += 2
+        if pos + ie_len > end:
+            break
+        ie_data = raw[pos: pos + ie_len]
+        if ie_id == 0:
+            try:
+                result['ssid'] = ie_data.decode('utf-8', errors='replace')
+            except Exception:
+                pass
+        elif ie_id == 3 and ie_len >= 1:
+            result['channel'] = ie_data[0]
+        elif ie_id == 48 and ie_len >= 2:
+            result['security'] = 'WPA2-PSK'
+            if ie_len >= 8 and b'\x00\x0f\xac\x08' in ie_data:
+                result['security'] = 'WPA3-SAE'
+            if b'\x00\x0f\xac\x04' in ie_data:
+                result['cipher'] = 'CCMP'
+            elif b'\x00\x0f\xac\x02' in ie_data:
+                result['cipher'] = 'TKIP'
+        elif ie_id == 221 and ie_len >= 4:
+            if ie_data[:4] == b'\x00\x50\xf2\x01':
+                if result['security'] == 'Open':
+                    result['security'] = 'WPA'
+                    result['cipher'] = 'TKIP'
+            elif ie_data[:4] == b'\x00\x50\xf2\x04':
+                result['wps'] = True
+        pos += ie_len
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Security detection
 # ---------------------------------------------------------------------------
@@ -483,7 +611,92 @@ def _update_top_signals(bssid, signal):
 
 
 # ---------------------------------------------------------------------------
-# Packet handler
+# Merge functions (scapy-independent)
+# ---------------------------------------------------------------------------
+
+
+def _merge_raw_probe(client_mac, ssid, signal):
+    global total_probes
+    if not client_mac or client_mac == "FF:FF:FF:FF:FF:FF":
+        return
+    now = datetime.now().isoformat()
+    now_ts = time.time()
+    with lock:
+        total_probes += 1
+        if client_mac not in probes:
+            probes[client_mac] = {
+                "ssids": set(), "count": 0,
+                "last_seen": now, "signal": signal, "_ts": now_ts,
+            }
+        p = probes[client_mac]
+        p["count"] += 1
+        p["last_seen"] = now
+        p["_ts"] = now_ts
+        if ssid:
+            p["ssids"].add(ssid)
+        p["signal"] = (p["signal"] * 0.7) + (signal * 0.3)
+
+
+def _merge_raw_network(bssid, ssid, channel, signal, security, cipher, wps):
+    global total_beacons, _inc_wigle_count
+    if not bssid or bssid == "FF:FF:FF:FF:FF:FF":
+        return
+    if not ssid:
+        ssid = "<hidden>"
+    vendor = _get_vendor(bssid)
+    now = datetime.now().isoformat()
+    now_ts = time.time()
+
+    gps_snap = gps_data
+    gps_pos = ({"lat": gps_snap["lat"], "lon": gps_snap["lon"],
+                "alt": gps_snap.get("alt", 0)} if gps_snap else None)
+
+    csv_snap = None
+    with lock:
+        total_beacons += 1
+        if bssid in _seen_bssids and bssid not in networks:
+            return
+
+        is_new = bssid not in networks
+        if is_new:
+            _seen_bssids.add(bssid)
+            net_entry = {
+                "ssid": ssid, "bssid": bssid, "channel": channel,
+                "signal": signal, "security": security, "cipher": cipher,
+                "auth": "", "wps": wps, "vendor": vendor,
+                "first_seen": now, "last_seen": now,
+                "gps": gps_pos, "beacon_count": 1,
+            }
+            networks[bssid] = net_entry
+            _dirty_bssids.add(bssid)
+            _insertion_order.append(bssid)
+            _inc_sec_count[security] = _inc_sec_count.get(security, 0) + 1
+            _inc_ch_count[channel] = _inc_ch_count.get(channel, 0) + 1
+            if gps_pos:
+                _inc_wigle_count += 1
+                _gps_bssids.append(bssid)
+            _recent_bssids.append((now_ts, bssid))
+            _update_top_signals(bssid, signal)
+            csv_snap = net_entry
+        else:
+            net = networks[bssid]
+            net["last_seen"] = now
+            net["beacon_count"] += 1
+            net["signal"] = (net["signal"] * 3 + signal) >> 2
+            if gps_pos and not net["gps"]:
+                net["gps"] = gps_pos
+                _inc_wigle_count += 1
+                _gps_bssids.append(bssid)
+                _dirty_bssids.add(bssid)
+            if ssid != "<hidden>" and net["ssid"] == "<hidden>":
+                net["ssid"] = ssid
+
+    if csv_snap:
+        _append_live_csv(bssid, csv_snap)
+
+
+# ---------------------------------------------------------------------------
+# Packet handler (legacy scapy path)
 # ---------------------------------------------------------------------------
 
 
@@ -573,14 +786,16 @@ def _packet_handler(pkt):
         now = datetime.now().isoformat()
         now_ts = time.time()
 
+        gps_snap = gps_data
+        gps_pos = {"lat": gps_snap["lat"], "lon": gps_snap["lon"],
+                   "alt": gps_snap.get("alt", 0)} if gps_snap else None
+
         csv_snap = None
         with lock:
             total_beacons += 1
 
             if bssid in _seen_bssids and bssid not in networks:
                 return
-            gps_pos = {"lat": gps_data["lat"], "lon": gps_data["lon"],
-                       "alt": gps_data.get("alt", 0)} if gps_data else None
 
             is_new = bssid not in networks
             if is_new:
@@ -697,6 +912,7 @@ def _channel_hopper_all(iface):
 
 def _channel_hopper_split(iface, channels):
     """Hop a specific set of channels on iface (for N-card split)."""
+    global current_channel
     with lock:
         if iface not in card_state:
             card_state[iface] = {"channel": 0, "channels": channels, "packets": 0}
@@ -706,13 +922,13 @@ def _channel_hopper_split(iface, channels):
         for ch in channels:
             if _shutdown.is_set() or not _scanning.is_set():
                 return
-            global current_channel
             r = subprocess.run(
                 ["sudo", "iw", "dev", iface, "set", "channel", str(ch)],
                 capture_output=True, timeout=3,
             )
             if r.returncode != 0:
                 continue
+            _per_iface_channel[iface] = ch
             with lock:
                 current_channel = ch
                 if iface in card_state:
@@ -723,8 +939,9 @@ def _channel_hopper_split(iface, channels):
 
 
 def _sniffer(iface):
-    """Sniff on monitor interface."""
+    """Sniff on monitor interface with auto-restart on failure."""
     _pkt_count = [0]
+
     def _counted_handler(pkt):
         _pkt_count[0] += 1
         if _pkt_count[0] % 10 == 0:
@@ -733,7 +950,6 @@ def _sniffer(iface):
                     card_state[iface]["packets"] = _pkt_count[0]
             except Exception:
                 pass
-        # Only process Beacon/ProbeResp/ProbeReq frames — skip data/control frames
         if not pkt.haslayer(Dot11):
             return
         ftype = pkt[Dot11].type
@@ -743,35 +959,201 @@ def _sniffer(iface):
             _packet_handler(pkt)
         except Exception:
             pass
+
+    backoff = 1
+    while not _shutdown.is_set() and _scanning.is_set():
+        if not os.path.isdir(f"/sys/class/net/{iface}"):
+            with lock:
+                if iface in card_state:
+                    card_state[iface]["status"] = "disconnected"
+            return
+        try:
+            scapy_sniff(
+                iface=iface,
+                prn=_counted_handler,
+                filter="type mgt",
+                stop_filter=lambda _: _shutdown.is_set() or not _scanning.is_set(),
+                store=0,
+                timeout=60,
+            )
+            backoff = 1
+        except Exception:
+            with lock:
+                if iface in card_state:
+                    card_state[iface]["status"] = "restarting"
+            if _shutdown.wait(timeout=backoff):
+                return
+            backoff = min(backoff * 2, 30)
+            _restart_monitor_mode(iface)
+
+
+def _raw_monitor_worker(iface):
+    """Raw AF_PACKET capture on monitor interface — no scapy."""
     try:
-        scapy_sniff(
-            iface=iface,
-            prn=_counted_handler,
-            filter="type mgt",
-            stop_filter=lambda _: _shutdown.is_set() or not _scanning.is_set(),
-            store=0,
-            timeout=300,
-        )
+        sock = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(0x0003))
+        sock.bind((iface, 0))
+        sock.settimeout(2.0)
+    except OSError:
+        with lock:
+            if iface in card_state:
+                card_state[iface]["status"] = "sock_fail"
+        return
+
+    pkt_count = 0
+    backoff = 1
+    while not _shutdown.is_set() and _scanning.is_set():
+        if not os.path.isdir(f"/sys/class/net/{iface}"):
+            with lock:
+                if iface in card_state:
+                    card_state[iface]["status"] = "disconnected"
+            break
+        try:
+            raw = sock.recv(65535)
+        except socket.timeout:
+            continue
+        except OSError:
+            if _shutdown.wait(timeout=backoff):
+                break
+            backoff = min(backoff * 2, 30)
+            continue
+
+        backoff = 1
+        pkt_count += 1
+        if pkt_count % 10 == 0:
+            with lock:
+                if iface in card_state:
+                    card_state[iface]["packets"] = pkt_count
+
+        rtap_len, signal = _parse_radiotap(raw)
+        frame = _parse_80211_mgmt(raw, rtap_len)
+        if not frame:
+            continue
+
+        if frame['subtype'] in (_SUBTYPE_BEACON, _SUBTYPE_PROBE_RESP):
+            body_start = frame['body_offset'] + 12
+            ies = _parse_ies(raw, body_start)
+            ch = ies['channel'] or _per_iface_channel.get(iface, current_channel)
+            _merge_raw_network(
+                frame['bssid'], ies['ssid'], ch, signal,
+                ies['security'], ies['cipher'], ies['wps'])
+        elif frame['subtype'] == _SUBTYPE_PROBE_REQ:
+            body_start = frame['body_offset']
+            ies = _parse_ies(raw, body_start)
+            _merge_raw_probe(frame['sa'], ies['ssid'], signal)
+
+    try:
+        sock.close()
     except Exception:
         pass
 
 
-def _iw_scanner(iface):
-    """Bulk AP discovery via 'iw dev scan' in managed mode.
+def _monitor_channel_hopper(iface):
+    """Single-card channel hopper for the raw monitor interface."""
+    channels = CHANNELS_24 + CHANNELS_5
+    while not _shutdown.is_set() and _scanning.is_set():
+        for ch in channels:
+            if _shutdown.is_set() or not _scanning.is_set():
+                return
+            r = subprocess.run(
+                ["sudo", "iw", "dev", iface, "set", "channel", str(ch)],
+                capture_output=True, timeout=3)
+            if r.returncode != 0:
+                continue
+            _per_iface_channel[iface] = ch
+            with lock:
+                if iface in card_state:
+                    card_state[iface]["channel"] = ch
+            dwell = 0.2 if ch <= 14 else 0.3
+            if _shutdown.wait(timeout=dwell):
+                return
 
-    Runs alongside monitor mode sniffing. The firmware handles channel
-    scanning internally (faster than hopping), catching APs with slow
-    beacon intervals that the monitor sniffer might miss.
+
+def _active_scan_worker(iface, freqs, stagger=0):
+    """Active scan via kernel — one worker per managed-mode card."""
+    subprocess.run(["sudo", "ip", "link", "set", iface, "up"],
+                   capture_output=True, timeout=5)
+    time.sleep(0.5)
+    if stagger > 0:
+        if _shutdown.wait(timeout=stagger):
+            return
+    scan_count = 0
+    while not _shutdown.is_set() and _scanning.is_set():
+        if not os.path.isdir(f"/sys/class/net/{iface}"):
+            with lock:
+                if iface in card_state:
+                    card_state[iface]["status"] = "disconnected"
+            return
+        try:
+            cmd = ["sudo", "iw", "dev", iface, "scan", "flush"]
+            if freqs:
+                cmd += ["freq"] + [str(f) for f in freqs]
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+            if r.returncode == 0:
+                _parse_iw_scan(r.stdout)
+                scan_count += 1
+                with lock:
+                    if iface in card_state:
+                        card_state[iface]["packets"] = scan_count
+                        card_state[iface]["status"] = "active"
+            else:
+                with lock:
+                    if iface in card_state:
+                        card_state[iface]["status"] = "busy"
+                if _shutdown.wait(timeout=2):
+                    return
+                continue
+        except subprocess.TimeoutExpired:
+            pass
+        except Exception:
+            pass
+        if _shutdown.wait(timeout=3):
+            return
+
+
+def _assign_card_roles(ifaces):
+    """Assign cards: N-1 active scan (managed) + 1 monitor (raw socket).
+    Returns (active_cards, monitor_card_or_None).
     """
+    if not ifaces:
+        return [], None
+    if len(ifaces) == 1:
+        return ifaces, None
+
+    monitor_capable = []
+    for iface in ifaces:
+        drv = _get_driver(iface)
+        if drv in KNOWN_MONITOR_DRIVERS:
+            monitor_capable.append(iface)
+
+    if not monitor_capable:
+        return ifaces, None
+
+    monitor_card = monitor_capable[0]
+    active_cards = [i for i in ifaces if i != monitor_card]
+    return active_cards, monitor_card
+
+
+_IW_FREQS_24 = [2412, 2417, 2422, 2427, 2432, 2437, 2442,
+                 2447, 2452, 2457, 2462, 2467, 2472]
+_IW_FREQS_5 = [5180, 5200, 5220, 5240, 5260, 5280, 5300, 5320,
+               5500, 5520, 5540, 5560, 5580, 5600, 5620, 5640,
+               5660, 5680, 5700, 5745, 5765, 5785, 5805, 5825]
+
+
+def _iw_scanner(iface):
+    """Active AP discovery via 'iw dev scan' — forces probe requests."""
     while not _shutdown.is_set() and _scanning.is_set():
         try:
+            freqs = _IW_FREQS_24 + _IW_FREQS_5
+            freq_args = []
+            for f in freqs:
+                freq_args += ["freq", str(f)]
             r = subprocess.run(
-                ["sudo", "iw", "dev", iface, "scan", "-u"],
-                capture_output=True, text=True, timeout=15,
+                ["sudo", "iw", "dev", iface, "scan", "flush"] + freq_args,
+                capture_output=True, text=True, timeout=20,
             )
             if r.returncode != 0:
-                # Interface might be in monitor mode or busy
-                if _shutdown.wait(timeout=10):
+                if _shutdown.wait(timeout=5):
                     break
                 continue
 
@@ -779,8 +1161,7 @@ def _iw_scanner(iface):
         except Exception:
             pass
 
-        # Fast scan if no monitor cards, slower when running alongside sniffers
-        interval = 3 if not mon_ifaces else 10
+        interval = 3 if not mon_ifaces else 8
         if _shutdown.wait(timeout=interval):
             break
 
@@ -1426,9 +1807,14 @@ def _draw_cards(lcd, font, font_sm, scroll_pos=0):
                 d.text((4, y), driver[:20], font=font_sm, fill="#555")
             y += 10
 
-            # Packets + channel progress bar
+            # Packets + status + drops
             pkts_str = f"{pkts//1000}k" if pkts > 1000 else str(pkts)
-            d.text((4, y), f"pkts:{pkts_str}", font=font_sm, fill="#444")
+            status = st.get("status", "active")
+            drops = st.get("rx_dropped", 0)
+            status_col = "#00FF00" if status == "active" else "#FF5500" if status == "restarting" else "#FF0000"
+            drop_str = f" d:{drops}" if drops > 0 else ""
+            d.text((4, y), f"pkts:{pkts_str}{drop_str}", font=font_sm, fill="#444")
+            d.text((100, y), status[:4], font=font_sm, fill=status_col)
 
             if ch and scanning and chs:
                 bar_x = 60
@@ -1911,6 +2297,7 @@ def _prune_networks():
             if net.get("gps"):
                 _inc_wigle_count = max(0, _inc_wigle_count - 1)
             _dirty_bssids.discard(b)
+            _seen_bssids.discard(b)
             del networks[b]
             evicted += 1
 
@@ -1925,6 +2312,47 @@ def _prune_probes():
         stale = [k for k, v in probes.items() if v.get("_ts", 0) < cutoff]
         for k in stale:
             del probes[k]
+
+
+def _watchdog_thread():
+    """Monitor card health: detect stale sniffers, USB disconnects, kernel drops."""
+    _prev_packets = {}
+    _stale_count = {}
+    while not _shutdown.is_set() and _scanning.is_set():
+        if _shutdown.wait(timeout=10):
+            return
+        with lock:
+            ifaces = list(card_state.keys())
+        for iface in ifaces:
+            if not os.path.isdir(f"/sys/class/net/{iface}"):
+                with lock:
+                    if iface in card_state:
+                        card_state[iface]["status"] = "disconnected"
+                continue
+
+            with lock:
+                cur = card_state.get(iface, {}).get("packets", 0)
+
+            prev = _prev_packets.get(iface, 0)
+            _prev_packets[iface] = cur
+            if cur == prev:
+                _stale_count[iface] = _stale_count.get(iface, 0) + 1
+                if _stale_count[iface] >= 3:
+                    _restart_monitor_mode(iface)
+                    _stale_count[iface] = 0
+                    with lock:
+                        if iface in card_state:
+                            card_state[iface]["status"] = "restarted"
+            else:
+                _stale_count[iface] = 0
+                with lock:
+                    if iface in card_state:
+                        card_state[iface]["status"] = "active"
+
+            drops = _read_rx_dropped(iface)
+            with lock:
+                if iface in card_state:
+                    card_state[iface]["rx_dropped"] = drops
 
 
 def _autosave_thread():
@@ -2108,8 +2536,9 @@ def main():
     threads = []
     _auto_started = False
 
-    # Start autosave thread (independent, survives even if main loop lags)
+    # Start background threads
     threading.Thread(target=_autosave_thread, daemon=True).start()
+    threading.Thread(target=_watchdog_thread, daemon=True).start()
 
     try:
         while not _shutdown.is_set():
@@ -2127,7 +2556,6 @@ def main():
             # OK = toggle scan
             if btn == "OK":
                 if not _scanning.is_set():
-                    # Find monitor-capable USB interfaces
                     ifaces = _find_monitor_interfaces()
 
                     _scanning.set()
@@ -2136,120 +2564,90 @@ def main():
                     _init_session()
                     mon_ifaces.clear()
 
-                    if ifaces:
-                        # Setup monitor mode on ALL USB cards
-                        img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-                        d = ScaledDraw(img)
-                        d.text((4, 40), f"Monitor mode...", font=font, fill="#FFAA00")
-                        d.text((4, 60), f"{len(ifaces)} card(s) found", font=font_sm, fill="#888")
-                        lcd.LCD_ShowImage(img, 0, 0)
+                    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+                    d = ScaledDraw(img)
+                    d.text((4, 40), "Starting scan...", font=font, fill="#FFAA00")
+                    d.text((4, 60), f"{len(ifaces)} USB + wlan0", font=font_sm, fill="#888")
+                    lcd.LCD_ShowImage(img, 0, 0)
 
-                        for iface in ifaces:
-                            mon = _monitor_up(iface)
-                            if mon:
-                                mon_ifaces.append(mon)
+                    active_cards, monitor_card = _assign_card_roles(ifaces)
 
-                        if mon_ifaces:
-                            dual_mode = len(mon_ifaces) >= 2
-                            n_cards = len(mon_ifaces)
+                    # Setup monitor mode on ONE card only (for probes/beacons)
+                    if monitor_card:
+                        mon = _monitor_up(monitor_card)
+                        if mon:
+                            mon_ifaces.append(mon)
+                            card_state[mon] = {
+                                "channel": 0, "channels": CHANNELS_24 + CHANNELS_5,
+                                "band": "monitor", "driver": _get_driver(monitor_card),
+                                "packets": 0, "status": "active", "role": "monitor",
+                            }
+                            t = threading.Thread(target=_raw_monitor_worker,
+                                                 args=(mon,), daemon=True)
+                            t.start()
+                            threads.append(t)
+                            t = threading.Thread(target=_monitor_channel_hopper,
+                                                 args=(mon,), daemon=True)
+                            t.start()
+                            threads.append(t)
 
-                            # Start a sniffer on each card
-                            for iface in mon_ifaces:
-                                t = threading.Thread(target=_sniffer, args=(iface,), daemon=True)
-                                t.start()
-                                threads.append(t)
+                    # Active scan workers (managed mode — no monitor setup)
+                    # Detect 5GHz support per card before assigning frequencies
+                    cards_5g_capable = set()
+                    for iface in active_cards:
+                        subprocess.run(["sudo", "ip", "link", "set", iface, "up"],
+                                       capture_output=True, timeout=5)
+                    time.sleep(0.5)
+                    for iface in active_cards:
+                        r = subprocess.run(
+                            ["sudo", "iw", "dev", iface, "scan", "freq", "5180"],
+                            capture_output=True, timeout=10)
+                        if r.returncode == 0:
+                            cards_5g_capable.add(iface)
 
-                            # Detect 5GHz support per card
-                            cards_5g = []
-                            cards_24_only = []
-                            for iface in mon_ifaces:
-                                r = subprocess.run(
-                                    ["sudo", "iw", "dev", iface, "set", "channel", "36"],
-                                    capture_output=True, timeout=3)
-                                if r.returncode == 0:
-                                    cards_5g.append(iface)
-                                    # Reset back to ch1
-                                    subprocess.run(
-                                        ["sudo", "iw", "dev", iface, "set", "channel", "1"],
-                                        capture_output=True, timeout=3)
-                                else:
-                                    cards_24_only.append(iface)
-
-                            # Init card state for the cards view
-                            for iface in mon_ifaces:
-                                band = "2.4+5" if iface in cards_5g else "2.4"
-                                drv = _get_driver(iface.replace("mon", ""))
-                                card_state[iface] = {
-                                    "channel": 0, "channels": [],
-                                    "band": band, "driver": drv or "?",
-                                    "packets": 0, "5g": iface in cards_5g,
-                                }
-
-                            # Smart channel split:
-                            # If 2.4-only cards exist, let them handle 2.4GHz
-                            # and dedicate 5G-capable cards to 5GHz only
-                            if cards_24_only and cards_5g:
-                                # 2.4-only cards: split 2.4GHz channels between them
-                                n_24 = len(cards_24_only)
-                                for idx, iface in enumerate(cards_24_only):
-                                    ch_list = [CHANNELS_24[i] for i in range(idx, len(CHANNELS_24), n_24)]
-                                    t = threading.Thread(
-                                        target=_channel_hopper_split,
-                                        args=(iface, ch_list),
-                                        daemon=True)
-                                    t.start()
-                                    threads.append(t)
-                                # 5G cards: 5GHz only
-                                n_5g = len(cards_5g)
-                                for idx, iface in enumerate(cards_5g):
-                                    ch_list = [CHANNELS_5[i] for i in range(idx, len(CHANNELS_5), n_5g)]
-                                    t = threading.Thread(
-                                        target=_channel_hopper_split,
-                                        args=(iface, ch_list),
-                                        daemon=True)
-                                    t.start()
-                                    threads.append(t)
-                            else:
-                                # All cards same type: split everything
-                                all_24_cards = cards_24_only + cards_5g
-                                n_24 = len(all_24_cards)
-                                for idx, iface in enumerate(all_24_cards):
-                                    ch_list = [CHANNELS_24[i] for i in range(idx, len(CHANNELS_24), n_24)]
-                                    t = threading.Thread(
-                                        target=_channel_hopper_split,
-                                        args=(iface, ch_list),
-                                        daemon=True)
-                                    t.start()
-                                    threads.append(t)
-                                if cards_5g:
-                                    n_5g = len(cards_5g)
-                                    for idx, iface in enumerate(cards_5g):
-                                        ch_list = [CHANNELS_5[i] for i in range(idx, len(CHANNELS_5), n_5g)]
-                                        t = threading.Thread(
-                                            target=_channel_hopper_split,
-                                            args=(iface, ch_list),
-                                            daemon=True)
-                                        t.start()
-                                        threads.append(t)
-
-                    # Always start iw scan on wlan0 (works with or without USB cards)
-                    if os.path.isdir("/sys/class/net/wlan0/wireless"):
-                        card_state["wlan0"] = {
-                            "channel": 0, "channels": [], "band": "iw scan",
-                            "driver": "brcmfmac", "packets": 0, "5g": False,
+                    n_active = max(len(active_cards), 1)
+                    stagger_step = 3.0 / n_active
+                    for idx, iface in enumerate(active_cards):
+                        if iface in cards_5g_capable:
+                            avail_freqs = _IW_FREQS_24 + _IW_FREQS_5
+                        else:
+                            avail_freqs = _IW_FREQS_24
+                        card_freqs = [avail_freqs[i] for i in range(idx, len(avail_freqs), n_active)]
+                        band_str = "2.4+5" if iface in cards_5g_capable else "2.4"
+                        card_state[iface] = {
+                            "channel": 0, "channels": card_freqs,
+                            "band": band_str, "driver": _get_driver(iface),
+                            "packets": 0, "status": "active", "role": "scan",
                         }
-                        t = threading.Thread(target=_iw_scanner,
-                                             args=("wlan0",), daemon=True)
+                        t = threading.Thread(target=_active_scan_worker,
+                                             args=(iface, card_freqs, idx * stagger_step),
+                                             daemon=True)
                         t.start()
                         threads.append(t)
 
-                    if not mon_ifaces:
-                        # No USB cards — scan-only mode with wlan0
+                    # Always include wlan0 as active scanner
+                    if os.path.isdir("/sys/class/net/wlan0/wireless"):
+                        wlan0_in_use = "wlan0" in active_cards or (monitor_card == "wlan0")
+                        if not wlan0_in_use:
+                            card_state["wlan0"] = {
+                                "channel": 0, "channels": [],
+                                "band": "onboard", "driver": "brcmfmac",
+                                "packets": 0, "status": "active", "role": "scan",
+                            }
+                            t = threading.Thread(target=_active_scan_worker,
+                                                 args=("wlan0", _IW_FREQS_24, 1.0),
+                                                 daemon=True)
+                            t.start()
+                            threads.append(t)
+
+                    dual_mode = len(active_cards) + len(mon_ifaces) >= 2
+
+                    if not active_cards and not mon_ifaces:
                         img = Image.new("RGB", (WIDTH, HEIGHT), "black")
                         d = ScaledDraw(img)
                         d.text((4, 35), "Scan mode (wlan0)", font=font, fill="#FFAA00")
-                        d.text((4, 55), "No monitor card", font=font_sm, fill="#888")
-                        d.text((4, 70), "Using iw scan", font=font_sm, fill="#888")
+                        d.text((4, 55), "No USB cards", font=font_sm, fill="#888")
+                        d.text((4, 70), "Active scan only", font=font_sm, fill="#888")
                         lcd.LCD_ShowImage(img, 0, 0)
                         time.sleep(1.5)
 
