@@ -408,12 +408,16 @@ If you submit UI changes, please include:
 ---
 ## 🎬 Community Content
 
-Videos made by the community about RaspyJack:
+Videos made by the community about RaspyJack (Thanks to all of you💕):
 
 ### Videos
 
 <div align="center">
-
+  
+[![](https://img.youtube.com/vi/CkR3xIpTVvI/mqdefault.jpg)](https://www.youtube.com/watch?v=CkR3xIpTVvI)<br>
+**RaspyJack Makes the Cardputer Zero INSANE! Flipper One is left in the DUST**<br>
+*Talking Sasquatch*
+  
 [![](https://img.youtube.com/vi/i4CnRoA7Mt4/mqdefault.jpg)](https://www.youtube.com/watch?v=i4CnRoA7Mt4)<br>
 **RASPYJACK - A Network Swiss Army Toolkit Based on the Raspberry Pi 2W**<br>
 *Zeek*
