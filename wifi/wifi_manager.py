@@ -257,12 +257,12 @@ class WiFiManager:
             # Build connect command - nmcli handles disconnect/reconnect internally
             if result.returncode == 0:
                 # Network is already saved. Don't use a password.
-                self.log("Existing network")
+                self.log("Connecting to an existing network.")
                 cmd = ['nmcli', 'device', 'wifi', 'connect', ssid,
                        'ifname', interface]
             else:
                 # New network. Use a password if given, otherwise connect without.
-                self.log("new network")
+                self.log("Connecting to a new network.")
                 if password:
                     cmd = ['nmcli', 'device', 'wifi', 'connect', ssid,
                         'password', password, 'ifname', interface]
