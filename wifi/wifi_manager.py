@@ -39,10 +39,10 @@ class WiFiManager:
         self.profiles_dir = f"{self.base_dir}/profiles"
         self.current_profile_file = f"{self.base_dir}/current_profile.json"
         self.log_file = f"{self.base_dir}/wifi.log"
-        
+
         # Create directories
         os.makedirs(self.profiles_dir, exist_ok=True)
-        
+
         # Available WiFi interfaces
         self.wifi_interfaces = self.detect_wifi_interfaces()
 
@@ -53,23 +53,23 @@ class WiFiManager:
         self.current_interface = None
         self.current_profile = None
         self.connection_status = "disconnected"
-        
+
     def log(self, message):
         """Log messages with timestamp."""
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         log_msg = f"[{timestamp}] {message}"
         print(log_msg)
-        
+
         try:
             with open(self.log_file, 'a') as f:
                 f.write(log_msg + "\n")
         except Exception:
             pass
-    
+
     def detect_wifi_interfaces(self):
         """Detect all available WiFi interfaces."""
         interfaces = []
-        
+
         try:
             # Method 1: Check /sys/class/net for wireless directories (most reliable)
             for iface in os.listdir("/sys/class/net"):
@@ -77,7 +77,7 @@ class WiFiManager:
                 if os.path.exists(wireless_path):
                     interfaces.append(iface)
                     self.log(f"Found wireless interface via /sys: {iface}")
-            
+
             # Method 2: iwconfig as backup
             if not interfaces:
                 result = subprocess.run(['iwconfig'], capture_output=True, text=True, stderr=subprocess.DEVNULL)
@@ -87,16 +87,16 @@ class WiFiManager:
                         if interface not in interfaces:
                             interfaces.append(interface)
                             self.log(f"Found wireless interface via iwconfig: {interface}")
-                        
+
         except Exception as e:
             self.log(f"Error detecting WiFi interfaces: {e}")
-        
+
         # Sort interfaces (prefer wlan0 built-in for connectivity, wlan1+ for attacks)
         interfaces.sort(key=lambda x: (x != 'wlan0', x != 'wlan1', x))
-        
+
         self.log(f"Final detected WiFi interfaces: {interfaces}")
         return interfaces
-    
+
     def scan_networks(self, interface=None):
         """Scan for available WiFi networks using nmcli (same tool as connect)."""
         if not interface:
@@ -165,7 +165,7 @@ class WiFiManager:
         except Exception as e:
             self.log(f"Error scanning networks: {e}")
             return []
-    
+
     def save_profile(self, ssid, password, interface="auto", priority=1, auto_connect=True):
         """Save a WiFi profile."""
         profile = {
@@ -177,25 +177,25 @@ class WiFiManager:
             "created": datetime.now().isoformat(),
             "last_used": None
         }
-        
+
         # Safe filename
         safe_name = "".join(c for c in ssid if c.isalnum() or c in (' ', '-', '_')).rstrip()
         profile_file = f"{self.profiles_dir}/{safe_name}.json"
-        
+
         try:
             with open(profile_file, 'w') as f:
                 json.dump(profile, f, indent=2)
-            
+
             self.log(f"Saved WiFi profile: {ssid}")
             return True
         except Exception as e:
             self.log(f"Error saving profile: {e}")
             return False
-    
+
     def load_profiles(self):
         """Load all WiFi profiles."""
         profiles = []
-        
+
         try:
             for filename in os.listdir(self.profiles_dir):
                 if filename.endswith('.json'):
@@ -203,20 +203,20 @@ class WiFiManager:
                         profile = json.load(f)
                         profile['filename'] = filename
                         profiles.append(profile)
-            
+
             # Sort by priority (higher first)
             profiles.sort(key=lambda x: x.get('priority', 1), reverse=True)
-            
+
         except Exception as e:
             self.log(f"Error loading profiles: {e}")
-        
+
         return profiles
-    
+
     def delete_profile(self, ssid):
         """Delete a WiFi profile."""
         safe_name = "".join(c for c in ssid if c.isalnum() or c in (' ', '-', '_')).rstrip()
         profile_file = f"{self.profiles_dir}/{safe_name}.json"
-        
+
         try:
             if os.path.exists(profile_file):
                 os.remove(profile_file)
@@ -224,9 +224,9 @@ class WiFiManager:
                 return True
         except Exception as e:
             self.log(f"Error deleting profile: {e}")
-        
+
         return False
-    
+
     def connect_to_network(self, ssid, password=None, interface=None):
         """Connect to a WiFi network."""
         if not interface:
@@ -298,71 +298,71 @@ class WiFiManager:
         except Exception as e:
             self.log(f"Error connecting to {ssid}: {e}")
             return False
-    
+
     def connect_to_profile(self, profile):
         """Connect using a saved profile."""
         interface = profile.get('interface', 'auto')
         if interface == 'auto':
             interface = self.get_active_interface()
-        
+
         return self.connect_to_network(
-            profile['ssid'], 
-            '', 
+            profile['ssid'],
+            '',
             interface
         )
-    
+
     def disconnect(self, interface=None):
         """Disconnect from WiFi."""
         if not interface:
             interface = self.current_interface or self.get_active_interface()
-        
+
         if not interface:
             return False
-        
+
         try:
-            subprocess.run(['nmcli', 'device', 'disconnect', interface], 
+            subprocess.run(['nmcli', 'device', 'disconnect', interface],
                          capture_output=True, check=True)
-            
+
             self.log(f"Disconnected from WiFi on {interface}")
             self.current_interface = None
             self.current_profile = None
             self.connection_status = "disconnected"
-            
+
             return True
         except Exception as e:
             self.log(f"Error disconnecting: {e}")
             return False
-    
+
     def get_connection_status(self, interface=None):
         """Get current WiFi connection status."""
         if not interface:
             interface = self.current_interface or self.get_active_interface()
-        
+
         if not interface:
             return {"status": "no_interface", "ssid": None, "ip": None}
-        
+
         try:
             # Check connection status
-            result = subprocess.run(['nmcli', '-t', '-f', 'ACTIVE,SSID', 'dev', 'wifi'], 
+            result = subprocess.run(['nmcli', '-t', '-f', 'ACTIVE,SSID', 'dev', 'wifi'],
                                   capture_output=True, text=True, check=False)
-            
+
             connected_ssid = None
             for line in result.stdout.split('\n'):
                 if line.startswith('yes:'):
                     connected_ssid = line.split(':', 1)[1]
                     break
-            
+
             if connected_ssid:
                 # Get IP address
-                ip_result = subprocess.run(['ip', '-4', 'addr', 'show', interface], 
+                ip_result = subprocess.run(['ip', '-4', 'addr', 'show', interface],
                                          capture_output=True, text=True, check=False)
-                
+
                 ip_addr = None
                 for line in ip_result.stdout.split('\n'):
                     if 'inet ' in line:
                         ip_addr = line.split('inet ')[1].split('/')[0]
                         break
-                
+
                 return {
                     "status": "connected",
                     "ssid": connected_ssid,
@@ -371,51 +371,51 @@ class WiFiManager:
                 }
             else:
                 return {"status": "disconnected", "ssid": None, "ip": None}
-                
+
         except Exception as e:
             self.log(f"Error getting connection status: {e}")
             return {"status": "error", "ssid": None, "ip": None}
-    
+
     def auto_connect(self):
         """Auto-connect to the best available saved network."""
         profiles = self.load_profiles()
         auto_profiles = [p for p in profiles if p.get('auto_connect', True)]
-        
+
         if not auto_profiles:
             self.log("No auto-connect profiles found")
             return False
-        
+
         # Scan for available networks
         available_networks = self.scan_networks()
         available_ssids = [n.get('ssid') for n in available_networks if 'ssid' in n]
-        
+
         # Try to connect to highest priority available network
         for profile in auto_profiles:
             if profile['ssid'] in available_ssids:
                 self.log(f"Auto-connecting to {profile['ssid']}")
                 if self.connect_to_profile(profile):
                     return True
-        
+
         self.log("No saved networks available for auto-connect")
         return False
-    
+
     def update_profile_last_used(self, ssid):
         """Update the last_used timestamp for a profile."""
         safe_name = "".join(c for c in ssid if c.isalnum() or c in (' ', '-', '_')).rstrip()
         profile_file = f"{self.profiles_dir}/{safe_name}.json"
-        
+
         try:
             if os.path.exists(profile_file):
                 with open(profile_file, 'r') as f:
                     profile = json.load(f)
-                
+
                 profile['last_used'] = datetime.now().isoformat()
-                
+
                 with open(profile_file, 'w') as f:
                     json.dump(profile, f, indent=2)
         except Exception as e:
             self.log(f"Error updating profile: {e}")
-    
+
     def save_current_connection(self, ssid, interface):
         """Save current connection info."""
         current = {
@@ -423,13 +423,13 @@ class WiFiManager:
             "interface": interface,
             "connected_at": datetime.now().isoformat()
         }
-        
+
         try:
             with open(self.current_profile_file, 'w') as f:
                 json.dump(current, f, indent=2)
         except Exception as e:
             self.log(f"Error saving current connection: {e}")
-    
+
     def set_selected_interface(self, iface):
         """Set the user-selected WiFi interface for scan/connect."""
         self.selected_interface = iface
@@ -454,7 +454,7 @@ class WiFiManager:
 
             # Fall back to ethernet
             return "eth0"
-        
+
         return preferred
 
 # Global WiFi manager instance
@@ -468,4 +468,4 @@ def get_available_interfaces():
 
 def get_current_interface():
     """Get the currently active interface for tools."""
-    return wifi_manager.get_interface_for_tool() 
+    return wifi_manager.get_interface_for_tool()
