@@ -250,13 +250,25 @@ class WiFiManager:
                          capture_output=True, check=False, timeout=10)
             time.sleep(1)
 
+            # Check if we are already connected to this SSID
+            result = subprocess.run(['nmcli', 'connection', 'show', ssid],
+                         capture_output=True, check=False, timeout=10)
+
             # Build connect command - nmcli handles disconnect/reconnect internally
-            if password:
-                cmd = ['nmcli', 'device', 'wifi', 'connect', ssid,
-                       'password', password, 'ifname', interface]
-            else:
+            if result.returncode == 0:
+                # Network is already saved. Don't use a password.
+                self.log("Existing network")
                 cmd = ['nmcli', 'device', 'wifi', 'connect', ssid,
                        'ifname', interface]
+            else:
+                # New network. Use a password if given, otherwise connect without.
+                self.log("new network")
+                if password:
+                    cmd = ['nmcli', 'device', 'wifi', 'connect', ssid,
+                        'password', password, 'ifname', interface]
+                else:
+                    cmd = ['nmcli', 'device', 'wifi', 'connect', ssid,
+                        'ifname', interface]
 
             self.log(f"Running: nmcli device wifi connect {ssid} ifname {interface}")
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=45)
@@ -295,7 +307,7 @@ class WiFiManager:
         
         return self.connect_to_network(
             profile['ssid'], 
-            profile['password'], 
+            '', 
             interface
         )
     
