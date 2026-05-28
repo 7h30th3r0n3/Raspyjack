@@ -1518,7 +1518,12 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
 
     def _handle_wardriving_live(self) -> None:
         """Serve the live wardriving CSV."""
-        path = "/root/Raspyjack/loot/wardriving/wardriving_live.csv"
+        files = list(Path("/root/Raspyjack/loot/wardriving/sessions").glob("*_wigle.csv"))
+        if files:
+            # Get latest file from list
+            path = max(files, key=lambda f: f.stat().st_mtime)
+        else:
+            path = []
         if os.path.isfile(path):
             self.send_response(200)
             self.send_header("Content-Type", "text/csv")
