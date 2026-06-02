@@ -12,7 +12,7 @@
     body { font-family: 'Segoe UI',system-ui,sans-serif; background:var(--bg); color:#ccc; overflow:hidden; }
 
     /* Top bar */
-    #topbar { height:36px; background:#0a0e1a; display:flex; align-items:center; padding:0 12px; gap:10px; border-bottom:1px solid var(--border); }
+    #topbar { flex-wrap: wrap; height: auto; min-height:36px; background:#0a0e1a; display:flex; align-items:center; padding:5px 12px; gap:10px; border-bottom:1px solid var(--border); }
     #topbar h1 { font-size:14px; color:var(--accent); white-space:nowrap; }
     #topbar select { background:#111830; color:#aaa; border:1px solid #1a2844; padding:2px 6px; border-radius:4px; font-size:11px; max-width:170px; }
     #topbar button { background:#111830; color:#888; border:1px solid #1a2844; padding:2px 8px; border-radius:4px; font-size:11px; cursor:pointer; }
@@ -21,6 +21,7 @@
     #topbar .spacer { flex:1; }
     #topbar a { color:#555; font-size:11px; text-decoration:none; }
     #liveDot { display:none; color:var(--green); font-size:8px; animation:pulse 1.5s infinite; }
+    #sessionSel { width: 160px; }
     @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
 
     /* Main layout */
