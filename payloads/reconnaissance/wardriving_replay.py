@@ -48,7 +48,6 @@ PINS = {
 WIDTH, HEIGHT = LCD_1in44.LCD_WIDTH, LCD_1in44.LCD_HEIGHT
 
 SESSION_DIR = "/root/Raspyjack/loot/wardriving/sessions"
-LOOT_DIR = "/root/Raspyjack/loot/wardriving"
 
 SEC_COLORS = {
     "WPA3": "#00ff88",
@@ -152,9 +151,6 @@ def _list_sessions():
         for f in sorted(os.listdir(SESSION_DIR), reverse=True):
             if f.endswith("_wigle.csv"):
                 sessions.append((f.replace("_wigle.csv", ""), os.path.join(SESSION_DIR, f)))
-    live = os.path.join(LOOT_DIR, "wardriving_live.csv")
-    if os.path.isfile(live):
-        sessions.insert(0, ("Live (last)", live))
     return sessions
 
 
