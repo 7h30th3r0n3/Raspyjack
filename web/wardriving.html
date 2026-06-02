@@ -18,8 +18,10 @@
     #topbar button { background:#111830; color:#888; border:1px solid #1a2844; padding:2px 8px; border-radius:4px; font-size:11px; cursor:pointer; }
     #topbar button:hover { color:#fff; background:#1a2850; }
     #topbar button.active { border-color:var(--accent); color:var(--accent); }
+    #topbar button.activePulse { border-color:var(--accent); color:var(--accent); animation:pulse 1.5s infinite; }
     #topbar .spacer { flex:1; }
     #topbar a { color:#555; font-size:11px; text-decoration:none; }
+    #wardriveDot { display:none; color:var(--green); font-size:8px; animation:pulse 1.5s infinite; }
     #liveDot { display:none; color:var(--green); font-size:8px; animation:pulse 1.5s infinite; }
     #sessionSel { width: 160px; }
     @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
@@ -118,7 +120,8 @@
   <h1><i class="fa-solid fa-satellite-dish"></i> Wardriving</h1>
   <select id="sessionSel"></select>
   <button onclick="loadSession()"><i class="fa-solid fa-rotate"></i></button>
-  <button id="btnLive" onclick="toggleLive()"><i class="fa-solid fa-tower-broadcast"></i> Live <i id="liveDot" class="fa-solid fa-circle"></i></button>
+  <button id="btnWardrive" onclick="toggleWD()"><i class="fa-solid fa-tower-broadcast"></i> Wardrive</button>
+  <button id="btnLive" onclick="toggleLive()"><i class="fa-solid fa-location-crosshairs"></i></button>
   <select id="themeSel" onchange="setTheme(this.value)" title="Map theme">
     <option value="hacker">🌑 Stealth</option>
     <option value="dark">🌃 Dark</option>
@@ -757,21 +760,36 @@ async function loadLive() {
   } catch(e){}
 }
 
-async function toggleLive() {
-  const btn = document.getElementById('btnLive');
-  const dot = document.getElementById('liveDot');
-  if (liveInterval) {
-    clearInterval(liveInterval); liveInterval=null;
-    btn.classList.remove('active'); dot.style.display='none';
+var wardrivingActive = false;
+
+async function toggleWD() {
+  const btn = document.getElementById('btnWardrive');
+  const dot = document.getElementById('wardriveDot');
+  if (wardrivingActive) {
     try { await fetch('/api/wardriving/stop', {method:'POST', credentials:'include'}); } catch(e){}
+    btn.classList.remove('activePulse');
+    wardrivingActive = false;
   } else {
     try {
       const r = await fetch('/api/wardriving/start', {method:'POST', credentials:'include'});
       if (!r.ok) { alert('Failed to start wardriving'); return; }
     } catch(e) { alert('Connection error'); return; }
-    btn.classList.add('active'); dot.style.display='inline';
+    btn.classList.add('activePulse');
+    toggleLive();
+    wardrivingActive = true;
+  }
+}
+
+async function toggleLive() {
+  const btn = document.getElementById('btnLive');
+  const dot = document.getElementById('liveDot');
+  if (liveInterval) {
+    clearInterval(liveInterval); liveInterval=null;
+    btn.classList.remove('active');
+  } else {
     setTimeout(loadLive, 3000);
     liveInterval = setInterval(loadLive, 2000);
+    btn.classList.add('active');
   }
 }
 
