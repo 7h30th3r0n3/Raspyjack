@@ -676,7 +676,7 @@ def _start_refresh() -> None:
 # ---------------------------------------------------------------------------
 
 WIGLE_UPLOAD_CONFIG = Path("/root/Raspyjack/loot/WiGLE/config.json")
-WARDRIVING_LOOT_DIR = Path("/root/Raspyjack/loot/wardriving")
+WARDRIVING_SESSIONS_DIR = Path("/root/Raspyjack/loot/wardriving/sessions")
 WIGLE_UPLOAD_URL = f"{API_BASE}/file/upload"
 
 upload_state_lock = threading.Lock()
@@ -707,7 +707,7 @@ def _read_upload_credentials() -> Tuple[str, str]:
 def _find_csv_files() -> List[Path]:
     """Find .csv files in the wardriving loot directory."""
     csv_files: List[Path] = []
-    for search_dir in [WARDRIVING_LOOT_DIR, Path("/root/Raspyjack/loot/WiGLE")]:
+    for search_dir in [WARDRIVING_SESSIONS_DIR, Path("/root/Raspyjack/loot/WiGLE")]:
         if search_dir.is_dir():
             csv_files.extend(sorted(search_dir.glob("*.csv")))
     return csv_files

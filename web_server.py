@@ -1495,7 +1495,6 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
     def _handle_wardriving_sessions(self) -> None:
         """List all wardriving session files."""
         sessions_dir = "/root/Raspyjack/loot/wardriving/sessions"
-        loot_dir = "/root/Raspyjack/loot/wardriving"
         result = []
         # Session files
         if os.path.isdir(sessions_dir):
@@ -1506,19 +1505,16 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
                         "path": os.path.join(sessions_dir, f),
                         "size": os.path.getsize(os.path.join(sessions_dir, f)),
                     })
-        # Also include legacy live file
-        live = os.path.join(loot_dir, "wardriving_live.csv")
-        if os.path.isfile(live):
-            result.insert(0, {
-                "name": "Live (current)",
-                "path": live,
-                "size": os.path.getsize(live),
-            })
         _json_response(self, result)
 
     def _handle_wardriving_live(self) -> None:
         """Serve the live wardriving CSV."""
-        path = "/root/Raspyjack/loot/wardriving/wardriving_live.csv"
+        files = list(Path("/root/Raspyjack/loot/wardriving/sessions").glob("*_wigle.csv"))
+        if files:
+            # Get latest file from list
+            path = max(files, key=lambda f: f.stat().st_mtime)
+        else:
+            path = []
         if os.path.isfile(path):
             self.send_response(200)
             self.send_header("Content-Type", "text/csv")
@@ -1532,8 +1528,8 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
     def _handle_wardriving_session(self, query: dict) -> None:
         """Serve a specific session CSV file."""
         path = query.get("path", [""])[0]
-        # Security: only allow files in the wardriving loot dir
-        if not path or not path.startswith("/root/Raspyjack/loot/wardriving/"):
+        # Security: only allow files in the wardriving sessions dir
+        if not path or not path.startswith("/root/Raspyjack/loot/wardriving/sessions"):
             self.send_response(403)
             self.end_headers()
             return

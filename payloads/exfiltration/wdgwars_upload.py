@@ -47,7 +47,6 @@ API_URL_JSON = "https://wdgwars.pl/api/upload"
 API_URL_ME = "https://wdgwars.pl/api/me"
 KEY_FILE = "/root/Raspyjack/.wdgwars_key"
 SESSION_DIR = "/root/Raspyjack/loot/wardriving/sessions"
-LOOT_DIR = "/root/Raspyjack/loot/wardriving"
 DEBOUNCE = 0.18
 _last_btn = 0
 
@@ -85,9 +84,6 @@ def _list_csv_files():
                 path = os.path.join(SESSION_DIR, f)
                 size = os.path.getsize(path)
                 files.append((f.replace("_wigle.csv", ""), path, size))
-    live = os.path.join(LOOT_DIR, "wardriving_live.csv")
-    if os.path.isfile(live):
-        files.insert(0, ("Live (current)", live, os.path.getsize(live)))
     return files
 
 
