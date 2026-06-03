@@ -121,7 +121,7 @@
   <select id="sessionSel"></select>
   <button onclick="loadSession()"><i class="fa-solid fa-rotate"></i></button>
   <button id="btnWardrive" onclick="toggleWD()"><i class="fa-solid fa-tower-broadcast"></i> Wardrive</button>
-  <button id="btnLive" onclick="toggleLive()"><i class="fa-solid fa-location-crosshairs"></i></button>
+  <button id="btnLive" onclick="toggleLive()"><i id="liveIcon" class="fa-solid fa-location-crosshairs"></i></button>
   <select id="themeSel" onchange="setTheme(this.value)" title="Map theme">
     <option value="hacker">🌑 Stealth</option>
     <option value="dark">🌃 Dark</option>
@@ -441,6 +441,12 @@ function fitMapBounds() {
   if (bounds.length) map.fitBounds(bounds, {padding:[30,30], maxZoom:16});
 }
 
+function flyToLatest() {
+  const gpsNets = allNets.filter(n => n.hasGps);
+  const latLng = gpsNets.map(n=>[n.lat,n.lon]).at(-1);
+  if (latLng) map.flyTo(latLng, 17);
+}
+
 // Re-cluster on zoom change
 map.on('zoomend', function() {
   if (replayActive) { tlSeek(document.getElementById('tlSlider').value); }
@@ -613,7 +619,8 @@ function onMarkerClick(n) {
   }
 }
 
-function renderAll() { renderMap(); renderStats(); renderPanel(); fitMapBounds(); }
+function renderAllAndFitBound() { renderMap(); renderStats(); renderPanel(); fitMapBounds(); }
+function renderAllAndFlyLive() { renderMap(); renderStats(); renderPanel(); flyToLatest(); }
 
 function togglePanel() {
   const p = document.getElementById('panel');
@@ -649,7 +656,7 @@ function toggleReplay() {
     tl.style.display = 'none';
     btn.classList.remove('active');
     legend.style.bottom = '20px';
-    renderAll();
+    renderAllAndFitBound();
   }
 }
 
@@ -742,10 +749,19 @@ async function loadSession() {
     if (r.ok) {
       allNets = parseCSV(await r.text());
       if (replayActive) toggleReplay();
-      renderAll();
+      renderAllAndFitBound();
     }
   } catch(e){}
 }
+
+
+var wardrivingActive = false;
+const LiveState = Object.freeze({
+  OFF: 0,
+  LATEST: 1,
+  FRAME: 2,
+});
+var liveMode = LiveState.OFF;
 
 async function loadLive() {
   try {
@@ -755,12 +771,14 @@ async function loadLive() {
       const m = new Map(allNets.map(n=>[n.mac,n]));
       fresh.forEach(n=>m.set(n.mac,n));
       allNets = [...m.values()];
-      renderAll();
+
+      if (liveMode == LiveState.LATEST)
+        renderAllAndFlyLive();
+      else if (liveMode == LiveState.FRAME)
+        renderAllAndFitBound();
     }
   } catch(e){}
 }
-
-var wardrivingActive = false;
 
 async function toggleWD() {
   const btn = document.getElementById('btnWardrive');
@@ -775,21 +793,52 @@ async function toggleWD() {
       if (!r.ok) { alert('Failed to start wardriving'); return; }
     } catch(e) { alert('Connection error'); return; }
     btn.classList.add('activePulse');
-    toggleLive();
+
+    if (liveMode == LiveState.OFF) toggleLive();
     wardrivingActive = true;
   }
 }
 
 async function toggleLive() {
   const btn = document.getElementById('btnLive');
-  const dot = document.getElementById('liveDot');
-  if (liveInterval) {
-    clearInterval(liveInterval); liveInterval=null;
-    btn.classList.remove('active');
-  } else {
-    setTimeout(loadLive, 3000);
-    liveInterval = setInterval(loadLive, 2000);
-    btn.classList.add('active');
+  const icon = document.getElementById('liveIcon');
+
+  // Cycle liveMode
+  switch (liveMode) {
+    case LiveState.OFF:
+      liveMode = LiveState.LATEST;
+      break;
+    case LiveState.LATEST:
+      liveMode = LiveState.FRAME;
+      break;
+    case LiveState.FRAME:
+      liveMode = LiveState.OFF;
+      break;
+  }
+
+  // Change UI and behavior based on liveMode
+  switch (liveMode) {
+    case LiveState.OFF:
+      clearInterval(liveInterval); liveInterval=null;
+      icon.classList.add("fa-location-crosshairs")
+      icon.classList.remove("fa-arrows-left-right-to-line")
+      btn.classList.remove('active');
+      break;
+    case LiveState.LATEST:
+      setTimeout(loadLive, 3000);
+      liveInterval = setInterval(loadLive, 2000);
+      btn.classList.add('active');
+      icon.classList.add("fa-location-crosshairs")
+      icon.classList.remove("fa-arrows-left-right-to-line")
+      break;
+    case LiveState.FRAME:
+      setTimeout(loadLive, 3000);
+      liveInterval = setInterval(loadLive, 2000);
+      btn.classList.add('active');
+      icon.classList.add("fa-arrows-left-right-to-line")
+      icon.classList.remove("fa-location-crosshairs")
+      break;
+
   }
 }
 
