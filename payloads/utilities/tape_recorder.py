@@ -275,9 +275,21 @@ def _stop_recording():
 def _set_volume(vol):
     global _volume
     _volume = max(0, min(63, vol))
-    subprocess.run(
-        ["amixer", "-c", get_audio_card(), "sset", "Headphone", str(_volume)],
-        capture_output=True, timeout=2)
+    card = get_audio_card()
+    dac_val = int(75 + (_volume / 63 * 180))
+    subprocess.run(["amixer", "-c", card, "sset", "Headphone", str(_volume)],
+                   capture_output=True, timeout=2)
+    subprocess.run(["amixer", "-c", card, "sset", "DACL", str(dac_val)],
+                   capture_output=True, timeout=2)
+    subprocess.run(["amixer", "-c", card, "sset", "DACR", str(dac_val)],
+                   capture_output=True, timeout=2)
+    try:
+        import smbus2
+        bus = smbus2.SMBus(1)
+        bus.write_byte_data(0x60, 0x01, 0xC0, force=True)
+        bus.close()
+    except Exception:
+        pass
 
 
 def _start_playback(path):

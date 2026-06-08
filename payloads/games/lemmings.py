@@ -113,7 +113,6 @@ def _key_thread(game_proc):
         "DOWN": "Down",
         "LEFT": "Left",
         "RIGHT": "Right",
-        "OK": "Return",
         "KEY1": "space",
     }
     env = os.environ.copy()
@@ -136,8 +135,20 @@ def _key_thread(game_proc):
                 ["xdotool", "key", key],
                 env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
+        ok_down = GPIO.input(PINS["OK"]) == 0
+        if ok_down and "OK" not in pressed_set:
+            pressed_set.add("OK")
+            subprocess.Popen(
+                ["xdotool", "mousedown", "1"],
+                env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        elif not ok_down and "OK" in pressed_set:
+            pressed_set.discard("OK")
+            subprocess.Popen(
+                ["xdotool", "mouseup", "1"],
+                env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
         for name, pin in PINS.items():
-            if name in ("KEY2", "KEY3"):
+            if name in ("KEY2", "KEY3", "OK"):
                 continue
             is_down = GPIO.input(pin) == 0
             xkey = key_map.get(name)
@@ -220,7 +231,7 @@ def main():
     env["SDL_AUDIODRIVER"] = "dummy"
 
     game = subprocess.Popen(
-        [PINGUS_BIN, "--no-sound", "--window"],
+        [PINGUS_BIN, "--window", "--quiet"],
         env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(3)
     if game.poll() is not None:

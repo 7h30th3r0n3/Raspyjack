@@ -549,6 +549,10 @@ def _start_portal():
     else:
         CaptiveHandler.template_dir = portal_path
 
+    # Free port 80 from any web server (caddy, nginx, apache)
+    for svc in ("caddy", "nginx", "apache2"):
+        _run(["sudo", "systemctl", "stop", svc])
+
     # Start threaded HTTP server with credential capture
     with lock:
         status_msg = "Starting HTTP..."
@@ -629,6 +633,10 @@ def _stop_portal():
     # Restore interface
     if _iface:
         _set_managed_mode(_iface)
+
+    # Restart web servers that were stopped
+    for svc in ("caddy",):
+        _run(["sudo", "systemctl", "start", svc])
 
     with lock:
         portal_running = False

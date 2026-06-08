@@ -136,7 +136,7 @@ _scanning = threading.Event()
 
 # Scan data
 networks = {}          # bssid -> {ssid, channel, signal, security, ...}
-_seen_bssids = set()   # all BSSIDs ever seen (lightweight dedup for evicted APs)
+_seen_bssids = set()   # permanent dedup — never purged to avoid CSV duplicates
 probes = {}            # client_mac -> {ssids: set, count, last_seen, signal}
 gps_data = None        # {lat, lon, alt, speed, sats, mode, ts}
 gps_ready = False
@@ -154,7 +154,7 @@ _inc_wigle_count = 0   # APs with GPS
 # Ring buffers for O(1) display (replaces O(n) heapq/sort per frame)
 _recent_bssids = deque(maxlen=64)   # (timestamp, bssid) for recent view
 _top_signals = []                    # top 8 by signal, maintained incrementally
-_insertion_order = deque()           # FIFO for O(1) prune (no sort)
+_insertion_order = deque(maxlen=MAX_NETWORKS + 2000)
 _gps_bssids = deque(maxlen=200)     # recent GPS-bearing BSSIDs for map
 
 # Interfaces
@@ -303,14 +303,14 @@ def _gps_updater():
                     }
             else:
                 _no_fix_count += 1
-                if _no_fix_count > 30:
+                if _no_fix_count > 150:
                     with lock:
                         if gps_data:
                             gps_data["mode"] = 0
         except Exception:
             pass
 
-        if _shutdown.wait(timeout=1):
+        if _shutdown.wait(timeout=0.2):
             break
 
 
@@ -586,6 +586,12 @@ def _parse_security(pkt):
     return {"security": security, "cipher": cipher, "auth": auth, "wps": wps}
 
 
+def _ts_iso(ts):
+    if isinstance(ts, (int, float)):
+        return datetime.fromtimestamp(ts).isoformat()
+    return ts
+
+
 def _get_vendor(mac):
     """OUI vendor lookup."""
     prefix = mac[:8].upper()
@@ -619,18 +625,17 @@ def _merge_raw_probe(client_mac, ssid, signal):
     global total_probes
     if not client_mac or client_mac == "FF:FF:FF:FF:FF:FF":
         return
-    now = datetime.now().isoformat()
     now_ts = time.time()
     with lock:
         total_probes += 1
         if client_mac not in probes:
             probes[client_mac] = {
                 "ssids": set(), "count": 0,
-                "last_seen": now, "signal": signal, "_ts": now_ts,
+                "last_seen": now_ts, "signal": signal, "_ts": now_ts,
             }
         p = probes[client_mac]
         p["count"] += 1
-        p["last_seen"] = now
+        p["last_seen"] = now_ts
         p["_ts"] = now_ts
         if ssid:
             p["ssids"].add(ssid)
@@ -644,10 +649,13 @@ def _merge_raw_network(bssid, ssid, channel, signal, security, cipher, wps):
     if not ssid:
         ssid = "<hidden>"
     vendor = _get_vendor(bssid)
-    now = datetime.now().isoformat()
     now_ts = time.time()
 
     gps_snap = gps_data
+    if gps_snap and (gps_snap.get("mode", 0) < 2 or now_ts - gps_snap.get("ts", 0) > 30):
+        gps_snap = None
+    if gps_snap and abs(gps_snap.get("lat", 0)) < 1 and abs(gps_snap.get("lon", 0)) < 1:
+        gps_snap = None
     gps_pos = ({"lat": gps_snap["lat"], "lon": gps_snap["lon"],
                 "alt": gps_snap.get("alt", 0)} if gps_snap else None)
 
@@ -664,7 +672,7 @@ def _merge_raw_network(bssid, ssid, channel, signal, security, cipher, wps):
                 "ssid": ssid, "bssid": bssid, "channel": channel,
                 "signal": signal, "security": security, "cipher": cipher,
                 "auth": "", "wps": wps, "vendor": vendor,
-                "first_seen": now, "last_seen": now,
+                "first_seen": now_ts, "last_seen": now_ts,
                 "gps": gps_pos, "beacon_count": 1,
             }
             networks[bssid] = net_entry
@@ -680,7 +688,7 @@ def _merge_raw_network(bssid, ssid, channel, signal, security, cipher, wps):
             csv_snap = net_entry
         else:
             net = networks[bssid]
-            net["last_seen"] = now
+            net["last_seen"] = now_ts
             net["beacon_count"] += 1
             net["signal"] = (net["signal"] * 3 + signal) >> 2
             if gps_pos and not net["gps"]:
@@ -696,7 +704,7 @@ def _merge_raw_network(bssid, ssid, channel, signal, security, cipher, wps):
 
 
 # ---------------------------------------------------------------------------
-# Packet handler (legacy scapy path)
+# Channel hoppers
 # ---------------------------------------------------------------------------
 
 
@@ -851,65 +859,6 @@ def _packet_handler(pkt):
 # ---------------------------------------------------------------------------
 
 
-def _channel_hopper_24(iface):
-    """Hop 2.4GHz channels on iface."""
-    while not _shutdown.is_set() and _scanning.is_set():
-        for ch in CHANNELS_24:
-            if _shutdown.is_set() or not _scanning.is_set():
-                return
-            global current_channel
-            subprocess.run(
-                ["sudo", "iw", "dev", iface, "set", "channel", str(ch)],
-                capture_output=True, timeout=3,
-            )
-            with lock:
-                current_channel = ch
-            if _shutdown.wait(timeout=DWELL_24):
-                return
-
-
-def _channel_hopper_5(iface):
-    """Hop 5GHz channels on iface."""
-    while not _shutdown.is_set() and _scanning.is_set():
-        for ch in CHANNELS_5:
-            if _shutdown.is_set() or not _scanning.is_set():
-                return
-            r = subprocess.run(
-                ["sudo", "iw", "dev", iface, "set", "channel", str(ch)],
-                capture_output=True, timeout=3,
-            )
-            if r.returncode != 0:
-                continue
-            if _shutdown.wait(timeout=DWELL_5):
-                return
-
-
-def _channel_hopper_all(iface):
-    """Hop all channels on single iface."""
-    while not _shutdown.is_set() and _scanning.is_set():
-        for ch in CHANNELS_24:
-            if _shutdown.is_set() or not _scanning.is_set():
-                return
-            global current_channel
-            subprocess.run(
-                ["sudo", "iw", "dev", iface, "set", "channel", str(ch)],
-                capture_output=True, timeout=3,
-            )
-            with lock:
-                current_channel = ch
-            if _shutdown.wait(timeout=DWELL_24):
-                return
-        for ch in CHANNELS_5:
-            if _shutdown.is_set() or not _scanning.is_set():
-                return
-            subprocess.run(
-                ["sudo", "iw", "dev", iface, "set", "channel", str(ch)],
-                capture_output=True, timeout=3,
-            )
-            if _shutdown.wait(timeout=DWELL_5):
-                return
-
-
 def _channel_hopper_split(iface, channels):
     """Hop a specific set of channels on iface (for N-card split)."""
     global current_channel
@@ -938,55 +887,6 @@ def _channel_hopper_split(iface, channels):
                 return
 
 
-def _sniffer(iface):
-    """Sniff on monitor interface with auto-restart on failure."""
-    _pkt_count = [0]
-
-    def _counted_handler(pkt):
-        _pkt_count[0] += 1
-        if _pkt_count[0] % 10 == 0:
-            try:
-                if iface in card_state:
-                    card_state[iface]["packets"] = _pkt_count[0]
-            except Exception:
-                pass
-        if not pkt.haslayer(Dot11):
-            return
-        ftype = pkt[Dot11].type
-        if ftype != 0:
-            return
-        try:
-            _packet_handler(pkt)
-        except Exception:
-            pass
-
-    backoff = 1
-    while not _shutdown.is_set() and _scanning.is_set():
-        if not os.path.isdir(f"/sys/class/net/{iface}"):
-            with lock:
-                if iface in card_state:
-                    card_state[iface]["status"] = "disconnected"
-            return
-        try:
-            scapy_sniff(
-                iface=iface,
-                prn=_counted_handler,
-                filter="type mgt",
-                stop_filter=lambda _: _shutdown.is_set() or not _scanning.is_set(),
-                store=0,
-                timeout=60,
-            )
-            backoff = 1
-        except Exception:
-            with lock:
-                if iface in card_state:
-                    card_state[iface]["status"] = "restarting"
-            if _shutdown.wait(timeout=backoff):
-                return
-            backoff = min(backoff * 2, 30)
-            _restart_monitor_mode(iface)
-
-
 def _raw_monitor_worker(iface):
     """Raw AF_PACKET capture on monitor interface — no scapy."""
     try:
@@ -1001,50 +901,48 @@ def _raw_monitor_worker(iface):
 
     pkt_count = 0
     backoff = 1
-    while not _shutdown.is_set() and _scanning.is_set():
-        if not os.path.isdir(f"/sys/class/net/{iface}"):
-            with lock:
-                if iface in card_state:
-                    card_state[iface]["status"] = "disconnected"
-            break
-        try:
-            raw = sock.recv(65535)
-        except socket.timeout:
-            continue
-        except OSError:
-            if _shutdown.wait(timeout=backoff):
-                break
-            backoff = min(backoff * 2, 30)
-            continue
-
-        backoff = 1
-        pkt_count += 1
-        if pkt_count % 10 == 0:
-            with lock:
-                if iface in card_state:
-                    card_state[iface]["packets"] = pkt_count
-
-        rtap_len, signal = _parse_radiotap(raw)
-        frame = _parse_80211_mgmt(raw, rtap_len)
-        if not frame:
-            continue
-
-        if frame['subtype'] in (_SUBTYPE_BEACON, _SUBTYPE_PROBE_RESP):
-            body_start = frame['body_offset'] + 12
-            ies = _parse_ies(raw, body_start)
-            ch = ies['channel'] or _per_iface_channel.get(iface, current_channel)
-            _merge_raw_network(
-                frame['bssid'], ies['ssid'], ch, signal,
-                ies['security'], ies['cipher'], ies['wps'])
-        elif frame['subtype'] == _SUBTYPE_PROBE_REQ:
-            body_start = frame['body_offset']
-            ies = _parse_ies(raw, body_start)
-            _merge_raw_probe(frame['sa'], ies['ssid'], signal)
-
     try:
+        while not _shutdown.is_set() and _scanning.is_set():
+            if not os.path.isdir(f"/sys/class/net/{iface}"):
+                with lock:
+                    if iface in card_state:
+                        card_state[iface]["status"] = "disconnected"
+                break
+            try:
+                raw = sock.recv(65535)
+            except socket.timeout:
+                continue
+            except OSError:
+                if _shutdown.wait(timeout=backoff):
+                    break
+                backoff = min(backoff * 2, 30)
+                continue
+
+            backoff = 1
+            pkt_count += 1
+            if pkt_count % 10 == 0:
+                with lock:
+                    if iface in card_state:
+                        card_state[iface]["packets"] = pkt_count
+
+            rtap_len, signal = _parse_radiotap(raw)
+            frame = _parse_80211_mgmt(raw, rtap_len)
+            if not frame:
+                continue
+
+            if frame['subtype'] in (_SUBTYPE_BEACON, _SUBTYPE_PROBE_RESP):
+                body_start = frame['body_offset'] + 12
+                ies = _parse_ies(raw, body_start)
+                ch = ies['channel'] or _per_iface_channel.get(iface, current_channel)
+                _merge_raw_network(
+                    frame['bssid'], ies['ssid'], ch, signal,
+                    ies['security'], ies['cipher'], ies['wps'])
+            elif frame['subtype'] == _SUBTYPE_PROBE_REQ:
+                body_start = frame['body_offset']
+                ies = _parse_ies(raw, body_start)
+                _merge_raw_probe(frame['sa'], ies['ssid'], signal)
+    finally:
         sock.close()
-    except Exception:
-        pass
 
 
 def _build_probe_request(src_mac):
@@ -1061,25 +959,26 @@ def _build_probe_request(src_mac):
     return radiotap + header + ssid_ie + rates_ie
 
 
-def _monitor_channel_hopper(iface):
-    """Single-card channel hopper with probe injection."""
+def _monitor_channel_hopper(iface, active_mode=False):
+    """Single-card channel hopper. Injects probe requests in active mode."""
     channels = CHANNELS_24 + CHANNELS_5
 
-    try:
-        r = subprocess.run(["cat", f"/sys/class/net/{iface}/address"],
-                           capture_output=True, text=True, timeout=3)
-        mac = r.stdout.strip().upper()
-    except Exception:
-        mac = "00:11:22:33:44:55"
-
-    probe_frame = _build_probe_request(mac)
-
-    try:
-        inject_sock = socket.socket(socket.AF_PACKET, socket.SOCK_RAW,
-                                    socket.htons(0x0003))
-        inject_sock.bind((iface, 0))
-    except OSError:
-        inject_sock = None
+    inject_sock = None
+    probe_frame = None
+    if active_mode:
+        try:
+            r = subprocess.run(["cat", f"/sys/class/net/{iface}/address"],
+                               capture_output=True, text=True, timeout=3)
+            mac = r.stdout.strip().upper()
+        except Exception:
+            mac = "00:11:22:33:44:55"
+        probe_frame = _build_probe_request(mac)
+        try:
+            inject_sock = socket.socket(socket.AF_PACKET, socket.SOCK_RAW,
+                                        socket.htons(0x0003))
+            inject_sock.bind((iface, 0))
+        except OSError:
+            inject_sock = None
 
     while not _shutdown.is_set() and _scanning.is_set():
         for ch in channels:
@@ -1108,8 +1007,8 @@ def _monitor_channel_hopper(iface):
                 return
 
 
-def _active_scan_worker(iface, freqs, stagger=0):
-    """Active scan via kernel — one worker per managed-mode card."""
+def _active_scan_worker(iface, freqs, stagger=0, passive=False):
+    """Scan via kernel — active (probe requests) or passive (listen only)."""
     subprocess.run(["sudo", "ip", "link", "set", iface, "up"],
                    capture_output=True, timeout=5)
     time.sleep(0.5)
@@ -1124,17 +1023,24 @@ def _active_scan_worker(iface, freqs, stagger=0):
                     card_state[iface]["status"] = "disconnected"
             return
         try:
-            cmd = ["sudo", "iw", "dev", iface, "scan", "flush"]
-            if freqs:
-                cmd += ["freq"] + [str(f) for f in freqs]
+            if passive:
+                cmd = ["sudo", "iw", "dev", iface, "scan", "passive"]
+            else:
+                cmd = ["sudo", "iw", "dev", iface, "scan", "flush"]
+                if freqs:
+                    cmd += ["freq"] + [str(f) for f in freqs]
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
-            if r.returncode == 0:
+            if r.returncode == 0 and "BSS " in r.stdout:
                 _parse_iw_scan(r.stdout)
                 scan_count += 1
                 with lock:
                     if iface in card_state:
                         card_state[iface]["packets"] = scan_count
                         card_state[iface]["status"] = "active"
+            elif "busy" in r.stderr.lower() or "busy" in r.stdout.lower():
+                if _shutdown.wait(timeout=0.5):
+                    return
+                continue
             else:
                 with lock:
                     if iface in card_state:
@@ -1218,16 +1124,13 @@ def _parse_iw_scan(output):
     cipher = ""
     wps = False
 
-    now = datetime.now().isoformat()
-
     for line in output.splitlines():
         line = line.strip()
 
         if line.startswith("BSS "):
-            # Save previous AP
             if bssid:
                 _merge_iw_network(bssid, ssid, channel, signal, security,
-                                  cipher, wps, now)
+                                  cipher, wps)
             # New AP
             parts = line.split()
             bssid = parts[1].split("(")[0].upper() if len(parts) > 1 else None
@@ -1275,11 +1178,11 @@ def _parse_iw_scan(output):
     # Save last AP
     if bssid:
         _merge_iw_network(bssid, ssid, channel, signal, security,
-                          cipher, wps, now)
+                          cipher, wps)
 
 
 def _merge_iw_network(bssid, ssid, channel, signal, security,
-                       cipher, wps, now):
+                       cipher, wps):
     """Merge iw scan result into networks dict."""
     global total_beacons, _inc_wigle_count
     if not bssid or bssid == "FF:FF:FF:FF:FF:FF":
@@ -1291,31 +1194,29 @@ def _merge_iw_network(bssid, ssid, channel, signal, security,
     csv_snap = None
     now_ts = time.time()
 
+    gps_snap = gps_data
+    if gps_snap and (gps_snap.get("mode", 0) < 2 or now_ts - gps_snap.get("ts", 0) > 30):
+        gps_snap = None
+    if gps_snap and abs(gps_snap.get("lat", 0)) < 1 and abs(gps_snap.get("lon", 0)) < 1:
+        gps_snap = None
+    gps_pos = ({"lat": gps_snap["lat"], "lon": gps_snap["lon"],
+                "alt": gps_snap.get("alt", 0)} if gps_snap else None)
+
     with lock:
         total_beacons += 1
 
         if bssid in _seen_bssids and bssid not in networks:
             return
-        gps_pos = {"lat": gps_data["lat"], "lon": gps_data["lon"],
-                   "alt": gps_data.get("alt", 0)} if gps_data else None
 
         is_new = bssid not in networks
         if is_new:
             _seen_bssids.add(bssid)
             net_entry = {
-                "ssid": ssid,
-                "bssid": bssid,
-                "channel": channel,
-                "signal": signal,
-                "security": security,
-                "cipher": cipher,
-                "auth": "",
-                "wps": wps,
-                "vendor": vendor,
-                "first_seen": now,
-                "last_seen": now,
-                "gps": gps_pos,
-                "beacon_count": 1,
+                "ssid": ssid, "bssid": bssid, "channel": channel,
+                "signal": signal, "security": security, "cipher": cipher,
+                "auth": "", "wps": wps, "vendor": vendor,
+                "first_seen": now_ts, "last_seen": now_ts,
+                "gps": gps_pos, "beacon_count": 1,
             }
             networks[bssid] = net_entry
             _insertion_order.append(bssid)
@@ -1329,7 +1230,7 @@ def _merge_iw_network(bssid, ssid, channel, signal, security,
             csv_snap = net_entry
         else:
             net = networks[bssid]
-            net["last_seen"] = now
+            net["last_seen"] = now_ts
             net["beacon_count"] += 1
             net["signal"] = (net["signal"] * 3 + signal) >> 2
             if gps_pos and not net["gps"]:
@@ -1348,56 +1249,99 @@ def _merge_iw_network(bssid, ssid, channel, signal, security,
 # ---------------------------------------------------------------------------
 
 
+_db_conn = None
+
+
 def _init_db():
+    global _db_conn
     os.makedirs(LOOT_DIR, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
+    _db_conn = sqlite3.connect(DB_PATH, timeout=10)
+    c = _db_conn.cursor()
     c.execute("PRAGMA journal_mode=WAL")
+    c.execute("PRAGMA synchronous=NORMAL")
+    c.execute("PRAGMA wal_autocheckpoint=500")
     c.execute("""CREATE TABLE IF NOT EXISTS networks (
         bssid TEXT PRIMARY KEY, ssid TEXT, channel INTEGER,
         signal INTEGER, security TEXT, cipher TEXT, auth TEXT,
         wps BOOLEAN, vendor TEXT, first_seen TEXT, last_seen TEXT,
         lat REAL, lon REAL, alt REAL, beacon_count INTEGER)""")
-    conn.commit()
-    conn.close()
+    _db_conn.commit()
+
+
+def _close_db():
+    global _db_conn
+    if _db_conn:
+        try:
+            _db_conn.close()
+        except Exception:
+            pass
+        _db_conn = None
+
+
+def _load_seen_from_db():
+    """Load existing BSSIDs from DB to prevent duplicates after restart."""
+    global _inc_wigle_count
+    if not _db_conn:
+        return
+    try:
+        rows = _db_conn.execute("SELECT bssid FROM networks").fetchall()
+        for r in rows:
+            _seen_bssids.add(r[0])
+        row = _db_conn.execute("SELECT COUNT(*) FROM networks WHERE lat IS NOT NULL").fetchone()
+        if row:
+            _inc_wigle_count = row[0]
+        for sec, cnt in _db_conn.execute("SELECT security, COUNT(*) FROM networks GROUP BY security"):
+            _inc_sec_count[sec] = cnt
+        for ch, cnt in _db_conn.execute("SELECT channel, COUNT(*) FROM networks GROUP BY channel"):
+            _inc_ch_count[ch] = cnt
+    except Exception:
+        pass
 
 
 _db_saved_count = 0
-_dirty_bssids = set()  # networks modified since last save
+_dirty_bssids = set()
 
 
 def _save_to_db():
-    """Save only dirty networks to SQLite. Batch copy under short lock."""
+    """Save dirty networks to SQLite. Lock held only for snapshot copy."""
     global _db_saved_count
     try:
         with lock:
             if not _dirty_bssids:
                 return
-            batch = []
-            for b in _dirty_bssids:
+            batch_keys = list(_dirty_bssids)[:500]
+            snap = {}
+            for b in batch_keys:
                 n = networks.get(b)
-                if not n:
-                    continue
-                gps = n.get("gps")
-                batch.append((
-                    b, n["ssid"], n["channel"], n["signal"],
-                    n["security"], n["cipher"], n["auth"], n["wps"],
-                    n["vendor"], n["first_seen"], n["last_seen"],
-                    gps["lat"] if gps else None,
-                    gps["lon"] if gps else None,
-                    gps.get("alt") if gps else None,
-                    n["beacon_count"],
-                ))
-            _dirty_bssids.clear()
+                if n:
+                    snap[b] = (
+                        b, n["ssid"], n["channel"], n["signal"],
+                        n["security"], n["cipher"], n["auth"], n["wps"],
+                        n["vendor"], n["first_seen"], n["last_seen"],
+                        n.get("gps"), n["beacon_count"],
+                    )
+                _dirty_bssids.discard(b)
             _db_saved_count = len(networks)
-        conn = sqlite3.connect(DB_PATH, timeout=5)
-        c = conn.cursor()
+
+        batch = []
+        for b, tup in snap.items():
+            bssid, ssid, ch, sig, sec, cipher, auth, wps, vendor, fs, ls, gps, bc = tup
+            batch.append((
+                bssid, ssid, ch, sig, sec, cipher, auth, wps, vendor,
+                _ts_iso(fs), _ts_iso(ls),
+                gps["lat"] if gps else None,
+                gps["lon"] if gps else None,
+                gps.get("alt") if gps else None,
+                bc,
+            ))
+        if not _db_conn:
+            return
+        c = _db_conn.cursor()
         c.executemany("""INSERT OR REPLACE INTO networks
             (bssid, ssid, channel, signal, security, cipher, auth,
              wps, vendor, first_seen, last_seen, lat, lon, alt, beacon_count)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", batch)
-        conn.commit()
-        conn.close()
+        _db_conn.commit()
     except Exception:
         pass
 
@@ -2337,7 +2281,6 @@ def _prune_networks():
             if net.get("gps"):
                 _inc_wigle_count = max(0, _inc_wigle_count - 1)
             _dirty_bssids.discard(b)
-            _seen_bssids.discard(b)
             del networks[b]
             evicted += 1
 
@@ -2394,6 +2337,17 @@ def _watchdog_thread():
                 if iface in card_state:
                     card_state[iface]["rx_dropped"] = drops
 
+        try:
+            with open("/proc/self/statm") as f:
+                rss_pages = int(f.read().split()[1])
+            rss_mb = rss_pages * 4096 // (1024 * 1024)
+            if rss_mb > 350:
+                import gc
+                gc.collect()
+                _prune_probes()
+        except Exception:
+            pass
+
 
 def _autosave_thread():
     """Background thread: periodic DB save and session metadata update."""
@@ -2447,7 +2401,7 @@ _WIGLE_COLS = ("MAC,SSID,AuthMode,FirstSeen,Channel,RSSI,"
                "AccuracyMeters,Type\n")
 
 
-_csv_buffer = deque()
+_csv_buffer = deque(maxlen=10000)
 
 
 def _append_live_csv(bssid, net):
@@ -2456,8 +2410,10 @@ def _append_live_csv(bssid, net):
     if not gps:
         return
     auth = _security_to_wigle(net["security"], net["cipher"], net.get("auth", ""))
+    fs = net["first_seen"]
+    first_seen_str = _ts_iso(fs)
     _csv_buffer.append([
-        bssid, net["ssid"], auth, net["first_seen"],
+        bssid, net["ssid"], auth, first_seen_str,
         net["channel"], net["signal"],
         f"{gps['lat']:.6f}", f"{gps['lon']:.6f}",
         f"{gps.get('alt', 0):.1f}", "10", "WIFI",
@@ -2482,32 +2438,6 @@ def _flush_csv_buffer():
         pass
 
 
-def _write_wigle_csv(path, nets):
-    """Write Wigle-format CSV to a given path."""
-    try:
-        with open(path, "w", newline="") as f:
-            f.write("WigleWifi-1.4,appRelease=RaspyJack-v2,model=RaspberryPi,"
-                    "release=2.0,device=RaspyJack,display=LCD144,"
-                    "board=RaspberryPi,brand=7h30th3r0n3\n")
-            writer = csv.writer(f)
-            writer.writerow([
-                "MAC", "SSID", "AuthMode", "FirstSeen", "Channel", "RSSI",
-                "CurrentLatitude", "CurrentLongitude", "AltitudeMeters",
-                "AccuracyMeters", "Type",
-            ])
-            for bssid, n in nets.items():
-                gps = n.get("gps")
-                lat = f"{gps['lat']:.6f}" if gps else ""
-                lon = f"{gps['lon']:.6f}" if gps else ""
-                alt = f"{gps.get('alt', 0):.1f}" if gps else ""
-                auth_mode = _security_to_wigle(
-                    n["security"], n["cipher"], n["auth"])
-                writer.writerow([
-                    bssid, n["ssid"], auth_mode, n["first_seen"],
-                    n["channel"], n["signal"], lat, lon, alt, "10", "WIFI",
-                ])
-    except Exception:
-        pass
 
 
 
@@ -2555,6 +2485,7 @@ def main():
         return 1
 
     _init_db()
+    _load_seen_from_db()
 
     # Start GPS thread
     gps_thread = threading.Thread(target=_gps_updater, daemon=True)
@@ -2596,6 +2527,42 @@ def main():
             # OK = toggle scan
             if btn == "OK":
                 if not _scanning.is_set():
+                    # Mode selection screen
+                    _scan_active_mode = False
+                    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+                    d = ScaledDraw(img)
+                    d.text((64, 20), "SCAN MODE", font=font, fill="#FFAA00", anchor="mm")
+                    d.text((64, 45), "> PASSIVE (stealth)", font=font_sm, fill="#00E676", anchor="mm")
+                    d.text((64, 60), "  ACTIVE (probe)", font=font_sm, fill="#888", anchor="mm")
+                    d.text((64, 85), "UP/DOWN select, OK confirm", font=font_sm, fill="#555", anchor="mm")
+                    lcd.LCD_ShowImage(img, 0, 0)
+
+                    _mode_sel = 0
+                    while True:
+                        mb = get_button(PINS, GPIO)
+                        if mb == "KEY3":
+                            break
+                        if mb in ("UP", "DOWN"):
+                            _mode_sel = 1 - _mode_sel
+                            img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+                            d = ScaledDraw(img)
+                            d.text((64, 20), "SCAN MODE", font=font, fill="#FFAA00", anchor="mm")
+                            if _mode_sel == 0:
+                                d.text((64, 45), "> PASSIVE (stealth)", font=font_sm, fill="#00E676", anchor="mm")
+                                d.text((64, 60), "  ACTIVE (probe)", font=font_sm, fill="#888", anchor="mm")
+                            else:
+                                d.text((64, 45), "  PASSIVE (stealth)", font=font_sm, fill="#888", anchor="mm")
+                                d.text((64, 60), "> ACTIVE (probe)", font=font_sm, fill="#00E676", anchor="mm")
+                            d.text((64, 85), "UP/DOWN select, OK confirm", font=font_sm, fill="#555", anchor="mm")
+                            lcd.LCD_ShowImage(img, 0, 0)
+                        if mb == "OK":
+                            _scan_active_mode = (_mode_sel == 1)
+                            break
+                        time.sleep(0.05)
+
+                    if mb == "KEY3":
+                        continue
+
                     ifaces = _find_monitor_interfaces()
 
                     _scanning.set()
@@ -2604,9 +2571,10 @@ def main():
                     _init_session()
                     mon_ifaces.clear()
 
+                    mode_txt = "ACTIVE" if _scan_active_mode else "PASSIVE"
                     img = Image.new("RGB", (WIDTH, HEIGHT), "black")
                     d = ScaledDraw(img)
-                    d.text((4, 40), "Starting scan...", font=font, fill="#FFAA00")
+                    d.text((4, 40), f"{mode_txt} scan...", font=font, fill="#FFAA00")
                     d.text((4, 60), f"{len(ifaces)} USB + wlan0", font=font_sm, fill="#888")
                     lcd.LCD_ShowImage(img, 0, 0)
 
@@ -2627,7 +2595,7 @@ def main():
                             t.start()
                             threads.append(t)
                             t = threading.Thread(target=_monitor_channel_hopper,
-                                                 args=(mon,), daemon=True)
+                                                 args=(mon, _scan_active_mode), daemon=True)
                             t.start()
                             threads.append(t)
 
@@ -2659,13 +2627,14 @@ def main():
                             "band": band_str, "driver": _get_driver(iface),
                             "packets": 0, "status": "active", "role": "scan",
                         }
+                        _passive = not _scan_active_mode
                         t = threading.Thread(target=_active_scan_worker,
-                                             args=(iface, card_freqs, idx * stagger_step),
+                                             args=(iface, card_freqs, idx * stagger_step, _passive),
                                              daemon=True)
                         t.start()
                         threads.append(t)
 
-                    # Always include wlan0 as active scanner
+                    # Always include wlan0 as scanner
                     if os.path.isdir("/sys/class/net/wlan0/wireless"):
                         wlan0_in_use = "wlan0" in active_cards or (monitor_card == "wlan0")
                         if not wlan0_in_use:
@@ -2674,8 +2643,9 @@ def main():
                                 "band": "onboard", "driver": "brcmfmac",
                                 "packets": 0, "status": "active", "role": "scan",
                             }
+                            _passive = not _scan_active_mode
                             t = threading.Thread(target=_active_scan_worker,
-                                                 args=("wlan0", _IW_FREQS_24, 1.0),
+                                                 args=("wlan0", _IW_FREQS_24, 1.0, _passive),
                                                  daemon=True)
                             t.start()
                             threads.append(t)
@@ -2770,11 +2740,12 @@ def main():
             except Exception:
                 pass
 
-            time.sleep(0.05)
+            time.sleep(0.1 if _scanning.is_set() else 0.05)
 
     finally:
         _shutdown.set()
         _scanning.clear()
+        _close_db()
 
         def _exit_msg(text):
             try:

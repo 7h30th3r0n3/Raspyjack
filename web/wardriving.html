@@ -297,6 +297,23 @@ function secInfo(auth) {
   return {cls:'b-open',label:'OPEN',color:'#ff3333'};
 }
 
+function csvSplitRow(line) {
+  const r = []; let cur = ''; let inQ = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inQ) {
+      if (ch === '"' && i+1 < line.length && line[i+1] === '"') { cur += '"'; i++; }
+      else if (ch === '"') { inQ = false; }
+      else { cur += ch; }
+    } else {
+      if (ch === '"') { inQ = true; }
+      else if (ch === ',') { r.push(cur); cur = ''; }
+      else { cur += ch; }
+    }
+  }
+  r.push(cur);
+  return r;
+}
 function parseCSV(text) {
   const lines = text.trim().split('\n');
   if (lines.length < 3) return [];
@@ -304,11 +321,11 @@ function parseCSV(text) {
   const g = k => h.indexOf(k);
   const result = [];
   for (let i=2; i<lines.length; i++) {
-    const c = lines[i].split(',');
+    const c = csvSplitRow(lines[i]);
     if (c.length<7) continue;
     const lat = parseFloat(c[g('CurrentLatitude')]);
     const lon = parseFloat(c[g('CurrentLongitude')]);
-    const hasGps = !isNaN(lat) && !isNaN(lon) && !(lat===0&&lon===0);
+    const hasGps = !isNaN(lat) && !isNaN(lon) && !(lat===0&&lon===0) && Math.abs(lat)>1 && Math.abs(lat)<90;
     result.push({
       mac:c[g('MAC')]||'', ssid:c[g('SSID')]||'', auth:c[g('AuthMode')]||'',
       channel:c[g('Channel')]||'', rssi:c[g('RSSI')]||'',

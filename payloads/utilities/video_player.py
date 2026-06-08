@@ -43,8 +43,8 @@ for p in PINS.values():
 LCD = LCD_1in44.LCD()
 LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
 WIDTH, HEIGHT = LCD.width, LCD.height
-font = scaled_font(9)
-font_sm = scaled_font(7)
+font = scaled_font(11)
+font_sm = scaled_font(9)
 
 VIDEO_EXTENSIONS = {".mp4", ".avi", ".mkv", ".mov", ".webm", ".flv", ".m4v"}
 START_DIR = "/root/Raspyjack/loot"
@@ -83,12 +83,25 @@ def _check_button():
     return None
 
 
+def _tpa_enable():
+    try:
+        import smbus2
+        bus = smbus2.SMBus(1)
+        bus.write_byte_data(0x60, 0x01, 0xC0, force=True)
+        bus.close()
+    except Exception:
+        pass
+
 def _set_volume(vol):
     global _volume
     _volume = max(0, min(100, vol))
-    subprocess.Popen(["amixer", "-c", _get_card(), "sset", "Headphone", str(int(_volume * 63 / 100))], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    subprocess.Popen(["amixer", "-c", _get_card(), "sset", "DACL", "180"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    subprocess.Popen(["amixer", "-c", _get_card(), "sset", "DACR", "180"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    dac_val = int(75 + (_volume * 180 / 100))
+    hp_val = int(19 + (_volume * 44 / 100))
+    card = _get_card()
+    subprocess.Popen(["amixer", "-c", card, "sset", "Headphone", str(hp_val)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.Popen(["amixer", "-c", card, "sset", "DACL", str(dac_val)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.Popen(["amixer", "-c", card, "sset", "DACR", str(dac_val)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    _tpa_enable()
 
 
 def _format_time(seconds):
@@ -287,6 +300,17 @@ def _has_audio(filepath):
         return False
 
 
+def _get_resolution(filepath):
+    try:
+        r = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=height", "-of", "csv=p=0", filepath],
+            capture_output=True, text=True, timeout=5)
+        return int(r.stdout.strip())
+    except Exception:
+        return 0
+
+
 def _start_playback(filepath, seek=0):
     """Start ffmpeg with video pipe + audio output, synced from seek position."""
     cmd = [
@@ -317,6 +341,22 @@ def _kill_proc(p):
 
 def _play_video(filepath):
     global _loop
+
+    res = _get_resolution(filepath)
+    if res > 1080:
+        img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+        d = ScaledDraw(img)
+        d.text((64, 40), "Resolution too high", font=font, fill="#FF5252", anchor="mm")
+        d.text((64, 58), f"{res}p > 1080p max", font=font_sm, fill="#888888", anchor="mm")
+        d.text((64, 75), "Re-download in 720p", font=font_sm, fill="#888888", anchor="mm")
+        d.text((64, 95), "OK to go back", font=font_sm, fill="#555555", anchor="mm")
+        LCD.LCD_ShowImage(img, 0, 0)
+        while _running:
+            b = get_button(PINS, GPIO)
+            if b in ("OK", "KEY3"):
+                break
+            time.sleep(0.05)
+        return
 
     fname = os.path.splitext(os.path.basename(filepath))[0]
     duration = _get_duration(filepath)

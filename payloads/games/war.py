@@ -1,25 +1,26 @@
 #!/usr/bin/env python3
 """
-RaspyJack Payload -- Network War Game
---------------------------------------
+RaspyJack Payload -- Network War
+----------------------------------
 Author: 7h30th3r0n3
 
-Turn-based strategy game simulating network attack/defense.
-Player and AI each have 5 network nodes. Destroy all enemy nodes to win.
+Cyber warfare strategy game. Hack enemy servers, defend your network.
+Each side has 5 nodes. Destroy all enemy nodes to win.
 
 Controls:
-  UP/DOWN    = select node
-  LEFT/RIGHT = cycle action
-  OK         = confirm action
-  KEY1       = skip turn
-  KEY3       = exit
+  UP/DOWN    -- Select node/target
+  LEFT/RIGHT -- Cycle action
+  OK         -- Confirm
+  KEY1       -- Skip turn
+  KEY3       -- Exit
 """
-import os, sys, time, signal, random
+import os, sys, time, signal, random, math
 sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..", "..")))
 
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image
+from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
 
 PINS = {
@@ -27,358 +28,379 @@ PINS = {
     "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16,
 }
 
-GPIO.setmode(GPIO.BCM)
-for pin in PINS.values():
-    GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+WIDTH, HEIGHT = LCD_1in44.LCD_WIDTH, LCD_1in44.LCD_HEIGHT
 
-LCD = LCD_1in44.LCD()
-LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-WIDTH, HEIGHT = LCD.width, LCD.height
-_GAME_W, _GAME_H = 128, 128
+font = scaled_font(10)
+font_sm = scaled_font(8)
+font_xs = scaled_font(7)
 
-font = ImageFont.load_default()
-
-running = True
-
-
-def cleanup(*_):
-    global running
-    running = False
-
-
-signal.signal(signal.SIGINT, cleanup)
-signal.signal(signal.SIGTERM, cleanup)
-
-# --- Colors ---
-COL_BG = (0, 0, 0)
-COL_TEXT = (255, 255, 255)
-COL_PLAYER = (0, 200, 0)
-COL_PLAYER_DIM = (0, 80, 0)
-COL_AI = (200, 0, 0)
-COL_AI_DIM = (80, 0, 0)
-COL_SELECT = (255, 255, 0)
-COL_HP_BG = (40, 40, 40)
-COL_HP_GREEN = (0, 200, 0)
-COL_HP_RED = (200, 0, 0)
-COL_HUD = (0, 180, 255)
-COL_ACTION = (255, 200, 0)
+C_BG = "#060612"
+C_HEADER = "#0d1117"
+C_PLAYER = "#00E676"
+C_PLAYER_DIM = "#004D25"
+C_ENEMY = "#FF5252"
+C_ENEMY_DIM = "#4D0000"
+C_SELECT = "#FFD740"
+C_HP_BG = "#1A1A2E"
+C_HP_GREEN = "#00E676"
+C_HP_RED = "#FF5252"
+C_CYAN = "#00E5FF"
+C_GOLD = "#FFD740"
+C_PURPLE = "#7C4DFF"
+C_WHITE = "#E0E0E0"
+C_DIM = "#555555"
+C_MSG_BG = "#0A0F2A"
 
 ACTIONS = ["SCAN", "ATTACK", "DEFEND", "PATCH"]
+ACTION_ICONS = ["?", "!", "+D", "+H"]
+ACTION_COLORS = [C_CYAN, C_ENEMY, C_PURPLE, C_HP_GREEN]
 NODE_NAMES = ["WEB", "DB", "DNS", "FW", "VPN"]
 
-
-def make_node(name):
-    """Create a fresh network node dict."""
-    return {
-        "name": name,
-        "hp": 100,
-        "defense": random.randint(5, 15),
-        "attack": random.randint(12, 22),
-        "scanned": False,
-    }
+_running = True
 
 
-def make_nodes():
-    """Return a list of 5 fresh nodes."""
-    return [make_node(n) for n in NODE_NAMES]
+def _sig(*_):
+    global _running
+    _running = False
 
 
-def clamp(val, lo, hi):
-    """Clamp value between lo and hi."""
-    if val < lo:
-        return lo
-    if val > hi:
-        return hi
-    return val
+signal.signal(signal.SIGINT, _sig)
+signal.signal(signal.SIGTERM, _sig)
 
 
-def nodes_alive(nodes):
-    """Return count of nodes with hp > 0."""
-    return sum(1 for n in nodes if n["hp"] > 0)
+class Node:
+    def __init__(self, name):
+        self.name = name
+        self.hp = 100
+        self.defense = random.randint(5, 15)
+        self.attack = random.randint(12, 22)
+        self.scanned = False
+        self.flash = 0
+        self.flash_color = C_WHITE
+
+    @property
+    def alive(self):
+        return self.hp > 0
 
 
-def first_alive_index(nodes):
-    """Return index of first alive node."""
+def _draw_hp_bar(d, x, y, w, hp, is_player):
+    d.rectangle((x, y, x + w, y + 3), fill=C_HP_BG)
+    bar_w = int(w * max(0, min(100, hp)) / 100)
+    if bar_w > 0:
+        col = C_HP_GREEN if is_player else C_HP_RED
+        if hp < 30:
+            col = C_GOLD
+        d.rectangle((x, y, x + bar_w, y + 3), fill=col)
+
+
+def _draw_node(d, node, x, y, selected, is_player):
+    if node.flash > 0:
+        node.flash -= 1
+        outline = node.flash_color
+    elif selected:
+        outline = C_SELECT
+    elif is_player:
+        outline = C_PLAYER if node.alive else C_PLAYER_DIM
+    else:
+        outline = C_ENEMY if node.alive else C_ENEMY_DIM
+
+    fill = C_PLAYER_DIM if is_player else C_ENEMY_DIM
+    if not node.alive:
+        fill = "#111111"
+
+    d.rectangle((x, y, x + 12, y + 12), fill=fill, outline=outline)
+
+    if node.alive:
+        inner_col = C_PLAYER if is_player else C_ENEMY
+        d.rectangle((x + 3, y + 3, x + 9, y + 9), fill=inner_col)
+
+
+def _draw_game(d, player, enemy, sel, sel_action, turn, msg, phase, frame):
+    d.rectangle((0, 0, 127, 11), fill=C_HEADER)
+    d.text((2, 1), f"T:{turn}", font=font_xs, fill=C_CYAN)
+    p_alive = sum(1 for n in player if n.alive)
+    e_alive = sum(1 for n in enemy if n.alive)
+    d.text((30, 1), f"YOU:{p_alive}", font=font_xs, fill=C_PLAYER)
+    d.text((75, 1), f"FOE:{e_alive}", font=font_xs, fill=C_ENEMY)
+
+    for i, node in enumerate(player):
+        ny = 15 + i * 20
+        is_sel = phase == "select_node" and i == sel
+        _draw_node(d, node, 2, ny, is_sel, True)
+        label_col = C_WHITE if node.alive else C_DIM
+        d.text((17, ny + 1), node.name, font=font_xs, fill=label_col)
+        _draw_hp_bar(d, 17, ny + 10, 38, node.hp, True)
+
+    cx = 63
+    for i in range(4):
+        ly = 20 + i * 22
+        pulse = int(math.sin(frame * 0.15 + i) * 20 + 40)
+        col = f"#{pulse:02X}{pulse:02X}{pulse+20:02X}"
+        d.line((56, ly + 6, 70, ly + 6), fill=col)
+    d.rectangle((59, 14, 67, 112), outline="#1A1A2E")
+
+    for i, node in enumerate(enemy):
+        ny = 15 + i * 20
+        is_sel = phase == "select_target" and i == sel
+        _draw_node(d, node, 113, ny, is_sel, False)
+        if node.scanned or not node.alive:
+            d.text((75, ny + 1), node.name, font=font_xs, fill=C_WHITE if node.alive else C_DIM)
+            _draw_hp_bar(d, 75, ny + 10, 36, node.hp, False)
+        else:
+            d.text((80, ny + 1), "???", font=font_xs, fill=C_DIM)
+
+    if phase == "select_action":
+        d.rectangle((0, 112, 127, 127), fill="#141428")
+        action_name = ACTIONS[sel_action]
+        action_col = ACTION_COLORS[sel_action]
+        d.text((4, 114), f"< {action_name} >", font=font_sm, fill=action_col)
+        d.text((90, 114), "OK", font=font_xs, fill=C_DIM)
+    elif phase == "select_target":
+        d.rectangle((0, 112, 127, 127), fill="#281414")
+        d.text((4, 114), "Select target", font=font_sm, fill=C_ENEMY)
+        d.text((90, 114), "OK", font=font_xs, fill=C_DIM)
+    elif phase == "select_node":
+        d.rectangle((0, 112, 127, 127), fill="#142814")
+        d.text((4, 114), "Select node", font=font_sm, fill=C_PLAYER)
+        d.text((90, 114), "OK", font=font_xs, fill=C_DIM)
+    else:
+        d.rectangle((0, 112, 127, 127), fill=C_HEADER)
+
+    if msg:
+        d.rectangle((2, 100, 126, 111), fill=C_MSG_BG, outline=C_CYAN)
+        d.text((64, 101), msg[:24], font=font_xs, fill=C_WHITE, anchor="mt")
+
+
+def _ai_turn(player, enemy):
+    alive_ai = [n for n in enemy if n.alive]
+    alive_p = [n for n in player if n.alive]
+    if not alive_ai or not alive_p:
+        return "No moves"
+
+    attacker = random.choice(alive_ai)
+    target = min(alive_p, key=lambda n: n.hp)
+    damage = max(0, attacker.attack - target.defense + random.randint(-8, 8))
+    target.hp = max(0, target.hp - damage)
+    target.flash = 6
+    target.flash_color = C_ENEMY
+    return f"FOE hit {target.name} -{damage}"
+
+
+def _execute(action, player, enemy, p_idx, t_idx):
+    p_node = player[p_idx]
+
+    if action == "SCAN":
+        enemy[t_idx].scanned = True
+        enemy[t_idx].flash = 4
+        enemy[t_idx].flash_color = C_CYAN
+        return f"Scanned {enemy[t_idx].name}"
+
+    if action == "ATTACK":
+        damage = max(0, p_node.attack - enemy[t_idx].defense + random.randint(-8, 8))
+        if enemy[t_idx].scanned:
+            damage = int(damage * 1.3)
+        enemy[t_idx].hp = max(0, enemy[t_idx].hp - damage)
+        enemy[t_idx].flash = 6
+        enemy[t_idx].flash_color = C_GOLD
+        return f"Hit {enemy[t_idx].name} -{damage}"
+
+    if action == "DEFEND":
+        p_node.defense = min(30, p_node.defense + 5)
+        p_node.flash = 4
+        p_node.flash_color = C_PURPLE
+        return f"{p_node.name} DEF+5"
+
+    if action == "PATCH":
+        healed = min(25, 100 - p_node.hp)
+        p_node.hp = min(100, p_node.hp + healed)
+        p_node.flash = 4
+        p_node.flash_color = C_HP_GREEN
+        return f"{p_node.name} HP+{healed}"
+
+    return ""
+
+
+def _first_alive(nodes):
     for i, n in enumerate(nodes):
-        if n["hp"] > 0:
+        if n.alive:
             return i
     return 0
 
 
-def draw_health_bar(draw, x, y, w, hp, is_player):
-    """Draw a small health bar."""
-    draw.rectangle([x, y, x + w, y + 4], fill=COL_HP_BG)
-    bar_w = int(w * clamp(hp, 0, 100) / 100)
-    if bar_w > 0:
-        col = COL_HP_GREEN if is_player else COL_HP_RED
-        draw.rectangle([x, y, x + bar_w, y + 4], fill=col)
-
-
-def draw_game(player, ai, sel_node, sel_action, turn, msg, phase):
-    """Render the full game state to LCD."""
-    img = Image.new("RGB", (_GAME_W, _GAME_H), COL_BG)
-    d = ImageDraw.Draw(img)
-
-    # HUD bar
-    d.text((2, 1), f"T:{turn}", font=font, fill=COL_HUD)
-    p_alive = nodes_alive(player)
-    a_alive = nodes_alive(ai)
-    d.text((30, 1), f"P:{p_alive}", font=font, fill=COL_PLAYER)
-    d.text((60, 1), f"E:{a_alive}", font=font, fill=COL_AI)
-
-    # Draw player nodes (left column)
-    for i, node in enumerate(player):
-        ny = 14 + i * 22
-        is_sel = (phase == "select_node" and i == sel_node)
-        outline = COL_SELECT if is_sel else COL_PLAYER
-        fill = COL_PLAYER if node["hp"] > 0 else COL_PLAYER_DIM
-        d.ellipse([4, ny, 16, ny + 12], fill=fill, outline=outline)
-        label = node["name"]
-        d.text((19, ny + 1), label, font=font, fill=COL_TEXT)
-        draw_health_bar(d, 19, ny + 11, 40, node["hp"], True)
-
-    # Draw AI nodes (right column)
-    for i, node in enumerate(ai):
-        ny = 14 + i * 22
-        fill = COL_AI if node["hp"] > 0 else COL_AI_DIM
-        d.ellipse([110, ny, 122, ny + 12], fill=fill, outline=COL_AI)
-        if node["scanned"]:
-            d.text((72, ny + 1), node["name"], font=font, fill=COL_TEXT)
-            draw_health_bar(d, 72, ny + 11, 36, node["hp"], False)
-        else:
-            d.text((80, ny + 1), "???", font=font, fill=(100, 100, 100))
-
-    # Action selector at bottom
-    if phase == "select_action":
-        d.rectangle([0, 112, 127, 127], fill=(20, 20, 40))
-        action_name = ACTIONS[sel_action]
-        d.text((4, 114), f"< {action_name} >", font=font, fill=COL_ACTION)
-        d.text((80, 114), "OK=Go", font=font, fill=COL_TEXT)
-    elif phase == "select_target":
-        d.rectangle([0, 112, 127, 127], fill=(40, 20, 20))
-        d.text((4, 114), "UP/DN target OK", font=font, fill=COL_AI)
-
-    # Message area
-    if msg:
-        d.rectangle([2, 100, 126, 111], fill=(0, 0, 60))
-        d.text((4, 101), msg[:22], font=font, fill=COL_TEXT)
-
-    if _GAME_W != WIDTH or _GAME_H != HEIGHT:
-        img = img.resize((WIDTH, HEIGHT), Image.NEAREST)
-    LCD.LCD_ShowImage(img, 0, 0)
-
-
-def wait_btn(timeout=0.05):
-    """Poll for a button press with debounce."""
+def _wait_btn():
     btn = get_button(PINS, GPIO)
     if btn:
-        time.sleep(0.18)
+        time.sleep(0.15)
     return btn
 
 
-def ai_turn(player, ai):
-    """Simple AI logic: attack a random alive player node."""
-    alive_ai = [n for n in ai if n["hp"] > 0]
-    alive_player = [n for n in player if n["hp"] > 0]
-    if not alive_ai or not alive_player:
-        return "AI has no moves", player
-
-    attacker = random.choice(alive_ai)
-    target = random.choice(alive_player)
-    damage = max(0, attacker["attack"] - target["defense"] + random.randint(-10, 10))
-    new_hp = max(0, target["hp"] - damage)
-    updated_player = []
-    for n in player:
-        if n is target:
-            updated_node = dict(n)
-            updated_node["hp"] = new_hp
-            updated_player.append(updated_node)
-        else:
-            updated_player.append(dict(n))
-    return f"AI hit {target['name']} -{damage}", updated_player
+def _render(lcd, player, enemy, sel, sel_action, turn, msg, phase, frame):
+    img = Image.new("RGB", (WIDTH, HEIGHT), C_BG)
+    d = ScaledDraw(img)
+    _draw_game(d, player, enemy, sel, sel_action, turn, msg, phase, frame)
+    lcd.LCD_ShowImage(img, 0, 0)
 
 
-def execute_action(action, player, ai, p_idx, t_idx):
-    """Execute a player action. Returns (msg, new_player, new_ai)."""
-    new_player = [dict(n) for n in player]
-    new_ai = [dict(n) for n in ai]
-    p_node = new_player[p_idx]
+def main():
+    global _running
 
-    if action == "SCAN":
-        new_ai[t_idx]["scanned"] = True
-        return f"Scanned {NODE_NAMES[t_idx]}", new_player, new_ai
+    GPIO.setmode(GPIO.BCM)
+    GPIO.setwarnings(False)
+    for pin in PINS.values():
+        GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
-    if action == "ATTACK":
-        damage = max(0, p_node["attack"] - new_ai[t_idx]["defense"] + random.randint(-10, 10))
-        new_ai[t_idx]["hp"] = max(0, new_ai[t_idx]["hp"] - damage)
-        return f"Hit {NODE_NAMES[t_idx]} -{damage}", new_player, new_ai
+    lcd = LCD_1in44.LCD()
+    lcd.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
+    lcd.LCD_Clear()
 
-    if action == "DEFEND":
-        new_player[p_idx]["defense"] = min(30, p_node["defense"] + 5)
-        return f"{p_node['name']} DEF+5", new_player, new_ai
-
-    if action == "PATCH":
-        healed = min(25, 100 - p_node["hp"])
-        new_player[p_idx]["hp"] = min(100, p_node["hp"] + healed)
-        return f"{p_node['name']} HP+{healed}", new_player, new_ai
-
-    return "", new_player, new_ai
-
-
-def play():
-    """Main game loop."""
-    global running
-
-    while running:
-        player = make_nodes()
-        ai = make_nodes()
+    while _running:
+        player = [Node(n) for n in NODE_NAMES]
+        enemy = [Node(n) for n in NODE_NAMES]
         turn = 1
         msg = "YOUR TURN"
         sel_node = 0
         sel_action = 0
+        frame = 0
 
-        while running:
-            # Check win/loss
-            if nodes_alive(ai) == 0:
-                draw_game(player, ai, 0, 0, turn, "YOU WIN!", "")
-                time.sleep(0.5)
-                if not wait_for_restart():
-                    return
-                break
-            if nodes_alive(player) == 0:
-                draw_game(player, ai, 0, 0, turn, "DEFEATED!", "")
-                time.sleep(0.5)
-                if not wait_for_restart():
-                    return
+        while _running:
+            frame += 1
+
+            if sum(1 for n in enemy if n.alive) == 0:
+                _render(lcd, player, enemy, 0, 0, turn, "VICTORY!", "", frame)
+                while _running:
+                    b = _wait_btn()
+                    if b == "KEY3":
+                        _running = False
+                    if b in ("OK", "KEY1"):
+                        break
+                    time.sleep(0.05)
                 break
 
-            # Phase 1: select player node
-            sel_node = clamp(sel_node, 0, 4)
-            if player[sel_node]["hp"] <= 0:
-                sel_node = first_alive_index(player)
+            if sum(1 for n in player if n.alive) == 0:
+                _render(lcd, player, enemy, 0, 0, turn, "DEFEATED!", "", frame)
+                while _running:
+                    b = _wait_btn()
+                    if b == "KEY3":
+                        _running = False
+                    if b in ("OK", "KEY1"):
+                        break
+                    time.sleep(0.05)
+                break
+
+            sel_node = max(0, min(4, sel_node))
+            if not player[sel_node].alive:
+                sel_node = _first_alive(player)
+
             phase = "select_node"
-            draw_game(player, ai, sel_node, sel_action, turn, msg, phase)
+            _render(lcd, player, enemy, sel_node, sel_action, turn, msg, phase, frame)
 
             node_chosen = False
-            while running and not node_chosen:
-                btn = wait_btn()
+            while _running and not node_chosen:
+                btn = _wait_btn()
                 if btn == "KEY3":
-                    cleanup()
-                    return
+                    _running = False
+                    break
                 if btn == "KEY1":
-                    # Skip turn
+                    msg = "Skipped"
                     node_chosen = True
-                    msg = "Turn skipped"
                     break
                 if btn == "UP":
                     sel_node = (sel_node - 1) % 5
-                    while player[sel_node]["hp"] <= 0:
+                    while not player[sel_node].alive:
                         sel_node = (sel_node - 1) % 5
                 elif btn == "DOWN":
                     sel_node = (sel_node + 1) % 5
-                    while player[sel_node]["hp"] <= 0:
+                    while not player[sel_node].alive:
                         sel_node = (sel_node + 1) % 5
                 elif btn == "OK":
                     node_chosen = True
-                draw_game(player, ai, sel_node, sel_action, turn, msg, phase)
+                frame += 1
+                _render(lcd, player, enemy, sel_node, sel_action, turn, msg, phase, frame)
                 time.sleep(0.03)
 
-            if not running:
-                return
-            if msg == "Turn skipped":
-                ai_msg, player = ai_turn(player, ai)
+            if not _running:
+                break
+            if msg == "Skipped":
+                ai_msg = _ai_turn(player, enemy)
                 msg = ai_msg
+                _render(lcd, player, enemy, sel_node, sel_action, turn, msg, "", frame)
+                time.sleep(0.6)
                 turn += 1
+                msg = "YOUR TURN"
                 continue
 
-            # Phase 2: select action
             phase = "select_action"
-            draw_game(player, ai, sel_node, sel_action, turn, f"Node:{player[sel_node]['name']}", phase)
+            _render(lcd, player, enemy, sel_node, sel_action, turn, f"Node: {player[sel_node].name}", phase, frame)
 
             action_chosen = False
-            while running and not action_chosen:
-                btn = wait_btn()
+            while _running and not action_chosen:
+                btn = _wait_btn()
                 if btn == "KEY3":
-                    cleanup()
-                    return
+                    _running = False
+                    break
                 if btn == "LEFT":
                     sel_action = (sel_action - 1) % len(ACTIONS)
                 elif btn == "RIGHT":
                     sel_action = (sel_action + 1) % len(ACTIONS)
                 elif btn == "OK":
                     action_chosen = True
-                draw_game(player, ai, sel_node, sel_action, turn, f"Node:{player[sel_node]['name']}", phase)
+                frame += 1
+                _render(lcd, player, enemy, sel_node, sel_action, turn, f"Node: {player[sel_node].name}", phase, frame)
                 time.sleep(0.03)
 
-            if not running:
-                return
+            if not _running:
+                break
 
-            chosen_action = ACTIONS[sel_action]
+            chosen = ACTIONS[sel_action]
 
-            # Phase 3: if ATTACK or SCAN, select target
-            if chosen_action in ("ATTACK", "SCAN"):
-                t_idx = 0
-                alive_ai_indices = [i for i, n in enumerate(ai) if n["hp"] > 0]
-                if not alive_ai_indices:
+            if chosen in ("ATTACK", "SCAN"):
+                alive_idx = [i for i, n in enumerate(enemy) if n.alive]
+                if not alive_idx:
                     continue
-                t_idx = alive_ai_indices[0]
+                t_idx = alive_idx[0]
                 phase = "select_target"
-                draw_game(player, ai, t_idx, sel_action, turn, f"{chosen_action}->?", phase)
+                _render(lcd, player, enemy, t_idx, sel_action, turn, f"{chosen} -> ?", phase, frame)
 
                 target_chosen = False
-                while running and not target_chosen:
-                    btn = wait_btn()
+                while _running and not target_chosen:
+                    btn = _wait_btn()
                     if btn == "KEY3":
-                        cleanup()
-                        return
-                    if btn == "UP" or btn == "DOWN":
-                        cur = alive_ai_indices.index(t_idx)
-                        if btn == "UP":
-                            cur = (cur - 1) % len(alive_ai_indices)
-                        else:
-                            cur = (cur + 1) % len(alive_ai_indices)
-                        t_idx = alive_ai_indices[cur]
+                        _running = False
+                        break
+                    if btn in ("UP", "DOWN"):
+                        cur = alive_idx.index(t_idx)
+                        cur = (cur + (-1 if btn == "UP" else 1)) % len(alive_idx)
+                        t_idx = alive_idx[cur]
                     elif btn == "OK":
                         target_chosen = True
-                    draw_game(player, ai, t_idx, sel_action, turn, f"{chosen_action}->?", phase)
+                    frame += 1
+                    _render(lcd, player, enemy, t_idx, sel_action, turn, f"{chosen} -> ?", phase, frame)
                     time.sleep(0.03)
 
-                if not running:
-                    return
+                if not _running:
+                    break
             else:
-                t_idx = sel_node  # self-target for DEFEND/PATCH
+                t_idx = sel_node
 
-            # Execute action
-            result_msg, player, ai = execute_action(chosen_action, player, ai, sel_node, t_idx)
-            draw_game(player, ai, sel_node, sel_action, turn, result_msg, "")
-            time.sleep(0.8)
+            result = _execute(chosen, player, enemy, sel_node, t_idx)
+            _render(lcd, player, enemy, sel_node, sel_action, turn, result, "", frame)
+            time.sleep(0.7)
 
-            # AI turn
-            ai_msg, player = ai_turn(player, ai)
+            ai_msg = _ai_turn(player, enemy)
             msg = ai_msg
-            draw_game(player, ai, sel_node, sel_action, turn, msg, "")
-            time.sleep(0.6)
+            _render(lcd, player, enemy, sel_node, sel_action, turn, msg, "", frame)
+            time.sleep(0.5)
 
             turn += 1
             msg = "YOUR TURN"
 
-
-def wait_for_restart():
-    """Wait for OK/KEY1 to restart or KEY3 to quit. Returns True to restart."""
-    while running:
-        btn = wait_btn()
-        if btn == "KEY3":
-            cleanup()
-            return False
-        if btn in ("OK", "KEY1"):
-            return True
-        time.sleep(0.05)
-    return False
+    try:
+        lcd.LCD_Clear()
+    except Exception:
+        pass
+    GPIO.cleanup()
+    return 0
 
 
 if __name__ == "__main__":
-    try:
-        play()
-    finally:
-        LCD.LCD_Clear()
-        GPIO.cleanup()
+    sys.exit(main())
