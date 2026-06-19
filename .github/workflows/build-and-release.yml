@@ -1,0 +1,105 @@
+name: Build Cardputer zero package
+
+on:
+  push:
+    branches:
+      - "**"
+  workflow_dispatch:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+env:
+  DOCKER_IMAGE_CACHE_DIR: /tmp/docker-image-cache
+
+jobs:
+  build:
+    name: Build arm64 .deb
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Restore Docker image cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.DOCKER_IMAGE_CACHE_DIR }}
+          key: docker-images-${{ runner.os }}-build-env-v1
+          restore-keys: |
+            docker-images-${{ runner.os }}-build-env-
+
+      - name: Load cached Docker images
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$DOCKER_IMAGE_CACHE_DIR"
+          if [ -f "$DOCKER_IMAGE_CACHE_DIR/build-env.tar" ]; then
+            docker load -i "$DOCKER_IMAGE_CACHE_DIR/build-env.tar"
+          fi
+          if [ -f "$DOCKER_IMAGE_CACHE_DIR/binfmt.tar" ]; then
+            docker load -i "$DOCKER_IMAGE_CACHE_DIR/binfmt.tar"
+          fi
+
+      - name: Pull Docker images
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker pull tonistiigi/binfmt:latest
+          docker pull ghcr.io/cardputerzero/build-env:latest
+          docker save tonistiigi/binfmt:latest -o "$DOCKER_IMAGE_CACHE_DIR/binfmt.tar"
+          docker save ghcr.io/cardputerzero/build-env:latest -o "$DOCKER_IMAGE_CACHE_DIR/build-env.tar"
+
+      - name: Configure package version
+        id: package_version
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "release" ]; then
+            version="${{ github.event.release.tag_name }}"
+            display_version="$version"
+            if [[ ! "$version" =~ ^[0-9] ]]; then
+              version="0${version}"
+            fi
+          else
+            commit_hash="$(git rev-parse --short=7 HEAD)"
+            version="0.${commit_hash}"
+            display_version="$commit_hash"
+          fi
+
+          sed -i -E "s/^PKG_VERSION=.*/PKG_VERSION=\"${version}\"/" scripts/packaging/meta.env
+
+      - name: Build package
+        shell: bash
+        run: bash scripts/build-deb.sh
+
+      - name: Locate built package
+        id: deb
+        shell: bash
+        run: |
+          set -euo pipefail
+          deb_file="$(ls -t dist/*.deb | head -n 1)"
+          echo "file=$deb_file" >> "$GITHUB_OUTPUT"
+          echo "name=$(basename "$deb_file")" >> "$GITHUB_OUTPUT"
+          ls -lh "$deb_file"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.deb.outputs.name }}
+          path: ${{ steps.deb.outputs.file }}
+
+      - name: Upload package to private release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release upload "${{ github.event.release.tag_name }}" "${{ steps.deb.outputs.file }}" \
+            --repo "${{ github.repository }}" \
+            --clobber

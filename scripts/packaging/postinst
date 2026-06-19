@@ -1,0 +1,100 @@
+#!/bin/bash
+set -e
+
+APP_DIR="/usr/share/APPLaunch/apps/raspyjack"
+LEGACY_DIR="/root/Raspyjack"
+
+if [ -d "$APP_DIR" ]; then
+  if [ ! -e "$LEGACY_DIR" ]; then
+    ln -s "$APP_DIR" "$LEGACY_DIR"
+  elif [ -d "$LEGACY_DIR" ] && [ ! -L "$LEGACY_DIR" ] && [ "$LEGACY_DIR" != "$APP_DIR" ]; then
+    echo "raspyjack: keeping existing $LEGACY_DIR; package app is in $APP_DIR" >&2
+  fi
+fi
+
+if [ -d "$LEGACY_DIR" ]; then
+  for d in \
+    config/ad_recon config/auto_loot_exfil config/bt_audio config/cctv_scanner \
+    config/cctv_viewer config/dns_tunnel config/exfil_ftp config/exfil_smb \
+    config/http_exfil config/reverse_ssh config/rtsp_viewer config/scheduler \
+    config/ssid_pool config/timer config/tripwire config/usb_gadget config/wifi_alert \
+    loot/Autostart loot/Favorites loot/MITM loot/Nmap loot/network loot/wardriving \
+    loot/wordlists wifi/profiles
+  do
+    mkdir -p "$LEGACY_DIR/$d"
+  done
+
+  if [ ! -f "$LEGACY_DIR/gui_conf.json" ]; then
+    cat > "$LEGACY_DIR/gui_conf.json" <<'JSON'
+{
+  "COLORS": {
+    "BACKGROUND": "#000000",
+    "BORDER": "#05ff00",
+    "GAMEPAD": "#141494",
+    "GAMEPAD_FILL": "#eeeeee",
+    "SELECTED_TEXT": "#00ff55",
+    "SELECTED_TEXT_BACKGROUND": "#2d0fff",
+    "TEXT": "#05ff00"
+  },
+  "DISPLAY": {
+    "type": "CARDPUTER_320",
+    "supported_types": ["ST7735_128", "ST7789_240", "CARDPUTER_320"],
+    "flip": false
+  },
+  "LOCK": {
+    "auto_lock_seconds": 0,
+    "enabled": false,
+    "pin_hash": ""
+  },
+  "PATHS": {
+    "IMAGEBROWSER_START": "/root/Raspyjack/img/",
+    "SCREENSAVER_GIF": "/root/Raspyjack/img/screensaver/default.gif"
+  },
+  "PINS": {
+    "KEY1_PIN": 21,
+    "KEY2_PIN": 20,
+    "KEY3_PIN": 16,
+    "KEY_DOWN_PIN": 19,
+    "KEY_LEFT_PIN": 5,
+    "KEY_PRESS_PIN": 13,
+    "KEY_RIGHT_PIN": 26,
+    "KEY_UP_PIN": 6
+  }
+}
+JSON
+  fi
+
+  chmod 0755 "$LEGACY_DIR" "$LEGACY_DIR/wifi" "$LEGACY_DIR/wifi/profiles" 2>/dev/null || true
+  chmod +x "$LEGACY_DIR/Navarro/navarro.py" "$LEGACY_DIR/scripts/pin_wifi_names.sh" 2>/dev/null || true
+fi
+
+FA_TARGET="/usr/share/fonts/truetype/fontawesome/fa-solid-900.ttf"
+if [ ! -f "$FA_TARGET" ]; then
+  mkdir -p "$(dirname "$FA_TARGET")"
+  for url in \
+    "https://use.fontawesome.com/releases/v6.5.1/webfonts/fa-solid-900.ttf" \
+    "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/webfonts/fa-solid-900.ttf" \
+    "https://raw.githubusercontent.com/FortAwesome/Font-Awesome/6.x/webfonts/fa-solid-900.ttf"
+  do
+    if wget -q --timeout=10 -O "$FA_TARGET.tmp" "$url"; then
+      mv "$FA_TARGET.tmp" "$FA_TARGET"
+      chmod 0644 "$FA_TARGET"
+      break
+    fi
+  done
+  rm -f "$FA_TARGET.tmp"
+fi
+
+if [ -x "$APP_DIR/run-raspyjack.sh" ]; then
+  ln -sf "$APP_DIR/run-raspyjack.sh" /usr/local/bin/raspyjack
+fi
+
+if command -v pip3 >/dev/null 2>&1; then
+  pip3 install --break-system-packages --quiet smbus2 bleak gpsd-py3 2>/dev/null || true
+fi
+
+if command -v systemctl >/dev/null 2>&1; then
+  systemctl daemon-reload >/dev/null 2>&1 || true
+fi
+
+exit 0
