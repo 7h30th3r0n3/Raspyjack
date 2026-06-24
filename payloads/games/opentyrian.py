@@ -84,10 +84,29 @@ def _ensure_deps():
         missing.append("xvfb")
     if not os.path.isfile("/usr/bin/xdotool"):
         missing.append("xdotool")
-    if not missing:
-        return True
-    _show_msg("Installing...", " ".join(missing), (255, 180, 0))
-    subprocess.run(["apt-get", "install", "-y"] + missing, capture_output=True, timeout=180)
+    if missing:
+        _show_msg("Installing...", " ".join(missing), (255, 180, 0))
+        subprocess.run(["apt-get", "install", "-y"] + missing, capture_output=True, timeout=180)
+    if not os.path.isfile(GAME_BIN):
+        return False
+    data_dir = "/usr/share/games/opentyrian/data"
+    if not os.path.isdir(data_dir) or not os.path.isfile(os.path.join(data_dir, "palette.dat")):
+        _show_msg("Getting game data...", "Please wait", (255, 180, 0))
+        subprocess.run(["apt-get", "install", "-y", "game-data-packager"],
+                       capture_output=True, timeout=120)
+        subprocess.run(["game-data-packager", "tyrian", "--install"],
+                       capture_output=True, timeout=120)
+        if not os.path.isdir(data_dir):
+            tyrian_url = "https://camanis.net/tyrian/tyrian21.zip"
+            dl_dir = "/tmp/tyrian_data"
+            os.makedirs(dl_dir, exist_ok=True)
+            subprocess.run(["wget", "-q", "-O", f"{dl_dir}/tyrian21.zip", tyrian_url],
+                           capture_output=True, timeout=60)
+            subprocess.run(["unzip", "-o", "-q", f"{dl_dir}/tyrian21.zip", "-d", dl_dir],
+                           capture_output=True, timeout=30)
+            os.makedirs(data_dir, exist_ok=True)
+            subprocess.run(["cp", "-r"] + [f for f in [f"{dl_dir}/tyrian21/{f}" for f in os.listdir(f"{dl_dir}/tyrian21")] if os.path.isfile(f)] + [data_dir],
+                           capture_output=True, timeout=30)
     return os.path.isfile(GAME_BIN)
 
 
@@ -151,7 +170,11 @@ def main():
     env["SDL_VIDEODRIVER"] = "x11"
     env["SDL_AUDIODRIVER"] = "dummy"
 
-    game = subprocess.Popen([GAME_BIN], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    data_dir = "/usr/share/games/opentyrian/data"
+    cmd = [GAME_BIN]
+    if os.path.isdir(data_dir):
+        cmd += ["-t", data_dir]
+    game = subprocess.Popen(cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(2)
     if game.poll() is not None:
         _show_msg("Game crashed", "", (255, 50, 50)); time.sleep(3); xvfb.kill(); GPIO.cleanup(); return 1

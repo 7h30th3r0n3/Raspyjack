@@ -1530,9 +1530,8 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
             self.end_headers()
 
     def _handle_wardriving_session(self, query: dict) -> None:
-        """Serve a specific session CSV file."""
+        """Serve a specific session CSV file, filtering bad GPS."""
         path = query.get("path", [""])[0]
-        # Security: only allow files in the wardriving loot dir
         if not path or not path.startswith("/root/Raspyjack/loot/wardriving/"):
             self.send_response(403)
             self.end_headers()
@@ -1541,8 +1540,21 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "text/csv")
             self.end_headers()
-            with open(path, "rb") as f:
-                self.wfile.write(f.read())
+            with open(path, "r") as f:
+                for i, line in enumerate(f):
+                    if i < 2:
+                        self.wfile.write(line.encode())
+                        continue
+                    parts = line.split(",")
+                    if len(parts) >= 8:
+                        try:
+                            lat = float(parts[6])
+                            lon = float(parts[7])
+                            if abs(lat) < 1 and abs(lon) < 1:
+                                continue
+                        except ValueError:
+                            pass
+                    self.wfile.write(line.encode())
         else:
             self.send_response(404)
             self.end_headers()

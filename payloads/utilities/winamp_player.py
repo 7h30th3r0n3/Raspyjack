@@ -85,8 +85,8 @@ try:
     font_led = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf', S(14))
 except Exception:
     font_led = scaled_font(14)
-font = scaled_font(9)
-font_sm = scaled_font(7)
+font = scaled_font(11)
+font_sm = scaled_font(9)
 font_xs = scaled_font(6)
 
 
@@ -100,17 +100,30 @@ def _check_btn():
 def _set_vol(vol):
     global _volume
     _volume = max(0, min(100, vol))
-    subprocess.Popen(["amixer", "sset", "Headphone", str(int(_volume * 63 / 100))],
+    dac_val = int(75 + (_volume * 180 / 100))
+    hp_val = int(19 + (_volume * 44 / 100))
+    subprocess.Popen(["amixer", "-c", "0", "sset", "Headphone", str(hp_val)],
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    subprocess.Popen(["amixer", "sset", "DACL", "180"],
+    subprocess.Popen(["amixer", "-c", "0", "sset", "DACL", str(dac_val)],
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    subprocess.Popen(["amixer", "sset", "DACR", "180"],
+    subprocess.Popen(["amixer", "-c", "0", "sset", "DACR", str(dac_val)],
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    _tpa_enable()
 
 
 # ---------------------------------------------------------------------------
 # Audio + PCM for spectrum
 # ---------------------------------------------------------------------------
+def _tpa_enable():
+    try:
+        import smbus2
+        bus = smbus2.SMBus(1)
+        bus.write_byte_data(0x60, 0x01, 0xC0, force=True)
+        bus.close()
+    except Exception:
+        pass
+
+
 def _start_audio(path):
     global _audio_proc, _pcm_proc
     _stop_audio()
@@ -746,12 +759,21 @@ def main():
                         current_dir, cursor, scroll = parent, 0, 0
                 time.sleep(DEBOUNCE)
             elif btn == "UP":
-                cursor = max(0, cursor - 1)
+                if cursor > 0:
+                    cursor -= 1
+                else:
+                    cursor = max(0, len(items) - 1)
                 if cursor < scroll:
                     scroll = cursor
+                if cursor >= scroll + 7:
+                    scroll = cursor - 6
                 time.sleep(DEBOUNCE)
             elif btn == "DOWN":
-                cursor = min(max(0, len(items) - 1), cursor + 1)
+                if cursor < len(items) - 1:
+                    cursor += 1
+                else:
+                    cursor = 0
+                    scroll = 0
                 if cursor >= scroll + 7:
                     scroll = cursor - 6
                 time.sleep(DEBOUNCE)

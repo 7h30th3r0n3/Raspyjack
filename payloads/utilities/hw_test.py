@@ -325,27 +325,119 @@ def test_usb():
 
 
 def test_gps():
-    """Test GPS."""
+    """Test GPS by reading actual NMEA data."""
     try:
-        for dev in ["/dev/ttyS0", "/dev/ttyUSB0", "/dev/ttyACM0"]:
-            if os.path.exists(dev):
-                return "PASS", dev
-        return "WARN", "No GPS port"
+        for dev in ["/dev/ttyUSB0", "/dev/ttyACM0", "/dev/ttyS0"]:
+            if not os.path.exists(dev):
+                continue
+            r = subprocess.run(
+                ["timeout", "3", "cat", dev],
+                capture_output=True, timeout=5)
+            if b"$GP" in r.stdout or b"$GN" in r.stdout:
+                return "PASS", f"{dev} NMEA OK"
+        r = subprocess.run(["pgrep", "gpsd"], capture_output=True, timeout=2)
+        if r.returncode == 0:
+            r2 = subprocess.run(
+                ["gpspipe", "-w", "-n", "3"],
+                capture_output=True, text=True, timeout=5)
+            if "lat" in r2.stdout or "TPV" in r2.stdout:
+                return "PASS", "gpsd active"
+        return "FAIL", "No GPS data"
     except Exception:
-        return "FAIL", "Error"
+        return "FAIL", "No GPS"
 
 
 def test_ir():
-    """Test IR TX/RX."""
-    tx = os.path.exists("/dev/lirc0")
-    rx = os.path.exists("/dev/lirc1")
-    if tx and rx:
-        return "PASS", "TX+RX"
-    elif tx:
-        return "WARN", "TX only"
-    elif rx:
-        return "WARN", "RX only"
-    return "FAIL", "No IR"
+    """Test IR TX/RX with loopback — TX sends, RX should receive reflection."""
+    tx_dev = None
+    rx_dev = None
+    for dev in ["/dev/lirc0", "/dev/lirc1"]:
+        if not os.path.exists(dev):
+            continue
+        try:
+            r = subprocess.run(["ir-ctl", "-d", dev, "--features"],
+                               capture_output=True, text=True, timeout=3)
+            if "device can send raw" in r.stdout.lower():
+                tx_dev = dev
+            if "device can receive raw" in r.stdout.lower():
+                rx_dev = dev
+        except Exception:
+            pass
+
+    if not tx_dev and not rx_dev:
+        return "FAIL", "No IR driver"
+
+    if not tx_dev or not rx_dev:
+        parts = []
+        if tx_dev:
+            parts.append("TX")
+        if rx_dev:
+            parts.append("RX")
+        return "WARN", f"{'+'.join(parts)} only"
+
+    _draw("HW TEST", [], "Hold paper/hand close", "to IR sensor then OK")
+    btn = _wait_btn(15)
+    if btn != "OK":
+        return "WARN", "Skipped by user"
+
+    _draw("HW TEST", [], "Testing IR loopback...", "Sending + receiving")
+
+    pulse_file = "/tmp/ir_test_pulse"
+    with open(pulse_file, "w") as f:
+        f.write("carrier 38000\npulse 9000\nspace 4500\n")
+        for _ in range(8):
+            f.write("pulse 560\nspace 560\n")
+        f.write("pulse 560\n")
+
+    rx_proc = subprocess.Popen(
+        ["ir-ctl", "-d", rx_dev, "--receive"],
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+
+    time.sleep(0.3)
+
+    for _ in range(3):
+        subprocess.run(["ir-ctl", "-d", tx_dev, f"--send={pulse_file}"],
+                       capture_output=True, timeout=2)
+        time.sleep(0.2)
+
+    time.sleep(0.5)
+    rx_proc.terminate()
+    try:
+        out, _ = rx_proc.communicate(timeout=2)
+    except Exception:
+        rx_proc.kill()
+        out = b""
+
+    try:
+        os.remove(pulse_file)
+    except Exception:
+        pass
+
+    if b"pulse" in out or b"space" in out or len(out) > 20:
+        return "PASS", "TX+RX loopback OK"
+    return "FAIL", "TX sent, RX no signal"
+
+
+def test_ethernet():
+    """Test Ethernet interfaces."""
+    try:
+        ifaces = []
+        for name in os.listdir("/sys/class/net"):
+            if name.startswith("eth") or name.startswith("enp") or name.startswith("usb"):
+                ifaces.append(name)
+        if not ifaces:
+            return "FAIL", "No ethernet"
+        statuses = []
+        for iface in ifaces:
+            try:
+                with open(f"/sys/class/net/{iface}/operstate") as f:
+                    state = f.read().strip()
+                statuses.append(f"{iface}:{state}")
+            except Exception:
+                statuses.append(f"{iface}:?")
+        return "PASS", " ".join(statuses)
+    except Exception:
+        return "FAIL", "Error"
 
 
 def test_backlight():
@@ -436,6 +528,7 @@ def main():
         ("USB", test_usb),
         ("GPS", test_gps),
         ("IR TX/RX", test_ir),
+        ("Ethernet", test_ethernet),
         ("Backlight", test_backlight),
         ("Battery", test_battery),
         ("Network", test_network),

@@ -83,21 +83,28 @@ SIGNAL_THRESHOLD_DB = -30.0
 VIEWS = ["capture", "library", "replay"]
 
 BANDS = [
-    {"name": "433 MHz", "freq": 433_920_000, "desc": "EU ISM"},
+    {"name": "300 MHz", "freq": 300_000_000, "desc": "Gate/Alarm"},
     {"name": "315 MHz", "freq": 315_000_000, "desc": "US Remotes"},
-    {"name": "868 MHz", "freq": 868_000_000, "desc": "EU ISM/LoRa"},
+    {"name": "390 MHz", "freq": 390_000_000, "desc": "Car Keys"},
+    {"name": "418 MHz", "freq": 418_000_000, "desc": "EU Remote"},
+    {"name": "433 MHz", "freq": 433_920_000, "desc": "EU ISM"},
+    {"name": "434 MHz", "freq": 434_000_000, "desc": "EU Sensors"},
+    {"name": "868 MHz", "freq": 868_000_000, "desc": "EU LoRa"},
     {"name": "915 MHz", "freq": 915_000_000, "desc": "US ISM"},
+    {"name": "Custom", "freq": 433_920_000, "desc": "Manual"},
 ]
+
+FREQ_STEP = 100_000  # 100 kHz step for custom frequency tuning
 
 GAIN_STEPS = [0, 10, 20, 30, 40, 49]
 
 # ---------------------------------------------------------------------------
 # Fonts
 # ---------------------------------------------------------------------------
-font = scaled_font(9)
-font_sm = scaled_font(7)
-font_lg = scaled_font(12)
-font_xs = scaled_font(6)
+font = scaled_font(10)
+font_sm = scaled_font(9)
+font_lg = scaled_font(13)
+font_xs = scaled_font(8)
 
 # ---------------------------------------------------------------------------
 # Module state (immutable replacement pattern: new dicts when updating)
@@ -344,7 +351,7 @@ def _draw_signal_bar(draw, db, x0, y0, w, h):
 
     # dB text
     draw.text(
-        (x0 + w + SX(3), y0 + 1),
+        (x0 + w + 3, y0 + 1),
         f"{db:.0f}dB",
         font=font_xs,
         fill=COL_SIGNAL if db > SIGNAL_THRESHOLD_DB else COL_MUTED,
@@ -372,30 +379,29 @@ def _draw_capture(lcd, sdr, band_idx, gain_idx, recording, rec_start, wf_buf):
         elapsed = time.time() - rec_start
         d.text((90, 2), f"REC {elapsed:.1f}s", font=font_xs, fill=COL_REPLAY)
 
+    # -- Frequency + band --
+    freq_mhz = band["freq"] / 1e6
+    d.text((2, 15), f"{freq_mhz:.3f} MHz", font=font, fill=COL_SIGNAL)
+    gain_val = GAIN_STEPS[gain_idx]
+    d.text((80, 15), f"G:{gain_val}", font=font_xs, fill=COL_MUTED)
+    d.text((100, 15), band["desc"], font=font_xs, fill=COL_DIM)
+
     # -- Signal strength bar --
     db = sdr.get_signal_db() if sdr.is_running else -100.0
-    _draw_signal_bar(d, db, SX(4), SY(16), SX(85), SY(8))
+    _draw_signal_bar(d, db, 4, 26, 85, 8)
 
+    # -- Status text --
     above_thresh = db > SIGNAL_THRESHOLD_DB
     if above_thresh and not recording:
-        d.text((2, 26), "SIGNAL DETECTED", font=font_xs, fill=COL_CAPTURE)
+        d.text((2, 36), "SIGNAL DETECTED", font=font_xs, fill=COL_CAPTURE)
     elif recording:
-        d.text((2, 26), "RECORDING...", font=font_xs, fill=COL_REPLAY)
+        d.text((2, 36), "RECORDING...", font=font_xs, fill=COL_REPLAY)
     else:
-        d.text((2, 26), "Listening...", font=font_xs, fill=COL_DIM)
-
-    # -- Gain display --
-    gain_val = GAIN_STEPS[gain_idx]
-    d.text((100, 26), f"G:{gain_val}", font=font_xs, fill=COL_MUTED)
-
-    # -- Frequency info --
-    freq_mhz = band["freq"] / 1e6
-    d.text((2, 33), f"{freq_mhz:.3f} MHz", font=font, fill=COL_SIGNAL)
-    d.text((80, 34), band["desc"], font=font_xs, fill=COL_DIM)
+        d.text((2, 36), "Listening...", font=font_xs, fill=COL_DIM)
 
     # -- Waterfall display --
-    wf_y = SY(44)
-    wf_h = HEIGHT - wf_y - SY(14)
+    wf_y = SY(46)
+    wf_h = SY(113) - wf_y
     wf_w = WIDTH
 
     if sdr.is_running:
@@ -422,12 +428,15 @@ def _draw_capture(lcd, sdr, band_idx, gain_idx, recording, rec_start, wf_buf):
         if len(points) > 1:
             draw.line(points, fill=COL_SIGNAL, width=1)
 
-    # -- Footer --
-    d.rectangle([(0, 115), (128, 128)], fill=COL_HEADER)
+    # -- Footer (drawn last, covers any overflow) --
+    d.rectangle([(0, 114), (128, 128)], fill=COL_HEADER)
+    is_custom = band["name"] == "Custom"
     if recording:
-        d.text((2, 116), "OK:Stop  LR:Band  K3:Exit", font=font_xs, fill=COL_DIM)
+        d.text((2, 115), "OK:Stop  LR:Band  K3:Exit", font=font_xs, fill=COL_DIM)
+    elif is_custom:
+        d.text((2, 115), "OK:Rec UD:Freq LR:Band", font=font_xs, fill=COL_DIM)
     else:
-        d.text((2, 116), "OK:Rec  UD:Gain  K1:View", font=font_xs, fill=COL_DIM)
+        d.text((2, 115), "OK:Rec UD:Gain LR:Band", font=font_xs, fill=COL_DIM)
 
     lcd.LCD_ShowImage(img, 0, 0)
     return db
@@ -858,8 +867,15 @@ def main():
 
             elif btn == "UP":
                 if view == "capture":
-                    gain_idx = min(len(GAIN_STEPS) - 1, gain_idx + 1)
-                    sdr.set_gain(GAIN_STEPS[gain_idx])
+                    if BANDS[band_idx]["name"] == "Custom" and not recording:
+                        BANDS[band_idx]["freq"] += FREQ_STEP
+                        BANDS[band_idx]["desc"] = f"{BANDS[band_idx]['freq']/1e6:.1f}M"
+                        sdr.stop()
+                        sdr.start(BANDS[band_idx]["freq"], SAMPLE_RATE, GAIN_STEPS[gain_idx], backend)
+                        wf_buf = _WaterfallBuf(WIDTH, SY(60))
+                    else:
+                        gain_idx = min(len(GAIN_STEPS) - 1, gain_idx + 1)
+                        sdr.set_gain(GAIN_STEPS[gain_idx])
                 elif view == "library":
                     lib_selected = max(0, lib_selected - 1)
                     visible = max(1, (HEIGHT - SY(30)) // SY(20))
@@ -868,8 +884,15 @@ def main():
 
             elif btn == "DOWN":
                 if view == "capture":
-                    gain_idx = max(0, gain_idx - 1)
-                    sdr.set_gain(GAIN_STEPS[gain_idx])
+                    if BANDS[band_idx]["name"] == "Custom" and not recording:
+                        BANDS[band_idx]["freq"] = max(24_000_000, BANDS[band_idx]["freq"] - FREQ_STEP)
+                        BANDS[band_idx]["desc"] = f"{BANDS[band_idx]['freq']/1e6:.1f}M"
+                        sdr.stop()
+                        sdr.start(BANDS[band_idx]["freq"], SAMPLE_RATE, GAIN_STEPS[gain_idx], backend)
+                        wf_buf = _WaterfallBuf(WIDTH, SY(60))
+                    else:
+                        gain_idx = max(0, gain_idx - 1)
+                        sdr.set_gain(GAIN_STEPS[gain_idx])
                 elif view == "library":
                     if captures:
                         lib_selected = min(len(captures) - 1, lib_selected + 1)

@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """
-RaspyJack Payload -- Neon Bikes (Tron Light Cycles)
+RaspyJack Payload -- NEON BIKES (Tron Light Cycles)
 ====================================================
 Author: 7h30th3r0n3
 
-Grid-based Tron game on 128x128 canvas. Player controls a light bike
-leaving a neon trail. AI opponent with chase/avoid algorithm.
+Intense Tron-style light cycle arena. Fast, lethal, neon.
+Player 1 (green) vs AI (red). Touch anything = instant death.
 
 Controls:
-  UP/DOWN/LEFT/RIGHT -- Change direction
-  KEY1               -- Restart after game over
-  KEY3               -- Exit
+  D-pad    -- Steer (instant turn, no stopping)
+  KEY2     -- Turbo (2x speed burst, limited fuel)
+  OK/KEY1  -- Restart round
+  KEY3     -- Exit
 """
 
 import os, sys, time, signal, random
@@ -18,337 +19,346 @@ sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..", "..")))
 
 import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image
+from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
 
-# ---------------------------------------------------------------------------
-# GPIO
-# ---------------------------------------------------------------------------
 PINS = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
     "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16,
 }
-GPIO.setmode(GPIO.BCM)
-for pin in PINS.values():
-    GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
-# ---------------------------------------------------------------------------
-# LCD
-# ---------------------------------------------------------------------------
-LCD = LCD_1in44.LCD()
-LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
-WIDTH, HEIGHT = LCD.width, LCD.height
-_GAME_W, _GAME_H = 128, 128
+WIDTH, HEIGHT = LCD_1in44.LCD_WIDTH, LCD_1in44.LCD_HEIGHT
 
-font = ImageFont.load_default()
+font = scaled_font(12)
+font_sm = scaled_font(9)
+font_xs = scaled_font(7)
 
-# ---------------------------------------------------------------------------
-# Grid & colours
-# ---------------------------------------------------------------------------
 CELL = 2
-GRID_W, GRID_H = _GAME_W // CELL, _GAME_H // CELL  # 64x64
+GW, GH = 64, 64
 
-COL_BG = (0, 0, 20)
-COL_GRID = (0, 0, 40)
-COL_PLAYER = (0, 255, 100)
-COL_PLAYER_HEAD = (150, 255, 200)
-COL_AI = (255, 40, 40)
-COL_AI_HEAD = (255, 150, 150)
-COL_BORDER = (0, 80, 160)
-COL_TEXT = (0, 255, 200)
-COL_SCORE = (200, 200, 255)
+UP = (0, -1)
+DN = (0, 1)
+LT = (-1, 0)
+RT = (1, 0)
+DIRS = [UP, DN, LT, RT]
 
-# Directions: (dx, dy)
-DIR_UP = (0, -1)
-DIR_DOWN = (0, 1)
-DIR_LEFT = (-1, 0)
-DIR_RIGHT = (1, 0)
-ALL_DIRS = [DIR_UP, DIR_DOWN, DIR_LEFT, DIR_RIGHT]
+SPEED = 18
+TURBO_MAX = 8
 
-FPS = 12
-FRAME_DT = 1.0 / FPS
-
-# ---------------------------------------------------------------------------
-# Signal handling
-# ---------------------------------------------------------------------------
-running = True
+_running = True
 
 
-def cleanup(*_):
-    global running
-    running = False
+def _sig(*_):
+    global _running
+    _running = False
 
 
-signal.signal(signal.SIGINT, cleanup)
-signal.signal(signal.SIGTERM, cleanup)
+signal.signal(signal.SIGINT, _sig)
+signal.signal(signal.SIGTERM, _sig)
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-def opposite(d1, d2):
-    """True if directions are exact opposites."""
+def _opp(d1, d2):
     return d1[0] == -d2[0] and d1[1] == -d2[1]
 
 
-def in_bounds(x, y):
-    """Check if position is inside the grid."""
-    return 0 <= x < GRID_W and 0 <= y < GRID_H
+def _safe(x, y, walls):
+    return 0 <= x < GW and 0 <= y < GH and (x, y) not in walls
 
 
-def is_safe(x, y, trail_p, trail_a):
-    """Check if a cell is safe to move into."""
-    if not in_bounds(x, y):
-        return False
-    if (x, y) in trail_p or (x, y) in trail_a:
-        return False
-    return True
-
-
-def count_reachable(sx, sy, trail_p, trail_a, limit=30):
-    """BFS flood-fill to count reachable cells (capped for performance)."""
-    visited = {(sx, sy)}
-    queue = [(sx, sy)]
-    count = 0
-    while queue and count < limit:
-        cx, cy = queue.pop(0)
-        count += 1
-        for dx, dy in ALL_DIRS:
+def _flood(sx, sy, walls, cap=50):
+    vis = {(sx, sy)}
+    q = [(sx, sy)]
+    n = 0
+    while q and n < cap:
+        cx, cy = q.pop(0)
+        n += 1
+        for dx, dy in DIRS:
             nx, ny = cx + dx, cy + dy
-            if (nx, ny) not in visited and is_safe(nx, ny, trail_p, trail_a):
-                visited.add((nx, ny))
-                queue.append((nx, ny))
-    return count
+            if (nx, ny) not in vis and _safe(nx, ny, walls):
+                vis.add((nx, ny))
+                q.append((nx, ny))
+    return n
 
 
-def ai_choose_direction(ax, ay, ai_dir, px, py, trail_p, trail_a):
-    """AI picks a direction: avoid death, chase player when safe."""
-    # Evaluate each valid direction
-    candidates = []
-    for d in ALL_DIRS:
-        if opposite(d, ai_dir):
+def _ai(ax, ay, ad, px, py, walls):
+    best = None
+    best_score = -1
+    for d in DIRS:
+        if _opp(d, ad):
             continue
         nx, ny = ax + d[0], ay + d[1]
-        if not is_safe(nx, ny, trail_p, trail_a):
+        if not _safe(nx, ny, walls):
             continue
-        reach = count_reachable(nx, ny, trail_p, trail_a)
-        # Distance to player (Manhattan) - prefer getting closer
+        reach = _flood(nx, ny, walls)
         dist = abs(nx - px) + abs(ny - py)
-        candidates.append((d, reach, dist))
-
-    if not candidates:
-        # No safe move, keep current direction (will crash)
-        return ai_dir
-
-    # Sort: prefer most reachable space, then closest to player
-    candidates.sort(key=lambda c: (-c[1], c[2]))
-    return candidates[0][0]
+        score = reach * 100 - dist
+        if score > best_score:
+            best_score = score
+            best = d
+    return best if best else ad
 
 
-# ---------------------------------------------------------------------------
-# Drawing
-# ---------------------------------------------------------------------------
-def draw_frame(trail_p, trail_a, head_p, head_a, score, game_over_msg=None):
-    """Render the full game frame to the LCD."""
-    img = Image.new("RGB", (_GAME_W, _GAME_H), COL_BG)
-    d = ImageDraw.Draw(img)
-
-    # Draw border
-    d.rectangle([0, 0, _GAME_W - 1, _GAME_H - 1], outline=COL_BORDER)
-
-    # Draw trails
-    for (tx, ty) in trail_p:
-        x1, y1 = tx * CELL, ty * CELL
-        d.rectangle([x1, y1, x1 + CELL - 1, y1 + CELL - 1], fill=COL_PLAYER)
-
-    for (tx, ty) in trail_a:
-        x1, y1 = tx * CELL, ty * CELL
-        d.rectangle([x1, y1, x1 + CELL - 1, y1 + CELL - 1], fill=COL_AI)
-
-    # Draw heads (brighter)
-    if head_p:
-        hx, hy = head_p
-        x1, y1 = hx * CELL, hy * CELL
-        d.rectangle([x1, y1, x1 + CELL - 1, y1 + CELL - 1], fill=COL_PLAYER_HEAD)
-
-    if head_a:
-        hx, hy = head_a
-        x1, y1 = hx * CELL, hy * CELL
-        d.rectangle([x1, y1, x1 + CELL - 1, y1 + CELL - 1], fill=COL_AI_HEAD)
-
-    # Score at top
-    d.text((3, 2), f"Score:{score}", font=font, fill=COL_SCORE)
-
-    # Game over message
-    if game_over_msg:
-        bbox = d.textbbox((0, 0), game_over_msg, font=font)
-        tw = bbox[2] - bbox[0]
-        th = bbox[3] - bbox[1]
-        cx = (_GAME_W - tw) // 2
-        cy = (_GAME_H - th) // 2
-        d.rectangle([cx - 4, cy - 4, cx + tw + 4, cy + th + 14],
-                     fill=(0, 0, 0), outline=COL_BORDER)
-        d.text((cx, cy), game_over_msg, font=font, fill=COL_TEXT)
-        d.text((cx, cy + th + 4), "KEY1:Retry KEY3:Exit",
-               font=font, fill=COL_SCORE)
-
-    if _GAME_W != WIDTH or _GAME_H != HEIGHT:
-        img = img.resize((WIDTH, HEIGHT), Image.NEAREST)
-    LCD.LCD_ShowImage(img, 0, 0)
+class Bike:
+    def __init__(self, x, y, d, color, head_color, trail_color):
+        self.x = x
+        self.y = y
+        self.d = d
+        self.color = color
+        self.head_color = head_color
+        self.trail_color = trail_color
+        self.trail = [(x, y)]
+        self.alive = True
 
 
-# ---------------------------------------------------------------------------
-# Game logic
-# ---------------------------------------------------------------------------
-def init_game_state():
-    """Create fresh game state."""
-    # Player starts left side, AI starts right side
-    px, py = GRID_W // 4, GRID_H // 2
-    ax, ay = 3 * GRID_W // 4, GRID_H // 2
-    return {
-        "px": px, "py": py,
-        "p_dir": DIR_RIGHT,
-        "trail_p": {(px, py)},
-        "ax": ax, "ay": ay,
-        "a_dir": DIR_LEFT,
-        "trail_a": {(ax, ay)},
-        "score": 0,
-        "alive_p": True,
-        "alive_a": True,
-    }
+class Game:
+    def __init__(self):
+        self.p = Bike(GW // 4, GH // 2, RT, "#00FF64", "#FFFFFF", "#004422")
+        self.a = Bike(3 * GW // 4, GH // 2, LT, "#FF3030", "#FFAAAA", "#440011")
+        self.walls = {(self.p.x, self.p.y), (self.a.x, self.a.y)}
+        self.over = False
+        self.msg = ""
+        self.score = 0
+        self.wins = 0
+        self.losses = 0
+        self.turbo = TURBO_MAX
+        self.turbo_cd = 0
+        self.tick = 0
+        self.sparks = []
 
+    def reset(self):
+        self.p = Bike(GW // 4, GH // 2, RT, "#00FF64", "#FFFFFF", "#004422")
+        self.a = Bike(3 * GW // 4, GH // 2, LT, "#FF3030", "#FFAAAA", "#440011")
+        self.walls = {(self.p.x, self.p.y), (self.a.x, self.a.y)}
+        self.over = False
+        self.msg = ""
+        self.score = 0
+        self.turbo = TURBO_MAX
+        self.turbo_cd = 0
+        self.sparks = []
 
-def step_game(state, new_p_dir):
-    """Advance one tick. Returns new state dict (immutable pattern)."""
-    px, py = state["px"], state["py"]
-    ax, ay = state["ax"], state["ay"]
-    p_dir = state["p_dir"]
-    a_dir = state["a_dir"]
-    trail_p = set(state["trail_p"])
-    trail_a = set(state["trail_a"])
-    score = state["score"]
+    def _move(self, bike):
+        nx = bike.x + bike.d[0]
+        ny = bike.y + bike.d[1]
+        if _safe(nx, ny, self.walls):
+            bike.x, bike.y = nx, ny
+            bike.trail.append((nx, ny))
+            self.walls.add((nx, ny))
+            return True
+        bike.alive = False
+        self._explode(bike.x, bike.y)
+        return False
 
-    # Update player direction (no reversals)
-    if new_p_dir and not opposite(new_p_dir, p_dir):
-        p_dir = new_p_dir
+    def _explode(self, x, y):
+        for _ in range(12):
+            self.sparks.append([
+                x * CELL + random.randint(-4, 4),
+                y * CELL + random.randint(-4, 4),
+                random.randint(6, 14),
+            ])
 
-    # AI direction
-    a_dir = ai_choose_direction(ax, ay, a_dir, px, py, trail_p, trail_a)
-
-    # Move player
-    npx, npy = px + p_dir[0], py + p_dir[1]
-    alive_p = is_safe(npx, npy, trail_p, trail_a)
-
-    # Move AI
-    nax, nay = ax + a_dir[0], ay + a_dir[1]
-    alive_a = is_safe(nax, nay, trail_p, trail_a)
-
-    # Head-on collision
-    if (npx, npy) == (nax, nay):
-        alive_p = False
-        alive_a = False
-
-    if alive_p:
-        trail_p.add((npx, npy))
-        px, py = npx, npy
-        score += 1
-
-    if alive_a:
-        trail_a.add((nax, nay))
-        ax, ay = nax, nay
-
-    return {
-        "px": px, "py": py,
-        "p_dir": p_dir,
-        "trail_p": trail_p,
-        "ax": ax, "ay": ay,
-        "a_dir": a_dir,
-        "trail_a": trail_a,
-        "score": score,
-        "alive_p": alive_p,
-        "alive_a": alive_a,
-    }
-
-
-# ---------------------------------------------------------------------------
-# Main game loop
-# ---------------------------------------------------------------------------
-def play():
-    """Single round of Neon Bikes."""
-    state = init_game_state()
-    pending_dir = None
-
-    while running:
-        t0 = time.time()
-
-        # Read input
-        btn = get_button(PINS, GPIO)
-        if btn == "KEY3":
+    def update(self, p_dir, turbo):
+        if self.over:
             return
+        self.tick += 1
 
-        dir_map = {
-            "UP": DIR_UP, "DOWN": DIR_DOWN,
-            "LEFT": DIR_LEFT, "RIGHT": DIR_RIGHT,
-        }
-        if btn in dir_map:
-            pending_dir = dir_map[btn]
+        if p_dir and not _opp(p_dir, self.p.d):
+            self.p.d = p_dir
 
-        # Step game
-        state = step_game(state, pending_dir)
-        pending_dir = None
+        self.a.d = _ai(self.a.x, self.a.y, self.a.d, self.p.x, self.p.y, self.walls)
 
-        # Check end conditions
-        if not state["alive_p"]:
-            msg = "YOU CRASHED!" if state["alive_a"] else "DRAW!"
-            draw_frame(state["trail_p"], state["trail_a"],
-                       (state["px"], state["py"]),
-                       (state["ax"], state["ay"]),
-                       state["score"], msg)
-            # Wait for restart or exit
-            while running:
-                b = get_button(PINS, GPIO)
-                if b == "KEY3":
-                    return
-                if b == "KEY1":
-                    time.sleep(0.2)
-                    play()
-                    return
-                time.sleep(0.05)
-            return
+        if self.turbo_cd > 0:
+            self.turbo_cd -= 1
 
-        if not state["alive_a"]:
-            draw_frame(state["trail_p"], state["trail_a"],
-                       (state["px"], state["py"]),
-                       (state["ax"], state["ay"]),
-                       state["score"], "AI CRASHED!")
-            while running:
-                b = get_button(PINS, GPIO)
-                if b == "KEY3":
-                    return
-                if b == "KEY1":
-                    time.sleep(0.2)
-                    play()
-                    return
-                time.sleep(0.05)
-            return
+        steps = 1
+        if turbo and self.turbo > 0 and self.turbo_cd <= 0:
+            steps = 2
+            self.turbo -= 1
+            self.turbo_cd = 2
 
-        # Render
-        draw_frame(state["trail_p"], state["trail_a"],
-                   (state["px"], state["py"]),
-                   (state["ax"], state["ay"]),
-                   state["score"])
+        for _ in range(steps):
+            if self.p.alive:
+                self._move(self.p)
+                if self.p.alive:
+                    self.score += 1
 
-        # Frame rate cap
-        elapsed = time.time() - t0
-        time.sleep(max(0, FRAME_DT - elapsed))
+        if self.a.alive:
+            self._move(self.a)
+
+        if (self.p.x, self.p.y) == (self.a.x, self.a.y):
+            self.p.alive = False
+            self.a.alive = False
+
+        self.sparks = [[x, y, l - 1] for x, y, l in self.sparks if l > 0]
+
+        if not self.p.alive and not self.a.alive:
+            self.over = True
+            self.msg = "DRAW"
+        elif not self.p.alive:
+            self.over = True
+            self.msg = "DEREZZ"
+            self.losses += 1
+        elif not self.a.alive:
+            self.over = True
+            self.msg = "VICTORY"
+            self.wins += 1
+
+    def draw(self, d):
+        # Grid floor — horizontal and vertical lines
+        for gx in range(0, 128, 16):
+            d.line((gx, 0, gx, 127), fill="#0A0A30")
+        for gy in range(0, 128, 16):
+            d.line((0, gy, 127, gy), fill="#0A0A30")
+
+        # Arena border — double line glow
+        d.rectangle((0, 0, 127, 127), outline="#0066CC")
+        d.rectangle((1, 1, 126, 126), outline="#003366")
+
+        # Trails
+        c = CELL
+        # Player trail with intensity gradient
+        tl = len(self.p.trail)
+        for i, (tx, ty) in enumerate(self.p.trail):
+            x1, y1 = tx * c, ty * c
+            if i >= tl - 6:
+                col = self.p.color
+            elif i >= tl - 20:
+                col = "#00AA44"
+            else:
+                col = self.p.trail_color
+            d.rectangle((x1, y1, x1 + c - 1, y1 + c - 1), fill=col)
+
+        tl = len(self.a.trail)
+        for i, (tx, ty) in enumerate(self.a.trail):
+            x1, y1 = tx * c, ty * c
+            if i >= tl - 6:
+                col = self.a.color
+            elif i >= tl - 20:
+                col = "#CC2020"
+            else:
+                col = self.a.trail_color
+            d.rectangle((x1, y1, x1 + c - 1, y1 + c - 1), fill=col)
+
+        # Bike heads — larger bright square with direction indicator
+        if self.p.alive:
+            hx, hy = self.p.x * c, self.p.y * c
+            d.rectangle((hx - 1, hy - 1, hx + c, hy + c), fill=self.p.head_color)
+            # Direction indicator (leading pixel)
+            lx = hx + self.p.d[0] * 2
+            ly = hy + self.p.d[1] * 2
+            d.point((lx, ly), fill=self.p.color)
+
+        if self.a.alive:
+            hx, hy = self.a.x * c, self.a.y * c
+            d.rectangle((hx - 1, hy - 1, hx + c, hy + c), fill=self.a.head_color)
+            lx = hx + self.a.d[0] * 2
+            ly = hy + self.a.d[1] * 2
+            d.point((lx, ly), fill=self.a.color)
+
+        # Sparks
+        for sx, sy, life in self.sparks:
+            if 0 <= sx < 128 and 0 <= sy < 128:
+                col = "#FFFFFF" if life > 8 else "#FFAA00" if life > 4 else "#FF4400"
+                d.point((sx, sy), fill=col)
+
+        # HUD — minimal, top corners
+        d.text((2, 1), f"{self.score}", font=font_xs, fill="#00FF64")
+        d.text((126, 1), f"W{self.wins}", font=font_xs, fill="#00AAFF", anchor="ra")
+
+        # Turbo bar — bottom left
+        for i in range(TURBO_MAX):
+            col = "#FFD700" if i < self.turbo else "#1A1A2A"
+            bx = 2 + i * 4
+            d.rectangle((bx, 122, bx + 2, 126), fill=col)
+
+        # Game over overlay
+        if self.over:
+            # Dim background
+            d.rectangle((20, 40, 108, 88), fill="#000000", outline="#0066CC")
+            d.rectangle((21, 41, 107, 87), outline="#003366")
+
+            if self.msg == "VICTORY":
+                col = "#00FF64"
+            elif self.msg == "DEREZZ":
+                col = "#FF3030"
+            else:
+                col = "#FFAA00"
+
+            d.text((64, 48), self.msg, font=font, fill=col, anchor="mt")
+            d.text((64, 64), f"Score: {self.score}", font=font_sm, fill="#AAAACC", anchor="mt")
+            d.text((64, 78), "OK:Again K3:Exit", font=font_xs, fill="#555577", anchor="mt")
 
 
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
-if __name__ == "__main__":
+def main():
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+
+    GPIO.setmode(GPIO.BCM)
+    GPIO.setwarnings(False)
+    for pin in PINS.values():
+        GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+
+    lcd = LCD_1in44.LCD()
+    lcd.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
+    lcd.LCD_Clear()
+
+    # Intro
+    img = Image.new("RGB", (WIDTH, HEIGHT), "#000014")
+    d = ScaledDraw(img)
+    d.rectangle((0, 0, 127, 127), outline="#0066CC")
+    d.text((64, 25), "NEON", font=font, fill="#00FF64", anchor="mm")
+    d.text((64, 42), "BIKES", font=font, fill="#00AAFF", anchor="mm")
+    d.line((20, 55, 108, 55), fill="#003366")
+    d.text((64, 65), "Last trail standing", font=font_xs, fill="#555577", anchor="mm")
+    d.text((64, 80), "D-pad steer", font=font_xs, fill="#444466", anchor="mm")
+    d.text((64, 92), "KEY2 turbo", font=font_xs, fill="#FFD700", anchor="mm")
+    d.text((64, 110), "OK to ride", font=font_xs, fill="#333355", anchor="mm")
+    lcd.LCD_ShowImage(img, 0, 0)
+
+    while _running:
+        b = get_button(PINS, GPIO)
+        if b == "KEY3":
+            GPIO.cleanup()
+            return 0
+        if b in ("OK", "KEY1"):
+            break
+        time.sleep(0.05)
+
+    game = Game()
+    dt = 1.0 / SPEED
+
     try:
-        play()
+        while _running:
+            t0 = time.monotonic()
+
+            btn = get_button(PINS, GPIO)
+            if btn == "KEY3":
+                break
+
+            if game.over:
+                if btn in ("OK", "KEY1"):
+                    game.reset()
+                    time.sleep(0.15)
+            else:
+                dm = {"UP": UP, "DOWN": DN, "LEFT": LT, "RIGHT": RT}
+                p_dir = dm.get(btn)
+                turbo = GPIO.input(PINS["KEY2"]) == 0
+                game.update(p_dir, turbo)
+
+            img = Image.new("RGB", (WIDTH, HEIGHT), "#000014")
+            d = ScaledDraw(img)
+            game.draw(d)
+            lcd.LCD_ShowImage(img, 0, 0)
+
+            elapsed = time.monotonic() - t0
+            if elapsed < dt:
+                time.sleep(dt - elapsed)
+
     finally:
-        LCD.LCD_Clear()
+        lcd.LCD_Clear()
         GPIO.cleanup()
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

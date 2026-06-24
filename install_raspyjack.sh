@@ -178,6 +178,19 @@ if [[ "$DISPLAY_TYPE" == "CARDPUTER_320" ]]; then
   sudo systemctl disable serial-getty@ttyAMA0.service 2>/dev/null || true
   sudo systemctl mask serial-getty@ttyAMA0.service 2>/dev/null || true
   info "serial-getty disabled on ttyS0/ttyAMA0 — GPS HAT can use UART"
+
+  step "Disabling console on LCD framebuffer …"
+  sudo systemctl stop getty@tty1.service 2>/dev/null || true
+  sudo systemctl disable getty@tty1.service 2>/dev/null || true
+  # Remove console=tty1 from cmdline and add fbcon=map:99 to prevent fbcon on LCD
+  CMDLINE="/boot/firmware/cmdline.txt"
+  if [ -f "$CMDLINE" ]; then
+    sudo sed -i 's/ console=tty1//g' "$CMDLINE"
+    grep -q "fbcon=map:99" "$CMDLINE" || sudo sed -i 's/$/ fbcon=map:99/' "$CMDLINE"
+  fi
+  # Unbind fbcon from LCD immediately
+  echo 0 | sudo tee /sys/class/vtconsole/vtcon1/bind 2>/dev/null || true
+  info "Console/getty disabled on LCD — no more cursor bleed-through"
 fi
 
 # ───── 2 ▸ install / upgrade required APT packages ───────────
@@ -317,10 +330,18 @@ fi
 # FontAwesome font (skip if already present)
 if [ ! -f /usr/share/fonts/truetype/fontawesome/fa-solid-900.ttf ]; then
   mkdir -p /usr/share/fonts/truetype/fontawesome
-  wget -q -O /usr/share/fonts/truetype/fontawesome/fa-solid-900.ttf \
-    https://use.fontawesome.com/releases/v6.5.1/webfonts/fa-solid-900.ttf \
-    && info "FontAwesome font installed" \
-    || warn "Could not download FontAwesome font"
+  FA_OK=0
+  for FA_URL in \
+    "https://use.fontawesome.com/releases/v6.5.1/webfonts/fa-solid-900.ttf" \
+    "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/webfonts/fa-solid-900.ttf" \
+    "https://raw.githubusercontent.com/FortAwesome/Font-Awesome/6.x/webfonts/fa-solid-900.ttf"; do
+    wget -q --timeout=10 -O /usr/share/fonts/truetype/fontawesome/fa-solid-900.ttf "$FA_URL" && FA_OK=1 && break
+  done
+  if [ "$FA_OK" = "1" ]; then
+    info "FontAwesome font installed"
+  else
+    warn "Could not download FontAwesome font (check internet connection)"
+  fi
 else
   info "FontAwesome font already present"
 fi
