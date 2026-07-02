@@ -142,6 +142,11 @@ Check the WIKI for more ! https://github.com/7h30th3r0n3/Raspyjack/wiki
     <td>Realtek RTL8812AU</td>
     <td>✅ Full support</td>
   </tr>
+  <tr>
+    <td><strong>Panda PAU0F / AXE3000</strong> (WiFi 6E)</td>
+    <td>MediaTek MT7921AU (<code>mt7921u</code>)</td>
+    <td>✅ Verified — in-kernel driver, no out-of-tree build</td>
+  </tr>
 </table>
 
 <ul>
@@ -161,6 +166,7 @@ Examples commonly used:
 - Alfa AWUS036ACH (RTL8812AU)
 - TP-Link TL-WN722N v1 (AR9271)
 - Panda PAU09 (RTL8812AU)
+- Panda PAU0F / AXE3000 WiFi 6E (MediaTek MT7921AU, `mt7921u` — in-kernel, no driver build)
 
 ---
 
