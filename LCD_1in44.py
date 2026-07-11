@@ -35,7 +35,8 @@ from PIL import Image as PILImage, ImageOps
 
 # ---------------------------------------------------------------------------
 # Display type detection from gui_conf.json
-# Supported: "ST7735_128" (128x128), "ST7789_240" (240x240), "CARDPUTER_320" (320x170)
+# Supported: "ST7735_128" (128x128), "ST7789_240" (240x240),
+#            "CARDPUTER_320" (320x170), "WAVESHARE35A_480" (480x320)
 # ---------------------------------------------------------------------------
 _DISPLAY_TYPE = "ST7735_128"  # default
 
@@ -56,16 +57,36 @@ for _p in _CONF_PATHS:
 else:
     _FLIP_180 = False
 
-# Hardware auto-detect fallback for CardputerZero
-if _DISPLAY_TYPE != "CARDPUTER_320":
+# Framebuffer-driven panels (rendered to a Linux framebuffer, not direct SPI).
+_FRAMEBUFFER_TYPES = {"CARDPUTER_320", "WAVESHARE35A_480"}
+# Map a /sys/class/graphics/fbN/name substring -> RaspyJack display type.
+_FB_PANEL_NAMES = {
+    "st7789v_m5st": "CARDPUTER_320",
+    "fb_ili9486":   "WAVESHARE35A_480",
+}
+
+# Hardware auto-detect fallback: if the configured type isn't a framebuffer panel
+# but a known one is physically present, switch to it (so a mis-selected config,
+# e.g. leftover ST7735_128, still finds the real screen).
+if _DISPLAY_TYPE not in _FRAMEBUFFER_TYPES:
     for _i in range(4):
         try:
             with open(f"/sys/class/graphics/fb{_i}/name", "r") as _fb:
-                if "st7789v_m5st" in _fb.read():
-                    _DISPLAY_TYPE = "CARDPUTER_320"
-                    break
+                _nm = _fb.read()
         except Exception:
-            pass
+            continue
+        _hit = next((dt for sub, dt in _FB_PANEL_NAMES.items() if sub in _nm), None)
+        if _hit:
+            _DISPLAY_TYPE = _hit
+            break
+
+# On-screen touch control deck (Waveshare 35a). When enabled, RaspyJack renders a
+# square UI and the driver composites a touch button deck beside it to fill the
+# panel. Disable with RJ_TOUCH_DECK=0 to render the UI across the full width.
+_TOUCH_DECK = (
+    _DISPLAY_TYPE == "WAVESHARE35A_480"
+    and os.environ.get("RJ_TOUCH_DECK", "1") != "0"
+)
 
 # ---------------------------------------------------------------------------
 # Resolution constants based on display type
@@ -77,6 +98,21 @@ if _DISPLAY_TYPE == "CARDPUTER_320":
     LCD_Y = 0
     LCD_X_MAXPIXEL = 320
     LCD_Y_MAXPIXEL = 170
+elif _DISPLAY_TYPE == "WAVESHARE35A_480":
+    # Waveshare 3.5" RPi LCD (A) — ILI9486, framebuffer, landscape 480x320.
+    # With the touch deck (default) RaspyJack renders into a 320x320 square — its
+    # natural 128-base proportions at 2.5x — and the driver composites the 160px
+    # touch control deck to the right to fill the physical 480-wide panel.
+    if _TOUCH_DECK:
+        LCD_WIDTH  = 320
+        LCD_HEIGHT = 320
+    else:
+        LCD_WIDTH  = 480
+        LCD_HEIGHT = 320
+    LCD_X = 0
+    LCD_Y = 0
+    LCD_X_MAXPIXEL = LCD_WIDTH
+    LCD_Y_MAXPIXEL = LCD_HEIGHT
 elif _DISPLAY_TYPE == "ST7789_240":
     LCD_WIDTH  = 240
     LCD_HEIGHT = 240
@@ -97,8 +133,10 @@ else:
 # Scale helper – payloads import this: from LCD_1in44 import S
 # All coordinates are authored for 128; S() adapts them to the actual panel.
 # ---------------------------------------------------------------------------
-if _DISPLAY_TYPE == "CARDPUTER_320":
-    LCD_SCALE = LCD_HEIGHT / 128  # 1.328 — use height (constraining dimension) for widescreen
+if _DISPLAY_TYPE in ("CARDPUTER_320", "WAVESHARE35A_480"):
+    # Widescreen framebuffer panels: scale by height (the constraining dimension).
+    # Cardputer 170/128 = 1.328 ; Waveshare 35a 320/128 = 2.5
+    LCD_SCALE = LCD_HEIGHT / 128
 else:
     LCD_SCALE = LCD_WIDTH / 128  # 1.0 on 128x128, 1.875 on 240x240
 
@@ -161,6 +199,32 @@ U2D_R2L = 6
 D2U_L2R = 7
 D2U_R2L = 8
 SCAN_DIR_DFT = U2D_R2L
+
+
+# --- Waveshare 35a: composite the square UI + on-screen touch deck ------------
+_touch_deck_mod = None
+
+
+def _compose_touch_frame(ui_img):
+    """Paste the square UI on the left and the touch control deck on the right,
+    returning a full framebuffer-sized (e.g. 480x320) RGB image. If the deck
+    module can't be loaded the UI is still shown (deck is optional)."""
+    global _touch_deck_mod
+    fb_w = getattr(LCD_Config, "FB_WIDTH", 480)
+    fb_h = getattr(LCD_Config, "FB_HEIGHT", 320)
+    if ui_img.width >= fb_w:
+        return ui_img
+    canvas = PILImage.new("RGB", (fb_w, fb_h), (0, 0, 0))
+    canvas.paste(ui_img, (0, 0))
+    try:
+        if _touch_deck_mod is None:
+            import touch_deck as _td
+            _touch_deck_mod = _td
+        deck = _touch_deck_mod.get_deck_image(fb_w - ui_img.width, fb_h)
+        canvas.paste(deck, (ui_img.width, 0))
+    except Exception:
+        pass
+    return canvas
 
 
 class LCD:
@@ -482,7 +546,7 @@ class LCD:
         if (LCD_Config.GPIO_Init() != 0):
             return -1
 
-        if self.display_type == "CARDPUTER_320":
+        if self.display_type in _FRAMEBUFFER_TYPES:
             return 0
 
         # Set SPI speed based on display type
@@ -537,7 +601,7 @@ class LCD:
         self.LCD_WriteReg(0x2C)
 
     def LCD_Clear(self):
-        if self.display_type == "CARDPUTER_320":
+        if self.display_type in _FRAMEBUFFER_TYPES:
             LCD_Config.fb_write(b'\x00' * LCD_Config.FB_SIZE)
             return
         _buffer = [0x00]*(self.width * self.height * 2)
@@ -555,8 +619,10 @@ class LCD:
         if imwidth != self.width or imheight != self.height:
             Image = Image.resize((self.width, self.height))
 
-        if self.display_type == "CARDPUTER_320":
+        if self.display_type in _FRAMEBUFFER_TYPES:
             img = Image.convert("RGB")
+            if _TOUCH_DECK and self.display_type == "WAVESHARE35A_480":
+                img = _compose_touch_frame(img)
             arr = np.asarray(img)
             r = (arr[..., 0].astype(np.uint16) >> 3) << 11
             g = (arr[..., 1].astype(np.uint16) >> 2) << 5

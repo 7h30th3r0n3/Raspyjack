@@ -64,7 +64,7 @@ def _set_display_type(dtype):
     if "DISPLAY" not in data:
         data["DISPLAY"] = {}
     data["DISPLAY"]["type"] = dtype
-    data["DISPLAY"]["supported_types"] = ["ST7735_128", "ST7789_240"]
+    data["DISPLAY"]["supported_types"] = ["ST7735_128", "ST7789_240", "CARDPUTER_320", "WAVESHARE35A_480"]
     with open(CONF_PATH, "w") as f:
         json.dump(data, f, indent=4)
 

@@ -29,6 +29,12 @@ elif cat /sys/class/graphics/fb0/name 2>/dev/null | grep -q "st7789v_m5st"; then
   IS_CARDPUTER=1
 fi
 
+# ───── auto-detect Waveshare 3.5" (35a / ILI9486) framebuffer ─
+IS_WAVE35A=0
+for _fb in /sys/class/graphics/fb*/name; do
+  cat "$_fb" 2>/dev/null | grep -q "fb_ili9486" && IS_WAVE35A=1
+done
+
 # ───── 0 ▸ convert CRLF if file came from Windows ────────────
 if grep -q $'\r' "$0"; then
   step "Converting CRLF → LF in $0"
@@ -64,20 +70,25 @@ else
   echo ""
   echo "  Which LCD screen are you using?"
   echo ""
-  echo "    1) ST7735_128    — 1.44\" 128×128  (original Waveshare HAT)"
-  echo "    2) ST7789_240    — 1.3\"  240×240"
-  echo "    3) CARDPUTER_320 — M5Stack CardputerZero 320×170"
+  echo "    1) ST7735_128       — 1.44\" 128×128  (original Waveshare HAT)"
+  echo "    2) ST7789_240       — 1.3\"  240×240"
+  echo "    3) CARDPUTER_320    — M5Stack CardputerZero 320×170"
+  echo "    4) WAVESHARE35A_480 — Waveshare 3.5\" (A) 480×320 touch (framebuffer)"
   echo ""
   DEFAULT_CHOICE=1
   if [[ $IS_CARDPUTER -eq 1 ]]; then
     DEFAULT_CHOICE=3
     info "CardputerZero hardware auto-detected!"
+  elif [[ $IS_WAVE35A -eq 1 ]]; then
+    DEFAULT_CHOICE=4
+    info "Waveshare 3.5\" (35a / ILI9486) framebuffer auto-detected!"
   fi
-  read -rp "  Enter choice [1/2/3] (default: $DEFAULT_CHOICE): " DISPLAY_CHOICE
+  read -rp "  Enter choice [1/2/3/4] (default: $DEFAULT_CHOICE): " DISPLAY_CHOICE
   DISPLAY_CHOICE="${DISPLAY_CHOICE:-$DEFAULT_CHOICE}"
   case "$DISPLAY_CHOICE" in
     2) DISPLAY_TYPE="ST7789_240" ;;
     3) DISPLAY_TYPE="CARDPUTER_320" ;;
+    4) DISPLAY_TYPE="WAVESHARE35A_480" ;;
     *) DISPLAY_TYPE="ST7735_128" ;;
   esac
 fi
@@ -95,7 +106,7 @@ with open("/root/Raspyjack/gui_conf.json") as f:
 if "DISPLAY" not in data:
     data["DISPLAY"] = {}
 data["DISPLAY"]["type"] = dtype
-data["DISPLAY"]["supported_types"] = ["ST7735_128", "ST7789_240", "CARDPUTER_320"]
+data["DISPLAY"]["supported_types"] = ["ST7735_128", "ST7789_240", "CARDPUTER_320", "WAVESHARE35A_480"]
 # Preserve flip if it exists
 # (flip key is NOT overwritten, it stays as-is)
 with open("/root/Raspyjack/gui_conf.json", "w") as f:
@@ -120,7 +131,7 @@ data = {
     },
     "DISPLAY": {
         "type": dtype,
-        "supported_types": ["ST7735_128", "ST7789_240", "CARDPUTER_320"],
+        "supported_types": ["ST7735_128", "ST7789_240", "CARDPUTER_320", "WAVESHARE35A_480"],
         "flip": False
     },
     "LOCK": {
@@ -191,6 +202,30 @@ if [[ "$DISPLAY_TYPE" == "CARDPUTER_320" ]]; then
   # Unbind fbcon from LCD immediately
   echo 0 | sudo tee /sys/class/vtconsole/vtcon1/bind 2>/dev/null || true
   info "Console/getty disabled on LCD — no more cursor bleed-through"
+fi
+
+# ───── 1‑e ▸ Waveshare 3.5" 35a: framebuffer console prep ────
+if [[ "$DISPLAY_TYPE" == "WAVESHARE35A_480" ]]; then
+  step "Waveshare 35a: preparing framebuffer + console …"
+  # Prerequisite: the panel must already present itself as a framebuffer (/dev/fb1).
+  # RaspyJack renders to it; the panel/touch overlay is the user's responsibility.
+  if [ -e /dev/fb1 ] && cat /sys/class/graphics/fb1/name 2>/dev/null | grep -q fb_ili9486; then
+    info "Panel detected: /dev/fb1 (fb_ili9486)"
+  else
+    warn "No ILI9486 framebuffer at /dev/fb1 — set up the 35a panel overlay FIRST"
+    warn "(Waveshare LCD-show, or a dtoverlay for the 3.5\" A). RaspyJack draws to /dev/fb1."
+  fi
+
+  # Keep the Linux console/login off the LCD so RaspyJack owns the panel cleanly.
+  sudo systemctl disable --now getty@tty1.service 2>/dev/null || true
+  CMDLINE="/boot/firmware/cmdline.txt"; [[ -f $CMDLINE ]] || CMDLINE="/boot/cmdline.txt"
+  if [ -f "$CMDLINE" ]; then
+    sudo cp "$CMDLINE" "${CMDLINE}.rj-backup" 2>/dev/null || true
+    sudo sed -i 's/ console=tty1//g' "$CMDLINE"
+    grep -q "fbcon=map:99" "$CMDLINE" || sudo sed -i 's/$/ fbcon=map:99/' "$CMDLINE"
+  fi
+  echo 0 | sudo tee /sys/class/vtconsole/vtcon1/bind >/dev/null 2>&1 || true
+  info "Console/getty kept off the LCD — RaspyJack owns the panel"
 fi
 
 # ───── 2 ▸ install / upgrade required APT packages ───────────
@@ -385,6 +420,10 @@ RPYGPIO
   sudo pip3 install --break-system-packages opencv-python-headless 2>/dev/null \
     || warn "opencv install failed — video_player may not work"
 
+elif [[ "$DISPLAY_TYPE" == "WAVESHARE35A_480" ]]; then
+  info "Waveshare 3.5\" 35a: framebuffer display — skipping RaspyJack SPI/I²C HAT setup"
+  info "(the 35a's own panel overlay already provides SPI + ADS7846 touch)"
+
 else
   step "Checking I²C & SPI …"
   SPI_OK=0
@@ -566,6 +605,45 @@ UNIT
 
 sudo systemctl daemon-reload
 sudo systemctl enable --now raspyjack.service
+
+# ───── 5‑a2 ▸ Waveshare 35a touch input service ──────────────
+if [[ "$DISPLAY_TYPE" == "WAVESHARE35A_480" ]]; then
+  step "Installing RaspyJack touch input service (35a) …"
+  sudo tee /etc/systemd/system/raspyjack-touch.service >/dev/null <<'TOUCHUNIT'
+[Unit]
+Description=RaspyJack Touch Input (Waveshare 3.5" 35a)
+After=raspyjack.service
+Wants=raspyjack.service
+ConditionPathExists=/dev/fb1
+
+[Service]
+Type=simple
+WorkingDirectory=/root/Raspyjack
+ExecStart=/usr/bin/python3 /root/Raspyjack/raspyjack_touch.py
+Restart=on-failure
+RestartSec=3
+User=root
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/root/Raspyjack
+# Optional idle backlight-dim (only if the panel exposes /sys/class/backlight):
+# Environment=RJ_IDLE_DIM_SECONDS=120
+
+[Install]
+WantedBy=multi-user.target
+TOUCHUNIT
+  sudo systemctl daemon-reload
+  sudo systemctl enable --now raspyjack-touch.service
+  info "raspyjack-touch.service enabled"
+
+  # Touch needs a one-time calibration (draws targets to tap).
+  if [ ! -f /root/Raspyjack/config/touch_cal.json ]; then
+    warn "Touch not calibrated yet — after install, run:"
+    warn "  sudo systemctl stop raspyjack && sudo python3 /root/Raspyjack/touch_calibrate.py && sudo systemctl start raspyjack"
+    warn "(The touch service waits for calibration before it does anything.)"
+  else
+    info "Touch calibration present (config/touch_cal.json)"
+  fi
+fi
 
 # ───── 5‑b ▸ device server & WebUI split services ───────────
 # Shared WebUI token (used by both HTTP + WS servers)
@@ -781,6 +859,12 @@ if [[ "$DISPLAY_TYPE" == "CARDPUTER_320" ]]; then
     info "Framebuffer found: /dev/fb0 (CardputerZero)"
   else
     warn "Framebuffer /dev/fb0 NOT found – display may not work"
+  fi
+elif [[ "$DISPLAY_TYPE" == "WAVESHARE35A_480" ]]; then
+  if [ -e /dev/fb1 ]; then
+    info "Framebuffer found: /dev/fb1 (Waveshare 35a)"
+  else
+    warn "Framebuffer /dev/fb1 NOT found – set up the 35a panel overlay first"
   fi
 else
   if ls /dev/spidev* 2>/dev/null | grep -q spidev0.0; then

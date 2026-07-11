@@ -970,7 +970,7 @@ def SaveConfig() -> None:
     data = {
         "DISPLAY": {
             "type": getattr(LCD_1in44, '_DISPLAY_TYPE', 'ST7789_240'),
-            "supported_types": ["ST7735_128", "ST7789_240"],
+            "supported_types": ["ST7735_128", "ST7789_240", "CARDPUTER_320", "WAVESHARE35A_480"],
             "flip": _flip_enabled,
         },
         "PINS":   _ORIGINAL_PINS,

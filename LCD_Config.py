@@ -43,21 +43,42 @@ try:
 except Exception:
     pass
 
-# Hardware auto-detect fallback: if gui_conf.json says ST7735 but we're on a CardputerZero
-if _DISPLAY_TYPE != "CARDPUTER_320":
+# ---------------------------------------------------------------------------
+# Framebuffer display registry (panels driven via a Linux framebuffer, not SPI).
+#   fb_name : substring of /sys/class/graphics/fbN/name used to locate the device
+#   w/h/bpp : fallback geometry when sysfs geometry can't be read
+# ---------------------------------------------------------------------------
+_FB_PANELS = {
+    "CARDPUTER_320":    {"fb_name": "st7789v_m5st", "w": 320, "h": 170, "bpp": 16},
+    "WAVESHARE35A_480": {"fb_name": "fb_ili9486",   "w": 480, "h": 320, "bpp": 16},
+}
+_FRAMEBUFFER_TYPES = set(_FB_PANELS)
+
+# Hardware auto-detect fallback: if the configured type isn't a framebuffer panel
+# but a known one is physically present, switch to it (e.g. a leftover ST7735_128
+# config on a board that actually has an ILI9486 / Cardputer panel wired up).
+if _DISPLAY_TYPE not in _FRAMEBUFFER_TYPES:
+    _found = None
     for _i in range(4):
         try:
             with open(f"/sys/class/graphics/fb{_i}/name", "r") as _fb:
-                if "st7789v_m5st" in _fb.read():
-                    _DISPLAY_TYPE = "CARDPUTER_320"
-                    break
+                _nm = _fb.read()
         except Exception:
-            pass
+            continue
+        for _dt, _spec in _FB_PANELS.items():
+            if _spec["fb_name"] in _nm:
+                _found = _dt
+                break
+        if _found:
+            break
+    if _found:
+        _DISPLAY_TYPE = _found
 
 
-if _DISPLAY_TYPE == "CARDPUTER_320":
+if _DISPLAY_TYPE in _FRAMEBUFFER_TYPES:
     # ===================================================================
-    # CardputerZero: framebuffer stub (no SPI, no GPIO for display)
+    # Framebuffer panels (CardputerZero, Waveshare 3.5" 35a / ILI9486):
+    # render straight to a Linux framebuffer — no SPI, no display GPIO.
     # ===================================================================
     import mmap
 
@@ -66,22 +87,43 @@ if _DISPLAY_TYPE == "CARDPUTER_320":
     LCD_CS_PIN = -1
     LCD_BL_PIN = -1
 
-    # Auto-detect framebuffer: find the one with st7789v_m5st
+    _panel = _FB_PANELS.get(
+        _DISPLAY_TYPE, {"fb_name": "", "w": 320, "h": 170, "bpp": 16}
+    )
+    _panel_name = _panel["fb_name"]
+
+    # Auto-detect framebuffer device: explicit override, else match by panel name.
     FB_DEVICE = os.environ.get("RJ_FB_DEVICE", "")
     if not FB_DEVICE:
         FB_DEVICE = "/dev/fb0"  # default fallback
         for _i in range(4):
-            _fb_name_path = f"/sys/class/graphics/fb{_i}/name"
             try:
-                with open(_fb_name_path) as _fn:
-                    if "st7789v_m5st" in _fn.read():
+                with open(f"/sys/class/graphics/fb{_i}/name") as _fn:
+                    if _panel_name and _panel_name in _fn.read():
                         FB_DEVICE = f"/dev/fb{_i}"
                         break
             except Exception:
                 pass
-    FB_WIDTH = 320
-    FB_HEIGHT = 170
-    FB_BPP = 16
+
+    def _fb_geometry(dev):
+        """Read (width, height, bpp) from /sys for /dev/fbN, or None on failure."""
+        base = "/sys/class/graphics/" + os.path.basename(dev)
+        try:
+            with open(base + "/virtual_size") as _f:
+                _w, _h = (int(_x) for _x in _f.read().strip().split(","))
+            with open(base + "/bits_per_pixel") as _f:
+                _b = int(_f.read().strip())
+            return _w, _h, _b
+        except Exception:
+            return None
+
+    # Geometry priority: env override > kernel sysfs (ground truth) > registry.
+    # Cardputer keeps its known-good hardcoded geometry to avoid any regression;
+    # other framebuffer panels trust the kernel's reported size.
+    _geo = _fb_geometry(FB_DEVICE) if _DISPLAY_TYPE != "CARDPUTER_320" else None
+    FB_WIDTH  = int(os.environ.get("RJ_FB_WIDTH",  0)) or (_geo[0] if _geo else _panel["w"])
+    FB_HEIGHT = int(os.environ.get("RJ_FB_HEIGHT", 0)) or (_geo[1] if _geo else _panel["h"])
+    FB_BPP    = int(os.environ.get("RJ_FB_BPP",    0)) or (_geo[2] if _geo else _panel["bpp"])
     FB_SIZE = FB_WIDTH * FB_HEIGHT * (FB_BPP // 8)
 
     _fb_fd = None

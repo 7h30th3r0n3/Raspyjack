@@ -25,8 +25,8 @@ RaspyJack is for **authorized security testing, research, and education only**.
 
 ## ✨ What RaspyJack includes
 
-- LCD-driven handheld-style interface (Waveshare 1.44" or 1.3" HAT)
-- **Dual-display support** — 128x128 (ST7735) and 240x240 (ST7789)
+- LCD-driven handheld-style interface (Waveshare 1.44" / 1.3" HAT, or 3.5" touchscreen)
+- **Multi-display support** — 128x128 (ST7735), 240x240 (ST7789), and 480x320 (3.5" ILI9486 touch)
 - **231 payloads** across 13 categories
 - Loot collection + browsing
 - WebUI remote control dashboard
@@ -248,21 +248,49 @@ Raspyjack now includes a vendored port of
 | KEY1 | Context/extra action (varies) |
 | KEY2 | Secondary action (varies) |
 | KEY3 | Exit / Cancel |
+
+On the **Waveshare 3.5" touchscreen**, these same controls appear as an on-screen deck (D-pad + OK + KEY1/2/3) you tap directly — no joystick or buttons needed (see below).
+
 ---
 
-## 🖥️ Dual-Display Support
+## 🖥️ Display Support
 
-RaspyJack supports two LCD screens from the same codebase. The installer asks which screen you have.
+RaspyJack drives several LCDs from the same codebase. The installer asks which screen you have (and auto-detects the framebuffer panels).
 
-| Display | Chip | Resolution | Config value |
-|---------|------|------------|--------------|
-| 1.44" (original) | ST7735S | 128x128 | `ST7735_128` |
-| 1.3" | ST7789 | 240x240 | `ST7789_240` |
+| Display | Chip | Resolution | Config value | Input |
+|---------|------|------------|--------------|-------|
+| 1.44" HAT (original) | ST7735S | 128×128 | `ST7735_128` | joystick + 3 keys |
+| 1.3" HAT | ST7789 | 240×240 | `ST7789_240` | joystick + 3 keys |
+| M5 CardputerZero | ST7789 (fb) | 320×170 | `CARDPUTER_320` | keyboard |
+| 3.5" (A) touchscreen | ILI9486 (fb) | 480×320 | `WAVESHARE35A_480` | **touch** |
 
 To switch screens, change `"type"` in `gui_conf.json` and reboot:
 ```json
 "DISPLAY": { "type": "ST7789_240" }
 ```
+
+### 📲 Waveshare 3.5" (35a) touchscreen
+
+The Waveshare 3.5" RPi LCD (A) — a 480×320 ILI9486 panel with an ADS7846/XPT2046 resistive touchscreen — renders RaspyJack through the Linux framebuffer and adds an **on-screen control deck**, so the device is fully self-contained: no HAT joystick, no buttons, no Web UI required.
+
+- The UI renders as a 320×320 square on the left; a touch **D-pad + OK + KEY1/2/3** deck fills the right 160px. Taps emit the same button events as the physical controls, so navigation, KEY actions, and combos all work unchanged.
+- The Web UI control deck still works in parallel if you want it.
+
+**1. Set up the panel first (prerequisite).** RaspyJack renders to `/dev/fb1`; it does *not* configure the panel overlay for you (that varies across 3.5" boards). Get the panel working as a Linux framebuffer first — e.g. Waveshare's `LCD-show`, or a `dtoverlay` for the 3.5" A. You'll know it's ready when the Linux console shows on the LCD and:
+```bash
+cat /sys/class/graphics/fb1/name   # -> fb_ili9486
+```
+
+**2. Install.** Choose `4) WAVESHARE35A_480` in the installer (it auto-detects the panel). It sets the display type, keeps the Linux console off the LCD so RaspyJack owns the screen, and installs the `raspyjack-touch` service.
+
+**3. Calibrate touch once** (draws targets to tap, then verifies):
+```bash
+sudo systemctl stop raspyjack
+sudo python3 /root/Raspyjack/touch_calibrate.py
+sudo systemctl start raspyjack
+```
+
+RaspyJack then boots straight to the touch UI. Tested on a Raspberry Pi 3B.
 
 ---
 
