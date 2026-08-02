@@ -46,7 +46,7 @@ import RPi.GPIO as GPIO
 import LCD_1in44
 import LCD_Config
 from PIL import Image, ImageDraw
-from payloads._display_helper import ScaledDraw, scaled_font, S, SX, SY
+from payloads._display_helper import scaled_font, S, SX, SY
 from payloads._input_helper import get_button
 from payloads._gps_helper import start_gps
 from payloads.sdr._sdr_core import SDRDevice, detect_sdr
@@ -66,7 +66,6 @@ for p in PINS.values():
     GPIO.setup(p, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
 LCD = LCD_1in44.LCD()
-LCD_Config.LCD_Init = getattr(LCD_Config, "LCD_Init", None)
 LCD.LCD_Init()
 W, H = LCD.width, LCD.height
 
@@ -153,9 +152,15 @@ def log_reading():
         "peak_db": round(peak_db, 1),
         "gps": gps,
     }
-    with open(LOG_PATH, "a") as f:
-        f.write(json.dumps(entry) + "\n")
+    try:
+        with open(LOG_PATH, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+    except OSError:
+        return None
     return entry
+
+
+_estimate_cache = {"key": None, "result": None}
 
 
 def estimate_position():
@@ -166,10 +171,18 @@ def estimate_position():
     honest version: strong readings pull the estimate, weak ones barely
     count, more points converge tighter.
     Returns (lat, lon, n_points, spread_m) or None if not enough data.
+    Cached by (freq_hz, log mtime) since the redraw loop calls this ~10x/sec
+    but the underlying log only changes when a new reading is logged.
     """
-    pts = []
-    if not os.path.exists(LOG_PATH):
+    try:
+        mtime = os.path.getmtime(LOG_PATH)
+    except OSError:
         return None
+    cache_key = (freq_hz, mtime)
+    if _estimate_cache["key"] == cache_key:
+        return _estimate_cache["result"]
+
+    pts = []
     with open(LOG_PATH) as f:
         for line in f:
             try:
@@ -184,12 +197,16 @@ def estimate_position():
                 pts.append((g["lat"], g["lon"], db))
 
     if len(pts) < 2:
+        _estimate_cache["key"] = cache_key
+        _estimate_cache["result"] = None
         return None
 
     # linear-power weighting: 10^(db/10), normalized
     weights = [10 ** (db / 10.0) for _, _, db in pts]
     wsum = sum(weights)
     if wsum <= 0:
+        _estimate_cache["key"] = cache_key
+        _estimate_cache["result"] = None
         return None
     lat_est = sum(lat * w for (lat, _, _), w in zip(pts, weights)) / wsum
     lon_est = sum(lon * w for (_, lon, _), w in zip(pts, weights)) / wsum
@@ -204,7 +221,10 @@ def estimate_position():
         return 2 * R * math.asin(math.sqrt(a))
 
     spread = max(dist_m(lat_est, lon_est, lat, lon) for lat, lon, _ in pts)
-    return lat_est, lon_est, len(pts), spread
+    result = (lat_est, lon_est, len(pts), spread)
+    _estimate_cache["key"] = cache_key
+    _estimate_cache["result"] = result
+    return result
 
 
 def draw_live(draw):
@@ -215,7 +235,14 @@ def draw_live(draw):
     draw.text((SX(2), SY(46)), f"peak {peak_db:6.1f} dB", font=font_xs, fill=(150, 150, 170))
 
     gps = current_gps()
-    gps_txt = f"GPS {gps['lat']:.5f},{gps['lon']:.5f}" if gps else ("GPS searching..." if GPSD_OK else "GPS n/a")
+    if gps:
+        gps_txt = f"GPS {gps['lat']:.5f},{gps['lon']:.5f}"
+    elif not GPSD_OK:
+        gps_txt = "GPS n/a"
+    elif not gps_ready:
+        gps_txt = "GPS not detected"
+    else:
+        gps_txt = "GPS searching..."
     draw.text((SX(2), SY(56)), gps_txt, font=font_xs, fill=(0, 200, 255) if gps else (100, 100, 120))
 
     chart_top, chart_h = SY(68), H - SY(80)
@@ -280,49 +307,55 @@ def main():
 
     threading.Thread(target=_gps_updater, daemon=True).start()
 
-    draw_frame()
-    while True:
-        btn = get_button(PINS, GPIO)
-        if btn == "KEY3":
-            break
-        elif btn == "OK":
-            running = not running
-            if running:
-                sdr.start(freq_hz)
-            else:
-                sdr.stop()
-        elif btn == "UP":
-            freq_hz += 1_000_000
-            if running:
-                sdr.set_freq(freq_hz)
-        elif btn == "DOWN":
-            freq_hz -= 1_000_000
-            if running:
-                sdr.set_freq(freq_hz)
-        elif btn == "RIGHT":
-            freq_hz += 10_000
-            if running:
-                sdr.set_freq(freq_hz)
-        elif btn == "LEFT":
-            freq_hz -= 10_000
-            if running:
-                sdr.set_freq(freq_hz)
-        elif btn == "KEY1":
-            view = "estimate" if view == "live" else "live"
-        elif btn == "KEY2" and history:
-            log_reading()
-
-        if running:
-            db = sdr.get_signal_db()
-            history.append(db)
-            if db > peak_db:
-                peak_db = db
-
+    try:
         draw_frame()
-        time.sleep(0.1)
+        while True:
+            btn = get_button(PINS, GPIO)
+            if btn == "KEY3":
+                break
+            elif btn == "OK":
+                running = not running
+                if running:
+                    peak_db = -120.0
+                    history.clear()
+                    sdr.start(freq_hz)
+                else:
+                    sdr.stop()
+            elif btn == "UP":
+                freq_hz += 1_000_000
+                if running:
+                    sdr.set_freq(freq_hz)
+            elif btn == "DOWN":
+                freq_hz -= 1_000_000
+                if running:
+                    sdr.set_freq(freq_hz)
+            elif btn == "RIGHT":
+                freq_hz += 10_000
+                if running:
+                    sdr.set_freq(freq_hz)
+            elif btn == "LEFT":
+                freq_hz -= 10_000
+                if running:
+                    sdr.set_freq(freq_hz)
+            elif btn == "KEY1":
+                if view == "estimate":
+                    peak_db = -120.0
+                    history.clear()
+                view = "live" if view == "estimate" else "estimate"
+            elif btn == "KEY2" and running and history:
+                log_reading()
 
-    _shutdown.set()
-    sdr.stop()
+            if running:
+                db = sdr.get_signal_db()
+                history.append(db)
+                if db > peak_db:
+                    peak_db = db
+
+            draw_frame()
+            time.sleep(0.1)
+    finally:
+        _shutdown.set()
+        sdr.stop()
 
 
 if __name__ == "__main__":
