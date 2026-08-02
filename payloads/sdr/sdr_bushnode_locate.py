@@ -160,10 +160,11 @@ def log_reading():
 
 def estimate_position():
     """
-    Signal-weighted centroid over all GPS-tagged readings logged so far.
-    Not a real multilateration fix — an omnidirectional dongle at a single
-    point gives no bearing. This is the honest version: strong readings
-    pull the estimate, weak ones barely count, more points converge tighter.
+    Signal-weighted centroid over GPS-tagged readings logged so far for the
+    currently tuned frequency. Not a real multilateration fix — an
+    omnidirectional dongle at a single point gives no bearing. This is the
+    honest version: strong readings pull the estimate, weak ones barely
+    count, more points converge tighter.
     Returns (lat, lon, n_points, spread_m) or None if not enough data.
     """
     pts = []
@@ -174,6 +175,8 @@ def estimate_position():
             try:
                 e = json.loads(line)
             except Exception:
+                continue
+            if e.get("freq_hz") != freq_hz:
                 continue
             g = e.get("gps")
             db = e.get("db")
@@ -290,12 +293,20 @@ def main():
                 sdr.stop()
         elif btn == "UP":
             freq_hz += 1_000_000
+            if running:
+                sdr.set_freq(freq_hz)
         elif btn == "DOWN":
             freq_hz -= 1_000_000
+            if running:
+                sdr.set_freq(freq_hz)
         elif btn == "RIGHT":
             freq_hz += 10_000
+            if running:
+                sdr.set_freq(freq_hz)
         elif btn == "LEFT":
             freq_hz -= 10_000
+            if running:
+                sdr.set_freq(freq_hz)
         elif btn == "KEY1":
             view = "estimate" if view == "live" else "live"
         elif btn == "KEY2" and history:
