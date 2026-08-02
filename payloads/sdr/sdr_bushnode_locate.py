@@ -2,34 +2,41 @@
 """
 RaspyJack Payload -- Bushnode Locator (RTL-SDR)
 =================================================
-Signal-strength "hot/cold" direction-finder for a fixed target frequency.
-Tune to a known transmitter (a lost/misbehaving bushnode, a beacon, whatever
-you've pointed it at) and walk around watching the live dB reading and
-strip-chart history to home in on it.
+Signal-strength "hot/cold" direction-finder for a fixed target frequency,
+with GPS-tagged logging and a weighted-centroid position estimate so the
+same unit works both planted (end of driveway) and grab-and-go (walk it
+around and let it home in on a source).
 
-This is the v1 foundation: live RSSI readout + peak tracking only.
-Deliberately NOT built yet (next steps, not in scope for this pass):
-  - Multi-point logging + real triangulation math (need >=2 fixed readings
-    with known positions to actually solve a bearing/fix, not just "warmer")
-  - GPS tagging of logged points (see payloads/_gps_helper.py to wire in)
+An omnidirectional RTL-SDR dongle can't give you a bearing from a single
+point — no directional antenna, no phase array. What it *can* give you,
+once you've got several GPS-tagged readings, is a signal-weighted centroid:
+strong readings pull the estimate hard, weak ones barely count. Walk a
+rough loop around the area and the estimate converges toward the source.
+Feed the output lat/lon into map_viewer.py / gps_tracker.py to actually
+navigate to it — not reinventing a map UI here.
+
+Still NOT built (future passes, not in scope for this one):
   - Kismet alert / webhook integration for auto-flagging
-  - Correlating with pressure-sensor or other out-of-band trip events
+  - Pressure-sensor or other out-of-band trip-event correlation
 
 Controls:
   OK          : Start/Stop live RSSI monitoring
   UP/DOWN     : Adjust target frequency (coarse, 1 MHz steps)
   LEFT/RIGHT  : Adjust target frequency (fine, 10 kHz steps)
-  KEY1 (SPACE): Reset peak/history
-  KEY2 (BKSP) : Log current reading (freq, dB, timestamp) to file — no GPS yet
+  KEY1 (SPACE): Cycle view (Live / Estimate) — Estimate resets on entry to Live
+  KEY2 (BKSP) : Log current reading (freq, dB, GPS, timestamp) to file
   KEY3 (ESC)  : Exit
 
-Requires: rtl-sdr (same backend as the rest of payloads/sdr/*)
+Requires: rtl-sdr (same backend as the rest of payloads/sdr/*), gpsd-py3
+          for GPS tagging (optional — logs with gps=null if unavailable).
 """
 
 import os
 import sys
 import time
 import json
+import math
+import threading
 from datetime import datetime
 from collections import deque
 
@@ -41,7 +48,14 @@ import LCD_Config
 from PIL import Image, ImageDraw
 from payloads._display_helper import ScaledDraw, scaled_font, S, SX, SY
 from payloads._input_helper import get_button
+from payloads._gps_helper import start_gps
 from payloads.sdr._sdr_core import SDRDevice, detect_sdr
+
+try:
+    import gpsd as gpsd_mod
+    GPSD_OK = True
+except Exception:
+    GPSD_OK = False
 
 PINS = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
@@ -63,19 +77,58 @@ font_xs = scaled_font(6)
 
 LOG_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "loot", "SDR", "bushnode_locate")
 os.makedirs(LOG_DIR, exist_ok=True)
+LOG_PATH = os.path.join(LOG_DIR, "readings.jsonl")
 
 HISTORY_LEN = 96  # one strip-chart's worth of samples at the render width
 
 freq_hz = 433_920_000  # default target — change with UP/DOWN/LEFT/RIGHT before starting
 running = False
+view = "live"  # "live" | "estimate"
 history = deque(maxlen=HISTORY_LEN)
 peak_db = -120.0
-peak_time = None
 sdr = SDRDevice()
+
+# --- GPS state, mirrors payloads/reconnaissance/wardriving.py's pattern ---
+gps_lock = threading.Lock()
+gps_data = None  # {"lat":, "lon":, "alt":, "mode":, "ts":}
+gps_ready = False
+_shutdown = threading.Event()
+
+
+def _gps_updater():
+    global gps_data, gps_ready
+    if not GPSD_OK:
+        return
+    if not start_gps():
+        return
+    try:
+        gpsd_mod.connect()
+    except Exception:
+        return
+    gps_ready = True
+    while not _shutdown.is_set():
+        try:
+            pkt = gpsd_mod.get_current()
+            if hasattr(pkt, "mode") and pkt.mode >= 2:
+                with gps_lock:
+                    gps_data = {
+                        "lat": pkt.lat,
+                        "lon": pkt.lon,
+                        "alt": pkt.alt if pkt.mode >= 3 else 0,
+                        "mode": pkt.mode,
+                        "ts": time.time(),
+                    }
+        except Exception:
+            pass
+        time.sleep(1)
+
+
+def current_gps():
+    with gps_lock:
+        return dict(gps_data) if gps_data else None
 
 
 def db_to_bar_height(db, max_h):
-    # RTL-SDR noise floor to strong-signal range, tuned loosely — not calibrated hardware dB
     lo, hi = -100.0, -20.0
     frac = max(0.0, min(1.0, (db - lo) / (hi - lo)))
     return int(frac * max_h)
@@ -83,26 +136,110 @@ def db_to_bar_height(db, max_h):
 
 def color_for_db(db):
     if db > -40:
-        return (255, 60, 60)      # hot
+        return (255, 60, 60)
     if db > -60:
-        return (255, 180, 0)      # warm
+        return (255, 180, 0)
     if db > -80:
-        return (255, 255, 0)      # cool
-    return (60, 120, 255)         # cold
+        return (255, 255, 0)
+    return (60, 120, 255)
 
 
 def log_reading():
+    gps = current_gps()
     entry = {
         "ts": datetime.now().isoformat(timespec="seconds"),
         "freq_hz": freq_hz,
         "db": round(history[-1], 1) if history else None,
         "peak_db": round(peak_db, 1),
-        "gps": None,  # TODO: wire payloads/_gps_helper.py here once bushnode has a GPS source
+        "gps": gps,
     }
-    path = os.path.join(LOG_DIR, "readings.jsonl")
-    with open(path, "a") as f:
+    with open(LOG_PATH, "a") as f:
         f.write(json.dumps(entry) + "\n")
-    return path
+    return entry
+
+
+def estimate_position():
+    """
+    Signal-weighted centroid over all GPS-tagged readings logged so far.
+    Not a real multilateration fix — an omnidirectional dongle at a single
+    point gives no bearing. This is the honest version: strong readings
+    pull the estimate, weak ones barely count, more points converge tighter.
+    Returns (lat, lon, n_points, spread_m) or None if not enough data.
+    """
+    pts = []
+    if not os.path.exists(LOG_PATH):
+        return None
+    with open(LOG_PATH) as f:
+        for line in f:
+            try:
+                e = json.loads(line)
+            except Exception:
+                continue
+            g = e.get("gps")
+            db = e.get("db")
+            if g and db is not None:
+                pts.append((g["lat"], g["lon"], db))
+
+    if len(pts) < 2:
+        return None
+
+    # linear-power weighting: 10^(db/10), normalized
+    weights = [10 ** (db / 10.0) for _, _, db in pts]
+    wsum = sum(weights)
+    if wsum <= 0:
+        return None
+    lat_est = sum(lat * w for (lat, _, _), w in zip(pts, weights)) / wsum
+    lon_est = sum(lon * w for (_, lon, _), w in zip(pts, weights)) / wsum
+
+    # rough spread in meters (equirectangular approx, fine at this scale)
+    def dist_m(lat1, lon1, lat2, lon2):
+        R = 6371000
+        dlat = math.radians(lat2 - lat1)
+        dlon = math.radians(lon2 - lon1)
+        a = (math.sin(dlat / 2) ** 2 +
+             math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2) ** 2)
+        return 2 * R * math.asin(math.sqrt(a))
+
+    spread = max(dist_m(lat_est, lon_est, lat, lon) for lat, lon, _ in pts)
+    return lat_est, lon_est, len(pts), spread
+
+
+def draw_live(draw):
+    draw.text((SX(2), SY(16)), f"{freq_hz/1e6:.3f} MHz", font=font_lg, fill=(255, 200, 0))
+
+    cur_db = history[-1] if history else -120.0
+    draw.text((SX(2), SY(32)), f"{cur_db:6.1f} dB", font=font_lg, fill=color_for_db(cur_db))
+    draw.text((SX(2), SY(46)), f"peak {peak_db:6.1f} dB", font=font_xs, fill=(150, 150, 170))
+
+    gps = current_gps()
+    gps_txt = f"GPS {gps['lat']:.5f},{gps['lon']:.5f}" if gps else ("GPS searching..." if GPSD_OK else "GPS n/a")
+    draw.text((SX(2), SY(56)), gps_txt, font=font_xs, fill=(0, 200, 255) if gps else (100, 100, 120))
+
+    chart_top, chart_h = SY(68), H - SY(80)
+    draw.rectangle([(0, chart_top), (W, chart_top + chart_h)], fill=(10, 12, 20))
+    for i, db in enumerate(history):
+        x = SX(i)
+        bar_h = db_to_bar_height(db, chart_h)
+        draw.line([(x, chart_top + chart_h), (x, chart_top + chart_h - bar_h)], fill=color_for_db(db))
+
+
+def draw_estimate(draw):
+    est = estimate_position()
+    draw.text((SX(2), SY(20)), "POSITION ESTIMATE", font=font_sm, fill=(0, 255, 100))
+    if not est:
+        draw.text((SX(2), SY(40)), "Need >=2 logged", font=font_xs, fill=(150, 150, 170))
+        draw.text((SX(2), SY(50)), "GPS-tagged readings", font=font_xs, fill=(150, 150, 170))
+        draw.text((SX(2), SY(60)), "(K2 to log while live)", font=font_xs, fill=(100, 100, 120))
+        return
+    lat, lon, n, spread = est
+    draw.text((SX(2), SY(38)), f"{lat:.6f}", font=font, fill=(255, 200, 0))
+    draw.text((SX(2), SY(50)), f"{lon:.6f}", font=font, fill=(255, 200, 0))
+    draw.text((SX(2), SY(66)), f"n={n} pts  spread~{spread:.0f}m", font=font_xs, fill=(150, 150, 170))
+    conf = "low" if n < 4 or spread > 100 else ("med" if n < 8 else "high")
+    conf_color = {"low": (255, 60, 60), "med": (255, 180, 0), "high": (0, 255, 100)}[conf]
+    draw.text((SX(2), SY(78)), f"confidence: {conf}", font=font_xs, fill=conf_color)
+    draw.text((SX(2), SY(90)), "open in map_viewer /", font=font_xs, fill=(100, 100, 120))
+    draw.text((SX(2), SY(98)), "gps_tracker to navigate", font=font_xs, fill=(100, 100, 120))
 
 
 def draw_frame():
@@ -114,32 +251,20 @@ def draw_frame():
     state_color = (0, 255, 100) if running else (120, 120, 120)
     draw.ellipse([W - SX(10), SY(4), W - SX(4), SY(10)], fill=state_color)
 
-    draw.text((SX(2), SY(16)), f"{freq_hz/1e6:.3f} MHz", font=font_lg, fill=(255, 200, 0))
-
-    cur_db = history[-1] if history else -120.0
-    draw.text((SX(2), SY(32)), f"{cur_db:6.1f} dB", font=font_lg, fill=color_for_db(cur_db))
-    draw.text((SX(2), SY(46)), f"peak {peak_db:6.1f} dB", font=font_xs, fill=(150, 150, 170))
-
-    # strip-chart history
-    chart_top, chart_h = SY(58), H - SY(70)
-    draw.rectangle([(0, chart_top), (W, chart_top + chart_h)], fill=(10, 12, 20))
-    for i, db in enumerate(history):
-        x = SX(i)
-        bar_h = db_to_bar_height(db, chart_h)
-        draw.line(
-            [(x, chart_top + chart_h), (x, chart_top + chart_h - bar_h)],
-            fill=color_for_db(db),
-        )
+    if view == "live":
+        draw_live(draw)
+    else:
+        draw_estimate(draw)
 
     draw.rectangle([(0, H - SY(12)), (W, H)], fill=(15, 20, 35))
     hint = "OK start" if not running else "OK stop"
-    draw.text((SX(2), H - SY(10)), f"{hint}  UP/DN 1M  L/R 10k  K2 log", font=font_xs, fill=(100, 100, 120))
+    draw.text((SX(2), H - SY(10)), f"{hint}  K1 view  K2 log", font=font_xs, fill=(100, 100, 120))
 
     LCD.LCD_ShowImage(img, 0, 0)
 
 
 def main():
-    global freq_hz, running, peak_db, peak_time
+    global freq_hz, running, peak_db, view
 
     ok, label, backend = detect_sdr()
     if not ok:
@@ -149,6 +274,8 @@ def main():
         LCD.LCD_ShowImage(img, 0, 0)
         time.sleep(2)
         return
+
+    threading.Thread(target=_gps_updater, daemon=True).start()
 
     draw_frame()
     while True:
@@ -170,9 +297,7 @@ def main():
         elif btn == "LEFT":
             freq_hz -= 10_000
         elif btn == "KEY1":
-            history.clear()
-            peak_db = -120.0
-            peak_time = None
+            view = "estimate" if view == "live" else "live"
         elif btn == "KEY2" and history:
             log_reading()
 
@@ -181,11 +306,11 @@ def main():
             history.append(db)
             if db > peak_db:
                 peak_db = db
-                peak_time = datetime.now()
 
         draw_frame()
         time.sleep(0.1)
 
+    _shutdown.set()
     sdr.stop()
 
 
