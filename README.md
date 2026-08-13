@@ -107,14 +107,8 @@ Check the WIKI for more ! https://github.com/7h30th3r0n3/Raspyjack/wiki
     <td>Quad-core 1.5 GHz, full-size HDMI, GigE LAN</td>
     <td><a href="https://s.click.aliexpress.com/e/_oFOHQdm">Buy</a></td>
   </tr>
-  <tr>
-    <td><strong>Raspberry Pi 5</strong> (8 GB)</td>
-    <td>Quad-core Cortex-A76 2.4 GHz, PCIe 2.0 x1</td>
-    <td><a href="https://s.click.aliexpress.com/e/_oC6NEZe">Buy</a></td>
-  </tr>
 </table>
 
-<p><em>Note:</em> Raspberry Pi 4/5 is not fully tested yet. It should work trough Webui but screen probably need some ajustement. Feedback is welcome.</p>
 
 ---
 
