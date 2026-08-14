@@ -900,6 +900,7 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
             or parsed.path.startswith("/api/auth/")
             or parsed.path.startswith("/api/wardriving/")
             or parsed.path.startswith("/api/adsb/")
+            or parsed.path.startswith("/api/sdr/")
         ):
             query = parse_qs(parsed.query or "")
             if parsed.path == "/api/auth/bootstrap-status":
@@ -956,6 +957,16 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
                 return
             if parsed.path == "/api/adsb/session":
                 self._handle_adsb_session(query)
+                return
+
+            if parsed.path == "/api/sdr/live":
+                self._handle_sdr_live()
+                return
+            if parsed.path == "/api/sdr/recordings":
+                self._handle_sdr_recordings()
+                return
+            if parsed.path == "/api/sdr/audio":
+                self._handle_sdr_audio()
                 return
 
             if parsed.path == "/api/system/status":
@@ -1036,6 +1047,27 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
                 _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
                 return
             self._handle_adsb_stop()
+            return
+        if parsed.path == "/api/sdr/start":
+            query = parse_qs(parsed.query or "")
+            if not _auth_ok(self, query):
+                _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
+                return
+            self._handle_sdr_start()
+            return
+        if parsed.path == "/api/sdr/stop":
+            query = parse_qs(parsed.query or "")
+            if not _auth_ok(self, query):
+                _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
+                return
+            self._handle_sdr_stop()
+            return
+        if parsed.path == "/api/sdr/control":
+            query = parse_qs(parsed.query or "")
+            if not _auth_ok(self, query):
+                _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
+                return
+            self._handle_sdr_control()
             return
 
         if parsed.path in ("/api/payloads/start", "/api/payloads/run"):
@@ -1704,6 +1736,172 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
             finally:
                 s.close()
             _json_response(self, {"ok": True, "status": "stopping"})
+        except Exception as exc:
+            _json_response(self, {"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+
+    # ------------------------------------------------------------------
+    # SDR
+    # ------------------------------------------------------------------
+
+    def _handle_sdr_live(self) -> None:
+        sdr_path = Path("/dev/shm/rj_sdr_live.json")
+        if sdr_path.exists():
+            try:
+                raw = sdr_path.read_text(encoding="utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(raw.encode())
+            except Exception:
+                _json_response(self, {"ts": 0, "streaming": False, "fft": None})
+        else:
+            _json_response(self, {"ts": 0, "streaming": False, "fft": None})
+
+    def _handle_sdr_recordings(self) -> None:
+        rec_dir = "/root/Raspyjack/loot/SDR/recordings"
+        result = []
+        if os.path.isdir(rec_dir):
+            for f in sorted(os.listdir(rec_dir), reverse=True):
+                if f.endswith((".raw", ".wav")):
+                    fp = os.path.join(rec_dir, f)
+                    try:
+                        sz = os.path.getsize(fp)
+                    except OSError:
+                        sz = 0
+                    result.append({"name": f, "path": fp, "size": sz})
+        _json_response(self, result)
+
+    def _handle_sdr_audio(self) -> None:
+        """Stream demodulated audio as WAV from the PCM buffer file."""
+        pcm_path = "/dev/shm/rj_sdr_audio.pcm"
+        if not os.path.exists(pcm_path):
+            _json_response(self, {"error": "no audio stream"}, status=HTTPStatus.NOT_FOUND)
+            return
+        try:
+            import struct as st
+            wav_header = bytearray(44)
+            wav_header[0:4] = b"RIFF"
+            st.pack_into("<I", wav_header, 4, 0x7FFFFFFF)
+            wav_header[8:12] = b"WAVE"
+            wav_header[12:16] = b"fmt "
+            st.pack_into("<I", wav_header, 16, 16)
+            st.pack_into("<H", wav_header, 20, 1)
+            st.pack_into("<H", wav_header, 22, 1)
+            st.pack_into("<I", wav_header, 24, 48000)
+            st.pack_into("<I", wav_header, 28, 96000)
+            st.pack_into("<H", wav_header, 32, 2)
+            st.pack_into("<H", wav_header, 34, 16)
+            wav_header[36:40] = b"data"
+            st.pack_into("<I", wav_header, 40, 0x7FFFFFFF)
+            self.send_response(200)
+            self.send_header("Content-Type", "audio/wav")
+            self.send_header("Cache-Control", "no-cache, no-store")
+            self.end_headers()
+            self.wfile.write(wav_header)
+            self.wfile.flush()
+            pos = 0
+            try:
+                fsize = os.path.getsize(pcm_path)
+                pos = max(0, fsize - 48000 * 2)
+            except OSError:
+                pass
+            while True:
+                try:
+                    with open(pcm_path, "rb") as f:
+                        f.seek(pos)
+                        chunk = f.read(16384)
+                    if chunk:
+                        pos += len(chunk)
+                        self.wfile.write(chunk)
+                        self.wfile.flush()
+                    else:
+                        time.sleep(0.05)
+                except OSError:
+                    time.sleep(0.1)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
+
+    def _handle_sdr_start(self) -> None:
+        try:
+            if PAYLOAD_STATE_PATH.exists():
+                raw = PAYLOAD_STATE_PATH.read_text(encoding="utf-8")
+                pdata = json.loads(raw) if raw else {}
+                if pdata.get("running"):
+                    _json_response(self, {"ok": True, "status": "already_running", "path": pdata.get("path")})
+                    return
+            request_path = Path("/dev/shm/rj_payload_request.json")
+            request_path.write_text(json.dumps({
+                "action": "start",
+                "path": "sdr/sdr_suite.py",
+                "args": ["--auto"],
+            }))
+            _json_response(self, {"ok": True, "status": "starting"})
+        except Exception as exc:
+            _json_response(self, {"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+
+    def _handle_sdr_stop(self) -> None:
+        try:
+            sock_path = "/dev/shm/rj_input.sock"
+            if not os.path.exists(sock_path):
+                _json_response(self, {"ok": False, "error": "input socket not found"})
+                return
+            s = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+            try:
+                s.sendto(json.dumps({"button": "KEY3", "state": "press"}).encode(), sock_path)
+                time.sleep(0.15)
+                s.sendto(json.dumps({"button": "KEY3", "state": "release"}).encode(), sock_path)
+            finally:
+                s.close()
+            _json_response(self, {"ok": True, "status": "stopping"})
+        except Exception as exc:
+            _json_response(self, {"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+
+    _SDR_CONTROL_PATH = "/dev/shm/rj_sdr_control.json"
+    _SDR_VALID_RATES = {1024000, 2048000, 2400000, 3200000}
+
+    def _handle_sdr_control(self) -> None:
+        body = _read_json(self)
+        if body is None:
+            _json_response(self, {"error": "invalid json"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        action = str(body.get("action", "")).strip()
+        value = body.get("value")
+        if action == "set_freq":
+            if not isinstance(value, (int, float)) or not (24_000_000 <= int(value) <= 1_766_000_000):
+                _json_response(self, {"error": "freq must be 24-1766 MHz"}, status=HTTPStatus.BAD_REQUEST)
+                return
+            value = int(value)
+        elif action == "set_gain":
+            if not isinstance(value, (int, float)) or not (0 <= int(value) <= 50):
+                _json_response(self, {"error": "gain must be 0-50"}, status=HTTPStatus.BAD_REQUEST)
+                return
+            value = int(value)
+        elif action == "set_sample_rate":
+            if not isinstance(value, (int, float)) or int(value) not in self._SDR_VALID_RATES:
+                _json_response(self, {"error": f"sample_rate must be one of {sorted(self._SDR_VALID_RATES)}"}, status=HTTPStatus.BAD_REQUEST)
+                return
+            value = int(value)
+        elif action in (
+            "start_recording", "stop_recording",
+            "start_audio", "stop_audio",
+            "start_wav_recording", "stop_wav_recording",
+            "start_decoder", "stop_decoder",
+            "start_scan", "stop_scan",
+            "add_bookmark", "delete_bookmark",
+            "reset_peak_hold",
+        ):
+            pass
+        else:
+            _json_response(self, {"error": f"unknown action: {action}"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        try:
+            cmd = dict(body)
+            cmd["action"] = action
+            tmp = self._SDR_CONTROL_PATH + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(cmd, f)
+            os.replace(tmp, self._SDR_CONTROL_PATH)
+            _json_response(self, {"ok": True})
         except Exception as exc:
             _json_response(self, {"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
 

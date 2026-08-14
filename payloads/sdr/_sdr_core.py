@@ -267,16 +267,133 @@ class SDRDevice:
         return self._sample_rate
 
 
-def start_fm_audio(freq_hz, device="default"):
-    _kill_stale()
-    cmd = (
-        f"rtl_fm -f {freq_hz} -M wbfm -s 200000 -r 48000 -g 20 - "
-        f"| aplay -D {device} -f S16_LE -r 48000 -c 1 -q"
-    )
+    @property
+    def recording(self):
+        with self._rec_lock:
+            return self._rec_file is not None
+
+
+AUDIO_PCM_PATH = "/dev/shm/rj_sdr_audio.pcm"
+AUDIO_RATE = 48000
+AUDIO_BUF_SIZE = AUDIO_RATE * 2 * 2
+
+
+class SoftDemod:
+    """Software demodulator — runs alongside SDRDevice, writes PCM to shared file."""
+
+    def __init__(self, sdr_device, mode="wfm", device="default"):
+        self._sdr = sdr_device
+        self._mode = mode
+        self._running = False
+        self._thread = None
+
+    def start(self):
+        self.stop()
+        self._running = True
+        try:
+            with open(AUDIO_PCM_PATH, "wb") as f:
+                f.write(b"")
+        except OSError:
+            pass
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def stop(self):
+        self._running = False
+        if self._thread:
+            self._thread.join(timeout=2)
+            self._thread = None
+        try:
+            os.unlink(AUDIO_PCM_PATH)
+        except OSError:
+            pass
+
+    @property
+    def is_running(self):
+        return self._running
+
+    def _run(self):
+        sr = self._sdr.sample_rate
+        block_size = max(1024, sr // 10)
+        prev_sample = 0 + 0j
+
+        while self._running:
+            try:
+                iq = self._sdr.get_iq_block(block_size)
+                if len(iq) < 64:
+                    time.sleep(0.02)
+                    continue
+
+                if self._mode in ("wfm", "nfm", "fm"):
+                    full = np.concatenate(([prev_sample], iq))
+                    prev_sample = iq[-1]
+                    audio = np.angle(full[1:] * np.conj(full[:-1])) / np.pi
+                elif self._mode == "am":
+                    audio = np.abs(iq)
+                    audio = audio / (np.max(audio) + 1e-10)
+                    audio = audio - np.mean(audio)
+                elif self._mode in ("usb", "lsb"):
+                    analytic = np.fft.ifft(np.fft.fft(iq.real) * (2 if self._mode == "usb" else -2))
+                    audio = analytic.real / (np.max(np.abs(analytic.real)) + 1e-10)
+                else:
+                    full = np.concatenate(([prev_sample], iq))
+                    prev_sample = iq[-1]
+                    audio = np.angle(full[1:] * np.conj(full[:-1])) / np.pi
+
+                ratio = len(audio) / AUDIO_RATE
+                if ratio > 1:
+                    indices = np.linspace(0, len(audio) - 1, int(len(audio) / ratio)).astype(int)
+                    audio = audio[indices]
+
+                pcm = np.clip(audio * 28000, -32768, 32767).astype(np.int16)
+                try:
+                    with open(AUDIO_PCM_PATH, "ab") as f:
+                        f.write(pcm.tobytes())
+                    fsize = os.path.getsize(AUDIO_PCM_PATH)
+                    if fsize > AUDIO_BUF_SIZE:
+                        with open(AUDIO_PCM_PATH, "r+b") as f:
+                            f.seek(fsize - AUDIO_BUF_SIZE)
+                            tail = f.read()
+                        with open(AUDIO_PCM_PATH, "wb") as f:
+                            f.write(tail)
+                except OSError:
+                    pass
+
+            except Exception:
+                time.sleep(0.01)
+
+
+def _start_audio_pipeline(freq_hz, mode, device="default", gain=20):
+    """Start an audio demodulation pipeline. Returns subprocess."""
+    mode_map = {
+        "wfm": f"rtl_fm -f {freq_hz} -M wbfm -s 200000 -r 48000 -g {gain} -",
+        "nfm": f"rtl_fm -f {freq_hz} -M fm -s 12500 -r 48000 -g {gain} -",
+        "am":  f"rtl_fm -f {freq_hz} -M am -s 12500 -r 48000 -g {gain} -",
+        "usb": f"rtl_fm -f {freq_hz} -M usb -s 12500 -r 48000 -g {gain} -",
+        "lsb": f"rtl_fm -f {freq_hz} -M lsb -s 12500 -r 48000 -g {gain} -",
+    }
+    rtl_cmd = mode_map.get(mode, mode_map["wfm"])
+    cmd = f"{rtl_cmd} | aplay -D {device} -f S16_LE -r 48000 -c 1 -q"
     return subprocess.Popen(
         cmd, shell=True, stderr=subprocess.DEVNULL,
         preexec_fn=os.setsid,
     )
+
+
+def start_fm_audio(freq_hz, device="default"):
+    return _start_audio_pipeline(freq_hz, "wfm", device)
+
+
+def start_nfm_audio(freq_hz, device="default"):
+    return _start_audio_pipeline(freq_hz, "nfm", device)
+
+
+def start_am_audio(freq_hz, device="default"):
+    return _start_audio_pipeline(freq_hz, "am", device)
+
+
+def start_ssb_audio(freq_hz, sideband="usb", device="default"):
+    return _start_audio_pipeline(freq_hz, sideband, device)
 
 
 def stop_fm_audio(proc):
@@ -286,3 +403,46 @@ def stop_fm_audio(proc):
         except Exception:
             pass
     _kill_stale()
+
+
+def start_wav_recording(freq_hz, mode, output_path, device="default", gain=20):
+    """Record demodulated audio to WAV file."""
+    _kill_stale()
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    mode_map = {
+        "wfm": f"rtl_fm -f {freq_hz} -M wbfm -s 200000 -r 48000 -g {gain} -",
+        "nfm": f"rtl_fm -f {freq_hz} -M fm -s 12500 -r 48000 -g {gain} -",
+        "am":  f"rtl_fm -f {freq_hz} -M am -s 12500 -r 48000 -g {gain} -",
+    }
+    rtl_cmd = mode_map.get(mode, mode_map["nfm"])
+    cmd = f"{rtl_cmd} | sox -t raw -r 48000 -b 16 -e signed -c 1 - {output_path}"
+    try:
+        return subprocess.Popen(
+            cmd, shell=True, stderr=subprocess.DEVNULL,
+            preexec_fn=os.setsid,
+        )
+    except Exception:
+        return None
+
+
+def start_decoder(freq_hz, decoder_type, gain=20):
+    """Start a protocol decoder pipeline. Returns (process, decoder_type)."""
+    _kill_stale()
+    decoders = {
+        "pocsag": f"rtl_fm -f {freq_hz} -M fm -s 22050 -g {gain} - | multimon-ng -a POCSAG512 -a POCSAG1200 -a POCSAG2400 -f alpha -t raw -",
+        "acars": f"rtl_fm -f {freq_hz} -M am -s 12500 -g {gain} - | multimon-ng -a ACARS -t raw -",
+        "ais": f"rtl_fm -f 161975000 -M fm -s 22050 -g {gain} - | multimon-ng -a AIS -t raw -",
+        "flex": f"rtl_fm -f {freq_hz} -M fm -s 22050 -g {gain} - | multimon-ng -a FLEX -f alpha -t raw -",
+    }
+    cmd = decoders.get(decoder_type)
+    if not cmd:
+        return None
+    try:
+        proc = subprocess.Popen(
+            cmd, shell=True, stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL, text=True,
+            preexec_fn=os.setsid, bufsize=1,
+        )
+        return proc
+    except Exception:
+        return None

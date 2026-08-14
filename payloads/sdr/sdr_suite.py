@@ -44,7 +44,11 @@ except ImportError:
     from payloads._input_helper import get_button
 
 import evdev_keys
-from payloads.sdr._sdr_core import SDRDevice, detect_sdr, compute_fft, start_fm_audio, stop_fm_audio
+from payloads.sdr._sdr_core import (
+    SDRDevice, detect_sdr, compute_fft,
+    start_fm_audio, stop_fm_audio, _start_audio_pipeline, SoftDemod,
+    start_wav_recording, start_decoder,
+)
 from payloads.sdr._waterfall import WaterfallBuffer, draw_spectrum, draw_signal_meter, draw_freq_scale, COLORMAPS
 from payloads.sdr._presets import (
     BAND_PRESETS, FM_STATIONS, NOAA_CHANNELS,
@@ -66,10 +70,27 @@ MODE_COLORS = {
 }
 DEBOUNCE = 0.15
 SDR_LIVE_PATH = "/dev/shm/rj_sdr_live.json"
+SDR_CONTROL_PATH = "/dev/shm/rj_sdr_control.json"
+RECORDINGS_DIR = "/root/Raspyjack/loot/SDR/recordings"
+BOOKMARKS_PATH = "/root/Raspyjack/loot/SDR/bookmarks.json"
 _running = True
 _shutdown = threading.Event()
 _sdr_ref = None
 _current_mode = "Waterfall"
+
+_audio_proc = None
+_audio_mode = ""
+_wav_proc = None
+_decoder_proc = None
+_decoder_type = ""
+_decoder_messages = []
+_decoder_lock = threading.Lock()
+_scanner_active = False
+_scanner_hits = []
+_scanner_lock = threading.Lock()
+_fft_avg_buf = []
+_fft_peak = None
+_FFT_AVG_N = 8
 
 
 def _sig(s, f):
@@ -82,31 +103,271 @@ signal.signal(signal.SIGTERM, _sig)
 signal.signal(signal.SIGINT, _sig)
 
 
+def _load_bookmarks():
+    try:
+        with open(BOOKMARKS_PATH) as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+
+def _save_bookmarks(bmarks):
+    os.makedirs(os.path.dirname(BOOKMARKS_PATH), exist_ok=True)
+    with open(BOOKMARKS_PATH, "w") as f:
+        json.dump(bmarks, f, indent=2)
+
+
+def _decoder_reader():
+    """Read decoded messages from decoder subprocess stdout."""
+    global _decoder_proc
+    while _decoder_proc and not _shutdown.is_set():
+        try:
+            line = _decoder_proc.stdout.readline()
+            if not line:
+                if _decoder_proc.poll() is not None:
+                    break
+                continue
+            msg = line.strip()
+            if msg:
+                with _decoder_lock:
+                    _decoder_messages.append({
+                        "ts": time.time(),
+                        "type": _decoder_type,
+                        "content": msg,
+                    })
+                    if len(_decoder_messages) > 100:
+                        del _decoder_messages[:len(_decoder_messages) - 100]
+        except Exception:
+            break
+
+
+def _scanner_worker(sdr, settings_ref, params):
+    """Background frequency scanner — steps through frequencies using the live SDR."""
+    global _scanner_active
+    start_f = params.get("start", 87_500_000)
+    end_f = params.get("end", 108_000_000)
+    step = max(params.get("step", 100_000), 25_000)
+    threshold = params.get("threshold", -45)
+    dwell = params.get("dwell", 0.3)
+
+    hits = []
+    orig_freq = settings_ref.get("center_freq", 100_000_000)
+
+    try:
+        f = start_f
+        while f <= end_f and _scanner_active and sdr and sdr.is_running:
+            sdr.set_freq(f)
+            settings_ref["center_freq"] = f
+            time.sleep(dwell)
+
+            fft_size = settings_ref.get("fft_size", 1024)
+            iq = sdr.get_iq_block(fft_size)
+            if len(iq) >= fft_size:
+                fft_db = compute_fft(iq, fft_size)
+                peak_db = float(np.max(fft_db))
+                if peak_db > threshold:
+                    hits.append({
+                        "freq": f,
+                        "db": round(peak_db, 1),
+                        "ts": time.time(),
+                    })
+
+            with _scanner_lock:
+                _scanner_hits.clear()
+                _scanner_hits.extend(hits)
+
+            f += step
+
+        sdr.set_freq(orig_freq)
+        settings_ref["center_freq"] = orig_freq
+    except Exception:
+        pass
+    _scanner_active = False
+
+
+def _poll_sdr_control(sdr, settings_ref):
+    """Check for WebUI control commands and apply them."""
+    global _audio_proc, _audio_mode, _wav_proc, _decoder_proc, _decoder_type
+    global _scanner_active, _fft_peak
+    if not os.path.exists(SDR_CONTROL_PATH):
+        return
+    try:
+        with open(SDR_CONTROL_PATH) as f:
+            cmd = json.load(f)
+        os.remove(SDR_CONTROL_PATH)
+    except Exception:
+        return
+    action = cmd.get("action")
+    value = cmd.get("value")
+    if not action:
+        return
+
+    if action == "set_freq" and sdr and isinstance(value, (int, float)):
+        sdr.set_freq(int(value))
+        settings_ref["center_freq"] = int(value)
+
+    elif action == "set_gain" and sdr and isinstance(value, (int, float)):
+        sdr.set_gain(int(value))
+        settings_ref["gain"] = int(value)
+
+    elif action == "set_sample_rate" and sdr and isinstance(value, (int, float)):
+        freq = settings_ref.get("center_freq", 100_000_000)
+        gain = settings_ref.get("gain", 30)
+        sdr.start(freq, int(value), gain)
+        settings_ref["sample_rate"] = int(value)
+
+    elif action == "start_recording" and sdr:
+        os.makedirs(RECORDINGS_DIR, exist_ok=True)
+        freq = settings_ref.get("center_freq", 0)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        path = os.path.join(RECORDINGS_DIR, f"iq_{freq}_{ts}.raw")
+        sdr.start_recording(path)
+
+    elif action == "stop_recording" and sdr:
+        sdr.stop_recording()
+
+    elif action == "start_audio":
+        mode = cmd.get("mode") or cmd.get("value") or "wfm"
+        device = settings_ref.get("audio_device", "default")
+        if _audio_proc:
+            _audio_proc.stop()
+        if sdr and sdr.is_running:
+            _audio_proc = SoftDemod(sdr, mode=mode, device=device)
+            _audio_proc.start()
+            _audio_mode = mode
+
+    elif action == "stop_audio":
+        if _audio_proc:
+            _audio_proc.stop()
+            _audio_proc = None
+            _audio_mode = ""
+
+    elif action == "start_wav_recording":
+        mode = cmd.get("mode") or cmd.get("value") or "nfm"
+        freq = settings_ref.get("center_freq", 100_000_000)
+        os.makedirs(RECORDINGS_DIR, exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        path = os.path.join(RECORDINGS_DIR, f"audio_{freq}_{ts}.wav")
+        if _wav_proc:
+            stop_fm_audio(_wav_proc)
+        _wav_proc = start_wav_recording(freq, mode, path,
+                                         settings_ref.get("audio_device", "default"),
+                                         settings_ref.get("gain", 20))
+
+    elif action == "stop_wav_recording":
+        if _wav_proc:
+            stop_fm_audio(_wav_proc)
+            _wav_proc = None
+
+    elif action == "start_decoder":
+        dtype = cmd.get("type") or cmd.get("value") or "pocsag"
+        freq = settings_ref.get("center_freq", 100_000_000)
+        if _decoder_proc:
+            stop_fm_audio(_decoder_proc)
+        _decoder_proc = start_decoder(freq, dtype, settings_ref.get("gain", 20))
+        _decoder_type = dtype
+        with _decoder_lock:
+            _decoder_messages.clear()
+        if _decoder_proc:
+            threading.Thread(target=_decoder_reader, daemon=True).start()
+
+    elif action == "stop_decoder":
+        if _decoder_proc:
+            stop_fm_audio(_decoder_proc)
+            _decoder_proc = None
+            _decoder_type = ""
+
+    elif action == "start_scan":
+        if not _scanner_active:
+            _scanner_active = True
+            params = cmd.get("params", {})
+            threading.Thread(
+                target=_scanner_worker,
+                args=(sdr, settings_ref, params),
+                daemon=True,
+            ).start()
+
+    elif action == "stop_scan":
+        _scanner_active = False
+
+    elif action == "add_bookmark":
+        bmarks = _load_bookmarks()
+        bmarks.append({
+            "freq": cmd.get("freq", 0),
+            "label": cmd.get("label", ""),
+            "mode": cmd.get("mode", ""),
+            "ts": time.time(),
+        })
+        _save_bookmarks(bmarks)
+
+    elif action == "delete_bookmark":
+        freq = cmd.get("freq", 0)
+        bmarks = [b for b in _load_bookmarks() if b.get("freq") != freq]
+        _save_bookmarks(bmarks)
+
+    elif action == "reset_peak_hold":
+        _fft_peak = None
+
+
 def _write_sdr_live(settings_ref):
-    """Background thread: write live FFT data to shared memory for WebUI."""
+    """Background thread: write live FFT + pro features to shared memory."""
+    global _fft_peak
     while not _shutdown.is_set():
         try:
             sdr = _sdr_ref
+            _poll_sdr_control(sdr, settings_ref)
             fft_data = None
+            fft_avg = None
+            fft_peak_out = None
             sig_db = -100.0
             if sdr and sdr.is_running:
-                fft_size = settings_ref.get("fft_size", 256)
+                fft_size = settings_ref.get("fft_size", 1024)
                 iq = sdr.get_iq_block(fft_size)
                 fft_raw = compute_fft(iq, fft_size)
                 fft_data = [round(float(v), 1) for v in fft_raw]
                 sig_db = round(float(20 * np.log10(np.sqrt(np.mean(np.abs(iq) ** 2)) + 1e-10)), 1)
+
+                _fft_avg_buf.append(fft_raw)
+                if len(_fft_avg_buf) > _FFT_AVG_N:
+                    del _fft_avg_buf[:len(_fft_avg_buf) - _FFT_AVG_N]
+                if _fft_avg_buf:
+                    avg = np.mean(_fft_avg_buf, axis=0)
+                    fft_avg = [round(float(v), 1) for v in avg]
+
+                if _fft_peak is None or len(_fft_peak) != len(fft_raw):
+                    _fft_peak = fft_raw.copy()
+                else:
+                    _fft_peak = np.maximum(_fft_peak, fft_raw)
+                fft_peak_out = [round(float(v), 1) for v in _fft_peak]
+
+            with _decoder_lock:
+                dec_msgs = list(_decoder_messages[-50:])
+            with _scanner_lock:
+                scan_hits = list(_scanner_hits)
+
             output = {
                 "ts": time.time(),
                 "freq": settings_ref.get("center_freq", 0),
                 "sample_rate": settings_ref.get("sample_rate", 2048000),
-                "fft_size": settings_ref.get("fft_size", 256),
+                "fft_size": settings_ref.get("fft_size", 1024),
                 "db_min": settings_ref.get("db_min", -70),
                 "db_max": settings_ref.get("db_max", -10),
                 "gain": settings_ref.get("gain", 30),
                 "streaming": bool(sdr and sdr.is_running),
                 "mode": _current_mode,
                 "fft": fft_data,
+                "fft_avg": fft_avg,
+                "fft_peak": fft_peak_out,
                 "signal_db": sig_db,
+                "recording": bool(sdr and sdr.recording),
+                "audio_active": _audio_proc is not None and _audio_proc.is_running,
+                "audio_mode": _audio_mode,
+                "wav_recording": _wav_proc is not None and _wav_proc.poll() is None,
+                "decoder_active": _decoder_type if _decoder_proc and _decoder_proc.poll() is None else "",
+                "decoder_messages": dec_msgs,
+                "scanner_active": _scanner_active,
+                "scanner_hits": scan_hits,
+                "bookmarks": _load_bookmarks(),
             }
             tmp = SDR_LIVE_PATH + ".tmp"
             with open(tmp, "w") as f:
@@ -960,6 +1221,12 @@ def main():
 
     finally:
         _shutdown.set()
+        if _audio_proc:
+            _audio_proc.stop()
+        if _wav_proc:
+            stop_fm_audio(_wav_proc)
+        if _decoder_proc:
+            stop_fm_audio(_decoder_proc)
         sdr.stop()
         _sdr_ref = None
         save_settings(settings)

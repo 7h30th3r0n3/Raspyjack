@@ -39,7 +39,7 @@ DEFAULT_SETTINGS = {
     "center_freq": 100_000_000,
     "sample_rate": 2_048_000,
     "gain": 30,
-    "fft_size": 256,
+    "fft_size": 1024,
     "colormap": "turbo",
     "db_min": -70,
     "db_max": -10,
