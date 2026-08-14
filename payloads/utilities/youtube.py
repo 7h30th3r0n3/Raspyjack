@@ -130,6 +130,14 @@ signal.signal(signal.SIGINT, _sig)
 signal.signal(signal.SIGTERM, _sig)
 
 
+def _yt_set_vol(vol):
+    hp_val = int(19 + (vol * 44 / 63))
+    dac_val = int(75 + (vol * 180 / 63))
+    for name, val in [("Headphone", hp_val), ("DACL", dac_val), ("DACR", dac_val)]:
+        subprocess.Popen(["amixer", "-c", "0", "sset", name, str(val)],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
 def _draw(img):
     """Get a draw context — raw ImageDraw on wide, ScaledDraw on small."""
     if IS_WIDE:
@@ -226,8 +234,7 @@ def _play_audio(playlist, start_idx=0):
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
         _vol = 40
-        subprocess.Popen(["amixer", "-c", "0", "sset", "Headphone", str(_vol)],
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        _yt_set_vol(_vol)
 
         start_time = time.time()
         duration = v.get("duration", 0)
@@ -254,13 +261,11 @@ def _play_audio(playlist, start_idx=0):
                 break
             elif btn == "UP":
                 _vol = min(63, _vol + 5)
-                subprocess.Popen(["amixer", "-c", "0", "sset", "Headphone", str(_vol)],
-                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                _yt_set_vol(_vol)
                 time.sleep(0.1)
             elif btn == "DOWN":
                 _vol = max(0, _vol - 5)
-                subprocess.Popen(["amixer", "-c", "0", "sset", "Headphone", str(_vol)],
-                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                _yt_set_vol(_vol)
                 time.sleep(0.1)
 
             # Check "L" key on TCA8418 (evdev code 38)
@@ -832,8 +837,7 @@ def _play_video(video_id, title, playlist_mode=False, start_offset=0):
     def _set_vol(v):
         nonlocal _vol
         _vol = max(0, min(63, v))
-        subprocess.Popen(["amixer", "-c", "0", "sset", "Headphone", str(_vol)],
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        _yt_set_vol(_vol)
 
     _set_vol(_vol)
 

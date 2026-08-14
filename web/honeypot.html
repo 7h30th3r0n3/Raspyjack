@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RaspyJack Honeypot SIEM</title>
+  <link rel="stylesheet" href="./vendor/css/fontawesome.min.css">
+  <style>
+    :root { color-scheme:dark; --bg:#05060a; --panel:#080c14; --border:#0f1a2a; --accent:#00ccff; --green:#00ff88; --red:#ff3333; --orange:#ff8800; --yellow:#ffaa00; }
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:#ccc;overflow:hidden;height:100vh;display:flex;flex-direction:column}
+
+    /* Topbar */
+    #topbar{height:38px;background:#0a0e1a;display:flex;align-items:center;padding:0 12px;gap:10px;border-bottom:1px solid var(--border);flex-shrink:0}
+    #topbar h1{font-size:14px;color:var(--accent);white-space:nowrap}
+    .tb-btn{background:#111830;color:#888;border:1px solid #1a2844;padding:3px 10px;border-radius:4px;font-size:11px;cursor:pointer;white-space:nowrap}
+    .tb-btn:hover{color:#fff;background:#1a2850}
+    .tb-btn.active{border-color:var(--green);color:var(--green);box-shadow:0 0 8px rgba(0,255,136,.3)}
+    #topbar .spacer{flex:1}
+    #topbar a{color:#555;font-size:11px;text-decoration:none}
+    #liveDot{display:none;color:var(--green);font-size:8px;animation:pulse 1.5s infinite}
+    @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+    .tb-stat{font-size:11px;color:#4a6080;font-family:'Courier New',monospace}
+    .tb-stat b{color:#ccc}
+
+    /* Stat cards */
+    #cards{display:flex;gap:8px;padding:10px 12px;border-bottom:1px solid var(--border);flex-shrink:0}
+    .card{flex:1;text-align:center;padding:10px 8px;background:rgba(0,30,60,.3);border:1px solid #0d2040;border-radius:8px}
+    .card .val{font-size:28px;font-weight:700;color:var(--green);font-family:'Courier New',monospace}
+    .card .lbl{font-size:9px;color:#4a6080;text-transform:uppercase;letter-spacing:1px;margin-top:2px}
+
+    /* Main split */
+    #main{display:flex;flex:1;min-height:0;overflow:hidden}
+
+    /* Left panel */
+    #left{width:30%;min-width:200px;max-width:320px;border-right:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden}
+    .section-title{font-size:10px;color:var(--accent);text-transform:uppercase;letter-spacing:1px;padding:8px 10px 4px;font-weight:600;border-bottom:1px solid var(--border)}
+    #portList{flex:1;overflow-y:auto;padding:4px 8px}
+    #portList::-webkit-scrollbar{width:3px}
+    #portList::-webkit-scrollbar-thumb{background:#1a2844;border-radius:2px}
+    .port-row{display:flex;align-items:center;gap:6px;padding:3px 0;font-size:10px}
+    .port-badge{display:inline-block;padding:1px 5px;border-radius:3px;font-size:9px;font-weight:600;min-width:45px;text-align:center;color:#fff}
+    .port-bar-bg{flex:1;height:6px;background:#0a1020;border-radius:3px;overflow:hidden}
+    .port-bar{height:100%;border-radius:3px;transition:width .3s}
+    .port-count{font-family:'Courier New',monospace;font-size:10px;color:#888;min-width:30px;text-align:right}
+
+    #ipSection{border-top:1px solid var(--border)}
+    #ipList{overflow-y:auto;max-height:40%;padding:4px 8px}
+    #ipList::-webkit-scrollbar{width:3px}
+    #ipList::-webkit-scrollbar-thumb{background:#1a2844;border-radius:2px}
+    .ip-row{display:flex;align-items:center;gap:6px;padding:2px 0;font-size:10px}
+    .ip-rank{color:#3a5070;font-size:9px;min-width:16px}
+    .ip-addr{font-family:'Courier New',monospace;color:var(--accent);flex:1}
+    .ip-bar-bg{width:60px;height:5px;background:#0a1020;border-radius:3px;overflow:hidden}
+    .ip-bar{height:100%;background:var(--red);border-radius:3px}
+    .ip-count{font-family:'Courier New',monospace;color:#888;font-size:9px;min-width:25px;text-align:right}
+
+    /* Right panel */
+    #right{flex:1;display:flex;flex-direction:column;overflow:hidden}
+
+    /* Event feed */
+    #feedWrap{flex:1;display:flex;flex-direction:column;overflow:hidden}
+    #feedHead{display:flex;justify-content:space-between;align-items:center;padding:6px 10px;border-bottom:1px solid var(--border)}
+    #feedHead span{font-size:10px;color:var(--accent);text-transform:uppercase;letter-spacing:1px;font-weight:600}
+    #feedHead button{background:none;border:1px solid #1a2844;color:#666;padding:2px 8px;border-radius:3px;font-size:9px;cursor:pointer}
+    #feedHead button:hover{color:#fff;border-color:#333}
+    #feed{flex:1;overflow-y:auto;font-size:10px;font-family:'Courier New',monospace;padding:2px 0}
+    #feed::-webkit-scrollbar{width:3px}
+    #feed::-webkit-scrollbar-thumb{background:#1a2844;border-radius:2px}
+    .evt{display:flex;align-items:center;gap:6px;padding:3px 10px;border-bottom:1px solid #080c16;transition:background .15s}
+    .evt:hover{background:#0c1828}
+    .evt-ts{color:#3a5070;min-width:65px;font-size:9px}
+    .evt-ip{color:var(--accent);min-width:110px}
+    .evt-svc{display:inline-block;padding:1px 5px;border-radius:3px;font-size:8px;font-weight:700;min-width:42px;text-align:center;color:#fff}
+    .evt-data{color:#888;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+    /* Heatmap */
+    #heatWrap{border-top:1px solid var(--border);padding:8px 10px;flex-shrink:0}
+    #heatTitle{font-size:10px;color:var(--accent);text-transform:uppercase;letter-spacing:1px;font-weight:600;margin-bottom:6px}
+    #heatmap{width:100%;height:90px;display:block}
+
+    /* Overlay */
+    #overlay{position:absolute;top:0;left:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;background:rgba(5,6,10,.88);z-index:50;pointer-events:none}
+    #overlay.hidden{display:none}
+    #overlay .msg{font-size:16px;color:#3a5070;text-align:center}
+    #overlay .msg i{font-size:28px;display:block;margin-bottom:8px;color:#1a3050}
+
+    @media(max-width:768px){
+      #main{flex-direction:column}
+      #left{width:100%;max-width:none;min-width:0;max-height:35vh;border-right:none;border-bottom:1px solid var(--border)}
+      #cards .card .val{font-size:20px}
+    }
+  </style>
+</head>
+<body>
+
+<div id="topbar">
+  <h1><i class="fa-solid fa-shield-halved"></i> Honeypot SIEM</h1>
+  <button class="tb-btn" id="btnLive" onclick="toggleLive()"><i class="fa-solid fa-tower-broadcast"></i> Live <i id="liveDot" class="fa-solid fa-circle"></i></button>
+  <span class="tb-stat">Events: <b id="tbTotal">0</b></span>
+  <span class="tb-stat">IPs: <b id="tbIps">0</b></span>
+  <div class="spacer"></div>
+  <a href="./index.html"><i class="fa-solid fa-arrow-left"></i> WebUI</a>
+</div>
+
+<div id="cards">
+  <div class="card"><div class="val" id="cTotal">0</div><div class="lbl">Total Events</div></div>
+  <div class="card"><div class="val" id="cIps">0</div><div class="lbl">Unique IPs</div></div>
+  <div class="card"><div class="val" id="cRate">0</div><div class="lbl">Events / Hour</div></div>
+  <div class="card"><div class="val" id="cUp">--:--</div><div class="lbl">Uptime</div></div>
+</div>
+
+<div id="main" style="position:relative">
+  <div id="left">
+    <div class="section-title"><i class="fa-solid fa-server"></i> Port Distribution</div>
+    <div id="portList"></div>
+    <div id="ipSection">
+      <div class="section-title"><i class="fa-solid fa-crosshairs"></i> Top Attackers</div>
+      <div id="ipList"></div>
+    </div>
+  </div>
+  <div id="right">
+    <div id="feedWrap">
+      <div id="feedHead">
+        <span><i class="fa-solid fa-bolt"></i> Event Feed</span>
+        <button onclick="clearFeed()"><i class="fa-solid fa-eraser"></i> Clear</button>
+      </div>
+      <div id="feed"></div>
+    </div>
+    <div id="heatWrap">
+      <div id="heatTitle"><i class="fa-solid fa-fire"></i> Activity Heatmap (7d &times; 24h)</div>
+      <canvas id="heatmap"></canvas>
+    </div>
+  </div>
+  <div id="overlay"><div class="msg"><i class="fa-solid fa-shield-halved"></i>Press Live to start Honeypot</div></div>
+</div>
+
+<script>
+const SVC_COLORS={21:'#ff8800',22:'#ff3333',23:'#ffaa00',25:'#4488ff',80:'#00ccff',110:'#8866ff',143:'#8866ff',445:'#cc44ff',3306:'#00ff88',3389:'#ff6688',5900:'#ffcc00',8080:'#00ccff',8443:'#00ccff'};
+const SVC_NAMES={21:'FTP',22:'SSH',23:'Telnet',25:'SMTP',80:'HTTP',110:'POP3',143:'IMAP',445:'SMB',3306:'MySQL',3389:'RDP',5900:'VNC',8080:'HTTP',8443:'HTTPS'};
+
+let isLive=false, pollInterval=null, autoScroll=true, allEvents=[];
+
+const feedEl=document.getElementById('feed');
+feedEl.addEventListener('mouseenter',()=>autoScroll=false);
+feedEl.addEventListener('mouseleave',()=>autoScroll=true);
+
+function fmtUptime(s){
+  if(!s||s<0)return'--:--';
+  const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sec=Math.floor(s%60);
+  return(h>0?h+'h ':'')+String(m).padStart(2,'0')+'m '+String(sec).padStart(2,'0')+'s';
+}
+function svcColor(port){return SVC_COLORS[port]||'#555'}
+function svcName(port,fallback){return SVC_NAMES[port]||fallback||'P'+port}
+
+function renderPortStats(stats){
+  const el=document.getElementById('portList');
+  if(!stats||!stats.length){el.innerHTML='<div style="padding:20px;text-align:center;color:#1a3050;font-size:9px">No data</div>';return}
+  const max=Math.max(...stats.map(s=>s.count),1);
+  el.innerHTML=stats.map(s=>{
+    const c=svcColor(s.port);
+    const pct=Math.round(s.count/max*100);
+    return'<div class="port-row">'+
+      '<span class="port-badge" style="background:'+c+'">'+svcName(s.port,s.service)+'</span>'+
+      '<div class="port-bar-bg"><div class="port-bar" style="width:'+pct+'%;background:'+c+'"></div></div>'+
+      '<span class="port-count">'+s.count+'</span></div>';
+  }).join('');
+}
+
+function renderTopIPs(ips){
+  const el=document.getElementById('ipList');
+  if(!ips||!ips.length){el.innerHTML='<div style="padding:12px;text-align:center;color:#1a3050;font-size:9px">No attackers</div>';return}
+  const max=Math.max(...ips.map(i=>i.count),1);
+  el.innerHTML=ips.slice(0,10).map((ip,i)=>{
+    const pct=Math.round(ip.count/max*100);
+    return'<div class="ip-row">'+
+      '<span class="ip-rank">#'+(i+1)+'</span>'+
+      '<span class="ip-addr">'+ip.ip+'</span>'+
+      '<div class="ip-bar-bg"><div class="ip-bar" style="width:'+pct+'%"></div></div>'+
+      '<span class="ip-count">'+ip.count+'</span></div>';
+  }).join('');
+}
+
+function renderEvents(events){
+  if(!events||!events.length)return;
+  const newOnes=events.filter(e=>!allEvents.find(a=>a.ts===e.ts&&a.ip===e.ip&&a.port===e.port));
+  allEvents.push(...newOnes);
+  if(allEvents.length>500)allEvents=allEvents.slice(-500);
+
+  let html='';
+  for(let i=allEvents.length-1;i>=Math.max(0,allEvents.length-200);i--){
+    const e=allEvents[i];
+    const ts=e.ts?e.ts.split('T')[1]||e.ts:'--';
+    const c=svcColor(e.port);
+    const svc=svcName(e.port,e.service);
+    const data=(e.data||'').substring(0,60);
+    html+='<div class="evt">'+
+      '<span class="evt-ts">'+ts.substring(0,8)+'</span>'+
+      '<span class="evt-ip">'+e.ip+'</span>'+
+      '<span class="evt-svc" style="background:'+c+'">'+svc+'</span>'+
+      '<span class="evt-data">'+escHtml(data)+'</span></div>';
+  }
+  feedEl.innerHTML=html;
+  if(autoScroll)feedEl.scrollTop=0;
+}
+
+function escHtml(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+
+function renderHeatmap(data){
+  const canvas=document.getElementById('heatmap');
+  const w=canvas.parentElement.clientWidth;
+  canvas.width=w;canvas.height=90;
+  const ctx=canvas.getContext('2d');
+  ctx.fillStyle='#030508';ctx.fillRect(0,0,w,90);
+
+  if(!data||!data.length)return;
+  const rows=data.length,cols=data[0]?data[0].length:24;
+  const max=Math.max(...data.flat(),1);
+  const cw=(w-30)/cols,ch=10;
+  const days=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+
+  ctx.font='8px Courier New';ctx.fillStyle='#3a5070';
+  for(let h=0;h<24;h+=3){
+    ctx.fillText(String(h).padStart(2,'0'),30+h*cw+cw/2-5,10);
+  }
+
+  for(let r=0;r<Math.min(rows,7);r++){
+    ctx.fillStyle='#3a5070';
+    ctx.fillText(days[r]||'',0,20+r*ch+8);
+    for(let c=0;c<cols;c++){
+      const v=data[r][c]||0;
+      const intensity=Math.min(1,v/max);
+      const g=Math.floor(intensity*200);
+      ctx.fillStyle='rgb(0,'+g+','+Math.floor(g/3)+')';
+      ctx.fillRect(30+c*cw+1,15+r*ch+1,cw-2,ch-2);
+    }
+  }
+}
+
+function refresh(){
+  fetch('/api/honeypot/live',{credentials:'include'}).then(r=>r.json()).then(d=>{
+    document.getElementById('overlay').classList.toggle('hidden',!!d.running);
+
+    document.getElementById('cTotal').textContent=d.total_events||0;
+    document.getElementById('cIps').textContent=d.unique_ips||0;
+    document.getElementById('cRate').textContent=(d.events_per_hour||0).toFixed(1);
+    document.getElementById('cUp').textContent=fmtUptime(d.uptime);
+    document.getElementById('tbTotal').textContent=d.total_events||0;
+    document.getElementById('tbIps').textContent=d.unique_ips||0;
+
+    renderPortStats(d.port_stats||[]);
+    renderTopIPs(d.top_ips||[]);
+    renderEvents(d.recent_events||[]);
+    renderHeatmap(d.heatmap||[]);
+  }).catch(()=>{});
+}
+
+function toggleLive(){
+  if(isLive){
+    isLive=false;
+    clearInterval(pollInterval);pollInterval=null;
+    document.getElementById('btnLive').classList.remove('active');
+    document.getElementById('liveDot').style.display='none';
+    fetch('/api/honeypot/stop',{method:'POST',credentials:'include'}).catch(()=>{});
+  }else{
+    isLive=true;
+    document.getElementById('btnLive').classList.add('active');
+    document.getElementById('liveDot').style.display='inline';
+    fetch('/api/honeypot/start',{method:'POST',credentials:'include'}).then(()=>{
+      setTimeout(()=>{pollInterval=setInterval(refresh,2000)},3000);
+    }).catch(()=>{});
+  }
+}
+
+function clearFeed(){allEvents=[];feedEl.innerHTML=''}
+
+// Initial load — check if already running
+fetch('/api/honeypot/live',{credentials:'include'}).then(r=>r.json()).then(d=>{
+  if(d.running){
+    isLive=true;
+    document.getElementById('btnLive').classList.add('active');
+    document.getElementById('liveDot').style.display='inline';
+    pollInterval=setInterval(refresh,2000);
+    refresh();
+  }
+}).catch(()=>{});
+</script>
+</body>
+</html>

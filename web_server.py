@@ -901,6 +901,7 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
             or parsed.path.startswith("/api/wardriving/")
             or parsed.path.startswith("/api/adsb/")
             or parsed.path.startswith("/api/sdr/")
+            or parsed.path.startswith("/api/honeypot/")
         ):
             query = parse_qs(parsed.query or "")
             if parsed.path == "/api/auth/bootstrap-status":
@@ -967,6 +968,10 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
                 return
             if parsed.path == "/api/sdr/audio":
                 self._handle_sdr_audio()
+                return
+
+            if parsed.path == "/api/honeypot/live":
+                self._handle_honeypot_live()
                 return
 
             if parsed.path == "/api/system/status":
@@ -1068,6 +1073,20 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
                 _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
                 return
             self._handle_sdr_control()
+            return
+        if parsed.path == "/api/honeypot/start":
+            query = parse_qs(parsed.query or "")
+            if not _auth_ok(self, query):
+                _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
+                return
+            self._handle_honeypot_start()
+            return
+        if parsed.path == "/api/honeypot/stop":
+            query = parse_qs(parsed.query or "")
+            if not _auth_ok(self, query):
+                _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
+                return
+            self._handle_honeypot_stop()
             return
 
         if parsed.path in ("/api/payloads/start", "/api/payloads/run"):
@@ -1902,6 +1921,59 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
                 json.dump(cmd, f)
             os.replace(tmp, self._SDR_CONTROL_PATH)
             _json_response(self, {"ok": True})
+        except Exception as exc:
+            _json_response(self, {"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+
+    # ------------------------------------------------------------------
+    # Honeypot
+    # ------------------------------------------------------------------
+
+    def _handle_honeypot_live(self) -> None:
+        hp_path = Path("/dev/shm/rj_honeypot_live.json")
+        if hp_path.exists():
+            try:
+                raw = hp_path.read_text(encoding="utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(raw.encode())
+            except Exception:
+                _json_response(self, {"ts": 0, "running": False, "total_events": 0, "unique_ips": 0, "events_per_hour": 0, "uptime": 0, "top_ips": [], "port_stats": [], "recent_events": [], "heatmap": []})
+        else:
+            _json_response(self, {"ts": 0, "running": False, "total_events": 0, "unique_ips": 0, "events_per_hour": 0, "uptime": 0, "top_ips": [], "port_stats": [], "recent_events": [], "heatmap": []})
+
+    def _handle_honeypot_start(self) -> None:
+        try:
+            if PAYLOAD_STATE_PATH.exists():
+                raw = PAYLOAD_STATE_PATH.read_text(encoding="utf-8")
+                pdata = json.loads(raw) if raw else {}
+                if pdata.get("running"):
+                    _json_response(self, {"ok": True, "status": "already_running", "path": pdata.get("path")})
+                    return
+            request_path = Path("/dev/shm/rj_payload_request.json")
+            request_path.write_text(json.dumps({
+                "action": "start",
+                "path": "reconnaissance/honeypot_siem.py",
+                "args": ["--auto"],
+            }))
+            _json_response(self, {"ok": True, "status": "starting"})
+        except Exception as exc:
+            _json_response(self, {"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+
+    def _handle_honeypot_stop(self) -> None:
+        try:
+            sock_path = "/dev/shm/rj_input.sock"
+            if not os.path.exists(sock_path):
+                _json_response(self, {"ok": False, "error": "input socket not found"})
+                return
+            s = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+            try:
+                s.sendto(json.dumps({"button": "KEY3", "state": "press"}).encode(), sock_path)
+                time.sleep(0.15)
+                s.sendto(json.dumps({"button": "KEY3", "state": "release"}).encode(), sock_path)
+            finally:
+                s.close()
+            _json_response(self, {"ok": True, "status": "stopping"})
         except Exception as exc:
             _json_response(self, {"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
 
