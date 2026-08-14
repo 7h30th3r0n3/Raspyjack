@@ -443,7 +443,10 @@
         " cu_slot_manager": "",
         " cu_clone": "",
         " cu_lf_reader": "",
-        " cu_autopwn": ""
+        " cu_autopwn": "",
+        " cyber_swarm": "",
+        " doodle_jump": "",
+        " honeypot_siem": ""
     },
     "fallbacks": {
         "__scan__": "",
