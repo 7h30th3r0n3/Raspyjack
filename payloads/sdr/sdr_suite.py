@@ -65,16 +65,57 @@ MODE_COLORS = {
     "Settings": (150, 150, 150),
 }
 DEBOUNCE = 0.15
+SDR_LIVE_PATH = "/dev/shm/rj_sdr_live.json"
 _running = True
+_shutdown = threading.Event()
+_sdr_ref = None
+_current_mode = "Waterfall"
 
 
 def _sig(s, f):
     global _running
     _running = False
+    _shutdown.set()
 
 
 signal.signal(signal.SIGTERM, _sig)
 signal.signal(signal.SIGINT, _sig)
+
+
+def _write_sdr_live(settings_ref):
+    """Background thread: write live FFT data to shared memory for WebUI."""
+    while not _shutdown.is_set():
+        try:
+            sdr = _sdr_ref
+            fft_data = None
+            sig_db = -100.0
+            if sdr and sdr.is_running:
+                fft_size = settings_ref.get("fft_size", 256)
+                iq = sdr.get_iq_block(fft_size)
+                fft_raw = compute_fft(iq, fft_size)
+                fft_data = [round(float(v), 1) for v in fft_raw]
+                sig_db = round(float(20 * np.log10(np.sqrt(np.mean(np.abs(iq) ** 2)) + 1e-10)), 1)
+            output = {
+                "ts": time.time(),
+                "freq": settings_ref.get("center_freq", 0),
+                "sample_rate": settings_ref.get("sample_rate", 2048000),
+                "fft_size": settings_ref.get("fft_size", 256),
+                "db_min": settings_ref.get("db_min", -70),
+                "db_max": settings_ref.get("db_max", -10),
+                "gain": settings_ref.get("gain", 30),
+                "streaming": bool(sdr and sdr.is_running),
+                "mode": _current_mode,
+                "fft": fft_data,
+                "signal_db": sig_db,
+            }
+            tmp = SDR_LIVE_PATH + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(output, f)
+            os.replace(tmp, SDR_LIVE_PATH)
+        except Exception:
+            pass
+        _shutdown.wait(0.1)
+
 
 GPIO.setmode(GPIO.BCM)
 for p in PINS.values():
@@ -868,8 +909,11 @@ def main():
     _splash(f"Found: {hw_name}", f"Backend: {backend}", color=(0, 255, 100))
     time.sleep(1.5)
 
+    global _sdr_ref, _current_mode
+
     settings = load_settings()
     sdr = SDRDevice()
+    _sdr_ref = sdr
 
     wf_w = WIDTH
     wf_h = HEIGHT - SY(60)
@@ -877,10 +921,19 @@ def main():
     wf_buf.set_range(settings["db_min"], settings["db_max"])
 
     mode_idx = 0
+    auto_mode = "--auto" in sys.argv
+
+    _shutdown.clear()
+    writer_thread = threading.Thread(target=_write_sdr_live, args=(settings,), daemon=True)
+    writer_thread.start()
+
+    if auto_mode:
+        sdr.start(settings["center_freq"], settings["sample_rate"], settings["gain"])
 
     try:
         while _running:
             mode = MODES[mode_idx]
+            _current_mode = mode
             wf_buf.set_colormap(settings["colormap"])
             wf_buf.set_range(settings["db_min"], settings["db_max"])
 
@@ -906,8 +959,14 @@ def main():
                 mode_idx = (mode_idx + 1) % len(MODES)
 
     finally:
+        _shutdown.set()
         sdr.stop()
+        _sdr_ref = None
         save_settings(settings)
+        try:
+            os.remove(SDR_LIVE_PATH)
+        except OSError:
+            pass
         LCD.LCD_Clear()
         GPIO.cleanup()
 

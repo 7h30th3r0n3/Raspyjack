@@ -4,13 +4,14 @@ RaspyJack Payload -- ADS-B Aircraft Tracker
 =============================================
 Track aircraft via ADS-B (1090 MHz) using RTL-SDR.
 Decodes Mode-S messages: callsign, position, altitude, speed.
-Displays on LCD + serves WebUI map on port 8081.
+Enriches with offline aircraft database (registration, type, operator).
+Displays on LCD + writes live JSON for WebUI integration.
 
 Controls:
   OK         Start/Stop tracking
   UP/DOWN    Scroll aircraft list
-  KEY1       Switch view (List / Map / Stats)
-  KEY2       Toggle WebUI server
+  KEY1       Switch view (List / Detail / Map / Stats)
+  KEY2       Save session
   KEY3       Exit
 """
 
@@ -19,6 +20,7 @@ import sys
 import time
 import math
 import json
+import sqlite3
 import struct
 import subprocess
 import threading
@@ -26,7 +28,6 @@ from datetime import datetime
 import urllib.request
 from io import BytesIO
 from PIL import ImageEnhance
-from http.server import SimpleHTTPRequestHandler, HTTPServer
 
 sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..", "..")))
 
@@ -47,17 +48,163 @@ LOOT_DIR = "/root/Raspyjack/loot/SDR/adsb"
 DEBOUNCE = 0.18
 _last_btn = 0
 VIEWS = ["list", "detail", "map", "stats"]
-WEBUI_PORT = 8081
+
+LIVE_JSON_PATH = "/dev/shm/rj_adsb_live.json"
+SESSION_DIR = "/root/Raspyjack/loot/SDR/adsb/sessions"
 
 # ADS-B constants
 ADSB_FREQ = 1090000000
 ADSB_RATE = 2000000
 MODES_PREAMBLE = [1, 0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0]
 
-# Aircraft database
+# Aircraft state
 aircraft = {}
 lock = threading.Lock()
 _shutdown = threading.Event()
+_session_path = ""
+
+# ---------------------------------------------------------------------------
+# Aircraft database lookup
+# ---------------------------------------------------------------------------
+
+_DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
+_DB_PATH = os.path.join(_DATA_DIR, "aircraft.db")
+_db_cache = {}
+
+_airlines = None
+_airports = None
+_route_cache = {}
+_route_queue = []
+_route_lock = threading.Lock()
+
+
+def _load_airlines():
+    global _airlines
+    if _airlines is not None:
+        return
+    path = os.path.join(_DATA_DIR, "airlines.json")
+    try:
+        with open(path) as f:
+            _airlines = json.load(f)
+    except Exception:
+        _airlines = {}
+
+
+def _load_airports():
+    global _airports
+    if _airports is not None:
+        return
+    path = os.path.join(_DATA_DIR, "airports.json")
+    try:
+        with open(path) as f:
+            _airports = json.load(f)
+    except Exception:
+        _airports = {}
+
+
+def _lookup_airline(callsign):
+    """Extract airline info from callsign prefix (first 3 alpha chars)."""
+    _load_airlines()
+    if not callsign or not _airlines:
+        return {"airline": "", "airline_country": ""}
+    prefix = ""
+    for c in callsign:
+        if c.isalpha():
+            prefix += c
+        else:
+            break
+    if len(prefix) < 2:
+        return {"airline": "", "airline_country": ""}
+    info = _airlines.get(prefix[:3], {})
+    return {"airline": info.get("name", ""), "airline_country": info.get("country", "")}
+
+
+def _lookup_airport(icao_code):
+    """Look up airport by ICAO 4-letter code."""
+    _load_airports()
+    if not _airports or not icao_code:
+        return {}
+    return _airports.get(icao_code.upper(), {})
+
+
+def _format_airport(icao_code):
+    """Format airport as 'City Name (ICAO)' or just the code."""
+    info = _lookup_airport(icao_code)
+    if info:
+        return f"{info.get('city', '')} {info.get('name', '')} ({icao_code})".strip()
+    return icao_code
+
+
+def _lookup_route(callsign):
+    """Look up flight route via OpenSky API (cached, non-blocking result)."""
+    if not callsign:
+        return {"departure": "", "arrival": ""}
+    cs = callsign.strip()
+    if cs in _route_cache:
+        return _route_cache[cs]
+    with _route_lock:
+        if cs not in _route_queue:
+            _route_queue.append(cs)
+    return {"departure": "", "arrival": ""}
+
+
+def _route_resolver():
+    """Background thread that resolves flight routes via OpenSky API."""
+    while not _shutdown.is_set():
+        cs = None
+        with _route_lock:
+            if _route_queue:
+                cs = _route_queue.pop(0)
+        if not cs:
+            _shutdown.wait(2)
+            continue
+        result = {"departure": "", "arrival": ""}
+        try:
+            url = f"https://opensky-network.org/api/routes?callsign={cs}"
+            req = urllib.request.Request(url, headers={"User-Agent": "RaspyJack/1.0"})
+            with urllib.request.urlopen(req, timeout=3) as resp:
+                data = json.loads(resp.read().decode())
+            route = data.get("route", [])
+            if len(route) >= 2:
+                result["departure"] = _format_airport(route[0])
+                result["arrival"] = _format_airport(route[-1])
+        except Exception:
+            pass
+        _route_cache[cs] = result
+        if len(_route_cache) > 500:
+            oldest = next(iter(_route_cache))
+            del _route_cache[oldest]
+        with lock:
+            for ac in aircraft.values():
+                if ac.get("callsign", "").strip() == cs:
+                    ac["departure"] = result["departure"]
+                    ac["arrival"] = result["arrival"]
+        _shutdown.wait(0.5)
+
+
+def _lookup_aircraft(icao_hex):
+    """Look up enrichment data from the offline SQLite database."""
+    icao_lower = icao_hex.lower()
+    if icao_lower in _db_cache:
+        return _db_cache[icao_lower]
+    result = {"registration": "", "typecode": "", "type_desc": "", "operator": "", "country": ""}
+    try:
+        if not os.path.isfile(_DB_PATH):
+            _db_cache[icao_lower] = result
+            return result
+        conn = sqlite3.connect(_DB_PATH, timeout=2)
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT registration, typecode, type_desc, operator, country FROM aircraft WHERE icao=?",
+            (icao_lower,),
+        ).fetchone()
+        conn.close()
+        if row:
+            result = {k: (row[k] or "") for k in ("registration", "typecode", "type_desc", "operator", "country")}
+    except Exception:
+        pass
+    _db_cache[icao_lower] = result
+    return result
 
 
 def _btn():
@@ -189,12 +336,21 @@ def _process_message(msg_hex):
                 "speed": 0, "heading": 0, "seen": time.time(),
                 "cpr_even": None, "cpr_odd": None, "messages": 0,
             }
+            db_info = _lookup_aircraft(icao)
+            aircraft[icao].update(db_info)
+            aircraft[icao].update({"airline": "", "airline_country": "", "departure": "", "arrival": ""})
         ac = aircraft[icao]
         ac["seen"] = time.time()
         ac["messages"] += 1
 
         if 1 <= tc <= 4:
-            ac["callsign"] = _decode_callsign(msg_hex)
+            new_cs = _decode_callsign(msg_hex)
+            if new_cs and new_cs != ac["callsign"]:
+                ac["callsign"] = new_cs
+                al = _lookup_airline(new_cs)
+                ac["airline"] = al["airline"]
+                ac["airline_country"] = al["airline_country"]
+                _lookup_route(new_cs)
         elif 9 <= tc <= 18:
             alt = _decode_altitude(msg_hex)
             if alt is not None:
@@ -362,184 +518,69 @@ def _adsb_receiver():
 
 
 # ---------------------------------------------------------------------------
-# WebUI server
+# Live JSON writer + session persistence
 # ---------------------------------------------------------------------------
 
-_webui_running = False
-_webui_server = None
-
-WEBUI_HTML = """<!DOCTYPE html>
-<html><head><meta charset="UTF-8"><title>RaspyJack ADS-B Radar</title>
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<link rel="stylesheet" href="/vendor/leaflet/leaflet.css">
-<style>
-*{margin:0;padding:0;box-sizing:border-box}
-body{background:#0a0e14;color:#c8d0dc;font-family:'Segoe UI',system-ui,sans-serif;overflow:hidden;height:100vh}
-#map{height:100vh;width:100%;position:absolute;top:0;left:0;z-index:1}
-.leaflet-container{background:#0a0e14}
-#sidebar{position:absolute;top:0;right:0;width:340px;height:100vh;background:rgba(8,12,20,0.92);
-  border-left:1px solid #1a2844;z-index:1000;display:flex;flex-direction:column;backdrop-filter:blur(10px)}
-#header{padding:12px 16px;background:rgba(0,20,40,0.8);border-bottom:1px solid #1a2844}
-#header h1{font-size:16px;color:#00ccff;font-weight:600;letter-spacing:1px}
-#header .sub{font-size:11px;color:#4a6080;margin-top:2px}
-#stats{display:flex;gap:8px;padding:8px 16px;border-bottom:1px solid #0d1a2e}
-.stat{flex:1;text-align:center;padding:6px;background:rgba(0,40,80,0.3);border-radius:6px;border:1px solid #0d2040}
-.stat .val{font-size:20px;font-weight:700;color:#00ff88}
-.stat .lbl{font-size:9px;color:#4a6080;text-transform:uppercase;letter-spacing:1px}
-#list{flex:1;overflow-y:auto;padding:4px 0}
-#list::-webkit-scrollbar{width:4px}
-#list::-webkit-scrollbar-thumb{background:#1a3050;border-radius:2px}
-.ac{display:flex;align-items:center;padding:8px 16px;cursor:pointer;border-bottom:1px solid #0a1525;transition:background 0.15s}
-.ac:hover{background:rgba(0,100,200,0.15)}
-.ac.selected{background:rgba(0,150,255,0.2);border-left:3px solid #00ccff}
-.ac-icon{font-size:20px;margin-right:10px;transform-origin:center}
-.ac-info{flex:1;min-width:0}
-.ac-call{font-size:13px;font-weight:600;color:#00ff88}
-.ac-icao{font-size:10px;color:#3a5070;margin-left:6px}
-.ac-details{font-size:11px;color:#6080a0;margin-top:2px}
-.ac-alt{color:#ffaa00}
-.ac-spd{color:#00bbff}
-.tag-live{display:inline-block;width:6px;height:6px;background:#00ff88;border-radius:50%;margin-right:6px;
-  animation:pulse 1.5s infinite}
-@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
-#footer{padding:8px 16px;background:rgba(0,15,30,0.8);border-top:1px solid #1a2844;
-  font-size:10px;color:#3a5070;display:flex;justify-content:space-between}
-.plane-marker{color:#00ff88;font-size:22px;text-shadow:0 0 8px rgba(0,255,136,0.5);
-  transition:transform 0.3s;display:flex;align-items:center;justify-content:center}
-.plane-label{position:absolute;left:18px;top:-2px;font-size:10px;color:#00ccff;
-  background:rgba(0,20,40,0.8);padding:1px 4px;border-radius:2px;white-space:nowrap;
-  border:1px solid #0d2040;font-family:monospace}
-@media(max-width:768px){
-  #sidebar{width:100%;height:45vh;top:auto;bottom:0;border-left:none;border-top:1px solid #1a2844}
-  #map{height:55vh}
-}
-</style></head><body>
-<div id="map"></div>
-<div id="sidebar">
-  <div id="header"><h1>ADSB RADAR</h1><div class="sub">RaspyJack &bull; 1090 MHz</div></div>
-  <div id="stats">
-    <div class="stat"><div class="val" id="s-ac">0</div><div class="lbl">Aircraft</div></div>
-    <div class="stat"><div class="val" id="s-msg">0</div><div class="lbl">Messages</div></div>
-    <div class="stat"><div class="val" id="s-pos">0</div><div class="lbl">Positions</div></div>
-  </div>
-  <div id="list"></div>
-  <div id="footer"><span>Auto-refresh 1.5s</span><span id="clock"></span></div>
-</div>
-<script src="/vendor/leaflet/leaflet.js"></script>
-<script>
-const map=L.map('map',{zoomControl:false}).setView([46.8,2.3],6);
-L.control.zoom({position:'topleft'}).addTo(map);
-L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{
-  maxZoom:18,attribution:'CartoDB'}).addTo(map);
-let markers={},trails={},selected=null;
-function hdgIcon(h){
-  return L.divIcon({className:'',iconSize:[30,30],iconAnchor:[15,15],
-    html:`<div class="plane-marker" style="transform:rotate(${h||0}deg)">&#9992;</div>`})}
-function refresh(){
-  fetch('/api/adsb/aircraft').then(r=>r.json()).then(data=>{
-    let html='',totalMsg=0,withPos=0;
-    data.forEach(ac=>{
-      totalMsg+=ac.messages;
-      if(ac.lat&&ac.lon)withPos++;
-      const cs=ac.callsign||ac.icao;
-      const sel=selected===ac.icao?'selected':'';
-      html+=`<div class="ac ${sel}" onclick="selectAc('${ac.icao}',${ac.lat},${ac.lon})">
-        <div class="ac-icon" style="transform:rotate(${ac.heading||0}deg)">&#9992;</div>
-        <div class="ac-info">
-          <div><span class="tag-live"></span><span class="ac-call">${cs}</span><span class="ac-icao">${ac.icao}</span></div>
-          <div class="ac-details"><span class="ac-alt">${ac.alt.toLocaleString()}ft</span> &bull;
-            <span class="ac-spd">${ac.speed}kt</span> &bull; ${ac.heading}&deg;</div>
-        </div></div>`;
-      if(ac.lat&&ac.lon){
-        if(!markers[ac.icao]){
-          markers[ac.icao]=L.marker([ac.lat,ac.lon],{icon:hdgIcon(ac.heading)}).addTo(map);
-          trails[ac.icao]=L.polyline([],{color:'#00ff8840',weight:1,dashArray:'4'}).addTo(map);
-        }else{
-          markers[ac.icao].setLatLng([ac.lat,ac.lon]);
-          markers[ac.icao].setIcon(hdgIcon(ac.heading));
-          const t=trails[ac.icao].getLatLngs();
-          t.push([ac.lat,ac.lon]);
-          if(t.length>100)t.shift();
-          trails[ac.icao].setLatLngs(t);
-        }
-        markers[ac.icao].bindPopup(`<div style="font-family:monospace;background:#0a0e14;color:#c8d0dc;padding:8px;border-radius:4px">
-          <b style="color:#00ff88;font-size:14px">${cs}</b><br>
-          <span style="color:#ffaa00">${ac.alt.toLocaleString()} ft</span><br>
-          ${ac.speed} kt &bull; ${ac.heading}&deg;<br>
-          <span style="color:#4a6080">${ac.lat.toFixed(4)}, ${ac.lon.toFixed(4)}</span><br>
-          <span style="color:#3a5070">${ac.messages} msgs</span></div>`,{className:'dark-popup'});
-      }
-    });
-    document.getElementById('list').innerHTML=html||'<div style="padding:40px;text-align:center;color:#3a5070">Waiting for aircraft...</div>';
-    document.getElementById('s-ac').textContent=data.length;
-    document.getElementById('s-msg').textContent=totalMsg>999?(totalMsg/1000).toFixed(1)+'k':totalMsg;
-    document.getElementById('s-pos').textContent=withPos;
-    // Remove stale markers
-    const ids=new Set(data.map(a=>a.icao));
-    Object.keys(markers).forEach(k=>{if(!ids.has(k)){map.removeLayer(markers[k]);map.removeLayer(trails[k]);delete markers[k];delete trails[k]}});
-  }).catch(()=>{});
-  document.getElementById('clock').textContent=new Date().toLocaleTimeString();
-}
-function selectAc(icao,lat,lon){
-  selected=icao;
-  if(lat&&lon)map.setView([lat,lon],10);
-}
-setInterval(refresh,1500);refresh();
-</script></body></html>"""
+_EXPORT_FIELDS = ("icao", "callsign", "alt", "lat", "lon", "speed", "heading",
+                  "messages", "registration", "typecode", "type_desc", "operator", "country",
+                  "airline", "airline_country", "departure", "arrival")
 
 
-class ADSBHandler(SimpleHTTPRequestHandler):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, directory="/root/Raspyjack/web", **kwargs)
+def _build_aircraft_list(active_only=True):
+    with lock:
+        now = time.time()
+        src = aircraft.values()
+        if active_only:
+            src = [ac for ac in src if now - ac["seen"] < 60]
+        return [{k: ac.get(k, "") for k in _EXPORT_FIELDS} for ac in src]
 
-    def do_GET(self):
-        if self.path == "/adsb" or self.path == "/adsb/":
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html")
-            self.end_headers()
-            self.wfile.write(WEBUI_HTML.encode())
-        elif self.path == "/api/adsb/aircraft":
+
+def _write_live_json():
+    """Periodically write active aircraft to shared memory JSON for the WebUI."""
+    while not _shutdown.is_set():
+        try:
+            data = _build_aircraft_list(active_only=True)
             with lock:
-                now = time.time()
-                active = [ac for ac in aircraft.values() if now - ac["seen"] < 60]
-                active.sort(key=lambda a: -a["messages"])
-            data = []
-            for ac in active:
-                data.append({
-                    "icao": ac["icao"], "callsign": ac["callsign"],
-                    "alt": ac["alt"], "lat": ac["lat"], "lon": ac["lon"],
-                    "speed": ac["speed"], "heading": ac["heading"],
-                    "messages": ac["messages"],
-                    "squawk": ac.get("squawk", ""),
-                    "rssi": ac.get("rssi", 0),
-                })
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(json.dumps(data).encode())
-        elif self.path.startswith("/vendor/"):
-            self.path = self.path
-            super().do_GET()
-        elif self.path == "/" or self.path == "":
-            self.send_response(302)
-            self.send_header("Location", "/adsb")
-            self.end_headers()
-        else:
-            super().do_GET()
-
-    def log_message(self, format, *args):
-        pass
+                total_msg = sum(ac["messages"] for ac in aircraft.values())
+            output = {
+                "ts": time.time(),
+                "count": len(data),
+                "total_messages": total_msg,
+                "aircraft": data,
+            }
+            tmp_path = LIVE_JSON_PATH + ".tmp"
+            with open(tmp_path, "w") as f:
+                json.dump(output, f)
+            os.replace(tmp_path, LIVE_JSON_PATH)
+        except Exception:
+            pass
+        _shutdown.wait(1.5)
 
 
-def _start_webui():
-    global _webui_server, _webui_running
+def _init_session():
+    global _session_path
+    os.makedirs(SESSION_DIR, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    _session_path = os.path.join(SESSION_DIR, f"adsb_session_{ts}.json")
+
+
+def _save_session():
+    if not _session_path:
+        return
     try:
-        _webui_server = HTTPServer(("0.0.0.0", WEBUI_PORT), ADSBHandler)
-        # directory set in handler __init__
-        _webui_running = True
-        _webui_server.serve_forever()
+        data = _build_aircraft_list(active_only=False)
+        with lock:
+            total_msg = sum(ac["messages"] for ac in aircraft.values())
+        output = {
+            "session_end": datetime.now().isoformat(),
+            "total_seen": len(aircraft),
+            "total_messages": total_msg,
+            "aircraft": data,
+        }
+        with open(_session_path, "w") as f:
+            json.dump(output, f, indent=2)
     except Exception:
-        _webui_running = False
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -586,12 +627,26 @@ def main():
     _map_lat = 46.8  # Default France center
     _map_lon = 2.3
     _map_manual = False  # True when user has panned/zoomed manually
+    auto_mode = "--auto" in sys.argv
     tracking = False
     receiver_thread = None
-    webui_thread = None
+    writer_thread = None
+    resolver_thread = None
     view_idx = 0
     scroll = 0
     status = desc[:20]
+
+    if auto_mode:
+        tracking = True
+        _shutdown.clear()
+        _init_session()
+        receiver_thread = threading.Thread(target=_adsb_receiver, daemon=True)
+        receiver_thread.start()
+        writer_thread = threading.Thread(target=_write_live_json, daemon=True)
+        writer_thread.start()
+        resolver_thread = threading.Thread(target=_route_resolver, daemon=True)
+        resolver_thread.start()
+        status = "Tracking..."
 
     try:
         while True:
@@ -640,20 +695,23 @@ def main():
                 elif not tracking:
                     tracking = True
                     _shutdown.clear()
+                    _init_session()
                     receiver_thread = threading.Thread(target=_adsb_receiver, daemon=True)
                     receiver_thread.start()
+                    writer_thread = threading.Thread(target=_write_live_json, daemon=True)
+                    writer_thread.start()
+                    resolver_thread = threading.Thread(target=_route_resolver, daemon=True)
+                    resolver_thread.start()
                     status = "Tracking..."
                 elif view != "map":
                     tracking = False
                     _shutdown.set()
+                    _save_session()
                     status = "Stopped"
 
-            if btn == "KEY2":
-                if not _webui_running:
-                    webui_thread = threading.Thread(target=_start_webui, daemon=True)
-                    webui_thread.start()
-                    time.sleep(0.5)
-                    status = f"WebUI :8081"
+            if btn == "KEY2" and view != "map":
+                _save_session()
+                status = "Session saved"
 
             with lock:
                 now = time.time()
@@ -718,7 +776,7 @@ def main():
 
                 # Footer
                 draw.rectangle([(0, real_h - 12*s), (real_w, real_h)], fill="#111111")
-                draw.text((2*s, real_h - 11*s), "OK:Track K1:View K2:Web UD:Scroll", font=font_sm, fill="#666666")
+                draw.text((2*s, real_h - 11*s), "OK:Track K1:View K2:Save", font=font_sm, fill="#666666")
                 lcd.LCD_ShowImage(img, 0, 0)
 
             # === DETAIL VIEW (single aircraft) ===
@@ -743,35 +801,53 @@ def main():
                     draw.text((real_w // 2, y + 2*s), cs, font=font, fill="#00FF88", anchor="mm")
                     y += 20
 
-                    # ICAO + Squawk line
+                    # ICAO + Registration
                     draw.text((4*s, y), f"ICAO: {ac['icao']}", font=font_sm, fill="#4488AA")
-                    sq = ac.get("squawk", "")
-                    if sq:
-                        sq_col = "#FF4444" if sq == "7700" else "#FFAA00" if sq in ("7600", "7500") else "#00CCFF"
-                        draw.text((real_w - 60*s, y), f"SQK: {sq}", font=font_sm, fill=sq_col)
+                    reg = ac.get("registration", "")
+                    if reg:
+                        draw.text((real_w - 60*s, y), reg, font=font_sm, fill="#00CCFF")
                     y += 16
 
                     # Separator
                     draw.line([(4*s, y), (real_w - 4*s, y)], fill="#1a2844")
                     y += 6
 
-                    # Data rows
-                    rows = [
+                    # Data rows (enriched with DB + airline + route info)
+                    rows = []
+                    airline = ac.get("airline", "")
+                    if airline:
+                        rows.append(("Airline", airline[:20], "#FF88FF"))
+                    type_desc = ac.get("type_desc", "")
+                    if type_desc:
+                        rows.append(("Type", type_desc[:20], "#CC88FF"))
+                    dep = ac.get("departure", "")
+                    arr = ac.get("arrival", "")
+                    if dep or arr:
+                        rows.append(("Route", f"{dep[:12]} -> {arr[:12]}", "#00FFAA"))
+                    rows.extend([
                         ("Altitude", f"{ac['alt']:,} ft", "#FFAA00"),
                         ("Speed", f"{ac['speed']} kt", "#00BBFF"),
                         ("Heading", f"{ac['heading']}°", "#AAAAAA"),
                         ("Position", f"{ac['lat']:.4f}, {ac['lon']:.4f}" if ac['lat'] else "No position", "#00FF88" if ac['lat'] else "#666666"),
-                        ("Messages", f"{ac['messages']}", "#888888"),
-                        ("RSSI", f"{ac.get('rssi', 0):.1f} dB", "#CC88FF"),
-                    ]
+                    ])
+                    operator = ac.get("operator", "")
+                    if operator:
+                        rows.append(("Operator", operator[:20], "#FFAA00"))
+                    country = ac.get("country", "")
+                    if country:
+                        rows.append(("Country", country[:16], "#888888"))
+                    rows.append(("Messages", f"{ac['messages']}", "#888888"))
+
                     for label, value, col in rows:
+                        if y + 14 > real_h - 14:
+                            break
                         draw.text((10, y), f"{label}:", font=font_sm, fill="#4a6080")
                         draw.text((real_w // 3, y), value, font=font_sm, fill=col)
                         y += 14
 
                 # Footer
                 draw.rectangle([(0, real_h - 12*s), (real_w, real_h)], fill="#111111")
-                draw.text((2*s, real_h - 11*s), "UD:Prev/Next K1:View K2:Web", font=font_sm, fill="#666666")
+                draw.text((2*s, real_h - 11*s), "UD:Prev/Next K1:View K2:Save", font=font_sm, fill="#666666")
                 lcd.LCD_ShowImage(img, 0, 0)
 
             # === MAP VIEW ===
@@ -838,9 +914,9 @@ def main():
                 d.text((4, y), f"Total seen: {len(aircraft)}", font=font_sm, fill="#888")
                 y += 15
 
-                if _webui_running:
-                    d.text((4, y), f"WebUI: port {WEBUI_PORT}", font=font_sm, fill="#00CCFF")
-                    y += 12
+                db_status = "loaded" if os.path.isfile(_DB_PATH) else "not found"
+                d.text((4, y), f"Aircraft DB: {db_status}", font=font_sm, fill="#00CCFF" if db_status == "loaded" else "#FF4444")
+                y += 12
 
                 if active:
                     highest = max(active, key=lambda a: a["alt"])
@@ -850,15 +926,18 @@ def main():
                     d.text((4, y), f"Fastest: {fastest['speed']}kt", font=font_sm, fill="#FFAA00")
 
                 d.rectangle((0, 116, 127, 127), fill="#111")
-                d.text((2, 117), "OK:Track K1:View K2:Web", font=font_sm, fill="#666")
+                d.text((2, 117), "OK:Track K1:View K2:Save", font=font_sm, fill="#666")
                 lcd.LCD_ShowImage(img, 0, 0)
 
             time.sleep(0.05)
 
     finally:
         _shutdown.set()
-        if _webui_server:
-            _webui_server.shutdown()
+        _save_session()
+        try:
+            os.remove(LIVE_JSON_PATH)
+        except OSError:
+            pass
         try:
             lcd.LCD_Clear()
         except Exception:

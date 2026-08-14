@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RaspyJack SDR Radio</title>
+  <link rel="stylesheet" href="./vendor/css/fontawesome.min.css">
+  <style>
+    :root { color-scheme: dark; --bg: #05060a; --panel: #080c14; --border: #0f1a2a; --accent: #00ccff; --green: #00ff88; --red: #ff3333; --orange: #ff8800; --yellow: #ffaa00; }
+    * { margin:0; padding:0; box-sizing:border-box; }
+    body { font-family: 'Segoe UI',system-ui,sans-serif; background:var(--bg); color:#ccc; overflow:hidden; height:100vh; }
+
+    #topbar { height:36px; background:#0a0e1a; display:flex; align-items:center; padding:0 12px; gap:10px; border-bottom:1px solid var(--border); }
+    #topbar h1 { font-size:14px; color:var(--accent); white-space:nowrap; }
+    #topbar button { background:#111830; color:#888; border:1px solid #1a2844; padding:2px 8px; border-radius:4px; font-size:11px; cursor:pointer; }
+    #topbar button:hover { color:#fff; background:#1a2850; }
+    #topbar button.active { border-color:var(--accent); color:var(--accent); }
+    #topbar .spacer { flex:1; }
+    #topbar a { color:#555; font-size:11px; text-decoration:none; }
+    #liveDot { display:none; color:var(--green); font-size:8px; animation:pulse 1.5s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+    #freqDisplay { font-family:'Courier New',monospace; font-size:16px; font-weight:700; color:var(--accent); letter-spacing:1px; }
+    #bwDisplay { font-family:'Courier New',monospace; font-size:11px; color:#4a6080; }
+    #modeDisplay { font-size:10px; color:var(--green); font-weight:600; padding:1px 6px; border:1px solid #0d2040; border-radius:3px; background:rgba(0,40,20,0.4); }
+
+    #main { display:flex; flex-direction:column; height:calc(100vh - 36px); }
+    #spectrumWrap { position:relative; height:30%; min-height:100px; background:#030508; border-bottom:1px solid var(--border); }
+    #spectrumCanvas { width:100%; height:100%; display:block; }
+    #waterfallWrap { position:relative; flex:1; background:#030508; }
+    #waterfallCanvas { width:100%; height:100%; display:block; }
+
+    #bottomBar { height:36px; background:#0a0e1a; display:flex; align-items:center; padding:0 12px; gap:10px; border-top:1px solid var(--border); }
+    #meterWrap { width:200px; height:14px; background:#0a1020; border-radius:3px; border:1px solid #1a2844; overflow:hidden; position:relative; }
+    #meterFill { height:100%; width:0; transition:width 0.1s; border-radius:2px; }
+    #meterText { position:absolute; left:4px; top:0; line-height:14px; font-size:9px; font-family:'Courier New',monospace; color:#ccc; text-shadow:0 0 3px #000; }
+    #freqScale { flex:1; display:flex; justify-content:space-between; font-size:9px; color:#4a6080; font-family:'Courier New',monospace; }
+    #freqScale span { white-space:nowrap; }
+
+    #overlay { position:absolute; top:0; left:0; right:0; bottom:0; display:flex; align-items:center; justify-content:center; background:rgba(5,6,10,0.85); z-index:100; pointer-events:none; }
+    #overlay.hidden { display:none; }
+    #overlay .msg { font-size:18px; color:#4a6080; text-align:center; }
+    #overlay .msg i { font-size:28px; display:block; margin-bottom:10px; color:#1a3050; }
+
+    @media(max-width:768px) {
+      #freqDisplay { font-size:13px; }
+      #meterWrap { width:120px; }
+    }
+  </style>
+</head>
+<body>
+
+<div id="topbar">
+  <h1><i class="fa-solid fa-broadcast-tower"></i> SDR Radio</h1>
+  <button id="btnLive" onclick="toggleLive()"><i class="fa-solid fa-tower-broadcast"></i> Live <i id="liveDot" class="fa-solid fa-circle"></i></button>
+  <span id="modeDisplay">--</span>
+  <span id="freqDisplay">---.--- MHz</span>
+  <span id="bwDisplay">BW --</span>
+  <div class="spacer"></div>
+  <a href="./index.html"><i class="fa-solid fa-arrow-left"></i> WebUI</a>
+</div>
+
+<div id="main">
+  <div id="spectrumWrap">
+    <canvas id="spectrumCanvas"></canvas>
+  </div>
+  <div id="waterfallWrap">
+    <canvas id="waterfallCanvas"></canvas>
+    <div id="overlay"><div class="msg"><i class="fa-solid fa-satellite-dish"></i>Press Live to start SDR</div></div>
+  </div>
+</div>
+
+<div id="bottomBar">
+  <div id="meterWrap"><div id="meterFill"></div><span id="meterText">-- dB</span></div>
+  <div id="freqScale">
+    <span id="fs0">--</span>
+    <span id="fs1">--</span>
+    <span id="fs2">--</span>
+    <span id="fs3">--</span>
+    <span id="fs4">--</span>
+  </div>
+</div>
+
+<script>
+// ── Turbo colormap LUT ──────────────────────────────────────────────
+const TURBO_STOPS = [
+  [0.0,[48,18,59]],[0.15,[0,91,197]],[0.3,[0,167,225]],
+  [0.45,[29,221,161]],[0.6,[159,240,60]],[0.75,[242,206,28]],
+  [0.9,[240,101,0]],[1.0,[122,4,3]]
+];
+const LUT = new Uint8Array(256*3);
+(function buildLUT(){
+  for(let i=0;i<256;i++){
+    const t=i/255;
+    let c=[0,0,0];
+    for(let j=0;j<TURBO_STOPS.length-1;j++){
+      if(t>=TURBO_STOPS[j][0]&&t<=TURBO_STOPS[j+1][0]){
+        const st=(t-TURBO_STOPS[j][0])/(TURBO_STOPS[j+1][0]-TURBO_STOPS[j][0]);
+        for(let k=0;k<3;k++) c[k]=Math.round(TURBO_STOPS[j][1][k]+(TURBO_STOPS[j+1][1][k]-TURBO_STOPS[j][1][k])*st);
+        break;
+      }
+    }
+    LUT[i*3]=c[0]; LUT[i*3+1]=c[1]; LUT[i*3+2]=c[2];
+  }
+})();
+
+// ── State ────────────────────────────────────────────────────────────
+let liveInterval = null;
+let isLive = false;
+let latestData = null;
+let pendingRender = false;
+let wfOffscreen = null;
+let wfCtx = null;
+let wfH = 0;
+
+// ── Canvas refs ──────────────────────────────────────────────────────
+const specCanvas = document.getElementById('spectrumCanvas');
+const specCtx = specCanvas.getContext('2d');
+const wfCanvas = document.getElementById('waterfallCanvas');
+const wfVisCtx = wfCanvas.getContext('2d');
+
+function resizeCanvases(){
+  const sw = specCanvas.parentElement.clientWidth;
+  const sh = specCanvas.parentElement.clientHeight;
+  specCanvas.width = sw; specCanvas.height = sh;
+
+  const ww = wfCanvas.parentElement.clientWidth;
+  const wh = wfCanvas.parentElement.clientHeight;
+  wfCanvas.width = ww; wfCanvas.height = wh;
+
+  // Offscreen waterfall buffer
+  wfOffscreen = document.createElement('canvas');
+  wfOffscreen.width = ww;
+  wfH = wh;
+  wfOffscreen.height = wh;
+  wfCtx = wfOffscreen.getContext('2d');
+  wfCtx.fillStyle = '#030508';
+  wfCtx.fillRect(0, 0, ww, wh);
+}
+resizeCanvases();
+window.addEventListener('resize', resizeCanvases);
+
+// ── Format helpers ───────────────────────────────────────────────────
+function fmtFreq(hz){
+  if(hz>=1e9) return (hz/1e9).toFixed(4)+' GHz';
+  if(hz>=1e6) return (hz/1e6).toFixed(3)+' MHz';
+  if(hz>=1e3) return (hz/1e3).toFixed(1)+' kHz';
+  return hz+' Hz';
+}
+function fmtFreqShort(hz){
+  if(hz>=1e6) return (hz/1e6).toFixed(1);
+  return (hz/1e3).toFixed(0)+'k';
+}
+function fmtBW(hz){
+  if(hz>=1e6) return (hz/1e6).toFixed(1)+' MHz';
+  return (hz/1e3).toFixed(0)+' kHz';
+}
+
+// ── S-meter ──────────────────────────────────────────────────────────
+function updateMeter(db){
+  const fill = document.getElementById('meterFill');
+  const txt = document.getElementById('meterText');
+  const pct = Math.max(0, Math.min(1, (db + 80) / 70));
+  fill.style.width = (pct*100)+'%';
+  let col;
+  if(pct<0.3) col='#0066ff';
+  else if(pct<0.5) col='#00cc66';
+  else if(pct<0.75) col='#ffaa00';
+  else col='#ff3333';
+  fill.style.background = col;
+  const sVal = db < -19 ? Math.max(0, Math.min(9, Math.floor((db+73)/6))) : 9;
+  const over = db >= -19 ? Math.max(0, Math.floor(db+19)) : 0;
+  const label = over === 0 ? `S${sVal}` : `S9+${over}`;
+  txt.textContent = `${label} ${db.toFixed(0)} dB`;
+}
+
+// ── Frequency scale ──────────────────────────────────────────────────
+function updateFreqScale(center, bw){
+  const left = center - bw/2;
+  for(let i=0;i<5;i++){
+    const f = left + bw * i / 4;
+    document.getElementById('fs'+i).textContent = fmtFreqShort(f);
+  }
+}
+
+// ── Draw spectrum ────────────────────────────────────────────────────
+function drawSpectrum(fft, dbMin, dbMax){
+  const w = specCanvas.width, h = specCanvas.height;
+  const ctx = specCtx;
+  ctx.fillStyle = '#030508';
+  ctx.fillRect(0, 0, w, h);
+  if(!fft || fft.length === 0) return;
+
+  const range = dbMax - dbMin || 1;
+
+  // Grid lines
+  ctx.strokeStyle = '#0a1525';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([2,4]);
+  // Horizontal (dB)
+  for(let db = Math.ceil(dbMin/10)*10; db <= dbMax; db += 10){
+    const y = h - ((db - dbMin) / range) * h;
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+    ctx.fillStyle = '#1a3050';
+    ctx.font = '9px Courier New';
+    ctx.fillText(db+'dB', 3, y - 2);
+  }
+  // Vertical (freq divisions)
+  const nDiv = Math.min(10, Math.max(4, Math.floor(w / 80)));
+  for(let i=1; i<nDiv; i++){
+    const x = w * i / nDiv;
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke();
+  }
+  ctx.setLineDash([]);
+
+  // Spectrum line + fill
+  const n = fft.length;
+  ctx.beginPath();
+  let peakIdx = 0, peakDb = -999;
+  for(let i=0; i<n; i++){
+    const x = (i / (n-1)) * w;
+    const norm = Math.max(0, Math.min(1, (fft[i] - dbMin) / range));
+    const y = h - norm * h;
+    if(i===0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    if(fft[i] > peakDb){ peakDb = fft[i]; peakIdx = i; }
+  }
+  ctx.strokeStyle = '#00ff88';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  // Fill under curve
+  ctx.lineTo(w, h);
+  ctx.lineTo(0, h);
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(0,255,136,0.08)';
+  ctx.fill();
+
+  // Peak marker
+  const px = (peakIdx / (n-1)) * w;
+  const pNorm = Math.max(0, Math.min(1, (peakDb - dbMin) / range));
+  const py = h - pNorm * h;
+  ctx.beginPath();
+  ctx.arc(px, py, 3, 0, Math.PI*2);
+  ctx.fillStyle = '#ffaa00';
+  ctx.fill();
+  ctx.font = '9px Courier New';
+  ctx.fillStyle = '#ffaa00';
+  ctx.fillText(peakDb.toFixed(0)+'dB', px+5, py-4);
+}
+
+// ── Draw waterfall row ───────────────────────────────────────────────
+function pushWaterfallRow(fft, dbMin, dbMax){
+  if(!wfCtx || !fft || fft.length === 0) return;
+  const w = wfOffscreen.width;
+  const h = wfOffscreen.height;
+
+  // Scroll down by 1 pixel
+  const imgData = wfCtx.getImageData(0, 0, w, h - 1);
+  wfCtx.putImageData(imgData, 0, 1);
+
+  // Draw new row at top
+  const row = wfCtx.createImageData(w, 1);
+  const n = fft.length;
+  const range = dbMax - dbMin || 1;
+  for(let x=0; x<w; x++){
+    const fi = Math.floor((x / w) * n);
+    const db = fi < n ? fft[fi] : dbMin;
+    const norm = Math.max(0, Math.min(1, (db - dbMin) / range));
+    const idx = Math.floor(norm * 255);
+    const off = x * 4;
+    row.data[off]   = LUT[idx*3];
+    row.data[off+1] = LUT[idx*3+1];
+    row.data[off+2] = LUT[idx*3+2];
+    row.data[off+3] = 255;
+  }
+  wfCtx.putImageData(row, 0, 0);
+
+  // Copy to visible canvas
+  wfVisCtx.drawImage(wfOffscreen, 0, 0, w, h, 0, 0, wfCanvas.width, wfCanvas.height);
+}
+
+// ── Data polling ─────────────────────────────────────────────────────
+function pollData(){
+  fetch('/api/sdr/live', {credentials:'include'}).then(r=>r.json()).then(data=>{
+    latestData = data;
+    if(!pendingRender){
+      pendingRender = true;
+      requestAnimationFrame(renderFrame);
+    }
+
+    // Update topbar info
+    if(data.freq){
+      document.getElementById('freqDisplay').textContent = fmtFreq(data.freq);
+      document.getElementById('bwDisplay').textContent = 'BW '+fmtBW(data.sample_rate||2048000);
+      document.getElementById('modeDisplay').textContent = data.mode || 'SDR';
+      updateFreqScale(data.freq, data.sample_rate||2048000);
+    }
+
+    // Show/hide overlay
+    const ov = document.getElementById('overlay');
+    if(data.streaming) ov.classList.add('hidden');
+    else ov.classList.remove('hidden');
+
+  }).catch(()=>{});
+}
+
+function renderFrame(){
+  pendingRender = false;
+  if(!latestData) return;
+  const d = latestData;
+  const dbMin = d.db_min || -70;
+  const dbMax = d.db_max || -10;
+
+  if(d.fft && d.fft.length > 0){
+    drawSpectrum(d.fft, dbMin, dbMax);
+    pushWaterfallRow(d.fft, dbMin, dbMax);
+  }
+  if(typeof d.signal_db === 'number'){
+    updateMeter(d.signal_db);
+  }
+}
+
+// ── Start / Stop ─────────────────────────────────────────────────────
+function toggleLive(){
+  if(isLive){
+    isLive = false;
+    clearInterval(liveInterval);
+    liveInterval = null;
+    document.getElementById('btnLive').classList.remove('active');
+    document.getElementById('liveDot').style.display = 'none';
+    fetch('/api/sdr/stop', {method:'POST', credentials:'include'}).catch(()=>{});
+  } else {
+    isLive = true;
+    document.getElementById('btnLive').classList.add('active');
+    document.getElementById('liveDot').style.display = 'inline';
+    fetch('/api/sdr/start', {method:'POST', credentials:'include'}).then(()=>{
+      setTimeout(()=>{
+        liveInterval = setInterval(pollData, 100);
+      }, 3000);
+    }).catch(()=>{});
+  }
+}
+
+// ── Init ─────────────────────────────────────────────────────────────
+// Draw empty state
+drawSpectrum([], -70, -10);
+</script>
+</body>
+</html>
