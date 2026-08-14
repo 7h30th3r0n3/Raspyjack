@@ -201,7 +201,7 @@ class _WaterfallBuf:
                 resampled[i] = np.interp(x_new, x_old, stacked[i]).astype(np.uint8)
             stacked = resampled
         lut_arr = np.array(_WF_LUT, dtype=np.uint8)
-        pixels = lut_arr[stacked]
+        pixels = lut_arr[stacked[::-1]]
         wf_img = Image.fromarray(pixels, "RGB")
         image.paste(wf_img, (x0, y0 + h - n))
 

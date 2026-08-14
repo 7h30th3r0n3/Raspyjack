@@ -1,9 +1,11 @@
 """
-Shared PN532 NFC driver for RaspyJack NFC suite.
-Supports UART (CH340/CP2102), I2C, and nfcpy USB readers.
+Shared NFC driver for RaspyJack NFC suite.
+Supports PN532 (UART/I2C), nfcpy USB readers, and Proxmark3.
 """
 
 import os
+import re
+import subprocess
 import time
 from dataclasses import dataclass, field
 from typing import Optional, List, Tuple
@@ -426,6 +428,286 @@ class NfcpyDriver:
         return False
 
 
+PM3_PORTS = ["/dev/ttyACM0", "/dev/ttyACM1"]
+_PM3_PROMPT_RE = re.compile(r"pm3\s*-->")
+
+
+class PM3Driver:
+    """Proxmark3 driver with persistent interactive process via PTY."""
+    can_write = True
+    can_emulate = True
+
+    def __init__(self, port: str, pm3_bin: str = None):
+        self._port = port
+        self._bin = pm3_bin or self._find_client()
+        self._last_auth_key = None
+        self._last_auth_key_type = MIFARE_AUTH_A
+        self._proc = None
+        self._master_fd = None
+        self._start()
+
+    @staticmethod
+    def _find_client() -> str:
+        for path in [
+            "/opt/proxmark3/client/proxmark3",
+            "/usr/local/bin/proxmark3",
+            "/usr/bin/proxmark3",
+        ]:
+            if os.path.isfile(path):
+                return path
+        return "proxmark3"
+
+    def _start(self):
+        self._kill_stale()
+        try:
+            import pty, fcntl, select
+            master_fd, slave_fd = pty.openpty()
+            self._proc = subprocess.Popen(
+                [self._bin, self._port],
+                stdin=slave_fd, stdout=slave_fd, stderr=slave_fd,
+            )
+            os.close(slave_fd)
+            self._master_fd = master_fd
+            flags = fcntl.fcntl(master_fd, fcntl.F_GETFL)
+            fcntl.fcntl(master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+            self._read_until_prompt(timeout=5.0)
+        except Exception:
+            self._proc = None
+            self._master_fd = None
+
+    def _read_until_prompt(self, timeout: float = 3.0) -> str:
+        import select
+        buf = b""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            remaining = max(0.01, deadline - time.time())
+            r, _, _ = select.select([self._master_fd], [], [], min(remaining, 0.1))
+            if r:
+                try:
+                    chunk = os.read(self._master_fd, 4096)
+                    if chunk:
+                        buf += chunk
+                        if _PM3_PROMPT_RE.search(buf.decode("utf-8", errors="replace")):
+                            break
+                except OSError:
+                    break
+            if self._proc and self._proc.poll() is not None:
+                break
+        return buf.decode("utf-8", errors="replace")
+
+    def _send(self, cmd: str, timeout: float = 5.0) -> Optional[str]:
+        if not self._proc or self._proc.poll() is not None or self._master_fd is None:
+            self._start()
+        if not self._proc or self._master_fd is None:
+            return None
+        try:
+            os.write(self._master_fd, (cmd + "\r").encode())
+        except OSError:
+            self._start()
+            if not self._proc or self._master_fd is None:
+                return None
+            os.write(self._master_fd, (cmd + "\r").encode())
+        return self._read_until_prompt(timeout=timeout)
+
+    def close(self):
+        if self._master_fd is not None:
+            try:
+                os.write(self._master_fd, b"quit\r")
+            except OSError:
+                pass
+            try:
+                os.close(self._master_fd)
+            except OSError:
+                pass
+            self._master_fd = None
+        if self._proc:
+            try:
+                self._proc.wait(timeout=3)
+            except Exception:
+                try:
+                    self._proc.kill()
+                    self._proc.wait(timeout=2)
+                except Exception:
+                    pass
+        self._proc = None
+
+    @staticmethod
+    def _kill_stale():
+        try:
+            subprocess.run(
+                ["pkill", "-f", "proxmark3.*ttyACM"],
+                capture_output=True, timeout=3,
+            )
+            time.sleep(0.5)
+        except Exception:
+            pass
+
+    def command(self, cmd: str, timeout: float = 10.0) -> Optional[str]:
+        """Send an arbitrary PM3 command and return raw output."""
+        return self._send(cmd, timeout=timeout)
+
+    def get_firmware(self) -> Optional[Tuple[int, int, int, int]]:
+        out = self._send("hw version", timeout=5.0)
+        if out and ("Proxmark3" in out or "proxmark3" in out or "RRG" in out or "iceman" in out):
+            return (3, 0, 0, 0)
+        return None
+
+    def sam_config(self):
+        pass
+
+    def read_passive_target(self, card_type=0x00, timeout=2.0) -> Optional[CardInfo]:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            out = self._send("hf 14a reader", timeout=3.0)
+            if out:
+                uid = self._parse_field(out, r"UID\s*[:=]\s*([0-9A-Fa-f ]+)")
+                if uid:
+                    atqa = self._parse_field(out, r"ATQA\s*[:=]\s*([0-9A-Fa-f ]+)")
+                    sak = self._parse_field(out, r"SAK\s*[:=]\s*([0-9A-Fa-f]+)")
+                    uid_bytes = bytes.fromhex(uid.replace(" ", ""))
+                    atqa_int = int(atqa.replace(" ", ""), 16) if atqa else 0
+                    sak_int = int(sak.replace(" ", ""), 16) if sak else 0
+                    return CardInfo(uid=uid_bytes, atqa=atqa_int, sak=sak_int)
+            time.sleep(0.1)
+        return None
+
+    @staticmethod
+    def _extract_block_hex(text: str) -> Optional[str]:
+        """Extract 16-byte block data from PM3 table output like '| 52 AC DA B9 ... |'."""
+        m = re.search(r"\|\s*((?:[0-9A-Fa-f]{2}\s+){15}[0-9A-Fa-f]{2})\s*\|", text)
+        if m:
+            return m.group(1).replace(" ", "")
+        m = re.search(r"(?:data\s*[:=]\s*)?([0-9A-Fa-f]{32})", text)
+        return m.group(1) if m else None
+
+    def mifare_auth(self, block: int, key: bytes, uid: bytes, key_type: int = MIFARE_AUTH_A) -> bool:
+        kt = "-a" if key_type == MIFARE_AUTH_A else "-b"
+        key_hex = key.hex().upper()
+        out = self._send(f"hf mf rdbl --blk {block} {kt} -k {key_hex}")
+        if not out or "error" in out.lower():
+            return False
+        ok = self._extract_block_hex(out) is not None
+        if ok:
+            self._last_auth_key = key
+            self._last_auth_key_type = key_type
+        return ok
+
+    def mifare_read(self, block: int) -> Optional[bytes]:
+        key = self._last_auth_key or bytes.fromhex("FFFFFFFFFFFF")
+        kt = "-a" if self._last_auth_key_type == MIFARE_AUTH_A else "-b"
+        key_hex = key.hex().upper()
+        out = self._send(f"hf mf rdbl --blk {block} {kt} -k {key_hex}")
+        if not out:
+            return None
+        hex_str = self._extract_block_hex(out)
+        return bytes.fromhex(hex_str) if hex_str else None
+
+    def mifare_write(self, block: int, data: bytes) -> bool:
+        key = self._last_auth_key or bytes.fromhex("FFFFFFFFFFFF")
+        kt = "-a" if self._last_auth_key_type == MIFARE_AUTH_A else "-b"
+        key_hex = key.hex().upper()
+        data_hex = data[:16].hex().upper()
+        out = self._send(f"hf mf wrbl --blk {block} {kt} -k {key_hex} -d {data_hex}")
+        if not out:
+            return False
+        lower = out.lower()
+        return "isok" in lower or "ok" in lower or "success" in lower
+
+    def mifare_ul_read(self, page: int) -> Optional[bytes]:
+        pages_data = b""
+        for p in range(page, min(page + 4, 256)):
+            out = self._send(f"hf mfu rdbl --blk {p}")
+            if not out:
+                return None
+            m = re.search(r"([0-9A-Fa-f]{8})", out)
+            if not m:
+                return None
+            pages_data += bytes.fromhex(m.group(1))
+        return pages_data if len(pages_data) == 16 else None
+
+    def mifare_ul_write(self, page: int, data: bytes) -> bool:
+        data_hex = data[:4].hex().upper()
+        out = self._send(f"hf mfu wrbl --blk {page} -d {data_hex}")
+        if not out:
+            return False
+        lower = out.lower()
+        return "ok" in lower or "success" in lower or "isok" in lower
+
+    def data_exchange(self, data: bytes, timeout=1.0) -> Optional[bytes]:
+        apdu_hex = data.hex().upper()
+        out = self._send(f"hf 14a apdu -d {apdu_hex}", timeout=max(3.0, timeout + 2))
+        if not out:
+            return None
+        m = re.search(r"(?:response|data|<<|RX)\s*[:=]?\s*([0-9A-Fa-f ]+)", out, re.IGNORECASE)
+        if m:
+            hex_str = m.group(1).replace(" ", "")
+            if len(hex_str) >= 4:
+                return bytes.fromhex(hex_str)
+        m = re.search(r"([0-9A-Fa-f]{4,})", out)
+        if m:
+            return bytes.fromhex(m.group(1))
+        return None
+
+    def communicate_thru(self, data: bytes, timeout=1.0) -> Optional[bytes]:
+        return self.data_exchange(data, timeout=timeout)
+
+    def in_communicate_thru_raw(self, data: bytes, timeout=0.5) -> Optional[bytes]:
+        raw_hex = data.hex().upper()
+        out = self._send(f"hf 14a raw -sc {raw_hex}", timeout=max(3.0, timeout + 2))
+        if not out:
+            return None
+        m = re.search(r"(?:received|<<|RX)\s*[:=]?\s*([0-9A-Fa-f ]+)", out, re.IGNORECASE)
+        if m:
+            hex_str = m.group(1).replace(" ", "")
+            if hex_str:
+                return bytes.fromhex(hex_str)
+        return None
+
+    def init_as_target(self, uid: bytes, atqa: bytes = b"\x04\x00", sak: int = 0x08, timeout: float = 1.0) -> Optional[bytes]:
+        uid_hex = uid[:4].hex().upper()
+        out = self._send(f"hf 14a sim -t 1 -u {uid_hex}", timeout=max(3.0, timeout + 2))
+        if out and ("simulating" in out.lower() or "uid" in out.lower()):
+            return uid[:4]
+        return None
+
+    def tg_get_data(self) -> Optional[bytes]:
+        return None
+
+    def tg_set_data(self, data: bytes) -> bool:
+        return False
+
+    @staticmethod
+    def _parse_field(text: str, pattern: str) -> Optional[str]:
+        m = re.search(pattern, text, re.IGNORECASE)
+        return m.group(1).strip() if m else None
+
+    @staticmethod
+    def detect_pm3() -> Optional[Tuple[str, str]]:
+        """Detect a connected Proxmark3. Returns (port, description) or None."""
+        client = PM3Driver._find_client()
+        for port in PM3_PORTS:
+            if not os.path.exists(port):
+                continue
+            try:
+                result = subprocess.run(
+                    [client, port, "-c", "hw version"],
+                    capture_output=True, text=True, timeout=8,
+                )
+                out = result.stdout + result.stderr
+                if "Proxmark3" in out or "proxmark3" in out or "RRG" in out or "iceman" in out:
+                    model = "PM3"
+                    if "RDV4" in out or "rdv4" in out:
+                        model = "PM3 RDV4"
+                    elif "Easy" in out or "easy" in out:
+                        model = "PM3 Easy"
+                    elif "RDV2" in out:
+                        model = "PM3 RDV2"
+                    return port, model
+            except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+                continue
+        return None
+
+
 def _usb_reset_ch340():
     """Reset CH340 USB device to recover stuck PN532."""
     import subprocess, glob
@@ -447,7 +729,16 @@ def _usb_reset_ch340():
 
 
 def auto_detect() -> Tuple[Optional[_PN532Base], str]:
-    """Auto-detect NFC reader. Returns (driver, description)."""
+    """Auto-detect NFC reader. Returns (driver, description).
+    Priority: Proxmark3 > nfcpy USB > PN532 UART > PN532 I2C.
+    """
+    # Proxmark3 (highest priority — full read/write/emulate/crack)
+    PM3Driver._kill_stale()
+    pm3 = PM3Driver.detect_pm3()
+    if pm3:
+        port, model = pm3
+        return PM3Driver(port), f"{model} {port}"
+
     if NFCPY_OK:
         for path in ["usb", "usb:072f:2200", "usb:04e6:5591"]:
             try:
