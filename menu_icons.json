@@ -438,7 +438,12 @@
         " pm3_lf_clone": "",
         " pm3_sniff": "",
         " pm3_lf_brute": "",
-        " pm3_iclass": ""
+        " pm3_iclass": "",
+        " cu_battery": "",
+        " cu_slot_manager": "",
+        " cu_clone": "",
+        " cu_lf_reader": "",
+        " cu_autopwn": ""
     },
     "fallbacks": {
         "__scan__": "",

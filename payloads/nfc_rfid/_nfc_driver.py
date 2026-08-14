@@ -1,11 +1,13 @@
 """
 Shared NFC driver for RaspyJack NFC suite.
-Supports PN532 (UART/I2C), nfcpy USB readers, and Proxmark3.
+Supports PN532 (UART/I2C), nfcpy USB readers, Proxmark3, and Chameleon Ultra.
 """
 
 import os
 import re
+import struct
 import subprocess
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Optional, List, Tuple
@@ -428,6 +430,341 @@ class NfcpyDriver:
         return False
 
 
+# ---------------------------------------------------------------------------
+# Chameleon Ultra driver
+# ---------------------------------------------------------------------------
+
+_CU_SOF = 0x11
+_CU_VID_PID = "6868:8686"
+
+# Command IDs
+_CU_GET_APP_VERSION = 1000
+_CU_CHANGE_DEVICE_MODE = 1001
+_CU_GET_DEVICE_MODEL = 1033
+_CU_GET_GIT_VERSION = 1017
+_CU_GET_BATTERY_INFO = 1025
+_CU_HF14A_SCAN = 2000
+_CU_MF1_AUTH_ONE_KEY_BLOCK = 2007
+_CU_MF1_READ_ONE_BLOCK = 2008
+_CU_MF1_WRITE_ONE_BLOCK = 2009
+_CU_HF14A_RAW = 2010
+_CU_EM410X_SCAN = 3000
+
+# Status codes
+_CU_SUCCESS_CODES = {0x0000, 0x0068, 0x0040}
+_CU_HF_TAG_NO = 0x0001
+_CU_MF_ERR_AUTH = 0x0006
+
+
+class ChameleonUltraDriver:
+    """Chameleon Ultra driver via serial binary protocol."""
+    can_write = True
+    can_emulate = True
+
+    def __init__(self, port: str):
+        self._port = port
+        self._ser = None
+        self._lock = threading.Lock()
+        self._last_auth_key = None
+        self._last_auth_key_type = MIFARE_AUTH_A
+        self._open()
+
+    def _open(self):
+        if self._ser:
+            try:
+                self._ser.close()
+            except Exception:
+                pass
+        try:
+            self._ser = serial.Serial(self._port, 115200, timeout=0.05)
+            time.sleep(0.3)
+            self._ser.reset_input_buffer()
+        except Exception:
+            self._ser = None
+
+    @staticmethod
+    def _lrc(data: bytes) -> int:
+        return (0x100 - (sum(data) & 0xFF)) & 0xFF
+
+    def _build_frame(self, cmd: int, data: bytes = b"", status: int = 0) -> bytes:
+        header = struct.pack(">HHH", cmd, status, len(data))
+        sof = bytes([_CU_SOF])
+        lrc1 = bytes([self._lrc(sof)])
+        lrc2 = bytes([self._lrc(sof + lrc1 + header)])
+        lrc3 = bytes([self._lrc(sof + lrc1 + header + lrc2 + data)])
+        return sof + lrc1 + header + lrc2 + data + lrc3
+
+    def _parse_frame(self, raw: bytes) -> Optional[Tuple[int, int, bytes]]:
+        if len(raw) < 9 or raw[0] != _CU_SOF:
+            return None
+        if raw[1] != self._lrc(raw[0:1]):
+            return None
+        cmd, status, dlen = struct.unpack(">HHH", raw[2:8])
+        if raw[8] != self._lrc(raw[0:8]):
+            return None
+        if len(raw) < 9 + dlen + 1:
+            return None
+        data = raw[9:9 + dlen]
+        if raw[9 + dlen] != self._lrc(raw[0:9 + dlen]):
+            return None
+        return cmd, status, data
+
+    def _send_cmd(self, cmd: int, data: bytes = b"", timeout: float = 3.0) -> Optional[Tuple[int, bytes]]:
+        if not self._ser or not self._ser.is_open:
+            self._open()
+        if not self._ser:
+            return None
+        frame = self._build_frame(cmd, data)
+        with self._lock:
+            try:
+                try:
+                    self._ser.reset_input_buffer()
+                except (OSError, serial.SerialException):
+                    self._open()
+                    if not self._ser:
+                        return None
+                self._ser.write(frame)
+                buf = b""
+                deadline = time.time() + timeout
+                while time.time() < deadline:
+                    chunk = self._ser.read(256)
+                    if chunk:
+                        buf += chunk
+                        parsed = self._parse_frame(buf)
+                        if parsed is not None:
+                            return parsed[1], parsed[2]
+                    else:
+                        time.sleep(0.01)
+            except (OSError, serial.SerialException):
+                pass
+        return None
+
+    def close(self):
+        if self._ser:
+            try:
+                self._ser.close()
+            except Exception:
+                pass
+            self._ser = None
+
+    def get_device_model(self) -> str:
+        result = self._send_cmd(1033)
+        if result and result[0] in _CU_SUCCESS_CODES:
+            model_id = result[1][0] if result[1] else 0xFF
+            return {0: "Ultra", 1: "Lite"}.get(model_id, "Unknown")
+        return "Ultra"
+
+    def get_firmware(self) -> Optional[Tuple[int, int, int, int]]:
+        result = self._send_cmd(_CU_GET_APP_VERSION)
+        if result is None:
+            return None
+        status, data = result
+        if status in _CU_SUCCESS_CODES and len(data) >= 2:
+            return (data[0], data[1], 0, 0)
+        return None
+
+    def sam_config(self):
+        self._send_cmd(_CU_CHANGE_DEVICE_MODE, bytes([0x01]))
+
+    def read_passive_target(self, card_type=0x00, timeout=2.0) -> Optional[CardInfo]:
+        self._send_cmd(_CU_CHANGE_DEVICE_MODE, bytes([0x01]))
+        time.sleep(0.3)
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            result = self._send_cmd(_CU_HF14A_SCAN, timeout=2.0)
+            if result is not None:
+                status, data = result
+                if status in _CU_SUCCESS_CODES and len(data) >= 4:
+                    uid_len = data[0]
+                    if len(data) >= 1 + uid_len + 3:
+                        uid = data[1:1 + uid_len]
+                        atqa_off = 1 + uid_len
+                        sak_off = atqa_off + 2
+                        atqa = data[atqa_off] | (data[atqa_off + 1] << 8)
+                        sak = data[sak_off]
+                        return CardInfo(uid=bytes(uid), atqa=atqa, sak=sak)
+            time.sleep(0.2)
+        return None
+
+    def mifare_auth(self, block: int, key: bytes, uid: bytes, key_type: int = MIFARE_AUTH_A) -> bool:
+        kt = 0x60 if key_type == MIFARE_AUTH_A else 0x61
+        data = bytes([kt, block]) + key[:6]
+        result = self._send_cmd(_CU_MF1_AUTH_ONE_KEY_BLOCK, data)
+        if result is None:
+            return False
+        ok = result[0] in _CU_SUCCESS_CODES
+        if ok:
+            self._last_auth_key = key[:6]
+            self._last_auth_key_type = key_type
+        return ok
+
+    def mifare_read(self, block: int) -> Optional[bytes]:
+        key = self._last_auth_key or bytes.fromhex("FFFFFFFFFFFF")
+        kt = 0x60 if self._last_auth_key_type == MIFARE_AUTH_A else 0x61
+        data = bytes([kt, block]) + key[:6]
+        result = self._send_cmd(_CU_MF1_READ_ONE_BLOCK, data)
+        if result is None:
+            return None
+        status, resp = result
+        if status in _CU_SUCCESS_CODES and len(resp) >= 16:
+            return bytes(resp[:16])
+        return None
+
+    def mifare_write(self, block: int, data: bytes) -> bool:
+        key = self._last_auth_key or bytes.fromhex("FFFFFFFFFFFF")
+        kt = 0x60 if self._last_auth_key_type == MIFARE_AUTH_A else 0x61
+        payload = bytes([kt, block]) + key[:6] + data[:16]
+        result = self._send_cmd(_CU_MF1_WRITE_ONE_BLOCK, payload)
+        if result is None:
+            return False
+        return result[0] in _CU_SUCCESS_CODES
+
+    def mifare_ul_read(self, page: int) -> Optional[bytes]:
+        pages_data = b""
+        for p in range(page, min(page + 4, 256)):
+            apdu = bytes([MIFARE_READ, p])
+            result = self._send_cmd(_CU_HF14A_RAW, apdu, timeout=2.0)
+            if result is None:
+                return None
+            status, resp = result
+            if status != _CU_SUCCESS or len(resp) < 4:
+                return None
+            pages_data += resp[:4]
+        return pages_data if len(pages_data) == 16 else None
+
+    def mifare_ul_write(self, page: int, data: bytes) -> bool:
+        apdu = bytes([MIFARE_UL_WRITE, page]) + data[:4]
+        result = self._send_cmd(_CU_HF14A_RAW, apdu, timeout=2.0)
+        if result is None:
+            return False
+        return result[0] in _CU_SUCCESS_CODES
+
+    def data_exchange(self, data: bytes, timeout=1.0) -> Optional[bytes]:
+        # First select card and keep RF field alive
+        scan_result = self._send_cmd(2016, timeout=3.0)  # HF14A_SCAN_KEEP
+        if scan_result is None or scan_result[0] not in _CU_SUCCESS_CODES:
+            return None
+        # HF14A_RAW format: options(1) + resp_timeout_ms(2 BE) + bitlen(2 BE) + data(N)
+        # Options: activate_rf=0, wait_response=1, append_crc=1, auto_select=0, keep_rf=1, check_crc=1
+        options = 0b01101100  # wait_resp + append_crc + keep_rf + check_crc
+        timeout_ms = int(max(timeout, 1.0) * 1000)
+        bitlen = len(data) * 8
+        raw_data = struct.pack(">BHH", options, timeout_ms, bitlen) + data
+        result = self._send_cmd(_CU_HF14A_RAW, raw_data, timeout=max(3.0, timeout + 1))
+        if result is None:
+            return None
+        status, resp = result
+        if resp and len(resp) >= 2:
+            return bytes(resp)
+        return None
+
+    def communicate_thru(self, data: bytes, timeout=1.0) -> Optional[bytes]:
+        return self.data_exchange(data, timeout=timeout)
+
+    def in_communicate_thru_raw(self, data: bytes, timeout=0.5) -> Optional[bytes]:
+        return self.data_exchange(data, timeout=timeout)
+
+    def init_as_target(self, uid: bytes, atqa: bytes = b"\x04\x00", sak: int = 0x08, timeout: float = 1.0) -> Optional[bytes]:
+        self._send_cmd(_CU_CHANGE_DEVICE_MODE, bytes([0x00]))
+        return uid[:4]
+
+    def tg_get_data(self) -> Optional[bytes]:
+        return None
+
+    def tg_set_data(self, data: bytes) -> bool:
+        return False
+
+    def command(self, cmd_id: int, data: bytes = b"", timeout: float = 3.0) -> Optional[Tuple[int, bytes]]:
+        return self._send_cmd(cmd_id, data, timeout=timeout)
+
+    def get_git_version(self) -> str:
+        result = self._send_cmd(1017)
+        if result and result[0] in _CU_SUCCESS_CODES and result[1]:
+            return result[1].decode("utf-8", errors="replace").strip("\x00")
+        return ""
+
+    def get_battery(self) -> Optional[Tuple[int, int]]:
+        result = self._send_cmd(1025)
+        if result and result[0] in _CU_SUCCESS_CODES and len(result[1]) >= 3:
+            voltage = (result[1][0] << 8) | result[1][1]
+            pct = result[1][2]
+            return voltage, pct
+        return None
+
+    def get_active_slot(self) -> int:
+        result = self._send_cmd(1018)
+        if result and result[0] in _CU_SUCCESS_CODES and result[1]:
+            return result[1][0]
+        return 0
+
+    def set_active_slot(self, slot: int):
+        self._send_cmd(1003, bytes([slot & 0x07]))
+
+    def get_slot_info(self) -> list:
+        result = self._send_cmd(1019)
+        slots = []
+        hf_types = {0: "None", 1: "MF1K", 2: "MF2K", 3: "MF4K", 4: "NTAG213",
+                     5: "NTAG215", 6: "NTAG216", 7: "MF0ICU1", 8: "MF0ICU2",
+                     9: "MF0UL11", 10: "MF0UL21", 11: "EM4100", 12: "HID"}
+        lf_types = {0: "None", 1: "EM4100", 2: "HID"}
+        if result and result[0] in _CU_SUCCESS_CODES and len(result[1]) >= 16:
+            for i in range(8):
+                hf = result[1][i * 2] if i * 2 < len(result[1]) else 0
+                lf = result[1][i * 2 + 1] if i * 2 + 1 < len(result[1]) else 0
+                slots.append({
+                    "slot": i,
+                    "hf_type": hf_types.get(hf, f"Type{hf}"),
+                    "lf_type": lf_types.get(lf, f"Type{lf}"),
+                })
+        else:
+            for i in range(8):
+                slots.append({"slot": i, "hf_type": "Unknown", "lf_type": "Unknown"})
+        return slots
+
+    def get_enabled_slots(self) -> list:
+        result = self._send_cmd(1023)
+        if result and result[0] in _CU_SUCCESS_CODES and result[1]:
+            enabled = []
+            for i in range(8):
+                if i < len(result[1]):
+                    enabled.append(bool(result[1][i]))
+                else:
+                    enabled.append(True)
+            return enabled
+        return [True] * 8
+
+    def set_slot_enable(self, slot: int, enable: bool):
+        self._send_cmd(1006, bytes([slot & 0x07, 0x01 if enable else 0x00]))
+
+    def em410x_scan(self) -> Optional[bytes]:
+        self._send_cmd(_CU_CHANGE_DEVICE_MODE, bytes([0x01]))
+        result = self._send_cmd(3000, timeout=5.0)
+        if result and result[0] in _CU_SUCCESS_CODES and len(result[1]) >= 5:
+            return bytes(result[1][:5])
+        return None
+
+    def hid_scan(self) -> Optional[bytes]:
+        self._send_cmd(_CU_CHANGE_DEVICE_MODE, bytes([0x01]))
+        result = self._send_cmd(3002, timeout=5.0)
+        if result and result[0] in _CU_SUCCESS_CODES and result[1]:
+            return bytes(result[1])
+        return None
+
+    @staticmethod
+    def detect_chameleon() -> Optional[Tuple[str, str]]:
+        """Detect a connected Chameleon Ultra by USB VID:PID. Returns (port, description) or None."""
+        try:
+            result = subprocess.run(["lsusb"], capture_output=True, text=True, timeout=3)
+            if _CU_VID_PID not in result.stdout:
+                return None
+        except Exception:
+            return None
+        for port in ["/dev/ttyACM0", "/dev/ttyACM1"]:
+            if os.path.exists(port):
+                return port, f"Chameleon Ultra {port}"
+        return None
+
+
 PM3_PORTS = ["/dev/ttyACM0", "/dev/ttyACM1"]
 _PM3_PROMPT_RE = re.compile(r"pm3\s*-->")
 
@@ -708,9 +1045,50 @@ class PM3Driver:
         return None
 
 
+CU_USB_VID_PID = "6868:8686"
+CU_SOF = 0x11
+
+# Chameleon Ultra command IDs
+CU_GET_APP_VERSION = 1000
+CU_CHANGE_DEVICE_MODE = 1001
+CU_GET_DEVICE_MODE = 1002
+CU_SET_ACTIVE_SLOT = 1003
+CU_SET_SLOT_TAG_TYPE = 1004
+CU_SET_SLOT_ENABLE = 1006
+CU_SET_SLOT_TAG_NICK = 1007
+CU_GET_SLOT_TAG_NICK = 1008
+CU_GET_DEVICE_CHIP_ID = 1011
+CU_GET_GIT_VERSION = 1017
+CU_GET_ACTIVE_SLOT = 1018
+CU_GET_SLOT_INFO = 1019
+CU_GET_ENABLED_SLOTS = 1023
+CU_GET_BATTERY_INFO = 1025
+CU_GET_DEVICE_MODEL = 1033
+CU_HF14A_SCAN = 2000
+CU_MF1_AUTH_ONE_KEY_BLOCK = 2007
+CU_MF1_READ_ONE_BLOCK = 2008
+CU_MF1_WRITE_ONE_BLOCK = 2009
+CU_HF14A_RAW = 2010
+CU_MF1_CHECK_KEYS_OF_SECTORS = 2012
+CU_EM410X_SCAN = 3000
+CU_HIDPROX_SCAN = 3002
+
+CU_STATUS_OK = 0
+CU_HF_TAG_OK = 0
+CU_HF_TAG_NO = 1
+CU_LF_TAG_OK = 0x40
+
+CU_TAG_TYPES = {
+    0: "Unknown", 1: "EM410X", 2: "MIFARE Mini", 3: "MIFARE 1K",
+    4: "MIFARE 2K", 5: "MIFARE 4K", 6: "NTAG213", 7: "NTAG215",
+    8: "NTAG216", 9: "MF0ICU1", 10: "MF0ICU2", 11: "MF0UL11",
+    12: "MF0UL21", 13: "NTAG210", 14: "NTAG212",
+}
+
+
 def _usb_reset_ch340():
     """Reset CH340 USB device to recover stuck PN532."""
-    import subprocess, glob
+    import glob
     for product_path in glob.glob("/sys/bus/usb/devices/*/product"):
         try:
             with open(product_path) as f:
@@ -730,9 +1108,17 @@ def _usb_reset_ch340():
 
 def auto_detect() -> Tuple[Optional[_PN532Base], str]:
     """Auto-detect NFC reader. Returns (driver, description).
-    Priority: Proxmark3 > nfcpy USB > PN532 UART > PN532 I2C.
+    Priority: Chameleon Ultra > Proxmark3 > nfcpy USB > PN532 UART > PN532 I2C.
     """
-    # Proxmark3 (highest priority — full read/write/emulate/crack)
+    # Chameleon Ultra (highest priority — unique VID:PID, no conflict)
+    if SERIAL_OK:
+        cu_result = ChameleonUltraDriver.detect_chameleon()
+        if cu_result:
+            port, desc = cu_result
+            drv = ChameleonUltraDriver(port)
+            return drv, desc
+
+    # Proxmark3
     PM3Driver._kill_stale()
     pm3 = PM3Driver.detect_pm3()
     if pm3:
