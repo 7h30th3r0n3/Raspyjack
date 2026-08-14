@@ -899,6 +899,7 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
             or parsed.path.startswith("/api/settings/")
             or parsed.path.startswith("/api/auth/")
             or parsed.path.startswith("/api/wardriving/")
+            or parsed.path.startswith("/api/adsb/")
         ):
             query = parse_qs(parsed.query or "")
             if parsed.path == "/api/auth/bootstrap-status":
@@ -945,6 +946,16 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
                 return
             if parsed.path == "/api/wardriving/session":
                 self._handle_wardriving_session(query)
+                return
+
+            if parsed.path == "/api/adsb/live":
+                self._handle_adsb_live()
+                return
+            if parsed.path == "/api/adsb/sessions":
+                self._handle_adsb_sessions()
+                return
+            if parsed.path == "/api/adsb/session":
+                self._handle_adsb_session(query)
                 return
 
             if parsed.path == "/api/system/status":
@@ -1011,6 +1022,20 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
                 _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
                 return
             self._handle_wardriving_stop()
+            return
+        if parsed.path == "/api/adsb/start":
+            query = parse_qs(parsed.query or "")
+            if not _auth_ok(self, query):
+                _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
+                return
+            self._handle_adsb_start()
+            return
+        if parsed.path == "/api/adsb/stop":
+            query = parse_qs(parsed.query or "")
+            if not _auth_ok(self, query):
+                _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
+                return
+            self._handle_adsb_stop()
             return
 
         if parsed.path in ("/api/payloads/start", "/api/payloads/run"):
@@ -1580,6 +1605,92 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
 
     def _handle_wardriving_stop(self) -> None:
         """Stop the currently running payload by sending KEY3 via rj_input socket."""
+        try:
+            sock_path = "/dev/shm/rj_input.sock"
+            if not os.path.exists(sock_path):
+                _json_response(self, {"ok": False, "error": "input socket not found"})
+                return
+            s = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+            try:
+                s.sendto(json.dumps({"button": "KEY3", "state": "press"}).encode(), sock_path)
+                time.sleep(0.15)
+                s.sendto(json.dumps({"button": "KEY3", "state": "release"}).encode(), sock_path)
+            finally:
+                s.close()
+            _json_response(self, {"ok": True, "status": "stopping"})
+        except Exception as exc:
+            _json_response(self, {"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+
+    # ------------------------------------------------------------------
+    # ADS-B
+    # ------------------------------------------------------------------
+
+    def _handle_adsb_live(self) -> None:
+        adsb_path = Path("/dev/shm/rj_adsb_live.json")
+        if adsb_path.exists():
+            try:
+                raw = adsb_path.read_text(encoding="utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(raw.encode())
+            except Exception:
+                _json_response(self, {"ts": 0, "count": 0, "total_messages": 0, "aircraft": []})
+        else:
+            _json_response(self, {"ts": 0, "count": 0, "total_messages": 0, "aircraft": []})
+
+    def _handle_adsb_sessions(self) -> None:
+        sessions_dir = "/root/Raspyjack/loot/SDR/adsb/sessions"
+        result = []
+        if os.path.isdir(sessions_dir):
+            for f in sorted(os.listdir(sessions_dir), reverse=True):
+                if f.endswith(".json"):
+                    fp = os.path.join(sessions_dir, f)
+                    try:
+                        sz = os.path.getsize(fp)
+                    except OSError:
+                        sz = 0
+                    result.append({"name": f, "path": fp, "size": sz})
+        _json_response(self, result)
+
+    def _handle_adsb_session(self, query: dict) -> None:
+        path = (query.get("path") or [""])[0] if isinstance(query.get("path"), list) else str(query.get("path", ""))
+        allowed_prefix = "/root/Raspyjack/loot/SDR/adsb/"
+        if not path.startswith(allowed_prefix) or ".." in path:
+            _json_response(self, {"error": "invalid path"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        if os.path.isfile(path):
+            try:
+                raw = Path(path).read_text(encoding="utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(raw.encode())
+            except Exception:
+                _json_response(self, {"error": "read error"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def _handle_adsb_start(self) -> None:
+        try:
+            if PAYLOAD_STATE_PATH.exists():
+                raw = PAYLOAD_STATE_PATH.read_text(encoding="utf-8")
+                pdata = json.loads(raw) if raw else {}
+                if pdata.get("running"):
+                    _json_response(self, {"ok": True, "status": "already_running", "path": pdata.get("path")})
+                    return
+            request_path = Path("/dev/shm/rj_payload_request.json")
+            request_path.write_text(json.dumps({
+                "action": "start",
+                "path": "sdr/sdr_adsb.py",
+                "args": ["--auto"],
+            }))
+            _json_response(self, {"ok": True, "status": "starting"})
+        except Exception as exc:
+            _json_response(self, {"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+
+    def _handle_adsb_stop(self) -> None:
         try:
             sock_path = "/dev/shm/rj_input.sock"
             if not os.path.exists(sock_path):
