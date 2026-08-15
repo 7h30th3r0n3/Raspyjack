@@ -35,7 +35,10 @@ import LCD_Config
 from PIL import Image, ImageDraw
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
-from payloads._audio_helper import get_audio_card, get_alsa_dev
+from payloads._audio_helper import (
+    get_alsa_dev, get_capture_dev,
+    enable_capture, disable_capture, get_capture_label,
+)
 
 PINS = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
@@ -89,6 +92,7 @@ _transcript = []
 _partial = ""
 _lock = threading.Lock()
 _alsa_dev = "default"
+_mic_label = ""
 
 C_BG = (5, 5, 15)
 C_HEAD = (20, 0, 40)
@@ -177,38 +181,19 @@ def _ensure_model(lang):
 
 
 def _enable_mic():
-    subprocess.run(
-        ["i2cset", "-f", "-y", "1", "0x4f", "0x06", "0x01"],
-        capture_output=True, timeout=2)
-    subprocess.run(
-        ["amixer", "-c", get_audio_card(), "cset", "name=ADC MUX", "0"],
-        capture_output=True, timeout=2)
-    subprocess.run(
-        ["amixer", "-c", get_audio_card(), "cset", "name=ADCL PGA Volume", "12"],
-        capture_output=True, timeout=2)
-    subprocess.run(
-        ["amixer", "-c", get_audio_card(), "cset", "name=ADCL Capture Volume", "220"],
-        capture_output=True, timeout=2)
+    """Power up the selected mic (USB, or built-in analog via AU_EN + ADC path)."""
+    enable_capture()
 
 
 def _disable_mic():
-    subprocess.run(
-        ["i2cset", "-f", "-y", "1", "0x4f", "0x06", "0x03"],
-        capture_output=True, timeout=2)
+    """Release the mic. No-op for USB."""
+    disable_capture()
 
 
 def _detect_alsa_dev():
-    global _alsa_dev
-    try:
-        r = subprocess.run(["aplay", "-l"], capture_output=True, text=True, timeout=3)
-        for line in r.stdout.split("\n"):
-            if "card" in line.lower() and ":" in line:
-                card_num = line.split(":")[0].replace("card", "").strip()
-                if any(k in line.upper() for k in ["ES8388", "ES8389", "ES8390"]):
-                    _alsa_dev = f"plughw:{card_num},0"
-                    return
-    except Exception:
-        pass
+    global _alsa_dev, _mic_label
+    _alsa_dev = get_capture_dev()
+    _mic_label = get_capture_label()
 
 
 _vosk_model = None

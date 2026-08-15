@@ -4456,6 +4456,7 @@ class DisposableMenu:
             "remote_access",
             "nfc_rfid",
             "sdr",
+            "ai",
             "utilities",
             "hardware",
             "games",
