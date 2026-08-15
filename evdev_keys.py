@@ -43,15 +43,36 @@ _key_state = {}
 _lock = threading.Lock()
 _device = None
 _thread = None
+_RAW_PIPE = "/dev/shm/rj_key_events"
+
+
+_PAUSE_FLAG = "/dev/shm/rj_evdev_pause"
 
 
 def _reader_loop():
     global _device
     while True:
         try:
+            if os.path.exists(_PAUSE_FLAG):
+                if _device:
+                    try:
+                        _device.close()
+                    except Exception:
+                        pass
+                    _device = None
+                import time
+                time.sleep(0.2)
+                continue
             if _device is None:
                 _device = evdev.InputDevice(EVDEV_DEVICE)
             for event in _device.read_loop():
+                if os.path.exists(_PAUSE_FLAG):
+                    try:
+                        _device.close()
+                    except Exception:
+                        pass
+                    _device = None
+                    break
                 if event.type != evdev.ecodes.EV_KEY:
                     continue
                 with _lock:
@@ -94,4 +115,22 @@ def get_pressed_button():
     return None
 
 
-start()
+def pause():
+    try:
+        with open(_PAUSE_FLAG, "w") as f:
+            pass
+    except Exception:
+        pass
+    import time
+    time.sleep(0.3)
+
+
+def resume():
+    try:
+        os.unlink(_PAUSE_FLAG)
+    except OSError:
+        pass
+
+
+if not os.path.exists(_PAUSE_FLAG):
+    start()
