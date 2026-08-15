@@ -1255,7 +1255,7 @@ def main():
     hist_sel = 0
 
     DEFAULT_PRESETS = [
-        "talking sasquatch",
+        "talking sasquach",
         "sn0ren",
         "Valleytechsolutions",
         "hacking tutorial 2026",

@@ -41,6 +41,7 @@ RaspyJack is for **authorized security testing, research, and education only**.
 - Exfiltration via HTTP, DNS, BLE, Discord, SMB, FTP, USB, Dropbox
 - Dead drop WiFi file sharing with dashboard
 - 25 games including Pac-Man, Tetris, Tron, LLM adventure, labyrinth
+- Media: YouTube search/stream player, local video player, and **RaspyJack TV** — a lean-back YouTube "channel" that endlessly rotates a JSON-defined lineup of shows + bumpers
 
 Check the WIKI for more ! https://github.com/7h30th3r0n3/Raspyjack/wiki
 
@@ -410,7 +411,7 @@ Videos made by the community about RaspyJack (Thanks to all of you💕):
   
 [![](https://img.youtube.com/vi/CkR3xIpTVvI/mqdefault.jpg)](https://www.youtube.com/watch?v=CkR3xIpTVvI)<br>
 **RaspyJack Makes the Cardputer Zero INSANE! Flipper One is left in the DUST**<br>
-*Talking Sasquatch*
+*Talking Sasquach*
   
 [![](https://img.youtube.com/vi/i4CnRoA7Mt4/mqdefault.jpg)](https://www.youtube.com/watch?v=i4CnRoA7Mt4)<br>
 **RASPYJACK - A Network Swiss Army Toolkit Based on the Raspberry Pi 2W**<br>
