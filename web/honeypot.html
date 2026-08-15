@@ -8,7 +8,7 @@
   <style>
     :root{color-scheme:dark;--bg:#05060a;--panel:#0a0e18;--border:#0f1a2a;--accent:#00ccff;--green:#00ff88;--red:#ff3333;--orange:#ff8800;--yellow:#ffaa00;--text:#c8d0dc;--text-dim:#4a6080;--card:#060a12;--topbar:#0c1020;--topbar2:#080c14}
     *{margin:0;padding:0;box-sizing:border-box}
-    body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:#c8d0dc;overflow:hidden;height:100vh;display:flex;flex-direction:column}
+    body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--text);overflow:hidden;height:100vh;display:flex;flex-direction:column}
     ::-webkit-scrollbar{width:4px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:#1a2844;border-radius:4px}
 
     /* ── TOPBAR ── */
@@ -21,7 +21,7 @@
     @keyframes glowO{0%,100%{box-shadow:0 0 6px rgba(255,136,0,.2)}50%{box-shadow:0 0 18px rgba(255,136,0,.5)}}
     #top h1{font-size:16px;font-weight:700;color:var(--accent);white-space:nowrap;text-shadow:0 0 20px rgba(0,204,255,.12)}
     #top h1 i{margin-right:6px}
-    .btn{background:rgba(17,24,48,.8);color:#78849c;border:1px solid #1a2844;padding:6px 14px;border-radius:6px;font-size:12px;cursor:pointer;white-space:nowrap;display:inline-flex;align-items:center;gap:6px;font-weight:600;transition:all .2s}
+    .btn{background:rgba(17,24,48,.8);color:var(--text-dim);border:1px solid #1a2844;padding:6px 14px;border-radius:6px;font-size:12px;cursor:pointer;white-space:nowrap;display:inline-flex;align-items:center;gap:6px;font-weight:600;transition:all .2s}
     .btn:hover{color:#fff;background:#1a2850;border-color:#2a3868}
     .btn.on{border-color:var(--green);color:var(--green);background:rgba(0,255,136,.06);box-shadow:0 0 12px rgba(0,255,136,.15)}
     .btn.active{border-color:var(--accent);color:var(--accent);background:rgba(0,204,255,.06)}
@@ -32,18 +32,18 @@
     .tl-medium{color:var(--yellow);border:1px solid rgba(255,170,0,.3);background:rgba(255,170,0,.06)}
     .tl-high{color:var(--orange);border:1px solid rgba(255,136,0,.4);background:rgba(255,136,0,.08);animation:glowO 2.5s infinite}
     .tl-critical{color:var(--red);border:1px solid rgba(255,50,50,.5);background:rgba(255,50,50,.1);animation:glowR 1.5s infinite}
-    .stat{font-family:'Courier New',monospace;font-size:12px;color:#5a7090;white-space:nowrap}
-    .stat b{color:#99aabb;font-weight:600}
+    .stat{font-family:'Courier New',monospace;font-size:12px;color:var(--text-dim);white-space:nowrap}
+    .stat b{color:var(--text);font-weight:600}
     .sp{flex:1}
-    #top a{color:#5a7090;font-size:12px;text-decoration:none}#top a:hover{color:var(--accent)}
+    #top a{color:var(--text-dim);font-size:12px;text-decoration:none}#top a:hover{color:var(--accent)}
 
     /* ── KPI ── */
     #kpi{display:flex;gap:10px;padding:10px 16px;flex-shrink:0}
     .kpi{flex:1;padding:14px 16px;background:var(--panel);border:1px solid var(--border);border-radius:10px}
     .kpi-v{font-family:'Courier New',monospace;font-size:32px;font-weight:700;color:var(--green);line-height:1}
-    .kpi-l{font-size:10px;color:#5a7090;text-transform:uppercase;letter-spacing:1.5px;font-weight:600;margin-top:4px}
-    .kpi-t{font-size:10px;float:right;margin-top:-28px}.t-up{color:var(--red)}.t-flat{color:#2a3858}
-    .kpi-bar{height:4px;border-radius:2px;margin-top:6px;background:#0a1020;overflow:hidden}
+    .kpi-l{font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:1.5px;font-weight:600;margin-top:4px}
+    .kpi-t{font-size:10px;float:right;margin-top:-28px}.t-up{color:var(--red)}.t-flat{color:var(--text-dim)}
+    .kpi-bar{height:4px;border-radius:2px;margin-top:6px;background:var(--card);overflow:hidden}
     .kpi-bar-f{height:100%;border-radius:2px;transition:width .6s,background .6s}
 
     /* ── VIEWS ── */
@@ -53,49 +53,49 @@
     /* ── DASHBOARD ── */
     #dashL{width:30%;min-width:240px;border-right:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden}
     #dashR{flex:1;display:flex;flex-direction:column;overflow:hidden}
-    .sec{font-size:13px;color:var(--accent);text-transform:uppercase;letter-spacing:1px;padding:10px 14px 6px;font-weight:700;display:flex;align-items:center;gap:6px;border-bottom:1px solid #0a1525}
-    .sec i{opacity:.5}.sec span{color:#3a5070;font-weight:400;text-transform:none;letter-spacing:0;margin-left:auto;font-size:11px}
+    .sec{font-size:13px;color:var(--accent);text-transform:uppercase;letter-spacing:1px;padding:10px 14px 6px;font-weight:700;display:flex;align-items:center;gap:6px;border-bottom:1px solid var(--border)}
+    .sec i{opacity:.5}.sec span{color:var(--text-dim);font-weight:400;text-transform:none;letter-spacing:0;margin-left:auto;font-size:11px}
     .scr{overflow-y:auto;flex:1}
 
     /* Services */
     .sv{display:flex;align-items:center;gap:8px;padding:5px 14px;font-size:12px;line-height:16px}
     .sv-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}.sv-dot.pulse{animation:dotP 1.5s infinite}
     @keyframes dotP{0%,100%{box-shadow:0 0 0 0 rgba(0,255,136,.4)}50%{box-shadow:0 0 0 5px rgba(0,255,136,0)}}
-    .sv-n{font-weight:600;min-width:55px}.sv-p{color:#3a5070;font-family:'Courier New',monospace;font-size:11px;min-width:40px}
-    .sv-bar{flex:1;height:5px;background:#0a1020;border-radius:3px;overflow:hidden}.sv-bar-f{height:100%;border-radius:3px;transition:width .4s}
-    .sv-c{font-family:'Courier New',monospace;color:#5a7090;min-width:30px;text-align:right;font-size:12px}
+    .sv-n{font-weight:600;min-width:55px}.sv-p{color:var(--text-dim);font-family:'Courier New',monospace;font-size:11px;min-width:40px}
+    .sv-bar{flex:1;height:5px;background:var(--card);border-radius:3px;overflow:hidden}.sv-bar-f{height:100%;border-radius:3px;transition:width .4s}
+    .sv-c{font-family:'Courier New',monospace;color:var(--text-dim);min-width:30px;text-align:right;font-size:12px}
 
     /* IPs */
     .ip{display:flex;align-items:center;gap:6px;padding:4px 14px;font-size:12px;cursor:pointer;transition:background .15s}
     .ip:hover,.ip.sel{background:rgba(0,50,100,.15)}.ip.sel{border-left:3px solid var(--accent)}
-    .ip-r{min-width:20px;text-align:right;font-weight:700;font-size:11px;color:#1a3050}
+    .ip-r{min-width:20px;text-align:right;font-weight:700;font-size:11px;color:var(--text-dim)}
     .ip-r.g{color:#ffd700}.ip-r.s{color:#c0c0c0}.ip-r.b{color:#cd7f32}
     .ip-a{font-family:'Courier New',monospace;color:var(--accent);flex:1;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-    .ip-cc{font-size:11px;color:#4a6080}.ip-cnt{font-family:'Courier New',monospace;color:#5a7090;font-size:12px}
+    .ip-cc{font-size:11px;color:var(--text-dim)}.ip-cnt{font-family:'Courier New',monospace;color:var(--text-dim);font-size:12px}
 
     /* Attack bars */
     .atk{display:flex;align-items:center;gap:8px;padding:5px 14px;font-size:12px}
-    .atk-n{min-width:80px;font-weight:600}.atk-bar{flex:1;height:6px;background:#0a1020;border-radius:3px;overflow:hidden}
-    .atk-bar-f{height:100%;border-radius:3px}.atk-p{font-family:'Courier New',monospace;color:#5a7090;min-width:35px;text-align:right}
+    .atk-n{min-width:80px;font-weight:600}.atk-bar{flex:1;height:6px;background:var(--card);border-radius:3px;overflow:hidden}
+    .atk-bar-f{height:100%;border-radius:3px}.atk-p{font-family:'Courier New',monospace;color:var(--text-dim);min-width:35px;text-align:right}
 
     /* Feed */
-    #feedH{display:flex;align-items:center;gap:8px;padding:8px 14px;border-bottom:1px solid #0a1525}
+    #feedH{display:flex;align-items:center;gap:8px;padding:8px 14px;border-bottom:1px solid var(--border)}
     .ft{font-size:13px;color:var(--accent);text-transform:uppercase;letter-spacing:1px;font-weight:700}
-    #feedSearch{flex:1;max-width:220px;background:rgba(10,16,32,.8);border:1px solid #1a2844;color:#c8d0dc;padding:5px 10px;border-radius:5px;font-size:11px;outline:none}
+    #feedSearch{flex:1;max-width:220px;background:rgba(10,16,32,.8);border:1px solid #1a2844;color:var(--text);padding:5px 10px;border-radius:5px;font-size:11px;outline:none}
     #feedSearch:focus{border-color:var(--accent)}
-    .fb{background:none;border:1px solid #1a2844;color:#4a6080;padding:3px 10px;border-radius:4px;font-size:10px;cursor:pointer;font-weight:600}
+    .fb{background:none;border:1px solid #1a2844;color:var(--text-dim);padding:3px 10px;border-radius:4px;font-size:10px;cursor:pointer;font-weight:600}
     .fb:hover{color:#ccc}.fb.on{border-color:var(--accent);color:var(--accent)}
-    .fc{font-size:11px;color:#3a5070;margin-left:auto}
+    .fc{font-size:11px;color:var(--text-dim);margin-left:auto}
     #feed{flex:1;overflow-y:auto}
-    .ev{display:grid;grid-template-columns:60px 8px 55px 1fr 30px;gap:8px;align-items:center;padding:10px 16px;border-bottom:1px solid #080c16;border-left:3px solid transparent;cursor:pointer;transition:background .15s}
+    .ev{display:grid;grid-template-columns:60px 8px 55px 1fr 30px;gap:8px;align-items:center;padding:10px 16px;border-bottom:1px solid var(--card);border-left:3px solid transparent;cursor:pointer;transition:background .15s}
     .ev:nth-child(odd){background:rgba(0,8,20,.2)}.ev:hover{background:rgba(0,40,80,.12)}
-    .ev.sev-high,.ev.sev-critical{border-left-color:var(--red)}.ev.sev-medium{border-left-color:var(--orange)}.ev.sev-low{border-left-color:var(--yellow)}.ev.sev-info{border-left-color:#1a3050}
-    .ev-ts{color:#3a5070;font-family:'Courier New',monospace;font-size:10px}
+    .ev.sev-high,.ev.sev-critical{border-left-color:var(--red)}.ev.sev-medium{border-left-color:var(--orange)}.ev.sev-low{border-left-color:var(--yellow)}.ev.sev-info{border-left-color:var(--text-dim)}
+    .ev-ts{color:var(--text-dim);font-family:'Courier New',monospace;font-size:10px}
     .ev-sev{width:8px;height:8px;border-radius:50%}
     .ev-svc{display:inline-block;padding:2px 0;border-radius:4px;font-size:10px;font-weight:700;color:#fff;text-align:center;white-space:nowrap;width:55px}
     .ev-main{overflow:hidden}
     .ev-ip{font-family:'Courier New',monospace;color:var(--accent);font-size:12px;font-weight:600}
-    .ev-cc{font-size:10px;color:#4a6080;margin-left:4px}
+    .ev-cc{font-size:10px;color:var(--text-dim);margin-left:4px}
     .ev-data{color:#6a7a94;font-size:11px;font-family:'Courier New',monospace;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.3}
     .ev-atk{display:inline-block;padding:1px 7px;border-radius:3px;font-size:9px;font-weight:700;color:#fff;margin-left:8px;vertical-align:middle}
 
@@ -105,64 +105,101 @@
     #donutC{width:190px;height:190px;flex-shrink:0}
     #donutLeg{font-size:12px;overflow-y:auto;max-height:190px;flex:1}
     .dl{display:flex;align-items:center;gap:6px;margin:4px 0}.dl-dot{width:10px;height:10px;border-radius:3px;flex-shrink:0}
-    .dl-pct{font-family:'Courier New',monospace;color:#5a7090;min-width:32px;text-align:right}
+    .dl-pct{font-family:'Courier New',monospace;color:var(--text-dim);min-width:32px;text-align:right}
     #heatW{width:50%;padding:12px 16px}
     #heatT{font-size:11px;color:var(--accent);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;font-weight:600}
     #heatC{width:100%;height:110px;display:block}
 
     /* ── CREDENTIALS VIEW ── */
     #credH{padding:14px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px}
-    #credH .stat{font-size:13px;color:#78849c}#credH .stat b{color:var(--accent)}
+    #credH .stat{font-size:13px;color:var(--text-dim)}#credH .stat b{color:var(--accent)}
     #credS{background:rgba(10,16,32,.8);border:1px solid #1a2844;color:#ccc;padding:5px 10px;border-radius:5px;font-size:12px;outline:none;width:220px}
-    .exp{background:none;border:1px solid #1a2844;color:#5a7090;padding:5px 14px;border-radius:5px;font-size:11px;cursor:pointer;display:flex;align-items:center;gap:5px}
+    .exp{background:none;border:1px solid #1a2844;color:var(--text-dim);padding:5px 14px;border-radius:5px;font-size:11px;cursor:pointer;display:flex;align-items:center;gap:5px}
     .exp:hover{color:var(--green);border-color:rgba(0,255,136,.3)}
     #credT{flex:1;overflow-y:auto}
-    .cth{display:flex;padding:8px 16px;font-size:11px;color:var(--accent);text-transform:uppercase;letter-spacing:.8px;font-weight:700;border-bottom:1px solid #0f1a2a;background:#060a12;position:sticky;top:0;z-index:1}
-    .ctr{display:flex;align-items:center;padding:10px 16px;font-size:13px;border-bottom:1px solid #060a12;gap:12px}
+    .cth{display:flex;padding:8px 16px;font-size:11px;color:var(--accent);text-transform:uppercase;letter-spacing:.8px;font-weight:700;border-bottom:1px solid var(--border);background:var(--card);position:sticky;top:0;z-index:1}
+    .ctr{display:flex;align-items:center;padding:10px 16px;font-size:13px;border-bottom:1px solid var(--card);gap:12px}
     .ctr:nth-child(odd){background:rgba(0,8,20,.2)}.ctr:hover{background:rgba(0,30,60,.15)}
     .ctr.common{background:rgba(60,10,10,.15)}
-    .c-ts{color:#3a5070;font-family:'Courier New',monospace;font-size:10px;min-width:62px}
+    .c-ts{color:var(--text-dim);font-family:'Courier New',monospace;font-size:10px;min-width:62px}
     .c-svc{display:inline-block;padding:2px 0;border-radius:3px;font-size:10px;font-weight:700;color:#fff;width:60px;text-align:center;flex-shrink:0}
     .c-ip{font-family:'Courier New',monospace;color:var(--accent);min-width:120px;font-size:13px}
-    .c-cc{font-size:11px;color:#4a6080;min-width:28px;text-align:center}
+    .c-cc{font-size:11px;color:var(--text-dim);min-width:28px;text-align:center}
     .c-user{font-family:'Courier New',monospace;color:var(--green);flex:1;font-size:14px;font-weight:600;padding:4px 10px;background:rgba(0,255,136,.04);border-radius:4px;min-width:100px}
     .c-pass{font-family:'Courier New',monospace;color:var(--red);flex:1;font-size:14px;padding:4px 10px;background:rgba(255,50,50,.04);border-radius:4px;min-width:100px}
-    .c-warn{color:var(--red);margin-left:4px}.c-cp{color:#2a3858;cursor:pointer;padding:4px}.c-cp:hover{color:var(--accent)}
+    .c-warn{color:var(--red);margin-left:4px}.c-cp{color:var(--text-dim);cursor:pointer;padding:4px}.c-cp:hover{color:var(--accent)}
 
     /* ── EXPLOITS VIEW ── */
     #xplH{padding:14px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px}
-    #xplH .stat{font-size:13px;color:#78849c}#xplH .stat b{color:var(--red)}
+    #xplH .stat{font-size:13px;color:var(--text-dim)}#xplH .stat b{color:var(--red)}
     #xplL{flex:1;overflow-y:auto;padding:10px 16px}
     .xpl{background:rgba(40,8,8,.15);border:1px solid rgba(255,50,50,.1);border-radius:8px;padding:14px 16px;margin-bottom:10px}
     .xpl.crit{border-color:rgba(255,50,50,.25);animation:glowR 3s infinite}
     .xpl-top{display:flex;align-items:center;gap:10px;margin-bottom:8px}
     .xpl-badge{padding:3px 10px;border-radius:5px;font-size:12px;font-weight:700;color:#fff}
     .xpl-ip{font-family:'Courier New',monospace;color:var(--accent);font-size:13px}
-    .xpl-ts{font-family:'Courier New',monospace;color:#3a5070;font-size:10px;margin-left:auto}
-    .xpl-cc{font-size:11px;color:#4a6080}
-    .xpl-pay{background:#030508;border:1px solid #0f1a2a;border-radius:6px;padding:10px 12px;font-family:'Courier New',monospace;font-size:12px;color:#78849c;white-space:pre-wrap;word-break:break-all;line-height:1.5;max-height:60px;overflow:hidden;cursor:pointer;transition:max-height .3s}
+    .xpl-ts{font-family:'Courier New',monospace;color:var(--text-dim);font-size:10px;margin-left:auto}
+    .xpl-cc{font-size:11px;color:var(--text-dim)}
+    .xpl-pay{background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:10px 12px;font-family:'Courier New',monospace;font-size:12px;color:var(--text-dim);white-space:pre-wrap;word-break:break-all;line-height:1.5;max-height:60px;overflow:hidden;cursor:pointer;transition:max-height .3s}
     .xpl-pay.open{max-height:500px}
     .hl-url{color:var(--accent)}.hl-param{color:var(--green)}.hl-exploit{color:var(--red);font-weight:700}
 
     /* ── EVENT DETAIL OVERLAY ── */
-    #detailOverlay{display:none;position:fixed;top:0;right:0;bottom:0;width:420px;background:#080c14;border-left:2px solid var(--accent);z-index:100;flex-direction:column;box-shadow:-8px 0 30px rgba(0,0,0,.6);animation:slideIn .2s ease}
+    #detailOverlay{display:none;position:fixed;top:0;right:0;bottom:0;width:420px;background:var(--topbar2);border-left:2px solid var(--accent);z-index:100;flex-direction:column;box-shadow:-8px 0 30px rgba(0,0,0,.6);animation:slideIn .2s ease}
     #detailOverlay.show{display:flex}
     @keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}
     #detHead{padding:16px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px}
-    #detHead .close{color:#5a7090;font-size:18px;cursor:pointer;margin-left:auto;padding:4px 8px}
+    #detHead .close{color:var(--text-dim);font-size:18px;cursor:pointer;margin-left:auto;padding:4px 8px}
     #detHead .close:hover{color:var(--red)}
     #detBody{flex:1;overflow-y:auto;padding:20px}
-    .det-row{display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid #0a1020;font-size:13px}
-    .det-label{color:#5a7090;min-width:100px}
-    .det-val{color:#c8d0dc;font-family:'Courier New',monospace;text-align:right;word-break:break-all;max-width:260px}
+    .det-row{display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--card);font-size:13px}
+    .det-label{color:var(--text-dim);min-width:100px}
+    .det-val{color:var(--text);font-family:'Courier New',monospace;text-align:right;word-break:break-all;max-width:260px}
     .det-section{font-size:12px;color:var(--accent);text-transform:uppercase;letter-spacing:1px;margin:20px 0 10px;font-weight:700;padding-bottom:6px;border-bottom:1px solid rgba(0,204,255,.1)}
-    .det-payload{background:#030508;border:1px solid #0f1a2a;border-radius:6px;padding:14px;font-family:'Courier New',monospace;font-size:12px;color:#8899b4;white-space:pre-wrap;word-break:break-all;line-height:1.6;margin-top:10px}
+    .det-payload{background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:14px;font-family:'Courier New',monospace;font-size:12px;color:var(--text);white-space:pre-wrap;word-break:break-all;line-height:1.6;margin-top:10px}
+
+    /* ── GRAPH VIEW ── */
+    #graphView{flex-direction:row}
+    #gIpPanel{width:240px;border-right:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden;background:rgba(5,8,14,.6)}
+    #gIpHead{padding:14px 16px;font-size:13px;color:var(--accent);font-weight:700;border-bottom:1px solid var(--border);text-transform:uppercase;letter-spacing:1.2px;display:flex;align-items:center;gap:6px}
+    #gIpHead i{opacity:.5}
+    #gIpScr{flex:1;overflow-y:auto;padding:6px}
+    .gip{display:flex;align-items:center;gap:8px;padding:10px 14px;cursor:pointer;transition:all .2s;border-left:3px solid transparent;font-size:12px;border-radius:6px;margin-bottom:3px}
+    .gip:hover{background:rgba(0,50,100,.12)}
+    .gip.sel{background:rgba(0,204,255,.06);border-left-color:var(--accent);box-shadow:0 0 12px rgba(0,204,255,.08)}
+    .gip-ip{font-family:'Courier New',monospace;color:var(--accent);flex:1;font-size:13px;font-weight:600}
+    .gip-cc{font-size:11px;color:var(--text-dim);min-width:22px}.gip-cnt{font-family:'Courier New',monospace;color:var(--text-dim);font-size:13px;font-weight:700}
+    .gip-bar{width:50px;height:5px;background:var(--card);border-radius:3px;overflow:hidden;margin-left:4px}
+    .gip-bar-f{height:100%;border-radius:3px;background:var(--accent);transition:width .3s}
+    #gCanvasWrap{flex:1;position:relative;display:flex;flex-direction:column;background:var(--bg)}
+    #gCanvas{flex:1;display:block;cursor:default}
+    #gStats{padding:14px 24px;border-top:1px solid var(--border);display:flex;gap:24px;font-size:13px;color:var(--text-dim);flex-shrink:0;background:rgba(5,6,10,.85)}
+    #gStats .gs{display:flex;align-items:center;gap:6px}
+    #gStats .gs i{font-size:11px;opacity:.5}
+    #gStats b{color:var(--text);font-size:16px}
+    #gTimeline{height:60px;border-top:1px solid var(--border);flex-shrink:0;position:relative;background:#020408}
+    #gTimeC{width:100%;height:100%;display:block}
+    #gKillChain{position:absolute;top:14px;right:18px;display:flex;align-items:center;gap:0;background:rgba(8,12,20,.88);backdrop-filter:blur(6px);border:1px solid rgba(0,204,255,.1);border-radius:30px;padding:8px 20px;box-shadow:0 8px 24px rgba(0,0,0,.4)}
+    .kc-step{display:flex;align-items:center;gap:6px;padding:0 8px;font-size:11px;transition:opacity .3s}
+    .kc-dot{width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;border:2px solid var(--text-dim);color:var(--text-dim);transition:all .3s}
+    .kc-dot.on{border-color:var(--green);color:var(--green);background:rgba(0,255,136,.1);box-shadow:0 0 10px rgba(0,255,136,.3)}
+    .kc-line{width:24px;height:2px;background:var(--text-dim);transition:background .3s}
+    .kc-line.on{background:var(--green);box-shadow:0 0 6px rgba(0,255,136,.3)}
+    .kc-lbl{font-size:9px;color:var(--text-dim);font-weight:600;letter-spacing:.5px}
+    .kc-lbl.on{color:var(--green)}
+    .gPopup{position:absolute;z-index:50;background:rgba(8,14,28,.95);backdrop-filter:blur(8px);border:1px solid var(--accent);border-radius:10px;padding:16px;min-width:260px;max-width:360px;box-shadow:0 12px 40px rgba(0,0,0,.6);display:none;font-size:12px}
+    .gPopup.show{display:block}
+    .gPop-head{font-size:14px;font-weight:700;margin-bottom:10px;display:flex;align-items:center;gap:8px}
+    .gPop-row{padding:4px 0;border-bottom:1px solid rgba(255,255,255,.05);display:flex;gap:8px}
+    .gPop-lbl{color:var(--text-dim);min-width:70px;font-size:11px}
+    .gPop-val{color:var(--text);font-family:'Courier New',monospace;font-size:11px;word-break:break-all}
 
     .toast{position:fixed;bottom:24px;right:24px;background:rgba(0,255,136,.12);border:1px solid var(--green);color:var(--green);padding:10px 20px;border-radius:8px;font-size:12px;z-index:200;display:none}
     @media(max-width:900px){#dashL{display:none}#dashBot{flex-direction:column;height:auto}#donutW,#heatW{width:100%;border:none}}
   </style>
 </head>
 <body>
+<script>fetch("/api/auth/me",{credentials:"include"}).then(r=>{if(!r.ok)throw 0;return r.json()}).then(d=>{if(!d||!d.authenticated)throw 0}).catch(()=>{document.body.innerHTML='<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;gap:16px;font-family:sans-serif;background:#05060a"><i class="fa-solid fa-lock" style="font-size:48px;color:#f43f5e"></i><h2 style="color:#e2e8f0">Authentication Required</h2><p style="color:#94a3b8">Please log in through the WebUI first.</p><a href="./index.html" style="color:#00ccff;text-decoration:none;padding:8px 20px;border:1px solid #00ccff;border-radius:6px;margin-top:8px">Go to Login</a></div>'})</script>
 
 <!-- ══ TOPBAR ══ -->
 <div id="top">
@@ -171,8 +208,13 @@
   <button class="btn active" id="btnDash" onclick="showView('dash')"><i class="fa-solid fa-chart-line"></i> Dashboard</button>
   <button class="btn" id="btnCred" onclick="showView('creds')"><i class="fa-solid fa-key"></i> Credentials <span class="badge" id="credBadge" style="background:var(--orange)">0</span></button>
   <button class="btn" id="btnXpl" onclick="showView('exploits')"><i class="fa-solid fa-triangle-exclamation"></i> Exploits <span class="badge" id="xplBadge" style="background:var(--red)">0</span></button>
+  <button class="btn" id="btnGraph" onclick="showView('graph')"><i class="fa-solid fa-diagram-project"></i> Graph</button>
+  <button class="btn" id="btnMalware" onclick="showView('malware')"><i class="fa-solid fa-bug"></i> Malware <span class="badge" id="malBadge" style="background:#cc44ff">0</span></button>
   <span id="threatBadge" class="threat tl-low">NONE</span>
-  <select id="themeSel" onchange="setTheme(this.value)" style="background:#111830;color:#78849c;border:1px solid #1a2844;padding:3px 6px;border-radius:5px;font-size:10px;cursor:pointer">
+  <select id="sessionSel" onchange="loadSession(this.value)" style="background:#111830;color:var(--text-dim);border:1px solid #1a2844;padding:3px 6px;border-radius:5px;font-size:10px;cursor:pointer;max-width:180px">
+    <option value="">⚡ Live</option>
+  </select>
+  <select id="themeSel" onchange="setTheme(this.value)" style="background:#111830;color:var(--text-dim);border:1px solid #1a2844;padding:3px 6px;border-radius:5px;font-size:10px;cursor:pointer">
     <option value="midnight">🌑 Midnight</option>
     <option value="matrix">🟢 Matrix</option>
     <option value="redteam">🔴 Red Team</option>
@@ -183,7 +225,7 @@
   <div class="sp"></div>
   <span class="stat">Events:<b id="hEvt">0</b></span>
   <span class="stat">IPs:<b id="hIp">0</b></span>
-  <span class="stat"><i class="fa-solid fa-clock" style="color:#3a5070"></i> <b id="hUp">00:00:00</b></span>
+  <span class="stat"><i class="fa-solid fa-clock" style="color:var(--text-dim)"></i> <b id="hUp">00:00:00</b></span>
   <a href="./index.html"><i class="fa-solid fa-arrow-left"></i> WebUI</a>
 </div>
 
@@ -244,10 +286,10 @@
     <button class="btn" onclick="showView('dash')"><i class="fa-solid fa-arrow-left"></i> Back</button>
     <span class="stat"><i class="fa-solid fa-skull-crossbones" style="color:var(--red);margin-right:4px"></i> <b id="xplCount">0</b> exploits, <b id="xplTypes">0</b> types</span>
     <input id="xplSearch" type="text" placeholder="Filter IP / type / payload..." oninput="renderXpl()" style="flex:1;max-width:200px;background:rgba(10,16,32,.8);border:1px solid #1a2844;color:var(--text);padding:4px 8px;border-radius:5px;font-size:11px;outline:none">
-    <select id="xplFilter" onchange="renderXpl()" style="background:#111830;color:#78849c;border:1px solid #1a2844;padding:3px 6px;border-radius:5px;font-size:10px">
+    <select id="xplFilter" onchange="renderXpl()" style="background:#111830;color:var(--text-dim);border:1px solid #1a2844;padding:3px 6px;border-radius:5px;font-size:10px">
       <option value="">All Types</option>
     </select>
-    <select id="xplSort" onchange="renderXpl()" style="background:#111830;color:#78849c;border:1px solid #1a2844;padding:3px 6px;border-radius:5px;font-size:10px">
+    <select id="xplSort" onchange="renderXpl()" style="background:#111830;color:var(--text-dim);border:1px solid #1a2844;padding:3px 6px;border-radius:5px;font-size:10px">
       <option value="newest">Newest first</option>
       <option value="oldest">Oldest first</option>
       <option value="type">By type</option>
@@ -258,6 +300,45 @@
   <div id="xplL"></div>
 </div>
 
+<!-- ══ GRAPH VIEW ══ -->
+<div class="view" id="graphView">
+  <div id="gIpPanel">
+    <div id="gIpHead"><i class="fa-solid fa-crosshairs"></i> Threat Actors</div>
+    <div id="gIpScr"></div>
+  </div>
+  <div id="gCanvasWrap">
+    <canvas id="gCanvas"></canvas>
+    <div id="gKillChain"></div>
+    <div class="gPopup" id="gPopup"></div>
+    <div id="gSettings" style="display:none;position:absolute;top:10px;left:10px;background:rgba(8,16,32,.92);border:1px solid var(--border);border-radius:8px;padding:12px 16px;z-index:20;width:220px;font-size:11px;backdrop-filter:blur(6px)">
+      <div style="display:flex;justify-content:space-between;margin-bottom:10px"><span style="color:var(--accent);font-weight:700;font-size:12px"><i class="fa-solid fa-sliders"></i> Graph Settings</span><span style="cursor:pointer;color:var(--text-dim)" onclick="document.getElementById('gSettings').style.display='none'"><i class="fa-solid fa-xmark"></i></span></div>
+      <div style="margin-bottom:8px"><span style="color:var(--text-dim)">Node Size</span><input type="range" min="0.5" max="2" step="0.1" value="1" oninput="_gCfg.nodeSize=+this.value;renderGraph()" style="width:100%"></div>
+      <div style="margin-bottom:8px"><span style="color:var(--text-dim)">Font Size</span><input type="range" min="0.5" max="2" step="0.1" value="1" oninput="_gCfg.fontSize=+this.value;renderGraph()" style="width:100%"></div>
+      <div style="margin-bottom:8px"><span style="color:var(--text-dim)">Edge Width</span><input type="range" min="0.5" max="3" step="0.1" value="1" oninput="_gCfg.edgeWidth=+this.value;renderGraph()" style="width:100%"></div>
+      <div style="margin-bottom:8px"><span style="color:var(--text-dim)">Zoom</span><input type="range" min="0.3" max="3" step="0.1" value="1" id="gZoomSlider" oninput="_gZoom=+this.value;renderGraph()" style="width:100%"></div>
+      <label style="display:flex;align-items:center;gap:6px;color:var(--text-dim);margin-bottom:4px;cursor:pointer"><input type="checkbox" checked onchange="_gCfg.showParticles=this.checked;renderGraph()"> Particles</label>
+      <label style="display:flex;align-items:center;gap:6px;color:var(--text-dim);margin-bottom:4px;cursor:pointer"><input type="checkbox" checked onchange="_gCfg.showIcons=this.checked;renderGraph()"> Icons (🔑⚠💻)</label>
+      <label style="display:flex;align-items:center;gap:6px;color:var(--text-dim);margin-bottom:4px;cursor:pointer"><input type="checkbox" checked onchange="_gCfg.showGrid=this.checked;renderGraph()"> Grid</label>
+      <label style="display:flex;align-items:center;gap:6px;color:var(--text-dim);cursor:pointer"><input type="checkbox" checked onchange="_gCfg.showLabels=this.checked;renderGraph()"> Edge labels</label>
+      <div style="margin-top:10px"><button class="btn" style="font-size:10px;padding:4px 10px;width:100%" onclick="_gZoom=1;_gPanX=0;_gPanY=0;_gCfg={nodeSize:1,fontSize:1,edgeWidth:1,showParticles:true,showIcons:true,showGrid:true,showLabels:true};document.getElementById('gZoomSlider').value=1;renderGraph()"><i class="fa-solid fa-rotate"></i> Reset</button></div>
+    </div>
+    <button class="btn" style="position:absolute;top:10px;left:10px;z-index:15;padding:4px 10px;font-size:11px" onclick="const s=document.getElementById('gSettings');s.style.display=s.style.display==='none'?'block':'none'"><i class="fa-solid fa-sliders"></i></button>
+    <div id="gStats"></div>
+    <div id="gTimeline"><canvas id="gTimeC"></canvas></div>
+  </div>
+</div>
+
+<!-- MALWARE VIEW -->
+<div class="view" id="malwareView" style="flex-direction:column">
+  <div style="padding:14px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px">
+    <button class="btn" onclick="showView('dash')"><i class="fa-solid fa-arrow-left"></i> Back</button>
+    <span style="font-size:14px;font-weight:700;color:#cc44ff"><i class="fa-solid fa-bug"></i> Malware Captures</span>
+    <span class="stat"><b id="malCount">0</b> files captured</span>
+    <div class="sp"></div>
+  </div>
+  <div id="malList" style="flex:1;overflow-y:auto;padding:10px 16px"></div>
+</div>
+
 <div class="toast" id="toast"></div>
 <div id="detailOverlay">
   <div id="detHead"><span style="font-size:14px;font-weight:700;color:var(--accent)"><i class="fa-solid fa-magnifying-glass"></i> Event Detail</span><span class="close" onclick="closeDet()"><i class="fa-solid fa-xmark"></i></span></div>
@@ -266,30 +347,33 @@
 
 <script>
 const SC={SSH:'#FF3333',FTP:'#FF8800',HTTP:'#00CCFF','HTTP-Alt':'#00CCFF','HTTPS-Alt':'#00CCFF',Telnet:'#FFAA00',SMTP:'#4488FF',MySQL:'#00FF88',SMB:'#CC44FF',POP3:'#8866FF',IMAP:'#8866FF',RDP:'#FF6688',VNC:'#44DDAA',Redis:'#FF4444',MongoDB:'#44BB44',Elastic:'#FFCC00',Docker:'#2496ED'};
-const SEV={high:'#FF3333',critical:'#FF3333',medium:'#FF8800',low:'#FFAA00',info:'#1a3050'};
-const AC={'brute-force':'#FF3333',scan:'#FF8800','exploit':'#FF2222',recon:'#FFAA00',other:'#4a6080'};
-const TM={NONE:{c:'#2a3858',p:5},LOW:{c:'#00FF88',p:15},MEDIUM:{c:'#FFAA00',p:40},HIGH:{c:'#FF8800',p:70},CRITICAL:{c:'#FF3333',p:100}};
+const SEV={high:'#FF3333',critical:'#FF3333',medium:'#FF8800',low:'#FFAA00',info:'var(--text-dim)'};
+const AC={'brute-force':'#FF3333',scan:'#FF8800','exploit':'#FF2222',recon:'#FFAA00',other:'var(--text-dim)'};
+const TM={NONE:{c:'var(--text-dim)',p:5},LOW:{c:'#00FF88',p:15},MEDIUM:{c:'#FFAA00',p:40},HIGH:{c:'#FF8800',p:70},CRITICAL:{c:'#FF3333',p:100}};
 const COMMON=['password','123456','admin','root','test','guest','1234','pass','letmein','toor','qwerty','abc123'];
-let isLive=false,pollId=null,allEv=[],allCr=[],allXp=[],prevT=0,paused=false,ipFilt='',sevF='all',localUp=0,upTick=null,curView='dash';
+let isLive=false,pollId=null,allEv=[],allCr=[],allXp=[],allMal=[],allTopIps=[],prevT=0,paused=false,ipFilt='',sevF='all',localUp=0,upTick=null,curView='dash';
 const _hc={};function _sh(id,h){if(_hc[id]===h)return;_hc[id]=h;document.getElementById(id).innerHTML=h}
 function fN(n){return n>=1e6?(n/1e6).toFixed(1)+'M':n>=1e3?(n/1e3).toFixed(1)+'K':String(n)}
 function fUp(s){const h=Math.floor(s/3600),m=Math.floor(s%3600/60),ss=s%60;return String(h).padStart(2,'0')+':'+String(m).padStart(2,'0')+':'+String(ss).padStart(2,'0')}
 function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML}
 function toast(m){const t=document.getElementById('toast');t.textContent=m;t.style.display='block';setTimeout(()=>t.style.display='none',2500)}
+function cv(name){return getComputedStyle(document.documentElement).getPropertyValue(name).trim()||'#888'}
 
 function showView(v){
   curView=v;
-  document.getElementById('dashView').classList.toggle('on',v==='dash');
-  document.getElementById('credsView').classList.toggle('on',v==='creds');
-  document.getElementById('exploitsView').classList.toggle('on',v==='exploits');
-  document.getElementById('btnDash').classList.toggle('active',v==='dash');
-  document.getElementById('btnCred').classList.toggle('active',v==='creds');
-  document.getElementById('btnXpl').classList.toggle('active',v==='exploits');
-  if(v==='creds')renderCreds();if(v==='exploits')renderXpl();
+  ['dash','creds','exploits','graph','malware'].forEach(k=>{
+    const el=document.getElementById({dash:'dashView',creds:'credsView',exploits:'exploitsView',graph:'graphView',malware:'malwareView'}[k]);
+    if(el)el.classList.toggle('on',v===k);
+  });
+  ['btnDash','btnCred','btnXpl','btnGraph','btnMalware'].forEach((id,i)=>{
+    const vk=['dash','creds','exploits','graph','malware'][i];
+    const b=document.getElementById(id);if(b)b.classList.toggle('active',v===vk);
+  });
+  if(v==='creds')renderCreds();if(v==='exploits')renderXpl();if(v==='graph')renderGraph();if(v==='malware')renderMalware();
 }
 
 const THEMES={
-  midnight:{bg:'#05060a',panel:'#0a0e18',border:'#0f1a2a',accent:'#00ccff',green:'#00ff88',red:'#ff3333',text:'#c8d0dc',dim:'#4a6080',card:'#060a12',top1:'#0c1020',top2:'#080c14'},
+  midnight:{bg:'var(--bg)',panel:'var(--panel)',border:'var(--border)',accent:'#00ccff',green:'#00ff88',red:'#ff3333',text:'var(--text)',dim:'var(--text-dim)',card:'var(--card)',top1:'#0c1020',top2:'var(--topbar2)'},
   matrix:{bg:'#000a00',panel:'#001a00',border:'#003300',accent:'#00ff41',green:'#00ff41',red:'#ff3333',text:'#00dd33',dim:'#006622',card:'#000e00',top1:'#001800',top2:'#001200'},
   redteam:{bg:'#0a0505',panel:'#180a0a',border:'#2a0f0f',accent:'#ff4444',green:'#ff6644',red:'#ff2222',text:'#dcc8c8',dim:'#804a4a',card:'#120606',top1:'#200c0c',top2:'#140808'},
   frost:{bg:'#050a10',panel:'#0a1428',border:'#0f2040',accent:'#66bbff',green:'#44ddaa',red:'#ff5566',text:'#c8dce8',dim:'#4a7090',card:'#060e1a',top1:'#0c1830',top2:'#081420'},
@@ -312,7 +396,10 @@ function toggleLive(){
   if(isLive){isLive=false;clearInterval(pollId);clearInterval(upTick);pollId=upTick=null;
     document.getElementById('btnLive').classList.remove('on');document.getElementById('liveDot').style.display='none';document.getElementById('top').classList.remove('live');
     fetch('/api/honeypot/stop',{method:'POST',credentials:'include'}).catch(()=>{});
-  }else{isLive=true;document.getElementById('btnLive').classList.add('on');document.getElementById('liveDot').style.display='inline';document.getElementById('top').classList.add('live');
+  }else{isLive=true;_sessionMode='live';
+    allEv=[];allCr=[];allXp=[];allMal=[];allTopIps=[];prevT=0;
+    renderFeed();renderCreds();renderXpl();renderMalware();
+    document.getElementById('btnLive').classList.add('on');document.getElementById('liveDot').style.display='inline';document.getElementById('top').classList.add('live');
     fetch('/api/honeypot/start',{method:'POST',credentials:'include'}).then(()=>{setTimeout(()=>{pollId=setInterval(poll,2000);poll()},2500)}).catch(()=>{});
     upTick=setInterval(()=>{localUp++;document.getElementById('hUp').textContent=fUp(localUp)},1000);
   }
@@ -321,6 +408,7 @@ function setF(s,b){sevF=s;document.querySelectorAll('.fb').forEach(x=>x.classLis
 function filterIp(ip){ipFilt=ipFilt===ip?'':ip;document.getElementById('feedSearch').value=ipFilt||'';renderFeed()}
 
 function poll(){
+  if(_sessionMode==='replay')return;
   fetch('/api/honeypot/live',{credentials:'include'}).then(r=>r.json()).then(d=>{
     if(!d||!d.ts)return;
     const tot=d.total_events||0,ips=d.unique_ips||0,eph=d.events_per_hour||0,up=d.uptime||0;
@@ -335,17 +423,17 @@ function poll(){
     // Services
     const ports=(d.port_stats||[]).slice().sort((a,b)=>b.count-a.count);const maxP=ports.length?ports[0].count:1;
     document.getElementById('svcN').textContent=ports.filter(p=>p.count>0).length+'/'+ports.length;
-    let sh='';ports.forEach(p=>{const col=SC[p.service]||'#4a6080';
+    let sh='';ports.forEach(p=>{const col=SC[p.service]||'var(--text-dim)';
       sh+='<div class="sv"><div class="sv-dot'+(p.count>0?' pulse':'')+'" style="background:'+(p.count>0?col:'#1a2030')+'"></div><span class="sv-n" style="color:'+col+'">'+p.service+'</span><span class="sv-p">:'+p.port+'</span><div class="sv-bar"><div class="sv-bar-f" style="width:'+(p.count/maxP*100)+'%;background:'+col+'"></div></div><span class="sv-c">'+fN(p.count)+'</span></div>'});_sh('svcList',sh);
 
     // Top IPs
-    const tips=d.top_ips||[];document.getElementById('ipN').textContent=tips.length;const maxI=tips.length?tips[0].count:1;let ih='';
+    const tips=d.top_ips||[];allTopIps=tips;document.getElementById('ipN').textContent=tips.length;const maxI=tips.length?tips[0].count:1;let ih='';
     tips.slice(0,10).forEach((t,i)=>{const rk=i<3?['<span class="ip-r g">🥇</span>','<span class="ip-r s">🥈</span>','<span class="ip-r b">🥉</span>'][i]:'<span class="ip-r">'+(i+1)+'</span>';
       ih+='<div class="ip'+(ipFilt===t.ip?' sel':'')+'" onclick="filterIp(\''+t.ip+'\')">'+rk+'<span class="ip-a">'+t.ip+'</span><span class="ip-cc">'+(t.country||'')+'</span><span class="ip-cnt">'+fN(t.count)+'</span></div>'});_sh('ipList',ih);
 
     // Attack types
     const atks=d.attack_types||[];const atkT=atks.reduce((s,a)=>s+a.count,0)||1;let ah='';
-    atks.forEach(a=>{const col=AC[a.type]||'#4a6080';const pct=Math.round(a.count/atkT*100);
+    atks.forEach(a=>{const col=AC[a.type]||'var(--text-dim)';const pct=Math.round(a.count/atkT*100);
       ah+='<div class="atk"><span class="atk-n" style="color:'+col+'">'+a.type+'</span><div class="atk-bar"><div class="atk-bar-f" style="width:'+pct+'%;background:'+col+'"></div></div><span class="atk-p">'+pct+'%</span></div>'});_sh('atkList',ah);
 
     // Events
@@ -365,6 +453,13 @@ function poll(){
       if(allXp.length>200)allXp.length=200}
     document.getElementById('xplBadge').textContent=allXp.length;
 
+    // Malware
+    const mal=d.malware_captures||[];
+    if(mal.length){const mk=new Set(allMal.map(m=>m.sha256||m.url));
+      mal.forEach(m=>{const k=m.sha256||m.url;if(!mk.has(k)){allMal.unshift(m);mk.add(k)}});
+      if(allMal.length>50)allMal.length=50}
+    document.getElementById('malBadge').textContent=allMal.length;
+
     // Donut
     drawDonut(atks,atkT);
     // Heatmap
@@ -382,7 +477,7 @@ function renderFeed(){
   if(q)f=f.filter(e=>(e.ip+' '+e.service+' '+(e.data||'')+' '+(e.country||'')).toLowerCase().includes(q));
   if(ipFilt)f=f.filter(e=>e.ip===ipFilt);if(sevF!=='all')f=f.filter(e=>(e.severity||'info')===sevF);
   document.getElementById('feedCnt').textContent=f.length+' events';
-  let h='';f.slice(0,100).forEach((e,i)=>{const ts=(e.ts||'').substring(11,19);const sCol=SC[e.service]||'#4a6080';const sevCol=SEV[e.severity||'info']||'#1a3050';const atkCol=AC[e.attack_type]||'transparent';
+  let h='';f.slice(0,100).forEach((e,i)=>{const ts=(e.ts||'').substring(11,19);const sCol=SC[e.service]||'var(--text-dim)';const sevCol=SEV[e.severity||'info']||'var(--text-dim)';const atkCol=AC[e.attack_type]||'transparent';
     const dataPreview=esc((e.data||'').substring(0,80));
     const atkBadge=e.attack_type?'<span class="ev-atk" style="background:'+atkCol+'">'+e.attack_type.toUpperCase()+'</span>':'';
     h+='<div class="ev sev-'+(e.severity||'info')+'" onclick="showDet('+i+')">';
@@ -395,7 +490,7 @@ function renderFeed(){
     h+='<span class="ev-cc" style="font-size:9px">:</span>';
     h+='</div>'});
   const el=document.getElementById('feed');const top=el.scrollTop<30;
-  const nh=h||'<div style="padding:60px;text-align:center;color:#1a3050;font-size:12px"><i class="fa-solid fa-shield-halved" style="font-size:32px;display:block;margin-bottom:10px;opacity:.3"></i>Waiting for events...</div>';
+  const nh=h||'<div style="padding:60px;text-align:center;color:var(--text-dim);font-size:12px"><i class="fa-solid fa-shield-halved" style="font-size:32px;display:block;margin-bottom:10px;opacity:.3"></i>Waiting for events...</div>';
   if(_hc._feed!==nh){_hc._feed=nh;el.innerHTML=nh}if(top&&!paused)el.scrollTop=0}
 document.getElementById('feed').addEventListener('mouseenter',()=>paused=true);
 document.getElementById('feed').addEventListener('mouseleave',()=>paused=false);
@@ -406,9 +501,9 @@ function renderCreds(){
   let f=allCr;if(q)f=f.filter(c=>((c.username||'')+(c.password||'')+c.ip+(c.service||'')).toLowerCase().includes(q));
   const ui=new Set(f.map(c=>c.ip));document.getElementById('credCount').textContent=f.length;document.getElementById('credIps').textContent=ui.size;
   let h='';f.slice(0,150).forEach(c=>{
-    const sCol=SC[c.service]||'#4a6080';const ts=(c.ts||'').substring(11,19);const cm=COMMON.includes((c.password||'').toLowerCase());
+    const sCol=SC[c.service]||'var(--text-dim)';const ts=(c.ts||'').substring(11,19);const cm=COMMON.includes((c.password||'').toLowerCase());
     h+='<div class="ctr'+(cm?' common':'')+'"><span class="c-ts">'+ts+'</span><span class="c-svc" style="background:'+sCol+'">'+esc(c.service||'')+'</span><span class="c-ip">'+esc(c.ip||'')+'</span><span class="c-cc">'+(c.country||'')+'</span><span class="c-user">'+esc(c.username||'')+'</span><span class="c-pass">'+esc(c.password||'')+(cm?'<i class="fa-solid fa-triangle-exclamation c-warn" title="Common password"></i>':'')+'</span><span class="c-cp" onclick="event.stopPropagation();cpTxt(\''+esc(c.username||'')+':'+esc(c.password||'')+'\')"><i class="fa-solid fa-copy"></i></span></div>'});
-  _sh('credRows',h||'<div style="padding:50px;text-align:center;color:#1a3050;font-size:13px">No credentials captured yet</div>')}
+  _sh('credRows',h||'<div style="padding:50px;text-align:center;color:var(--text-dim);font-size:13px">No credentials captured yet</div>')}
 function _cp(text){
   if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(text).then(()=>toast('Copied!')).catch(()=>_cpFallback(text))}
   else{_cpFallback(text)}
@@ -437,11 +532,24 @@ function renderXpl(){
   if(sortBy==='oldest')f.reverse();
   else if(sortBy==='type')f.sort((a,b)=>(a.attack_type||'').localeCompare(b.attack_type||''));
   else if(sortBy==='ip')f.sort((a,b)=>(a.ip||'').localeCompare(b.ip||''));
-  let h='';f.slice(0,80).forEach(x=>{
-    const at=(x.attack_type||'exploit').replace('exploit:','');const sCol=SC[x.service]||'#4a6080';const isCrit=(x.severity||'')==='critical';
+  // Group similar exploits (same type + normalized payload)
+  const groups={};
+  f.forEach(x=>{
+    const at=(x.attack_type||'').replace('exploit:','');
+    const normPay=(x.data||'').replace(/\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/g,'IP').replace(/\d{10,}/g,'N').substring(0,80);
+    const key=at+'|'+normPay;
+    if(!groups[key])groups[key]={...x,count:0,ips:new Set(),at:at};
+    groups[key].count++;groups[key].ips.add(x.ip);
+    if(x.ts>groups[key].ts)groups[key].ts=x.ts;
+  });
+  const merged=Object.values(groups).sort((a,b)=>b.count-a.count);
+  let h='';merged.slice(0,60).forEach(x=>{
+    const sCol=SC[x.service]||'var(--text-dim)';const isCrit=(x.severity||'')==='critical';
     const pay=esc(x.data||'').replace(/(\$\{[^}]+\})/g,'<span class="hl-exploit">$1</span>').replace(/(https?:\/\/[^\s<]+)/g,'<span class="hl-url">$1</span>').replace(/([?&]\w+=)/g,'<span class="hl-param">$1</span>');
-    h+='<div class="xpl'+(isCrit?' crit':'')+'"><div class="xpl-top"><span class="xpl-badge" style="background:'+(isCrit?'var(--red)':'var(--orange)')+'"><i class="fa-solid fa-triangle-exclamation"></i> '+esc(at)+'</span><span class="ev-svc" style="background:'+sCol+';width:55px">'+esc(x.service||'')+'</span><span class="xpl-ip">'+esc(x.ip||'')+'</span><span class="xpl-cc">'+(x.country||'')+'</span><span class="xpl-ts">'+(x.ts||'').substring(11,19)+'</span></div><div class="xpl-pay" onclick="this.classList.toggle(\'open\')">'+pay+'</div></div>'});
-  _sh('xplL',h||'<div style="padding:50px;text-align:center;color:#1a3050;font-size:13px"><i class="fa-solid fa-shield-halved" style="font-size:28px;display:block;margin-bottom:10px;opacity:.3"></i>No exploit attempts detected</div>')}
+    const cntBadge=x.count>1?'<span style="background:var(--red);color:#fff;padding:1px 6px;border-radius:8px;font-size:10px;font-weight:700;margin-left:6px">×'+x.count+'</span>':'';
+    const ipList=x.count>1?' <span style="color:var(--text-dim);font-size:10px">('+x.ips.size+' IPs)</span>':'';
+    h+='<div class="xpl'+(isCrit?' crit':'')+'"><div class="xpl-top"><span class="xpl-badge" style="background:'+(isCrit?'var(--red)':'var(--orange)')+'"><i class="fa-solid fa-triangle-exclamation"></i> '+esc(x.at)+cntBadge+'</span><span class="ev-svc" style="background:'+sCol+';width:55px">'+esc(x.service||'')+'</span><span class="xpl-ip">'+esc(x.ip||'')+ipList+'</span><span class="xpl-cc">'+(x.country||'')+'</span><span class="xpl-ts">'+(x.ts||'').substring(11,19)+'</span></div><div class="xpl-pay" onclick="this.classList.toggle(\'open\')">'+pay+'</div></div>'});
+  _sh('xplL',h||'<div style="padding:50px;text-align:center;color:var(--text-dim);font-size:13px"><i class="fa-solid fa-shield-halved" style="font-size:28px;display:block;margin-bottom:10px;opacity:.3"></i>No exploit attempts detected</div>')}
 function exportXpl(){_cp(JSON.stringify(allXp,null,2))}
 
 function cpTxt(t){_cp(t)}
@@ -453,7 +561,7 @@ function showDet(idx){
   if(ipFilt)f=f.filter(e=>e.ip===ipFilt);
   if(sevF!=='all')f=f.filter(e=>(e.severity||'info')===sevF);
   const e=f[idx];if(!e)return;
-  const sCol=SC[e.service]||'#4a6080';
+  const sCol=SC[e.service]||'var(--text-dim)';
   const related=allEv.filter(x=>x.ip===e.ip).length;
   const creds=allCr.filter(c=>c.ip===e.ip);
   let h='';
@@ -480,14 +588,14 @@ function closeDet(){document.getElementById('detailOverlay').classList.remove('s
 function drawDonut(atks,total){
   const c=document.getElementById('donutC'),ctx=c.getContext('2d');const cx=95,cy=95,r=85,r2=45;
   ctx.clearRect(0,0,190,190);
-  if(!atks.length){ctx.fillStyle='#0a1020';ctx.beginPath();ctx.arc(cx,cy,r,0,Math.PI*2);ctx.fill();return}
+  if(!atks.length){ctx.fillStyle=cv('--card');ctx.beginPath();ctx.arc(cx,cy,r,0,Math.PI*2);ctx.fill();return}
   let start=-Math.PI/2;
-  atks.forEach(a=>{const slice=a.count/total*Math.PI*2;ctx.fillStyle=AC[a.type]||'#4a6080';
+  atks.forEach(a=>{const slice=a.count/total*Math.PI*2;ctx.fillStyle=AC[a.type]||cv('--text-dim');
     ctx.beginPath();ctx.moveTo(cx,cy);ctx.arc(cx,cy,r,start,start+slice);ctx.closePath();ctx.fill();start+=slice});
-  ctx.fillStyle='#05060a';ctx.beginPath();ctx.arc(cx,cy,r2,0,Math.PI*2);ctx.fill();
-  ctx.fillStyle='var(--text,#c8d0dc)';ctx.font='bold 18px Courier New';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(fN(total),cx,cy);
+  ctx.fillStyle=cv('--bg');ctx.beginPath();ctx.arc(cx,cy,r2,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle='var(--text,var(--text))';ctx.font='bold 18px Courier New';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(fN(total),cx,cy);
   let lg='';atks.forEach(a=>{const pct=Math.round(a.count/total*100);
-    lg+='<div class="dl"><div class="dl-dot" style="background:'+(AC[a.type]||'#4a6080')+'"></div><span style="flex:1;color:#8899aa">'+a.type+'</span><span class="dl-pct">'+pct+'%</span></div>'});
+    lg+='<div class="dl"><div class="dl-dot" style="background:'+(AC[a.type]||'var(--text-dim)')+'"></div><span style="flex:1;color:#8899aa">'+a.type+'</span><span class="dl-pct">'+pct+'%</span></div>'});
   _sh('donutLeg',lg);
 }
 
@@ -498,20 +606,531 @@ function drawHeat(hm){
   const lw=30,rows=Math.min(hm.length,7),cols=24;
   const cellW=(cw-lw)/cols,cellH=Math.min(13,(100)/rows);
   let maxV=1;hm.forEach(r=>r.forEach(v=>{if(v>maxV)maxV=v}));
-  ctx.fillStyle='#030508';ctx.fillRect(0,0,cw,110);
+  ctx.fillStyle=cv('--bg');ctx.fillRect(0,0,cw,110);
   ctx.font='9px Courier New';ctx.textBaseline='middle';
   for(let r=0;r<rows;r++){
-    ctx.fillStyle='#3a5070';ctx.fillText(days[r],0,14+r*cellH+cellH/2);
+    ctx.fillStyle=cv('--text-dim');ctx.fillText(days[r],0,14+r*cellH+cellH/2);
     for(let cl=0;cl<cols;cl++){const v=hm[r]&&hm[r][cl]||0;const t=v/maxV;
       let R,G,B;if(t<0.5){R=0;G=Math.floor(t*2*200);B=0}else if(t<0.8){R=Math.floor((t-0.5)/0.3*255);G=200;B=0}else{R=255;G=Math.floor((1-t)/0.2*200);B=0}
-      ctx.fillStyle=v===0?'#080c14':'rgb('+R+','+G+','+B+')';
+      ctx.fillStyle=v===0?cv('--topbar2'):'rgb('+R+','+G+','+B+')';
       ctx.fillRect(lw+cl*cellW,14+r*cellH,cellW-1,cellH-1)}}
-  ctx.fillStyle='#2a3858';ctx.font='8px Courier New';ctx.textBaseline='top';
+  ctx.fillStyle=cv('--text-dim');ctx.font='8px Courier New';ctx.textBaseline='top';
   for(let i=0;i<24;i+=3)ctx.fillText(String(i).padStart(2,'0'),lw+i*cellW,2);
 }
 
+// ── ATTACK GRAPH ──
+let gSelIp='';
+let _gAnimId=0,_gDashOff=0,_gParticles=[],_gNodePositions=[],_gHoverNode=-1;
+let _gZoom=1,_gPanX=0,_gPanY=0,_gDragging=false,_gDragStart={x:0,y:0,px:0,py:0};
+let _gCfg={nodeSize:1.0,fontSize:1.0,edgeWidth:1.0,showParticles:true,showIcons:true,showGrid:true,showLabels:true};
+
+function renderGraph(){
+  const ipMap={};
+  // Seed from top_ips (complete list from server)
+  allTopIps.forEach(t=>{
+    if(!ipMap[t.ip])ipMap[t.ip]={ip:t.ip,count:t.count,country:t.country||'',services:new Set(),atypes:new Set(),first:t.last_seen||'',last:t.last_seen||''};
+  });
+  // Enrich with event details
+  allEv.forEach(e=>{
+    if(!ipMap[e.ip])ipMap[e.ip]={ip:e.ip,count:0,country:e.country||'',services:new Set(),atypes:new Set(),first:e.ts,last:e.ts};
+    const m=ipMap[e.ip];m.services.add(e.service);m.atypes.add(e.attack_type||'scan');
+    if(!m.first||e.ts<m.first)m.first=e.ts;if(!m.last||e.ts>m.last)m.last=e.ts;
+  });
+  const ips=Object.values(ipMap).sort((a,b)=>b.count-a.count);
+  if(!gSelIp&&ips.length)gSelIp=ips[0].ip;
+  const maxIpC=ips.length?ips[0].count:1;
+
+  let ih='';ips.forEach(ip=>{
+    const hasXpl=allEv.some(e=>e.ip===ip.ip&&(e.attack_type||'').includes('exploit'));
+    const hasBf=allEv.some(e=>e.ip===ip.ip&&(e.attack_type||'').includes('brute'));
+    const sevCol=hasXpl?'var(--red)':hasBf?'var(--orange)':'var(--yellow)';
+    ih+='<div class="gip'+(gSelIp===ip.ip?' sel':'')+'" onclick="gSelIp=\''+ip.ip+'\';renderGraph()">';
+    ih+='<span class="gip-ip">'+esc(ip.ip)+'</span><span class="gip-cc">'+ip.country+'</span>';
+    ih+='<div class="gip-bar"><div class="gip-bar-f" style="width:'+Math.round(ip.count/maxIpC*100)+'%;background:'+sevCol+'"></div></div>';
+    ih+='<span class="gip-cnt">'+ip.count+'</span></div>';
+  });
+  _sh('gIpScr',ih||'<div style="padding:40px;text-align:center;color:var(--text-dim);font-size:13px"><i class="fa-solid fa-diagram-project" style="font-size:28px;display:block;margin-bottom:10px;opacity:.3"></i>No attackers yet</div>');
+
+  if(!gSelIp||!ipMap[gSelIp]){drawEmptyGraph();return}
+  const ip=ipMap[gSelIp];
+  const evs=allEv.filter(e=>e.ip===gSelIp);
+  const creds=allCr.filter(c=>c.ip===gSelIp);
+  const xpls=allXp.filter(x=>x.ip===gSelIp);
+  const cmds=evs.filter(e=>(e.data||'').startsWith('cmd:'));
+  const dur=ip.first&&ip.last?Math.max(1,Math.round((new Date(ip.last)-new Date(ip.first))/1000)):0;
+  const durStr=dur>=3600?Math.floor(dur/3600)+'h'+Math.floor(dur%3600/60)+'m':dur>=60?Math.floor(dur/60)+'m'+dur%60+'s':dur+'s';
+  document.getElementById('gStats').innerHTML=
+    '<span class="gs"><i class="fa-solid fa-bolt"></i> Events: <b>'+ip.count+'</b></span>'+
+    '<span class="gs"><i class="fa-solid fa-server"></i> Services: <b>'+ip.services.size+'</b></span>'+
+    '<span class="gs"><i class="fa-solid fa-clock"></i> Duration: <b>'+durStr+'</b></span>'+
+    '<span class="gs"><i class="fa-solid fa-key"></i> Creds: <b>'+creds.length+'</b></span>'+
+    '<span class="gs"><i class="fa-solid fa-skull"></i> Exploits: <b>'+xpls.length+'</b></span>'+
+    '<span class="gs"><i class="fa-solid fa-terminal"></i> Cmds: <b>'+cmds.length+'</b></span>';
+
+  // Kill chain as horizontal progress bar
+  const hasRecon=evs.some(e=>(e.attack_type||'').includes('scan')||(e.attack_type||'').includes('recon'));
+  const hasAccess=evs.some(e=>(e.attack_type||'').includes('exploit'));
+  const hasCred=evs.some(e=>(e.attack_type||'').includes('brute'));
+  const hasExec=cmds.length>0;
+  const hasExfil=evs.some(e=>(e.data||'').includes('download')||(e.data||'').includes('malware'));
+  const phases=[['🔍','Recon',hasRecon],['🚨','Access',hasAccess],['🔑','Creds',hasCred],['⚡','Exec',hasExec],['📦','Exfil',hasExfil]];
+  let kh='';
+  phases.forEach(([ico,n,on],i)=>{
+    kh+='<div class="kc-step"><div class="kc-dot'+(on?' on':'')+'">'+ico+'</div><div class="kc-lbl'+(on?' on':'')+'">'+n+'</div></div>';
+    if(i<phases.length-1)kh+='<div class="kc-line'+(on&&phases[i+1][2]?' on':'')+'"></div>';
+  });
+  document.getElementById('gKillChain').innerHTML=kh;
+
+  // Build node positions for interaction
+  _gNodePositions=[];
+  cancelAnimationFrame(_gAnimId);
+  _gParticles=[];
+  _drawGraphFrame(ip,evs,creds,xpls,cmds);
+  drawTimeline(evs);
+}
+
+function _drawGraphFrame(ip,evs,creds,xpls,cmds){
+  const c=document.getElementById('gCanvas');const wrap=c.parentElement;
+  const w=wrap.clientWidth;const h=wrap.clientHeight-125;
+  if(c.width!==w)c.width=w;if(c.height!==h)c.height=h;
+  const ctx=c.getContext('2d');
+  const ns=_gCfg.nodeSize,fs=_gCfg.fontSize,ew=_gCfg.edgeWidth;
+
+  // Background
+  const bgGrad=ctx.createRadialGradient(w/2,h/2,0,w/2,h/2,Math.max(w,h)*0.7);
+  bgGrad.addColorStop(0,cv('--card'));bgGrad.addColorStop(1,cv('--bg'));
+  ctx.fillStyle=bgGrad;ctx.fillRect(0,0,w,h);
+
+  // Apply zoom and pan
+  ctx.save();
+  ctx.translate(w/2+_gPanX,h/2+_gPanY);
+  ctx.scale(_gZoom,_gZoom);
+  ctx.translate(-w/2,-h/2);
+
+  // Subtle grid
+  if(_gCfg.showGrid){ctx.strokeStyle=cv('--card');ctx.lineWidth=0.3;ctx.globalAlpha=0.5;
+  for(let x=0;x<w;x+=50){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,h);ctx.stroke()}
+  for(let y=0;y<h;y+=50){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(w,y);ctx.stroke()}}
+  ctx.globalAlpha=1;
+
+  const cx=w/2,cy=h/2;
+  const svcMap={};
+  evs.forEach(e=>{
+    if(!svcMap[e.service])svcMap[e.service]={name:e.service,port:e.port,count:0,atypes:{},hasCred:false,hasXpl:false,cmdCount:0};
+    const s=svcMap[e.service];s.count++;
+    const at=e.attack_type||'scan';s.atypes[at]=(s.atypes[at]||0)+1;
+    if((e.data||'').startsWith('cmd:'))s.cmdCount++;
+  });
+  (creds||[]).forEach(c=>{if(svcMap[c.service])svcMap[c.service].hasCred=true});
+  (xpls||[]).forEach(x=>{if(svcMap[x.service])svcMap[x.service].hasXpl=true});
+  const svcs=Object.values(svcMap).sort((a,b)=>b.count-a.count);
+  const maxC=svcs.length?svcs[0].count:1;
+  const baseRadius=Math.min(w,h)*0.35;
+  const radius=svcs.length>8?baseRadius*1.1:baseRadius;
+
+  _gDashOff+=0.4;
+  _gNodePositions=[{x:cx,y:cy,r:55,type:'center',data:ip}];
+
+  // Spawn particles along edges
+  if(_gParticles.length<svcs.length*3){
+    svcs.forEach((svc,i)=>{
+      const angle=(i/svcs.length)*Math.PI*2-Math.PI/2;
+      for(let p=0;p<3;p++){
+        _gParticles.push({i,t:Math.random(),speed:0.003+Math.random()*0.004,angle});
+      }
+    });
+  }
+
+  // Draw edges
+  svcs.forEach((svc,i)=>{
+    const angle=(i/svcs.length)*Math.PI*2-Math.PI/2;
+    const sx=cx+Math.cos(angle)*radius;
+    const sy=cy+Math.sin(angle)*radius;
+    let domType='scan',domCount=0;
+    Object.entries(svc.atypes).forEach(([t,c])=>{if(c>domCount){domType=t;domCount=c}});
+    const edgeCol=domType.includes('exploit')?'#FF3333':domType.includes('brute')?'#FF8800':domType.includes('recon')?'#FFAA00':'#2a4060';
+    const lw=Math.max(2,Math.min(5,svc.count/maxC*5));
+
+    const grad=ctx.createLinearGradient(cx,cy,sx,sy);
+    const centerCol2=evs.some(e=>(e.attack_type||'').includes('exploit'))?'#FF333366':'#FF880066';
+    grad.addColorStop(0,centerCol2);grad.addColorStop(1,edgeCol+'bb');
+    ctx.beginPath();ctx.moveTo(cx,cy);ctx.lineTo(sx,sy);
+    ctx.strokeStyle=grad;ctx.lineWidth=lw;
+    if(domType.includes('exploit')){ctx.setLineDash([12,6]);ctx.lineDashOffset=-_gDashOff}
+    else if(domType.includes('scan')){ctx.setLineDash([4,8])}
+    else{ctx.setLineDash([])}
+    ctx.globalAlpha=0.6;ctx.stroke();ctx.globalAlpha=1;ctx.setLineDash([]);ctx.lineDashOffset=0;
+
+    // Arrow
+    const aAngle=Math.atan2(sy-cy,sx-cx);
+    const nr=Math.max(30,Math.min(55,30+svc.count/maxC*25))*ns;
+    const ax=sx-Math.cos(aAngle)*(nr+5);
+    const ay=sy-Math.sin(aAngle)*(nr+5);
+    ctx.beginPath();
+    ctx.moveTo(ax,ay);
+    ctx.lineTo(ax-12*Math.cos(aAngle-0.35),ay-12*Math.sin(aAngle-0.35));
+    ctx.lineTo(ax-12*Math.cos(aAngle+0.35),ay-12*Math.sin(aAngle+0.35));
+    ctx.closePath();ctx.fillStyle=edgeCol;ctx.globalAlpha=0.8;ctx.fill();ctx.globalAlpha=1;
+
+    // Count label on edge
+    const mx=(cx+sx)/2+Math.cos(aAngle+Math.PI/2)*16;
+    const my=(cy+sy)/2+Math.sin(aAngle+Math.PI/2)*16;
+    ctx.fillStyle=edgeCol;ctx.font='bold '+Math.round(12*fs)+'px Courier New';ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.shadowColor=edgeCol;ctx.shadowBlur=4;
+    ctx.fillText('×'+svc.count,mx,my);
+    ctx.shadowBlur=0;
+  });
+
+  // Particles flowing along edges
+  _gParticles.forEach(p=>{
+    p.t+=p.speed;if(p.t>1)p.t=0;
+    const svc=svcs[p.i];if(!svc)return;
+    const angle=(p.i/svcs.length)*Math.PI*2-Math.PI/2;
+    const sx=cx+Math.cos(angle)*radius;
+    const sy=cy+Math.sin(angle)*radius;
+    const px=cx+(sx-cx)*p.t;
+    const py=cy+(sy-cy)*p.t;
+    const col=SC[svc.name]||'#4a6080';
+    ctx.beginPath();ctx.arc(px,py,2,0,Math.PI*2);
+    ctx.fillStyle=col;ctx.globalAlpha=0.6+p.t*0.4;ctx.fill();ctx.globalAlpha=1;
+  });
+
+  // Service nodes — BIGGER
+  svcs.forEach((svc,i)=>{
+    const angle=(i/svcs.length)*Math.PI*2-Math.PI/2;
+    const sx=cx+Math.cos(angle)*radius;
+    const sy=cy+Math.sin(angle)*radius;
+    const nr=Math.max(30,Math.min(55,30+svc.count/maxC*25))*ns;
+    const col=SC[svc.name]||'#4a6080';
+    const isHover=_gHoverNode===i+1;
+
+    // Glow
+    ctx.shadowColor=col;ctx.shadowBlur=isHover?30:18;
+    ctx.beginPath();ctx.arc(sx,sy,nr+3,0,Math.PI*2);ctx.strokeStyle=col+'44';ctx.lineWidth=1;ctx.stroke();
+    ctx.shadowBlur=0;
+
+    // Outer ring
+    ctx.beginPath();ctx.arc(sx,sy,nr,0,Math.PI*2);
+    ctx.strokeStyle=col;ctx.lineWidth=isHover?3.5:2.5;ctx.stroke();
+
+    // Inner fill
+    const ng=ctx.createRadialGradient(sx-nr*0.2,sy-nr*0.2,0,sx,sy,nr);
+    ng.addColorStop(0,'#1a2040');ng.addColorStop(1,'#080c18');
+    ctx.beginPath();ctx.arc(sx,sy,nr-1,0,Math.PI*2);ctx.fillStyle=ng;ctx.fill();
+
+    // Service name
+    ctx.fillStyle=col;ctx.font='bold '+Math.round(14*fs)+'px Segoe UI';ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.shadowColor=col;ctx.shadowBlur=6;
+    ctx.fillText(svc.name,sx,sy-10);
+    ctx.shadowBlur=0;
+    // Port
+    ctx.fillStyle='#7a8a9e';ctx.font='12px Courier New';
+    ctx.fillText(':'+svc.port,sx,sy+5);
+    // Count
+    ctx.fillStyle=col;ctx.font='bold '+Math.round(11*fs)+'px Courier New';
+    ctx.fillText(svc.count+' evt',sx,sy+19);
+
+    // Icons for creds/exploits/commands near node
+    let iconY=sy-nr-14;
+    if(svc.hasCred){ctx.font='12px Segoe UI';ctx.fillStyle='#FFAA00';ctx.fillText('🔑',sx-12,iconY);iconY-=14}
+    if(svc.hasXpl){ctx.font='12px Segoe UI';ctx.fillStyle='#FF3333';ctx.fillText('⚠',sx,iconY);iconY-=14}
+    if(svc.cmdCount>0){ctx.font='12px Segoe UI';ctx.fillStyle='#00CCFF';ctx.fillText('💻',sx+12,sy-nr-14)}
+
+    _gNodePositions.push({x:sx,y:sy,r:nr,type:'service',data:svc,index:i});
+  });
+
+  // Center IP node — BIGGER with pulse
+  const hasXpl=evs.some(e=>(e.attack_type||'').includes('exploit'));
+  const hasBf=evs.some(e=>(e.attack_type||'').includes('brute'));
+  const centerCol=hasXpl?'#FF3333':hasBf?'#FF8800':'#FFAA00';
+  const cr=55;
+  const pulse=Math.sin(Date.now()/400)*4;
+
+  // Pulsing glow rings
+  ctx.shadowColor=centerCol;ctx.shadowBlur=30;
+  const og=ctx.createRadialGradient(cx,cy,cr,cx,cy,cr+16+pulse);
+  og.addColorStop(0,centerCol+'44');og.addColorStop(1,'transparent');
+  ctx.beginPath();ctx.arc(cx,cy,cr+16+pulse,0,Math.PI*2);ctx.fillStyle=og;ctx.fill();
+  ctx.shadowBlur=0;
+
+  // Outer ring
+  ctx.beginPath();ctx.arc(cx,cy,cr,0,Math.PI*2);
+  ctx.strokeStyle=centerCol;ctx.lineWidth=3;ctx.stroke();
+
+  // Inner gradient
+  const cg=ctx.createRadialGradient(cx-cr*0.2,cy-cr*0.2,0,cx,cy,cr);
+  cg.addColorStop(0,'#1a1a35');cg.addColorStop(1,'#0a0c1a');
+  ctx.beginPath();ctx.arc(cx,cy,cr-1,0,Math.PI*2);ctx.fillStyle=cg;ctx.fill();
+
+  // IP text
+  ctx.shadowColor=centerCol;ctx.shadowBlur=8;
+  ctx.fillStyle=centerCol;ctx.font='bold '+Math.round(16*fs)+'px Courier New';ctx.textAlign='center';ctx.textBaseline='middle';
+  ctx.fillText(ip.ip,cx,cy-12);
+  ctx.shadowBlur=0;
+  ctx.fillStyle='#8a9ab0';ctx.font='13px Segoe UI';
+  ctx.fillText((ip.country||'??')+'  •  '+ip.count+' events',cx,cy+8);
+  ctx.fillStyle='#5a6a80';ctx.font='11px Courier New';
+  const durSec=ip.first&&ip.last?Math.max(1,Math.round((new Date(ip.last)-new Date(ip.first))/1000)):0;
+  ctx.fillText(durSec>=60?Math.floor(durSec/60)+'m '+durSec%60+'s':durSec+'s',cx,cy+24);
+
+  ctx.restore();
+  if(curView==='graph')_gAnimId=requestAnimationFrame(()=>_drawGraphFrame(ip,evs,creds,xpls,cmds));
+}
+
+// Mouse interaction
+(function(){
+  const c=document.getElementById('gCanvas');
+  c.addEventListener('mousemove',e=>{
+    const rect=c.getBoundingClientRect();
+    const mx=e.clientX-rect.left,my=e.clientY-rect.top;
+    let found=-1;
+    for(let i=_gNodePositions.length-1;i>=0;i--){
+      const n=_gNodePositions[i];
+      const d=Math.sqrt((mx-n.x)**2+(my-n.y)**2);
+      if(d<=n.r){found=i;break}
+    }
+    _gHoverNode=found;
+    c.style.cursor=found>=0?'pointer':'default';
+  });
+  c.addEventListener('click',e=>{
+    if(_gHoverNode<0)return;
+    const n=_gNodePositions[_gHoverNode];
+    const popup=document.getElementById('gPopup');
+    if(n.type==='center'){
+      const ipEvs=allEv.filter(x=>x.ip===gSelIp);
+      const ipCreds=allCr.filter(x=>x.ip===gSelIp);
+      let h='<div class="gPop-head" style="color:var(--accent)"><i class="fa-solid fa-crosshairs"></i> '+esc(gSelIp)+'</div>';
+      h+='<div class="gPop-row"><span class="gPop-lbl">Country</span><span class="gPop-val">'+(n.data.country||'??')+'</span></div>';
+      h+='<div class="gPop-row"><span class="gPop-lbl">Events</span><span class="gPop-val">'+ipEvs.length+'</span></div>';
+      h+='<div class="gPop-row"><span class="gPop-lbl">Services</span><span class="gPop-val">'+n.data.services.size+'</span></div>';
+      if(ipCreds.length){h+='<div class="gPop-row"><span class="gPop-lbl">Credentials</span><span class="gPop-val">'+ipCreds.map(c=>esc(c.username||'')+':'+esc(c.password||'')).join(', ')+'</span></div>'}
+      popup.innerHTML=h;
+    }else{
+      const svc=n.data;
+      const svcEvs=allEv.filter(x=>x.ip===gSelIp&&x.service===svc.name);
+      const svcCreds=allCr.filter(x=>x.ip===gSelIp&&x.service===svc.name);
+      const svcXpls=allXp.filter(x=>x.ip===gSelIp&&x.service===svc.name);
+      const svcCmds=svcEvs.filter(x=>(x.data||'').startsWith('cmd:')).map(x=>x.data.substring(5).trim());
+      const col=SC[svc.name]||'#888';
+      let h='<div class="gPop-head"><span style="background:'+col+';color:#fff;padding:2px 10px;border-radius:4px">'+esc(svc.name)+' :'+svc.port+'</span> <span style="color:var(--text-dim)">'+svc.count+' events</span></div>';
+      if(svcCreds.length)h+='<div class="gPop-row"><span class="gPop-lbl">🔑 Creds</span><span class="gPop-val">'+svcCreds.map(c=>esc(c.username||'')+':'+esc(c.password||'')).slice(0,5).join(', ')+'</span></div>';
+      if(svcXpls.length)h+='<div class="gPop-row"><span class="gPop-lbl">⚠ Exploits</span><span class="gPop-val">'+svcXpls.map(x=>(x.attack_type||'').replace('exploit:','')).filter((v,i,a)=>a.indexOf(v)===i).join(', ')+'</span></div>';
+      if(svcCmds.length)h+='<div class="gPop-row"><span class="gPop-lbl">💻 Commands</span><span class="gPop-val" style="font-size:10px">'+svcCmds.slice(0,8).map(c=>esc(c)).join('<br>')+'</span></div>';
+      const atkTypes=Object.entries(svc.atypes).map(([t,c])=>t+': '+c).join(', ');
+      h+='<div class="gPop-row"><span class="gPop-lbl">Attacks</span><span class="gPop-val">'+atkTypes+'</span></div>';
+      popup.innerHTML=h;
+    }
+    const rect=c.getBoundingClientRect();
+    const px=Math.min(n.x+n.r+10,c.width-280);
+    const py=Math.max(10,n.y-60);
+    popup.style.left=px+'px';popup.style.top=py+'px';
+    popup.classList.add('show');
+  });
+  document.addEventListener('click',e=>{
+    if(!e.target.closest('#gCanvas')&&!e.target.closest('.gPopup')&&!e.target.closest('#gSettings'))document.getElementById('gPopup').classList.remove('show');
+  });
+  c.addEventListener('mousedown',e=>{
+    if(_gHoverNode>=0)return;
+    _gDragging=true;_gDragStart={x:e.clientX,y:e.clientY,px:_gPanX,py:_gPanY};
+    c.style.cursor='grabbing';
+  });
+  c.addEventListener('mousemove',e=>{
+    if(_gDragging){
+      _gPanX=_gDragStart.px+(e.clientX-_gDragStart.x);
+      _gPanY=_gDragStart.py+(e.clientY-_gDragStart.y);
+    }
+  });
+  window.addEventListener('mouseup',()=>{_gDragging=false});
+  c.addEventListener('wheel',e=>{
+    e.preventDefault();
+    const delta=e.deltaY>0?0.9:1.1;
+    _gZoom=Math.max(0.3,Math.min(3,_gZoom*delta));
+    const sl=document.getElementById('gZoomSlider');if(sl)sl.value=_gZoom;
+  },{passive:false});
+})();
+
+function drawEmptyGraph(){
+  cancelAnimationFrame(_gAnimId);_gNodePositions=[];
+  const c=document.getElementById('gCanvas');const w=c.parentElement.clientWidth;const h=c.parentElement.clientHeight-125;
+  c.width=w;c.height=h;const ctx=c.getContext('2d');
+  const bg=ctx.createRadialGradient(w/2,h/2,0,w/2,h/2,Math.max(w,h)/2);
+  bg.addColorStop(0,cv('--card'));bg.addColorStop(1,cv('--bg'));
+  ctx.fillStyle=bg;ctx.fillRect(0,0,w,h);
+  ctx.fillStyle=cv('--text-dim');ctx.font='16px Segoe UI';ctx.textAlign='center';ctx.textBaseline='middle';
+  ctx.fillText('Select an attacker IP to visualize the attack graph',w/2,h/2);
+  ctx.font='12px Segoe UI';ctx.fillStyle=cv('--text-dim');
+  ctx.fillText('Events will appear as connections are captured',w/2,h/2+28);
+}
+
+function drawTimeline(evs){
+  const c=document.getElementById('gTimeC');const w=c.parentElement.clientWidth;
+  c.width=w;c.height=60;const ctx=c.getContext('2d');
+  const tg=ctx.createLinearGradient(0,0,0,60);tg.addColorStop(0,cv('--bg'));tg.addColorStop(1,'#050810');
+  ctx.fillStyle=tg;ctx.fillRect(0,0,w,60);
+  if(!evs.length)return;
+  const times=evs.map(e=>new Date(e.ts).getTime()).filter(t=>!isNaN(t));
+  if(!times.length)return;
+  const minT=Math.min(...times),maxT=Math.max(...times);
+  const range=maxT-minT||1;
+
+  // Axis
+  ctx.strokeStyle='#1a2844';ctx.lineWidth=1;
+  ctx.beginPath();ctx.moveTo(30,32);ctx.lineTo(w-30,32);ctx.stroke();
+
+  // Vertical bars per event (height=severity)
+  evs.forEach(e=>{
+    const t=new Date(e.ts).getTime();if(isNaN(t))return;
+    const x=30+(t-minT)/range*(w-60);
+    const col=SC[e.service]||'#4a6080';
+    const sev=((e.severity||'')==='critical'||(e.severity||'')==='high')?16:((e.severity||'')==='medium')?10:6;
+    ctx.strokeStyle=col;ctx.lineWidth=2;ctx.globalAlpha=0.7;
+    ctx.beginPath();ctx.moveTo(x,32);ctx.lineTo(x,32-sev);ctx.stroke();
+    ctx.globalAlpha=1;
+  });
+
+  // Time labels
+  ctx.fillStyle=cv('--text-dim');ctx.font='10px Courier New';ctx.textBaseline='top';ctx.textAlign='left';
+  const first=evs[evs.length-1],last=evs[0];
+  if(first)ctx.fillText((first.ts||'').substring(11,19),30,40);
+  if(last){ctx.textAlign='right';ctx.fillText((last.ts||'').substring(11,19),w-30,40)}
+  ctx.textAlign='center';ctx.font='9px Segoe UI';ctx.fillText('TIMELINE',w/2,48);
+}
+
+function renderMalware(){
+  document.getElementById('malCount').textContent=allMal.length;
+  if(!allMal.length){_sh('malList','<div style="padding:60px 20px;text-align:center;color:var(--text-dim)"><i class="fa-solid fa-bug" style="font-size:32px;display:block;margin-bottom:12px;opacity:.3"></i><div style="font-size:13px">No malware captured yet</div><div style="font-size:11px;color:var(--border);margin-top:6px">Malware is captured when attackers run wget/curl in fake shells</div></div>');return}
+  let h='';allMal.forEach(m=>{
+    const sz=m.size>=1048576?(m.size/1048576).toFixed(1)+' MB':m.size>=1024?(m.size/1024).toFixed(1)+' KB':m.size+' B';
+    h+='<div style="background:var(--panel);border:1px solid rgba(204,68,255,.15);border-radius:8px;padding:16px;margin-bottom:12px">';
+    h+='<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">';
+    h+='<i class="fa-solid fa-virus" style="color:#cc44ff;font-size:18px"></i>';
+    h+='<span style="font-size:14px;font-weight:700;color:#cc44ff">'+esc(m.filename||'unknown')+'</span>';
+    h+='<span style="font-size:12px;color:var(--text-dim)">'+sz+'</span>';
+    h+='<span style="font-size:11px;color:var(--text-dim);margin-left:auto">'+(m.ts||'').substring(11,19)+'</span>';
+    h+='</div>';
+    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px">';
+    h+='<div><span style="color:var(--text-dim)">Source IP:</span> <span style="color:var(--accent);font-family:Courier New,monospace">'+esc(m.ip||'')+'</span></div>';
+    h+='<div><span style="color:var(--text-dim)">SHA256:</span> <span style="color:var(--text);font-family:Courier New,monospace;font-size:10px;cursor:pointer" onclick="cpTxt(\''+esc(m.sha256||'')+'\')">'+esc((m.sha256||'').substring(0,32))+'... <i class="fa-solid fa-copy" style="font-size:9px"></i></span></div>';
+    h+='</div>';
+    h+='<div style="margin-top:10px;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:10px 12px;font-family:Courier New,monospace;font-size:11px;color:#6a7a94;word-break:break-all">'+esc(m.url||'')+'</div>';
+    h+='</div>'});
+  _sh('malList',h);
+}
+
+// ── Sessions ──
+let _sessionMode='live';
+
+function loadSessionList(){
+  fetch('/api/honeypot/sessions',{credentials:'include'}).then(r=>r.json()).then(sessions=>{
+    const sel=document.getElementById('sessionSel');
+    const cur=sel.value;
+    let opts='<option value="">⚡ Live</option>';
+    if(sessions&&sessions.length>1)opts+='<option value="__all__">📊 All sessions combined</option>';
+    (sessions||[]).forEach(s=>{
+      const label=s.name.replace('honeypot_','').replace('.json','').replace(/_/g,' ');
+      const evts=s.events?(' — '+fN(s.events)+' evt'):'';
+      const start=s.start?s.start.slice(5,16).replace('T',' '):'';
+      opts+='<option value="'+s.path+'">📁 '+start+evts+'</option>';
+    });
+    sel.innerHTML=opts;
+    sel.value=cur;
+  }).catch(()=>{});
+}
+
+function _renderSession(d){
+  allEv=d.recent_events||[];
+  allCr=d.credentials||[];
+  allXp=d.exploit_attempts||[];
+  allMal=d.malware_captures||[];
+  allTopIps=(d.ip_counts?Object.entries(d.ip_counts).map(([ip,count])=>({ip,count,country:''})).sort((a,b)=>b.count-a.count):[]);
+  document.getElementById('kEvt').textContent=fN(d.total_events||allEv.length);
+  document.getElementById('kIp').textContent=Object.keys(d.ip_counts||{}).length;
+  const elapsed=d.session_start&&d.session_end&&d.session_start!=='merged'?Math.max(1,(new Date(d.session_end)-new Date(d.session_start))/3600000):1;
+  document.getElementById('kEph').textContent=Math.round((d.total_events||allEv.length)/elapsed);
+  document.getElementById('threatBadge').textContent='REPLAY';
+  document.getElementById('threatBadge').className='threat tl-medium';
+  document.getElementById('kThreat').textContent='REPLAY';
+  const ports=d.port_counts||{};
+  const portArr=Object.entries(ports).map(([p,c])=>({port:parseInt(p),service:SERVICES_MAP[p]||'Port '+p,count:c})).sort((a,b)=>b.count-a.count);
+  const atks=d.attack_types||{};
+  const atkArr=Object.entries(atks).map(([t,c])=>({type:t,count:c})).sort((a,b)=>b.count-a.count);
+  renderFeed();renderCreds();renderXpl();renderMalware();
+  if(d.heatmap)drawHeat(d.heatmap);
+  const atkT=atkArr.reduce((s,a)=>s+a.count,0)||1;
+  drawDonut(atkArr,atkT);
+  const maxP=portArr.length?portArr[0].count:1;
+  let sh='';portArr.forEach(p=>{
+    const col=SC[p.service]||'var(--text-dim)';
+    sh+='<div class="sv"><div class="sv-dot" style="background:'+col+'"></div><span class="sv-n" style="color:'+col+'">'+p.service+'</span><span class="sv-p">:'+p.port+'</span><div class="sv-bar"><div class="sv-bar-f" style="width:'+(p.count/maxP*100)+'%;background:'+col+'"></div></div><span class="sv-c">'+fN(p.count)+'</span></div>';
+  });_sh('svcList',sh);
+  const maxI=allTopIps.length?allTopIps[0].count:1;
+  let ih='';allTopIps.slice(0,15).forEach((t,i)=>{
+    const rk=i<3?['<span class="ip-r g">🥇</span>','<span class="ip-r s">🥈</span>','<span class="ip-r b">🥉</span>'][i]:'<span class="ip-r">'+(i+1)+'</span>';
+    ih+='<div class="ip">'+rk+'<span class="ip-a">'+t.ip+'</span><span class="ip-cnt">'+fN(t.count)+'</span></div>';
+  });_sh('ipList',ih);
+  document.getElementById('credBadge').textContent=allCr.length;
+  document.getElementById('xplBadge').textContent=allXp.length;
+  document.getElementById('malBadge').textContent=allMal.length;
+}
+
+function _loadAllSessions(){
+  _sessionMode='replay';
+  document.getElementById('btnLive').style.display='none';
+  fetch('/api/honeypot/sessions',{credentials:'include'}).then(r=>r.json()).then(sessions=>{
+    const paths=(sessions||[]).map(s=>s.path);
+    if(!paths.length){toast('No sessions');return;}
+    return Promise.all(paths.map(p=>fetch('/api/honeypot/session?path='+encodeURIComponent(p),{credentials:'include'}).then(r=>r.ok?r.json():null).catch(()=>null)));
+  }).then(all=>{
+    const merged={total_events:0,ip_counts:{},port_counts:{},attack_types:{},credentials:[],exploit_attempts:[],malware_captures:[],recent_events:[],heatmap:[]};
+    (all||[]).filter(Boolean).forEach(d=>{
+      merged.total_events+=(d.total_events||0);
+      Object.entries(d.ip_counts||{}).forEach(([k,v])=>merged.ip_counts[k]=(merged.ip_counts[k]||0)+v);
+      Object.entries(d.port_counts||{}).forEach(([k,v])=>merged.port_counts[k]=(merged.port_counts[k]||0)+v);
+      Object.entries(d.attack_types||{}).forEach(([k,v])=>merged.attack_types[k]=(merged.attack_types[k]||0)+v);
+      merged.credentials.push(...(d.credentials||[]));
+      merged.exploit_attempts.push(...(d.exploit_attempts||[]));
+      merged.malware_captures.push(...(d.malware_captures||[]));
+      merged.recent_events.push(...(d.recent_events||[]));
+      if(d.heatmap)merged.heatmap.push(...d.heatmap);
+    });
+    merged.recent_events.sort((a,b)=>(b.ts||'').localeCompare(a.ts||''));
+    merged.recent_events=merged.recent_events.slice(0,200);
+    merged.session_start='merged';merged.session_end='merged';
+    _renderSession(merged);
+    toast('All sessions merged: '+fN(merged.total_events)+' events');
+  }).catch(e=>toast('Merge error: '+e.message));
+}
+
+function loadSession(path){
+  if(!path){
+    _sessionMode='live';
+    allEv=[];allCr=[];allXp=[];allMal=[];allTopIps=[];prevT=0;
+    renderFeed();renderCreds();renderXpl();renderMalware();
+    document.getElementById('btnLive').style.display='';
+    return;
+  }
+  if(path==='__all__'){
+    _loadAllSessions();
+    return;
+  }
+  _sessionMode='replay';
+  document.getElementById('btnLive').style.display='none';
+  fetch('/api/honeypot/session?path='+encodeURIComponent(path),{credentials:'include'}).then(r=>{
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    return r.json();
+  }).then(d=>{
+    if(!d||d.error){toast(d&&d.error||'Empty session');return;}
+    _renderSession(d);
+    toast('Session loaded: '+fN(d.total_events||0)+' events');
+  }).catch(e=>toast('Session error: '+e.message));
+}
+
+const SERVICES_MAP={21:'FTP',22:'SSH',23:'Telnet',25:'SMTP',80:'HTTP',110:'POP3',143:'IMAP',445:'SMB',3306:'MySQL',3389:'RDP',5900:'VNC',6379:'Redis',8080:'HTTP-Alt',8443:'HTTPS-Alt',9200:'Elastic',2375:'Docker',27017:'MongoDB'};
+
 // Init
+loadSessionList();
 poll();setInterval(poll,2000);
+setInterval(loadSessionList,30000);
 </script>
 </body>
 </html>

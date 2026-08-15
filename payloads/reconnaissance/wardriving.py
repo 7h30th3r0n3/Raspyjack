@@ -2527,38 +2527,40 @@ def main():
             # OK = toggle scan
             if btn == "OK":
                 if not _scanning.is_set():
-                    # Mode selection screen
                     _scan_active_mode = False
-                    img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-                    d = ScaledDraw(img)
-                    d.text((64, 20), "SCAN MODE", font=font, fill="#FFAA00", anchor="mm")
-                    d.text((64, 45), "> PASSIVE (stealth)", font=font_sm, fill="#00E676", anchor="mm")
-                    d.text((64, 60), "  ACTIVE (probe)", font=font_sm, fill="#888", anchor="mm")
-                    d.text((64, 85), "UP/DOWN select, OK confirm", font=font_sm, fill="#555", anchor="mm")
-                    lcd.LCD_ShowImage(img, 0, 0)
-
                     _mode_sel = 0
-                    while True:
-                        mb = get_button(PINS, GPIO)
-                        if mb == "KEY3":
-                            break
-                        if mb in ("UP", "DOWN"):
-                            _mode_sel = 1 - _mode_sel
-                            img = Image.new("RGB", (WIDTH, HEIGHT), "black")
-                            d = ScaledDraw(img)
-                            d.text((64, 20), "SCAN MODE", font=font, fill="#FFAA00", anchor="mm")
-                            if _mode_sel == 0:
-                                d.text((64, 45), "> PASSIVE (stealth)", font=font_sm, fill="#00E676", anchor="mm")
-                                d.text((64, 60), "  ACTIVE (probe)", font=font_sm, fill="#888", anchor="mm")
-                            else:
-                                d.text((64, 45), "  PASSIVE (stealth)", font=font_sm, fill="#888", anchor="mm")
-                                d.text((64, 60), "> ACTIVE (probe)", font=font_sm, fill="#00E676", anchor="mm")
-                            d.text((64, 85), "UP/DOWN select, OK confirm", font=font_sm, fill="#555", anchor="mm")
-                            lcd.LCD_ShowImage(img, 0, 0)
-                        if mb == "OK":
-                            _scan_active_mode = (_mode_sel == 1)
-                            break
-                        time.sleep(0.05)
+                    mb = "OK"
+
+                    if not AUTO_MODE:
+                        img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+                        d = ScaledDraw(img)
+                        d.text((64, 20), "SCAN MODE", font=font, fill="#FFAA00", anchor="mm")
+                        d.text((64, 45), "> PASSIVE (stealth)", font=font_sm, fill="#00E676", anchor="mm")
+                        d.text((64, 60), "  ACTIVE (probe)", font=font_sm, fill="#888", anchor="mm")
+                        d.text((64, 85), "UP/DOWN select, OK confirm", font=font_sm, fill="#555", anchor="mm")
+                        lcd.LCD_ShowImage(img, 0, 0)
+
+                        while True:
+                            mb = get_button(PINS, GPIO)
+                            if mb == "KEY3":
+                                break
+                            if mb in ("UP", "DOWN"):
+                                _mode_sel = 1 - _mode_sel
+                                img = Image.new("RGB", (WIDTH, HEIGHT), "black")
+                                d = ScaledDraw(img)
+                                d.text((64, 20), "SCAN MODE", font=font, fill="#FFAA00", anchor="mm")
+                                if _mode_sel == 0:
+                                    d.text((64, 45), "> PASSIVE (stealth)", font=font_sm, fill="#00E676", anchor="mm")
+                                    d.text((64, 60), "  ACTIVE (probe)", font=font_sm, fill="#888", anchor="mm")
+                                else:
+                                    d.text((64, 45), "  PASSIVE (stealth)", font=font_sm, fill="#888", anchor="mm")
+                                    d.text((64, 60), "> ACTIVE (probe)", font=font_sm, fill="#00E676", anchor="mm")
+                                d.text((64, 85), "UP/DOWN select, OK confirm", font=font_sm, fill="#555", anchor="mm")
+                                lcd.LCD_ShowImage(img, 0, 0)
+                            if mb == "OK":
+                                _scan_active_mode = (_mode_sel == 1)
+                                break
+                            time.sleep(0.05)
 
                     if mb == "KEY3":
                         continue

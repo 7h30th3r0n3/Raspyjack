@@ -640,11 +640,12 @@ def getButton():
             lock_device("Auto lock")
             continue
         # WebUI payload requests: launch immediately while waiting for input
-        if not screen_lock.is_set():
-            requested = _check_payload_request()
-            if requested:
-                exec_payload(requested)
-                continue
+        requested = _check_payload_request()
+        if requested:
+            if screen_lock.is_set():
+                screen_lock.clear()
+            exec_payload(requested)
+            continue
         # 1) virtual buttons from Web UI
         v = rj_input.get_virtual_button()
         if v:
@@ -1491,6 +1492,11 @@ def _play_lock_screensaver_until_input(reason: str = "Locked") -> str:
     _show_lock_wake_screen(reason)
     static_deadline = time.monotonic() + LOCK_SCREEN_STATIC_SECONDS
     while time.monotonic() < static_deadline:
+        requested = _check_payload_request()
+        if requested:
+            lock_runtime["locked"] = False
+            exec_payload(requested)
+            return ""
         button = _get_fresh_lock_button()
         if button:
             return button
@@ -1499,6 +1505,11 @@ def _play_lock_screensaver_until_input(reason: str = "Locked") -> str:
     frames, durations = _load_lock_screensaver_frames()
     if not frames:
         while True:
+            requested = _check_payload_request()
+            if requested:
+                lock_runtime["locked"] = False
+                exec_payload(requested)
+                return ""
             button = _get_fresh_lock_button()
             if button:
                 return button
@@ -1511,6 +1522,12 @@ def _play_lock_screensaver_until_input(reason: str = "Locked") -> str:
             _draw_lock_screensaver_frame(frames[frame_index])
             frame_deadline = time.monotonic() + durations[frame_index]
             while time.monotonic() < frame_deadline:
+                requested = _check_payload_request()
+                if requested:
+                    lock_runtime["locked"] = False
+                    lock_runtime["showing_screensaver"] = False
+                    exec_payload(requested)
+                    return ""
                 button = _get_fresh_lock_button()
                 if button:
                     return button
@@ -1889,7 +1906,9 @@ def lock_device(reason: str = "Locked") -> bool:
         _wait_for_button_release()
         while True:
             if not show_keypad:
-                _play_lock_screensaver_until_input(reason)
+                result = _play_lock_screensaver_until_input(reason)
+                if result == "":
+                    return True
                 _wait_for_button_release()
                 show_keypad = True
                 continue

@@ -112,6 +112,7 @@
   </style>
 </head>
 <body>
+<script>fetch("/api/auth/me",{credentials:"include"}).then(r=>{if(!r.ok)throw 0;return r.json()}).then(d=>{if(!d||!d.authenticated)throw 0}).catch(()=>{document.body.innerHTML='<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;gap:16px;font-family:sans-serif;background:#05060a"><i class="fa-solid fa-lock" style="font-size:48px;color:#f43f5e"></i><h2 style="color:#e2e8f0">Authentication Required</h2><p style="color:#94a3b8">Please log in through the WebUI first.</p><a href="./index.html" style="color:#00ccff;text-decoration:none;padding:8px 20px;border:1px solid #00ccff;border-radius:6px;margin-top:8px">Go to Login</a></div>'})</script>
 
 <div id="topbar">
   <h1><i class="fa-solid fa-satellite-dish"></i> Wardriving</h1>
@@ -737,10 +738,12 @@ async function loadSessionList() {
       const s = await r.json();
       const sel = document.getElementById('sessionSel');
       sel.innerHTML = '';
-      s.forEach((x,i) => {
+      const live = document.createElement('option');
+      live.value = '__live__'; live.textContent = '⚡ Live';
+      sel.appendChild(live);
+      s.forEach(x => {
         const o = document.createElement('option');
         o.value = x.path; o.textContent = x.name;
-        if (i===0) o.selected = true;
         sel.appendChild(o);
       });
     }
@@ -750,6 +753,11 @@ async function loadSessionList() {
 async function loadSession() {
   const path = document.getElementById('sessionSel').value;
   if (!path) return;
+  if (path === '__live__') {
+    if (!liveInterval) toggleLive();
+    return;
+  }
+  if (liveInterval) toggleLive();
   try {
     const r = await fetch(`/api/wardriving/session?path=${encodeURIComponent(path)}`, {credentials:'include'});
     if (r.ok) {
@@ -785,6 +793,10 @@ async function toggleLive() {
       const r = await fetch('/api/wardriving/start', {method:'POST', credentials:'include'});
       if (!r.ok) { alert('Failed to start wardriving'); return; }
     } catch(e) { alert('Connection error'); return; }
+    allNets = [];
+    markersLayer.clearLayers();
+    routeLayer.clearLayers();
+    renderAll();
     btn.classList.add('active'); dot.style.display='inline';
     setTimeout(loadLive, 3000);
     liveInterval = setInterval(loadLive, 2000);
@@ -792,7 +804,6 @@ async function toggleLive() {
 }
 
 loadSessionList();
-setTimeout(loadSession, 500);
 updateHiddenCount();
 </script>
 </body>
