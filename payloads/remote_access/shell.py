@@ -55,6 +55,11 @@ def main():
             return 1
         img = Image.new("RGB", (W, H), "black")
 
+    # Load CardputerZero sym keymap
+    kmap = "/usr/share/keymaps/tca8418_keypad_m5stack_keymap.map"
+    if os.path.isfile(kmap):
+        subprocess.run(["sudo", "loadkeys", kmap], capture_output=True)
+
     d = ScaledDraw(img)
     d.text((W // 2, 40), "Starting Shell...", font=font, fill="#00FF00", anchor="mm")
     d.text((W // 2, 60), "KEY3 to exit", font=scaled_font(8), fill="#888888", anchor="mm")
