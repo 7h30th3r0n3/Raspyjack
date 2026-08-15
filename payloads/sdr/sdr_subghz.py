@@ -89,13 +89,18 @@ PROTO_CATEGORIES = {
     "other": {"icon": "?", "color": (150, 150, 150), "keywords": []},
 }
 
+ISM_LIVE_PATH = "/dev/shm/rj_ism_live.json"
+ISM_CONTROL_PATH = "/dev/shm/rj_ism_control.json"
+
 _running = True
 _capturing = False
 _rtl_proc = None
 _signals = []
 _signal_lock = threading.Lock()
 _proto_counts = defaultdict(int)
+_devices = {}
 _last_btn = 0
+_start_time = 0
 
 
 def _sig(s, f):
@@ -165,9 +170,13 @@ def _capture_thread(freq):
 
     filt = PROTO_FILTERS[_proto_filter_idx]
     cmd = [
-        "rtl_433", "-f", str(freq), "-g", "49.6",
+        "rtl_433", "-f", str(freq), "-g", "20",
+        "-s", "1024000",
         "-F", "json", "-F", "log",
         "-M", "time:unix", "-M", "protocol", "-M", "level",
+        "-X", "n=CAME-12,m=OOK_PWM,s=320,l=640,r=15000,g=800,t=0,y=1650,bits>=12",
+        "-X", "n=Princeton,m=OOK_PWM,s=320,l=640,r=15000,g=800,t=0,y=1650,bits>=24",
+        "-X", "n=NiceFLO,m=OOK_PWM,s=700,l=1400,r=15000,g=1600,t=0,y=0,bits>=12",
     ] + filt["args"]
 
     try:
@@ -207,6 +216,7 @@ def _capture_thread(freq):
                     if len(_signals) > 500:
                         _signals.pop(0)
                     _proto_counts[data.get("model", "Unknown")] += 1
+                    _update_device(data)
             except json.JSONDecodeError:
                 pass
 
@@ -262,6 +272,97 @@ def _export_log():
     with open(path, "w") as f:
         json.dump(data, f, indent=2)
     return path, len(data)
+
+
+_HISTORY_METRICS = ("temperature_C", "humidity", "pressure_kPa",
+                    "wind_avg_km_h", "rain_mm", "pressure_PSI",
+                    "temperature_F", "uv", "light_lux", "power_W",
+                    "energy_kWh", "moisture", "rssi")
+_MAX_HISTORY = 60
+
+
+def _update_device(data):
+    model = data.get("model", "Unknown")
+    dev_id = data.get("id", "")
+    channel = data.get("channel", "")
+    key = f"{model}_{dev_id}_{channel}"
+    now = time.time()
+    entry = _devices.get(key, {"first_seen": now, "count": 0, "history": {}})
+    rssi = data.get("rssi", data.get("snr", None))
+    entry.update({
+        "model": model, "id": dev_id, "channel": channel,
+        "category": data.get("_category", "other"),
+        "last_seen": now, "count": entry["count"] + 1,
+        "rssi": rssi,
+    })
+    for k in ("temperature_C", "humidity", "battery_ok", "pressure_kPa",
+              "wind_avg_km_h", "rain_mm", "code", "button", "status",
+              "pressure_PSI", "temperature_F", "uv", "light_lux",
+              "moisture", "depth_cm", "power_W", "energy_kWh"):
+        if k in data:
+            entry[k] = data[k]
+    hist = entry.get("history", {})
+    for k in _HISTORY_METRICS:
+        val = data.get(k) if k != "rssi" else rssi
+        if val is not None and isinstance(val, (int, float)):
+            pts = hist.get(k, [])
+            pts.append([round(now, 1), round(val, 2)])
+            if len(pts) > _MAX_HISTORY:
+                pts = pts[-_MAX_HISTORY:]
+            hist[k] = pts
+    entry["history"] = hist
+    _devices[key] = entry
+
+
+def _write_live_json():
+    while _running:
+        try:
+            with _signal_lock:
+                recent = [s for s in _signals[-50:]]
+                dev_list = sorted(_devices.values(), key=lambda d: d.get("last_seen", 0), reverse=True)
+            filt = PROTO_FILTERS[_proto_filter_idx]
+            cmd_parts = ["rtl_433", "-f", str(BANDS[_current_band]["freq"]),
+                         "-g", "49.6", "-F", "json", "-M", "time:unix",
+                         "-M", "protocol", "-M", "level"] + filt["args"]
+            payload = {
+                "ts": time.time(),
+                "running": _capturing,
+                "total_signals": len(_signals),
+                "unique_devices": len(_devices),
+                "uptime": int(time.time() - _start_time) if _start_time else 0,
+                "proto_counts": dict(_proto_counts),
+                "devices": dev_list[:100],
+                "recent": recent,
+                "band": BANDS[_current_band]["name"] if _capturing else "",
+                "freq": BANDS[_current_band]["freq"] if _capturing else 0,
+                "filter": PROTO_FILTERS[_proto_filter_idx]["name"],
+                "command": " ".join(cmd_parts) if _capturing else "",
+                "bands": [{"name": b["name"], "freq": b["freq"], "desc": b["desc"]} for b in BANDS],
+                "filters": [f["name"] for f in PROTO_FILTERS],
+                "filter_idx": _proto_filter_idx,
+            }
+            tmp = ISM_LIVE_PATH + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(payload, f)
+            os.replace(tmp, ISM_LIVE_PATH)
+        except Exception:
+            pass
+        time.sleep(1.5)
+
+
+def _check_web_control():
+    try:
+        if os.path.exists(ISM_CONTROL_PATH):
+            with open(ISM_CONTROL_PATH) as f:
+                ctrl = json.load(f)
+            os.unlink(ISM_CONTROL_PATH)
+            return ctrl
+    except Exception:
+        pass
+    return None
+
+
+_current_band = 0
 
 
 # ---------------------------------------------------------------------------
@@ -504,6 +605,8 @@ def _select_filter():
 
 
 def main():
+    auto_mode = "--auto" in sys.argv
+
     # Check rtl_433
     r = subprocess.run(["which", "rtl_433"], capture_output=True)
     if r.returncode != 0:
@@ -516,14 +619,22 @@ def main():
         GPIO.cleanup()
         return 1
 
-    # Pre-launch config screen
-    filt_idx, band_idx = _select_filter()
-    if filt_idx < 0:
-        GPIO.cleanup()
-        return 0
+    if auto_mode:
+        filt_idx, band_idx = 0, 0
+        _start_capture(BANDS[0]["freq"])
+    else:
+        filt_idx, band_idx = _select_filter()
+        if filt_idx < 0:
+            GPIO.cleanup()
+            return 0
 
+    global _current_band, _start_time, _proto_filter_idx
+    _current_band = band_idx
     view_idx = 0
     scroll = 0
+    _start_time = time.time()
+
+    threading.Thread(target=_write_live_json, daemon=True).start()
 
     try:
         while _running:
@@ -535,6 +646,25 @@ def main():
                 _draw_log(scroll)
             elif view == "stats":
                 _draw_stats(band_idx)
+
+            web_ctrl = _check_web_control()
+            if web_ctrl:
+                action = web_ctrl.get("action", "")
+                if action == "start" and not _capturing:
+                    _start_capture(BANDS[band_idx]["freq"])
+                elif action == "stop" and _capturing:
+                    _stop_capture()
+                elif action == "set_band":
+                    bi = web_ctrl.get("value", 0)
+                    if 0 <= bi < len(BANDS):
+                        band_idx = bi
+                        _current_band = bi
+                        if _capturing:
+                            _start_capture(BANDS[band_idx]["freq"])
+                elif action == "set_filter":
+                    fi = web_ctrl.get("value", 0)
+                    if 0 <= fi < len(PROTO_FILTERS):
+                        _proto_filter_idx = fi
 
             btn = _btn()
 
@@ -558,19 +688,19 @@ def main():
                 time.sleep(DEBOUNCE)
             elif btn == "RIGHT":
                 band_idx = (band_idx + 1) % len(BANDS)
+                _current_band = band_idx
                 if _capturing:
                     _start_capture(BANDS[band_idx]["freq"])
                 scroll = 0
                 time.sleep(DEBOUNCE)
             elif btn == "LEFT":
                 band_idx = (band_idx - 1) % len(BANDS)
+                _current_band = band_idx
                 if _capturing:
                     _start_capture(BANDS[band_idx]["freq"])
                 scroll = 0
                 time.sleep(DEBOUNCE)
             elif btn == "KEY2" and view == "live" and not _capturing:
-                # Cycle protocol filter
-                global _proto_filter_idx
                 _proto_filter_idx = (_proto_filter_idx + 1) % len(PROTO_FILTERS)
                 time.sleep(DEBOUNCE)
             elif btn == "KEY2":
@@ -599,6 +729,10 @@ def main():
 
     finally:
         _stop_capture()
+        try:
+            os.unlink(ISM_LIVE_PATH)
+        except OSError:
+            pass
         LCD.LCD_Clear()
         GPIO.cleanup()
 

@@ -37,6 +37,7 @@ import secrets
 import shutil
 import socket
 import subprocess
+import sys
 import threading
 import time
 from http import HTTPStatus
@@ -62,6 +63,288 @@ SESSION_TTL_SECONDS = int(os.environ.get("RJ_WEB_SESSION_TTL", str(8 * 60 * 60))
 WS_TICKET_TTL_SECONDS = int(os.environ.get("RJ_WEB_WS_TICKET_TTL", "120"))
 TAILSCALE_KEY_PATH = ROOT_DIR / ".tailscale_auth_key"
 TAILSCALE_STATUS_PATH = Path("/dev/shm/rj_tailscale_status.json")
+
+
+# ---------------------------------------------------------------------------
+# ISM Manager — runs rtl_433 as a background subprocess
+# ---------------------------------------------------------------------------
+
+_ISM_BANDS = [
+    {"name": "433 MHz", "freq": 433920000, "desc": "EU ISM / Remotes"},
+    {"name": "315 MHz", "freq": 315000000, "desc": "US Remotes / TPMS"},
+    {"name": "868 MHz", "freq": 868000000, "desc": "EU ISM / LoRa"},
+    {"name": "345 MHz", "freq": 345000000, "desc": "Honeywell Security"},
+    {"name": "915 MHz", "freq": 915000000, "desc": "US ISM"},
+]
+_ISM_LIVE = Path("/dev/shm/rj_ism_live.json")
+_ISM_HISTORY_MAX = 60
+_ISM_HISTORY_METRICS = (
+    "temperature_C", "humidity", "pressure_kPa", "wind_avg_km_h",
+    "rain_mm", "pressure_PSI", "temperature_F", "uv", "light_lux",
+    "power_W", "energy_kWh", "moisture",
+)
+
+_ISM_CAT_KEYWORDS = {
+    "remote": ["remote", "came", "nice", "gate", "garage", "button", "keyfob"],
+    "weather": ["weather", "temp", "humid", "rain", "wind", "baro", "thermo"],
+    "sensor": ["sensor", "motion", "door", "window", "alarm", "smoke", "pir"],
+    "tpms": ["tpms", "tire", "pressure"],
+    "car": ["car", "auto", "key", "fob", "vehicle"],
+}
+
+
+def _ism_empty_state():
+    return {"ts": 0, "running": False, "total_signals": 0,
+            "unique_devices": 0, "devices": [], "recent": [],
+            "band": "", "command": "", "bands": _ISM_BANDS,
+            "proto_counts": {}}
+
+
+def _ism_categorize(model):
+    text = model.lower()
+    for cat, kws in _ISM_CAT_KEYWORDS.items():
+        for kw in kws:
+            if kw in text:
+                return cat
+    return "other"
+
+
+class _ISMManager:
+    def __init__(self):
+        self._proc = None
+        self._thread = None
+        self._writer_thread = None
+        self._lock = threading.Lock()
+        self._signals = []
+        self._devices = {}
+        self._proto_counts = {}
+        self._band_idx = 0
+        self._start_time = 0
+        self._running = False
+        self._cmd = ""
+
+    def start(self, band_idx=0):
+        self.stop()
+        if band_idx < 0 or band_idx >= len(_ISM_BANDS):
+            band_idx = 0
+        self._band_idx = band_idx
+        freq = _ISM_BANDS[band_idx]["freq"]
+        self._signals = []
+        self._devices = {}
+        self._proto_counts = {}
+        self._start_time = time.time()
+        self._running = True
+
+        cmd = [
+            "rtl_433", "-f", str(freq), "-g", "20",
+            "-s", "1024000",
+            "-F", "json",
+            "-M", "time:unix", "-M", "protocol", "-M", "level",
+            "-X", "n=CAME-12,m=OOK_PWM,s=320,l=640,r=15000,g=800,t=0,y=1650,bits>=12",
+            "-X", "n=Princeton,m=OOK_PWM,s=320,l=640,r=15000,g=800,t=0,y=1650,bits>=24",
+            "-X", "n=NiceFLO,m=OOK_PWM,s=700,l=1400,r=15000,g=1600,t=0,y=0,bits>=12",
+        ]
+        self._cmd = " ".join(cmd)
+
+        try:
+            subprocess.run(["pkill", "-9", "rtl_433"], capture_output=True)
+            time.sleep(0.3)
+            self._proc = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                text=True, bufsize=1,
+            )
+            self._thread = threading.Thread(target=self._reader, daemon=True)
+            self._thread.start()
+            self._writer_thread = threading.Thread(target=self._writer, daemon=True)
+            self._writer_thread.start()
+        except Exception:
+            self._running = False
+
+    def stop(self):
+        self._running = False
+        if self._proc:
+            try:
+                self._proc.terminate()
+                self._proc.wait(timeout=3)
+            except Exception:
+                try:
+                    self._proc.kill()
+                except Exception:
+                    pass
+            self._proc = None
+        subprocess.run(["pkill", "-9", "rtl_433"], capture_output=True)
+        try:
+            _ISM_LIVE.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    def _reader(self):
+        last_sig = {}
+        try:
+            for line in self._proc.stdout:
+                if not self._running:
+                    break
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                model = data.get("model", "Unknown")
+                sig_key = f"{model}_{data.get('id', '')}_{data.get('channel', '')}"
+                sig_vals = {k: v for k, v in data.items()
+                            if k not in ("time", "rssi", "snr", "noise", "mic")}
+                sig_hash = str(sig_vals)
+                now = time.time()
+                if sig_key in last_sig:
+                    lh, lt = last_sig[sig_key]
+                    if sig_hash == lh and (now - lt) < 2.0:
+                        continue
+                last_sig[sig_key] = (sig_hash, now)
+
+                from datetime import datetime as _dt
+                data["_time_local"] = _dt.now().strftime("%H:%M:%S")
+                cat = _ism_categorize(model)
+                data["_category"] = cat
+
+                with self._lock:
+                    self._signals.append(data)
+                    if len(self._signals) > 500:
+                        self._signals.pop(0)
+                    self._proto_counts[model] = self._proto_counts.get(model, 0) + 1
+                    self._update_device(data, now)
+        except Exception:
+            pass
+
+    def _update_device(self, data, now):
+        model = data.get("model", "Unknown")
+        dev_id = data.get("id", "")
+        channel = data.get("channel", "")
+        key = f"{model}_{dev_id}_{channel}"
+        entry = self._devices.get(key, {"first_seen": now, "count": 0, "history": {}})
+        rssi = data.get("rssi", data.get("snr", None))
+        entry.update({
+            "model": model, "id": dev_id, "channel": channel,
+            "category": data.get("_category", "other"),
+            "last_seen": now, "count": entry["count"] + 1,
+            "rssi": rssi,
+        })
+        for k in ("temperature_C", "humidity", "battery_ok", "pressure_kPa",
+                   "wind_avg_km_h", "rain_mm", "code", "button", "status",
+                   "pressure_PSI", "temperature_F", "uv", "light_lux",
+                   "moisture", "depth_cm", "power_W", "energy_kWh"):
+            if k in data:
+                entry[k] = data[k]
+        hist = entry.get("history", {})
+        for k in _ISM_HISTORY_METRICS:
+            val = data.get(k) if k != "rssi" else rssi
+            if val is not None and isinstance(val, (int, float)):
+                pts = hist.get(k, [])
+                pts.append([round(now, 1), round(val, 2)])
+                if len(pts) > _ISM_HISTORY_MAX:
+                    pts = pts[-_ISM_HISTORY_MAX:]
+                hist[k] = pts
+        entry["history"] = hist
+        self._devices[key] = entry
+
+    def _writer(self):
+        while self._running:
+            try:
+                with self._lock:
+                    recent = list(self._signals[-50:])
+                    dev_list = sorted(self._devices.values(),
+                                      key=lambda d: d.get("last_seen", 0), reverse=True)
+                payload = {
+                    "ts": time.time(),
+                    "running": self._running,
+                    "total_signals": len(self._signals),
+                    "unique_devices": len(self._devices),
+                    "uptime": int(time.time() - self._start_time),
+                    "proto_counts": dict(self._proto_counts),
+                    "devices": dev_list[:100],
+                    "recent": recent,
+                    "band": _ISM_BANDS[self._band_idx]["name"],
+                    "freq": _ISM_BANDS[self._band_idx]["freq"],
+                    "command": self._cmd,
+                    "bands": _ISM_BANDS,
+                }
+                tmp = str(_ISM_LIVE) + ".tmp"
+                with open(tmp, "w") as f:
+                    json.dump(payload, f)
+                os.replace(tmp, str(_ISM_LIVE))
+            except Exception:
+                pass
+            time.sleep(1.5)
+
+
+_ism_manager = _ISMManager()
+
+
+# ---------------------------------------------------------------------------
+# Generic payload process manager — direct subprocess, no LCD payload dance
+# ---------------------------------------------------------------------------
+
+class _PayloadRunner:
+    """Manages a payload Python script as a direct subprocess."""
+
+    def __init__(self, name: str, script_path: str, live_path: str, kill_cmd: str | None = None):
+        self._name = name
+        self._script = script_path
+        self._live = Path(live_path)
+        self._kill_cmd = kill_cmd
+        self._proc = None
+        self._lock = threading.Lock()
+
+    @property
+    def running(self) -> bool:
+        return self._proc is not None and self._proc.poll() is None
+
+    def start(self, extra_args: list[str] | None = None):
+        self.stop()
+        cmd = [sys.executable, self._script, "--headless"]
+        if extra_args:
+            cmd.extend(extra_args)
+        try:
+            self._proc = subprocess.Popen(
+                cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+        except Exception:
+            self._proc = None
+
+    def stop(self):
+        with self._lock:
+            if self._proc:
+                try:
+                    self._proc.terminate()
+                    self._proc.wait(timeout=5)
+                except Exception:
+                    try:
+                        self._proc.kill()
+                    except Exception:
+                        pass
+                self._proc = None
+            if self._kill_cmd:
+                subprocess.run(["pkill", "-9", "-f", self._kill_cmd],
+                               capture_output=True)
+            if str(self._live):
+                try:
+                    self._live.unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+
+def _kill_payload(script_name: str) -> None:
+    subprocess.run(["pkill", "-f", script_name], capture_output=True)
+    time.sleep(0.3)
+    subprocess.run(["pkill", "-9", "-f", script_name], capture_output=True)
+
+
+_honeypot_runner = _PayloadRunner(
+    "Honeypot", str(PAYLOADS_DIR / "reconnaissance" / "honeypot_siem.py"),
+    "/dev/shm/rj_honeypot_live.json", "honeypot_siem.py",
+)
 
 
 def _load_shared_token() -> str | None:
@@ -901,6 +1184,7 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
             or parsed.path.startswith("/api/wardriving/")
             or parsed.path.startswith("/api/adsb/")
             or parsed.path.startswith("/api/sdr/")
+            or parsed.path.startswith("/api/ism/")
             or parsed.path.startswith("/api/honeypot/")
         ):
             query = parse_qs(parsed.query or "")
@@ -970,8 +1254,18 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
                 self._handle_sdr_audio()
                 return
 
+            if parsed.path == "/api/ism/live":
+                self._handle_ism_live()
+                return
+
             if parsed.path == "/api/honeypot/live":
                 self._handle_honeypot_live()
+                return
+            if parsed.path == "/api/honeypot/sessions":
+                self._handle_honeypot_sessions()
+                return
+            if parsed.path == "/api/honeypot/session":
+                self._handle_honeypot_session(query)
                 return
 
             if parsed.path == "/api/system/status":
@@ -1073,6 +1367,27 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
                 _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
                 return
             self._handle_sdr_control()
+            return
+        if parsed.path == "/api/ism/start":
+            query = parse_qs(parsed.query or "")
+            if not _auth_ok(self, query):
+                _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
+                return
+            self._handle_ism_start()
+            return
+        if parsed.path == "/api/ism/stop":
+            query = parse_qs(parsed.query or "")
+            if not _auth_ok(self, query):
+                _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
+                return
+            self._handle_ism_stop()
+            return
+        if parsed.path == "/api/ism/control":
+            query = parse_qs(parsed.query or "")
+            if not _auth_ok(self, query):
+                _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
+                return
+            self._handle_ism_control()
             return
         if parsed.path == "/api/honeypot/start":
             query = parse_qs(parsed.query or "")
@@ -1593,9 +1908,21 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
         _json_response(self, result)
 
     def _handle_wardriving_live(self) -> None:
-        """Serve the live wardriving CSV."""
-        path = "/root/Raspyjack/loot/wardriving/wardriving_live.csv"
-        if os.path.isfile(path):
+        """Serve the most recent wardriving session CSV."""
+        sessions_dir = "/root/Raspyjack/loot/wardriving/sessions"
+        path = None
+        if os.path.isdir(sessions_dir):
+            csvs = sorted(
+                [f for f in os.listdir(sessions_dir) if f.endswith("_wigle.csv")],
+                reverse=True,
+            )
+            if csvs:
+                path = os.path.join(sessions_dir, csvs[0])
+        if not path:
+            legacy = "/root/Raspyjack/loot/wardriving/wardriving_live.csv"
+            if os.path.isfile(legacy):
+                path = legacy
+        if path and os.path.isfile(path):
             self.send_response(200)
             self.send_header("Content-Type", "text/csv")
             self.end_headers()
@@ -1636,7 +1963,6 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
             self.end_headers()
 
     def _handle_wardriving_start(self) -> None:
-        """Start wardriving payload via the payload request mechanism."""
         try:
             if PAYLOAD_STATE_PATH.exists():
                 raw = PAYLOAD_STATE_PATH.read_text(encoding="utf-8")
@@ -1655,22 +1981,8 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
             _json_response(self, {"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
 
     def _handle_wardriving_stop(self) -> None:
-        """Stop the currently running payload by sending KEY3 via rj_input socket."""
-        try:
-            sock_path = "/dev/shm/rj_input.sock"
-            if not os.path.exists(sock_path):
-                _json_response(self, {"ok": False, "error": "input socket not found"})
-                return
-            s = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
-            try:
-                s.sendto(json.dumps({"button": "KEY3", "state": "press"}).encode(), sock_path)
-                time.sleep(0.15)
-                s.sendto(json.dumps({"button": "KEY3", "state": "release"}).encode(), sock_path)
-            finally:
-                s.close()
-            _json_response(self, {"ok": True, "status": "stopping"})
-        except Exception as exc:
-            _json_response(self, {"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+        _kill_payload("wardriving.py")
+        _json_response(self, {"ok": True, "status": "stopped"})
 
     # ------------------------------------------------------------------
     # ADS-B
@@ -1742,21 +2054,12 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
             _json_response(self, {"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
 
     def _handle_adsb_stop(self) -> None:
+        _kill_payload("sdr_adsb.py")
         try:
-            sock_path = "/dev/shm/rj_input.sock"
-            if not os.path.exists(sock_path):
-                _json_response(self, {"ok": False, "error": "input socket not found"})
-                return
-            s = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
-            try:
-                s.sendto(json.dumps({"button": "KEY3", "state": "press"}).encode(), sock_path)
-                time.sleep(0.15)
-                s.sendto(json.dumps({"button": "KEY3", "state": "release"}).encode(), sock_path)
-            finally:
-                s.close()
-            _json_response(self, {"ok": True, "status": "stopping"})
-        except Exception as exc:
-            _json_response(self, {"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            Path("/dev/shm/rj_adsb_live.json").unlink(missing_ok=True)
+        except Exception:
+            pass
+        _json_response(self, {"ok": True, "status": "stopped"})
 
     # ------------------------------------------------------------------
     # SDR
@@ -1859,24 +2162,15 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
             _json_response(self, {"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
 
     def _handle_sdr_stop(self) -> None:
+        _kill_payload("sdr_suite.py")
         try:
-            sock_path = "/dev/shm/rj_input.sock"
-            if not os.path.exists(sock_path):
-                _json_response(self, {"ok": False, "error": "input socket not found"})
-                return
-            s = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
-            try:
-                s.sendto(json.dumps({"button": "KEY3", "state": "press"}).encode(), sock_path)
-                time.sleep(0.15)
-                s.sendto(json.dumps({"button": "KEY3", "state": "release"}).encode(), sock_path)
-            finally:
-                s.close()
-            _json_response(self, {"ok": True, "status": "stopping"})
-        except Exception as exc:
-            _json_response(self, {"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            Path("/dev/shm/rj_sdr_live.json").unlink(missing_ok=True)
+        except Exception:
+            pass
+        _json_response(self, {"ok": True, "status": "stopped"})
 
     _SDR_CONTROL_PATH = "/dev/shm/rj_sdr_control.json"
-    _SDR_VALID_RATES = {1024000, 2048000, 2400000, 3200000}
+    _SDR_VALID_RATES = {250000, 1024000, 2048000, 2400000, 2880000, 3200000}
 
     def _handle_sdr_control(self) -> None:
         body = _read_json(self)
@@ -1925,6 +2219,51 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
             _json_response(self, {"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
 
     # ------------------------------------------------------------------
+    # ISM (Sub-GHz / rtl_433) — lightweight background runner
+    # ------------------------------------------------------------------
+
+    _ISM_LIVE_PATH = Path("/dev/shm/rj_ism_live.json")
+
+    def _handle_ism_live(self) -> None:
+        if self._ISM_LIVE_PATH.exists():
+            try:
+                raw = self._ISM_LIVE_PATH.read_text(encoding="utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(raw.encode())
+            except Exception:
+                _json_response(self, _ism_empty_state())
+        else:
+            _json_response(self, _ism_empty_state())
+
+    def _handle_ism_start(self) -> None:
+        body = _read_json(self) or {}
+        band_idx = int(body.get("band", 0))
+        _ism_manager.start(band_idx)
+        _json_response(self, {"ok": True, "status": "running"})
+
+    def _handle_ism_stop(self) -> None:
+        _ism_manager.stop()
+        _json_response(self, {"ok": True, "status": "stopped"})
+
+    def _handle_ism_control(self) -> None:
+        body = _read_json(self)
+        if body is None:
+            _json_response(self, {"error": "invalid json"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        action = str(body.get("action", "")).strip()
+        if action == "set_band":
+            _ism_manager.stop()
+            _ism_manager.start(int(body.get("value", 0)))
+            _json_response(self, {"ok": True})
+        elif action == "stop":
+            _ism_manager.stop()
+            _json_response(self, {"ok": True})
+        else:
+            _json_response(self, {"error": f"unknown action: {action}"}, status=HTTPStatus.BAD_REQUEST)
+
+    # ------------------------------------------------------------------
     # Honeypot
     # ------------------------------------------------------------------
 
@@ -1942,40 +2281,56 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
         else:
             _json_response(self, {"ts": 0, "running": False, "total_events": 0, "unique_ips": 0, "events_per_hour": 0, "uptime": 0, "top_ips": [], "port_stats": [], "recent_events": [], "heatmap": []})
 
+    def _handle_honeypot_sessions(self) -> None:
+        sessions_dir = "/root/Raspyjack/loot/honeypot/sessions"
+        result = []
+        if os.path.isdir(sessions_dir):
+            for f in sorted(os.listdir(sessions_dir), reverse=True):
+                if f.endswith(".json"):
+                    fp = os.path.join(sessions_dir, f)
+                    try:
+                        sz = os.path.getsize(fp)
+                        with open(fp, encoding="utf-8") as fh:
+                            d = json.load(fh)
+                        result.append({
+                            "name": f, "path": fp, "size": sz,
+                            "start": d.get("session_start", ""),
+                            "end": d.get("session_end", ""),
+                            "events": d.get("total_events", 0),
+                        })
+                    except Exception:
+                        result.append({"name": f, "path": fp, "size": sz})
+        _json_response(self, result)
+
+    def _handle_honeypot_session(self, query: dict) -> None:
+        path = (query.get("path") or [""])[0] if isinstance(query.get("path"), list) else str(query.get("path", ""))
+        allowed = "/root/Raspyjack/loot/honeypot/"
+        if not path.startswith(allowed) or ".." in path:
+            _json_response(self, {"error": "invalid path"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        if os.path.isfile(path):
+            try:
+                raw = Path(path).read_text(encoding="utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(raw.encode())
+            except Exception:
+                _json_response(self, {"error": "read error"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+        else:
+            self.send_response(404)
+            self.end_headers()
+
     def _handle_honeypot_start(self) -> None:
-        try:
-            if PAYLOAD_STATE_PATH.exists():
-                raw = PAYLOAD_STATE_PATH.read_text(encoding="utf-8")
-                pdata = json.loads(raw) if raw else {}
-                if pdata.get("running"):
-                    _json_response(self, {"ok": True, "status": "already_running", "path": pdata.get("path")})
-                    return
-            request_path = Path("/dev/shm/rj_payload_request.json")
-            request_path.write_text(json.dumps({
-                "action": "start",
-                "path": "reconnaissance/honeypot_siem.py",
-                "args": ["--auto"],
-            }))
-            _json_response(self, {"ok": True, "status": "starting"})
-        except Exception as exc:
-            _json_response(self, {"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+        if _honeypot_runner.running:
+            _json_response(self, {"ok": True, "status": "already_running"})
+            return
+        _honeypot_runner.start()
+        _json_response(self, {"ok": True, "status": "starting"})
 
     def _handle_honeypot_stop(self) -> None:
-        try:
-            sock_path = "/dev/shm/rj_input.sock"
-            if not os.path.exists(sock_path):
-                _json_response(self, {"ok": False, "error": "input socket not found"})
-                return
-            s = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
-            try:
-                s.sendto(json.dumps({"button": "KEY3", "state": "press"}).encode(), sock_path)
-                time.sleep(0.15)
-                s.sendto(json.dumps({"button": "KEY3", "state": "release"}).encode(), sock_path)
-            finally:
-                s.close()
-            _json_response(self, {"ok": True, "status": "stopping"})
-        except Exception as exc:
-            _json_response(self, {"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+        _honeypot_runner.stop()
+        _json_response(self, {"ok": True, "status": "stopped"})
 
     def _handle_system_status(self) -> None:
         try:
