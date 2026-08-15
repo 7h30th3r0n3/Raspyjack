@@ -34,8 +34,8 @@
     .main-tab{flex:1;padding:7px 0;text-align:center;font-size:10px;color:#3a5070;cursor:pointer;border-bottom:2px solid transparent;transition:all .15s;display:flex;align-items:center;justify-content:center;gap:5px}
     .main-tab:hover{color:#ccc;background:rgba(0,204,255,.02)}
     .main-tab.on{color:var(--accent);border-bottom-color:var(--accent);background:rgba(0,204,255,.04)}
-    .main-pane{display:none;flex:1;min-height:0;position:relative}
-    .main-pane.on{display:flex}
+    .main-pane{flex:1;min-height:0;position:absolute;top:0;left:0;right:0;bottom:0;visibility:hidden;pointer-events:none;display:flex}
+    .main-pane.on{visibility:visible;pointer-events:auto;position:relative}
 
     /* Globe */
     #globePane{align-items:center;justify-content:center;background:radial-gradient(ellipse at center,#080c18 0%,#030508 70%);overflow:hidden}
@@ -152,6 +152,7 @@
   <div class="main-tab" onclick="showMain('sky')"><i class="fa-solid fa-compass"></i> Skyplot</div>
   <div class="main-tab" onclick="showMain('cards')"><i class="fa-solid fa-id-card"></i> Satellites</div>
   <div class="main-tab" onclick="showMain('stats')"><i class="fa-solid fa-chart-bar"></i> Statistics</div>
+  <div class="main-tab" onclick="showMain('horizon')"><i class="fa-solid fa-eye"></i> Sky View</div>
 </div>
 
 <div class="main-pane on" id="globePane">
@@ -191,6 +192,17 @@
   <div id="cardsGrid"></div>
 </div>
 <div class="main-pane" id="statsPane"></div>
+<div class="main-pane" id="horizonPane" style="flex-direction:column">
+  <div style="background:#070a12;padding:4px 10px;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--border);flex-shrink:0">
+    <span style="font-size:8px;color:#3a5070">Center:</span>
+    <span class="cf on" data-h="0" onclick="setHorizonCenter(0)">N</span>
+    <span class="cf" data-h="90" onclick="setHorizonCenter(90)">E</span>
+    <span class="cf" data-h="180" onclick="setHorizonCenter(180)">S</span>
+    <span class="cf" data-h="270" onclick="setHorizonCenter(270)">W</span>
+    <span style="font-size:8px;color:#3a5070;margin-left:auto" id="hCenterLabel">Facing North</span>
+  </div>
+  <canvas id="horizonCanvas" style="flex:1;width:100%;cursor:grab"></canvas>
+</div>
 
 <script src="./vendor/leaflet/leaflet.js"></script>
 <script>
@@ -238,11 +250,12 @@ let posHistory=[];
 // ═════════════════════════════════════════════════════════════════════
 function showMain(t){
   curTab=t;
-  const tabs=['globe','map','sky','cards','stats'];
+  const tabs=['globe','map','sky','cards','stats','horizon'];
   document.querySelectorAll('.main-tab').forEach((b,i)=>b.classList.toggle('on',tabs[i]===t));
   document.querySelectorAll('.main-pane').forEach(p=>p.classList.toggle('on',p.id===t+'Pane'));
   if(t==='map'){if(!leafletMap)initMap();else leafletMap.invalidateSize()}
-  if(t==='globe')resizeGlobe();
+  if(t==='globe'){_globeCache=null;_globeCacheRot={lon:NaN,lat:NaN};requestAnimationFrame(()=>resizeGlobe())}
+  if(t==='horizon')resizeHorizon();
   renderTab();
 }
 
@@ -322,7 +335,7 @@ function proj3d(lat,lon,rScale){
 function _renderGlobeTexture(){
   const w=gc.width,h=gc.height;
   const cx=w/2,cy=h/2,R=Math.floor(gRadius*gZoom);
-  if(!_earthTex)return null;
+  if(!_earthTex||R<5)return null;
 
   const off=document.createElement('canvas');
   off.width=w;off.height=h;
@@ -336,36 +349,29 @@ function _renderGlobeTexture(){
   const lonOff=gRot.lon*Math.PI/180;
   const R2=R*R;
 
-  for(let py=cy-R;py<=cy+R;py++){
+  for(let py=Math.max(0,cy-R|0);py<=Math.min(h-1,cy+R|0);py++){
     const dy=cy-py;
-    const dy2=dy*dy;
-    const rowMaxX=Math.sqrt(R2-dy2);
-    for(let px=cx-rowMaxX;px<=cx+rowMaxX;px++){
+    const rowMaxX=Math.sqrt(Math.max(0,R2-dy*dy));
+    for(let px=Math.max(0,cx-rowMaxX|0);px<=Math.min(w-1,cx+rowMaxX|0);px++){
       const dx=px-cx;
-      const rr=dx*dx+dy2;
-      if(rr>R2)continue;
-
       const xn=dx/R,yn=dy/R;
-      const zn=Math.sqrt(Math.max(0,1-xn*xn-yn*yn));
+      const r2=xn*xn+yn*yn;
+      if(r2>1)continue;
+      const zn=Math.sqrt(1-r2);
 
-      // Inverse rotate by lat tilt
       const y2=yn*cosR+zn*sinR;
       const z2=-yn*sinR+zn*cosR;
-
-      const lat=Math.asin(Math.max(-1,Math.min(1,y2)));
+      const lat=Math.asin(y2>1?1:y2<-1?-1:y2);
       const lon=Math.atan2(xn,z2)+lonOff;
 
-      // Sample texture (equirectangular)
-      let u=((lon/(Math.PI*2))+0.5)%1;if(u<0)u+=1;
+      let u=lon/(Math.PI*2)+0.5;u=u-Math.floor(u);
       const v=0.5-lat/Math.PI;
       const tx=Math.floor(u*tw)%tw;
       const ty=Math.max(0,Math.min(th-1,Math.floor(v*th)));
       const ti=(ty*tw+tx)*4;
-
-      // Slight shading: darken edges for 3D feel
       const shade=0.35+0.65*zn;
 
-      const pi=((py|0)*w+(px|0))*4;
+      const pi=(py*w+px)*4;
       d[pi]=td[ti]*shade|0;
       d[pi+1]=td[ti+1]*shade|0;
       d[pi+2]=td[ti+2]*shade|0;
@@ -374,15 +380,13 @@ function _renderGlobeTexture(){
   }
   ox.putImageData(img,0,0);
 
-  // Atmosphere glow on top
-  ox.save();
-  ox.globalCompositeOperation='screen';
+  // Atmosphere glow
+  ox.save();ox.globalCompositeOperation='screen';
   const grd=ox.createRadialGradient(cx,cy,R*0.92,cx,cy,R*1.08);
   grd.addColorStop(0,'rgba(0,0,0,0)');
   grd.addColorStop(0.7,'rgba(30,80,160,0.06)');
   grd.addColorStop(1,'rgba(60,140,220,0.12)');
-  ox.fillStyle=grd;
-  ox.beginPath();ox.arc(cx,cy,R*1.08,0,Math.PI*2);ox.fill();
+  ox.fillStyle=grd;ox.beginPath();ox.arc(cx,cy,R*1.08,0,Math.PI*2);ox.fill();
   ox.restore();
 
   return off;
@@ -390,6 +394,8 @@ function _renderGlobeTexture(){
 
 function drawGlobe(){
   const w=gc.width,h=gc.height;
+  if(w<10||h<10)return;
+  if(_globeCacheR!==gRadius){_globeCacheRot={lon:NaN,lat:NaN};_globeCacheR=gRadius}
   gx.fillStyle='#030508';gx.fillRect(0,0,w,h);
   const cx=w/2,cy=h/2,R=gRadius*gZoom;
 
@@ -756,6 +762,198 @@ function renderTab(){
   else if(curTab==='sky')renderSky();
   else if(curTab==='cards')renderCards();
   else if(curTab==='stats')renderStats();
+  else if(curTab==='horizon')drawHorizon();
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// SKY VIEW — panoramic ground perspective
+// ═════════════════════════════════════════════════════════════════════
+const hc=document.getElementById('horizonCanvas');
+const hx=hc.getContext('2d');
+let hCenter=0,hDrag=false,hDragStart=0,hDragCenter=0;
+const dirNames=['North','NE','East','SE','South','SW','West','NW'];
+
+function setHorizonCenter(deg){
+  hCenter=deg;
+  document.querySelectorAll('#horizonPane .cf').forEach(c=>c.classList.toggle('on',+c.dataset.h===deg));
+  document.getElementById('hCenterLabel').textContent='Facing '+dirNames[Math.round(((deg%360+360)%360)/45)%8];
+  drawHorizon();
+}
+
+hc.addEventListener('mousedown',e=>{hDrag=true;hDragStart=e.clientX;hDragCenter=hCenter;hc.style.cursor='grabbing'});
+window.addEventListener('mousemove',e=>{
+  if(!hDrag)return;
+  const dx=e.clientX-hDragStart;
+  const degPerPx=360/hc.width;
+  hCenter=((hDragCenter-dx*degPerPx)%360+360)%360;
+  document.querySelectorAll('#horizonPane .cf').forEach(c=>c.classList.remove('on'));
+  document.getElementById('hCenterLabel').textContent='Facing '+Math.round(hCenter)+'°';
+  drawHorizon();
+});
+window.addEventListener('mouseup',()=>{if(hDrag){hDrag=false;hc.style.cursor='grab'}});
+
+hc.addEventListener('touchstart',e=>{hDragStart=e.touches[0].clientX;hDragCenter=hCenter},{passive:true});
+hc.addEventListener('touchmove',e=>{
+  const dx=e.touches[0].clientX-hDragStart;
+  const degPerPx=360/hc.width;
+  hCenter=((hDragCenter-dx*degPerPx)%360+360)%360;
+  document.getElementById('hCenterLabel').textContent='Facing '+Math.round(hCenter)+'°';
+  drawHorizon();
+},{passive:true});
+
+function resizeHorizon(){
+  const p=hc.parentElement;if(!p)return;
+  hc.width=p.clientWidth;hc.height=p.clientHeight;
+  drawHorizon();
+}
+
+function drawHorizon(){
+  const w=hc.width,h=hc.height;if(!w)return;
+  hx.clearRect(0,0,w,h);
+
+  const skyH=h*0.85;
+  const groundH=h-skyH;
+  const margin=40;
+  const plotW=w-margin*2;
+  const plotH=skyH-30;
+
+  // Sky gradient
+  const skyGrad=hx.createLinearGradient(0,0,0,skyH);
+  skyGrad.addColorStop(0,'#020510');
+  skyGrad.addColorStop(0.5,'#050a18');
+  skyGrad.addColorStop(0.85,'#0a1525');
+  skyGrad.addColorStop(1,'#0f1a2a');
+  hx.fillStyle=skyGrad;
+  hx.fillRect(0,0,w,skyH);
+
+  // Ground
+  const gndGrad=hx.createLinearGradient(0,skyH,0,h);
+  gndGrad.addColorStop(0,'#0a1a0a');
+  gndGrad.addColorStop(1,'#040a04');
+  hx.fillStyle=gndGrad;
+  hx.fillRect(0,skyH,w,groundH);
+
+  // Horizon line
+  hx.strokeStyle='#1a3020';hx.lineWidth=2;
+  hx.beginPath();hx.moveTo(0,skyH);hx.lineTo(w,skyH);hx.stroke();
+  hx.strokeStyle='#0a2010';hx.lineWidth=1;
+  hx.setLineDash([4,4]);
+  hx.beginPath();hx.moveTo(0,skyH);hx.lineTo(w,skyH);hx.stroke();
+  hx.setLineDash([]);
+
+  // Elevation grid
+  hx.strokeStyle='rgba(20,40,60,0.3)';hx.lineWidth=0.5;
+  hx.font='9px Courier New';hx.fillStyle='#1a3050';
+  for(let el=10;el<=80;el+=10){
+    const y=skyH-(el/90)*plotH;
+    hx.beginPath();hx.setLineDash([2,6]);
+    hx.moveTo(margin,y);hx.lineTo(w-margin,y);hx.stroke();
+    hx.setLineDash([]);
+    hx.fillText(el+'°',4,y+3);
+  }
+
+  // Zenith label
+  hx.fillStyle='#1a3050';hx.font='8px Courier New';
+  hx.fillText('ZENITH 90°',w/2-25,20);
+
+  // Azimuth labels (wrapped around hCenter)
+  const dirs=[
+    [0,'N','#ff4444'],[45,'NE','#3a5070'],[90,'E','#3a5070'],
+    [135,'SE','#3a5070'],[180,'S','#4488ff'],[225,'SW','#3a5070'],
+    [270,'W','#3a5070'],[315,'NW','#3a5070']
+  ];
+  dirs.forEach(([az,lbl,col])=>{
+    let rel=((az-hCenter+180+360)%360)-180;
+    const x=margin+(rel/360+0.5)*plotW;
+    hx.fillStyle=col;hx.font=lbl.length===1?'bold 12px sans-serif':'9px Courier New';
+    hx.textAlign='center';
+    hx.fillText(lbl,x,skyH+15);
+    if(az<360){
+      hx.strokeStyle='rgba(20,40,60,0.2)';hx.lineWidth=0.5;
+      hx.beginPath();hx.moveTo(x,skyH);hx.lineTo(x,15);hx.stroke();
+    }
+  });
+  hx.textAlign='left';
+
+  // Stars (static)
+  for(let i=0;i<40;i++){
+    const sx=margin+Math.sin(i*137.5)*plotW*0.48+plotW/2;
+    const sy=15+Math.cos(i*73.3)*plotH*0.45+plotH/2;
+    if(sx>margin&&sx<w-margin&&sy>15&&sy<skyH){
+      hx.fillStyle='rgba(200,220,255,0.15)';
+      hx.fillRect(sx,sy,1,1);
+    }
+  }
+
+  // Satellites
+  const vis=sats.filter(s=>s.elev>0).sort((a,b)=>a.snr-b.snr);
+  vis.forEach(s=>{
+    let rel=((s.azim-hCenter+180+360)%360)-180;
+    if(rel<-180||rel>180)return;
+    const x=margin+(rel/360+0.5)*plotW;
+    const y=skyH-(s.elev/90)*plotH;
+    const col=COL[s.constellation]||'#888';
+    const r=s.snr>0?Math.max(4,Math.min(10,3+s.snr/8)):3;
+    const nm=satName(s.constellation,s.prn);
+    const prefix=(NAM[s.constellation]||'?')[0];
+
+    if(s.snr>0){
+      // Glow
+      const glow=hx.createRadialGradient(x,y,0,x,y,r*3);
+      glow.addColorStop(0,col+'44');
+      glow.addColorStop(1,col+'00');
+      hx.fillStyle=glow;
+      hx.fillRect(x-r*3,y-r*3,r*6,r*6);
+
+      // Dot
+      hx.beginPath();hx.arc(x,y,r,0,Math.PI*2);
+      hx.fillStyle=col;hx.fill();
+
+      // Label
+      hx.fillStyle=col;hx.font='bold 9px Courier New';hx.textAlign='center';
+      hx.fillText(prefix+s.prn,x,y-r-3);
+
+      // SNR label
+      hx.fillStyle='#4a6080';hx.font='7px Courier New';
+      hx.fillText(s.snr+'dB',x,y+r+9);
+
+      // Elevation/Azimuth tiny
+      if(r>=5){
+        hx.fillStyle='#2a4060';hx.font='6px Courier New';
+        hx.fillText(s.elev+'°↑ '+s.azim+'°→',x,y+r+16);
+      }
+    } else {
+      // Untracked — hollow circle
+      hx.beginPath();hx.arc(x,y,r,0,Math.PI*2);
+      hx.strokeStyle=col;hx.globalAlpha=0.3;hx.lineWidth=1;hx.stroke();
+      hx.globalAlpha=1;
+      hx.fillStyle=col+'66';hx.font='8px Courier New';hx.textAlign='center';
+      hx.fillText(prefix+s.prn,x,y-r-2);
+    }
+    hx.textAlign='left';
+  });
+
+  // Below-horizon satellites
+  const below=sats.filter(s=>s.elev<=0);
+  if(below.length){
+    hx.fillStyle='#1a3050';hx.font='8px Courier New';
+    hx.fillText(below.length+' satellite'+(below.length>1?'s':'')+' below horizon',margin,h-8);
+  }
+
+  // Legend
+  hx.font='8px Courier New';
+  let lx=w-margin;
+  [['GPS','var(--gps)'],['GLO','var(--glo)'],['GAL','var(--gal)'],['BDS','var(--bds)']].forEach(([n,c])=>{
+    const cc=getComputedStyle(document.documentElement).getPropertyValue(c.replace('var(','').replace(')',''))||'#888';
+    hx.fillStyle=cc||'#888';
+    lx-=40;
+    hx.fillRect(lx,6,6,6);
+    hx.fillText(n,lx+8,12);
+  });
+
+  // Info
+  hx.fillStyle='#1a3050';hx.font='8px Courier New';
+  hx.fillText('Visible: '+vis.length+'/'+sats.length+' · Tracked: '+vis.filter(s=>s.snr>0).length,margin,h-8);
 }
 
 // ═════════════════════════════════════════════════════════════════════
