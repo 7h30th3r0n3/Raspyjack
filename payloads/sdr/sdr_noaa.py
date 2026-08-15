@@ -186,11 +186,14 @@ def _predict_passes(tle_sats, obs_lat, obs_lon, obs_alt, hours=24):
                         end_az = az
                         dur = (t - pass_start).total_seconds()
                         direction = _az_to_dir(start_az) + "→" + _az_to_dir(end_az)
+                        local_start = pass_start.astimezone()
+                        local_end = t.astimezone()
                         passes.append({
                             "satellite": sat_name,
-                            "start": pass_start.strftime("%H:%M"),
+                            "start": local_start.strftime("%H:%M"),
+                            "start_utc": pass_start.strftime("%H:%M UTC"),
                             "start_ts": pass_start.timestamp(),
-                            "end": t.strftime("%H:%M"),
+                            "end": local_end.strftime("%H:%M"),
                             "end_ts": t.timestamp(),
                             "max_el": round(max_el),
                             "direction": direction,
@@ -344,6 +347,9 @@ def _write_live(state, passes):
                 "observer": {"lat": obs[0], "lon": obs[1], "alt": obs[2]},
                 "captures": _list_captures(),
                 "tle_age": "",
+                "auto_mode": "--auto" in sys.argv,
+                "next_pass": state.get("next_pass"),
+                "next_pass_seconds": state.get("next_pass_seconds", 0),
             }
             if state.get("start_time") and state.get("capturing"):
                 elapsed = time.time() - state["start_time"]
@@ -552,8 +558,69 @@ def main():
     view = 0
     scroll = 0
 
-    if auto_mode and passes:
-        pass
+    _auto_thread = None
+    if auto_mode:
+        def _auto_scheduler():
+            while _running:
+                obs = _get_observer()
+                _passes = _predict_passes(tle_sats, obs[0], obs[1], obs[2]) if tle_sats else []
+                passes.clear()
+                passes.extend(_passes)
+
+                now = datetime.now(timezone.utc)
+                next_pass = None
+                for p in passes:
+                    start = datetime.fromisoformat(p["start_utc"])
+                    if start > now and not state.get("capturing"):
+                        next_pass = p
+                        break
+
+                if next_pass:
+                    start = datetime.fromisoformat(next_pass["start_utc"])
+                    wait = (start - now).total_seconds()
+                    state["next_pass"] = next_pass
+                    state["next_pass_seconds"] = max(0, int(wait))
+
+                    if wait <= 10 and not state.get("capturing"):
+                        state["capturing"] = True
+                        state["satellite"] = next_pass["satellite"]
+                        state["frequency"] = next_pass["freq"]
+                        state["duration"] = next_pass["duration"]
+                        state["image_path"] = ""
+                        state["image_lines"] = 0
+
+                        os.makedirs(LOOT_DIR, exist_ok=True)
+                        raw_path = os.path.join(LOOT_DIR, "capture_raw.s16")
+
+                        def _auto_capture(p=next_pass):
+                            _capture_thread(p["freq"], p["duration"], raw_path, state)
+                            arr = _decode_apt_partial(raw_path, 48000)
+                            if arr is not None:
+                                path = _save_image(arr, p["satellite"])
+                                state["image_path"] = path
+                                state["image_lines"] = arr.shape[0]
+                                current_png = os.path.join(LOOT_DIR, "current.png")
+                                Image.fromarray(arr, "L").save(current_png)
+                            state["capturing"] = False
+
+                        threading.Thread(target=_auto_capture, daemon=True).start()
+
+                        def _auto_live():
+                            while state.get("capturing") and _running:
+                                time.sleep(5)
+                                arr = _decode_apt_partial(raw_path, 48000)
+                                if arr is not None:
+                                    current_png = os.path.join(LOOT_DIR, "current.png")
+                                    Image.fromarray(arr, "L").save(current_png)
+                                    state["image_path"] = current_png
+                                    state["image_lines"] = arr.shape[0]
+
+                        threading.Thread(target=_auto_live, daemon=True).start()
+
+                time.sleep(10)
+
+        _auto_thread = threading.Thread(target=_auto_scheduler, daemon=True)
+        _auto_thread.start()
 
     try:
         while _running:

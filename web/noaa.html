@@ -163,12 +163,18 @@ function poll(){
     data=d;
 
     const badge=document.getElementById('statusBadge');
+    const auto=d.auto_mode?'AUTO · ':'';
     if(d.capturing){
-      badge.textContent='CAPTURING';badge.className='status-badge status-capturing';
+      badge.textContent=auto+'CAPTURING';badge.className='status-badge status-capturing';
     } else if(d.passes&&d.passes.length){
-      badge.textContent='WAITING';badge.className='status-badge status-waiting';
+      badge.textContent=auto+'WAITING';badge.className='status-badge status-waiting';
     } else {
       badge.textContent='IDLE';badge.className='status-badge status-idle';
+    }
+
+    // GPS position
+    if(d.observer&&d.observer.lat){
+      document.getElementById('kFreq').textContent=d.observer.lat.toFixed(4)+'°, '+d.observer.lon.toFixed(4)+'°';
     }
 
     document.getElementById('kSat').textContent=d.satellite||'--';
@@ -201,15 +207,21 @@ function poll(){
 
     // Next pass countdown
     if(!d.capturing&&d.passes&&d.passes.length){
-      const next=d.passes[0];
-      const diff=next.start_ts-Date.now()/1000;
-      document.getElementById('nextPassInfo').textContent='Next: '+next.satellite+' at '+next.start+' ('+next.max_el+'° '+next.direction+')';
+      const next=d.next_pass||d.passes[0];
+      const diff=d.next_pass_seconds||Math.max(0,(next.start_ts||0)-Date.now()/1000);
+      document.getElementById('nextPassInfo').textContent='Next: '+next.satellite+' at '+(next.start||'?')+' ('+next.max_el+'° max, '+next.direction+', '+fmtDur(next.duration)+')';
       if(diff>0){
         const h=Math.floor(diff/3600),m=Math.floor(diff%3600/60),s=Math.floor(diff%60);
         document.getElementById('countdownEl').textContent=(h>0?h+'h ':'')+(m>0?m+'m ':'')+(s+'s');
       } else {
-        document.getElementById('countdownEl').textContent='NOW!';
+        document.getElementById('countdownEl').textContent='PASS IN PROGRESS';
       }
+      if(d.auto_mode){
+        document.getElementById('nextPassInfo').textContent+=' · AUTO-CAPTURE';
+      }
+    } else if(!d.capturing){
+      document.getElementById('nextPassInfo').textContent='No upcoming passes';
+      document.getElementById('countdownEl').textContent='--';
     }
 
     // Passes
