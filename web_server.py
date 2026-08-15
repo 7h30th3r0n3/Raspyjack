@@ -1175,6 +1175,10 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
             super().do_GET()
             return
 
+        if parsed.path.startswith("/tiles/"):
+            self._handle_tile(parsed.path)
+            return
+
         if (
             parsed.path.startswith("/api/loot/")
             or parsed.path.startswith("/api/payloads/")
@@ -1185,6 +1189,7 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
             or parsed.path.startswith("/api/adsb/")
             or parsed.path.startswith("/api/sdr/")
             or parsed.path.startswith("/api/ism/")
+            or parsed.path.startswith("/api/gnss/")
             or parsed.path.startswith("/api/honeypot/")
         ):
             query = parse_qs(parsed.query or "")
@@ -1256,6 +1261,10 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
 
             if parsed.path == "/api/ism/live":
                 self._handle_ism_live()
+                return
+
+            if parsed.path == "/api/gnss/live":
+                self._handle_gnss_live()
                 return
 
             if parsed.path == "/api/honeypot/live":
@@ -1388,6 +1397,34 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
                 _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
                 return
             self._handle_ism_control()
+            return
+        if parsed.path == "/api/gnss/start":
+            query = parse_qs(parsed.query or "")
+            if not _auth_ok(self, query):
+                _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
+                return
+            try:
+                request_path = Path("/dev/shm/rj_payload_request.json")
+                request_path.write_text(json.dumps({
+                    "action": "start",
+                    "path": "hardware/gnss_skyplot.py",
+                    "args": ["--auto"],
+                }))
+                _json_response(self, {"ok": True, "status": "starting"})
+            except Exception as exc:
+                _json_response(self, {"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+        if parsed.path == "/api/gnss/stop":
+            query = parse_qs(parsed.query or "")
+            if not _auth_ok(self, query):
+                _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
+                return
+            _kill_payload("gnss_skyplot.py")
+            try:
+                Path("/dev/shm/rj_gnss_live.json").unlink(missing_ok=True)
+            except Exception:
+                pass
+            _json_response(self, {"ok": True, "status": "stopped"})
             return
         if parsed.path == "/api/honeypot/start":
             query = parse_qs(parsed.query or "")
@@ -2236,6 +2273,40 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
                 _json_response(self, _ism_empty_state())
         else:
             _json_response(self, _ism_empty_state())
+
+    _TILES_DIR = Path("/root/Raspyjack/web/vendor/tiles")
+
+    def _handle_tile(self, path: str) -> None:
+        parts = path.strip("/").split("/")
+        if len(parts) != 4 or not parts[1].isdigit():
+            self.send_response(404)
+            self.end_headers()
+            return
+        tile_path = self._TILES_DIR / parts[1] / parts[2] / parts[3]
+        if tile_path.exists():
+            self.send_response(200)
+            self.send_header("Content-Type", "image/png")
+            self.send_header("Cache-Control", "public, max-age=604800")
+            self.end_headers()
+            self.wfile.write(tile_path.read_bytes())
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    _GNSS_LIVE_PATH = Path("/dev/shm/rj_gnss_live.json")
+
+    def _handle_gnss_live(self) -> None:
+        if self._GNSS_LIVE_PATH.exists():
+            try:
+                raw = self._GNSS_LIVE_PATH.read_text(encoding="utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(raw.encode())
+            except Exception:
+                _json_response(self, {"ts": 0, "satellites": [], "total": 0, "fix": {}})
+        else:
+            _json_response(self, {"ts": 0, "satellites": [], "total": 0, "fix": {}})
 
     def _handle_ism_start(self) -> None:
         body = _read_json(self) or {}

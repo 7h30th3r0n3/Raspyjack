@@ -144,13 +144,13 @@ L.control.zoom({position:'topright'}).addTo(map);
 const THEMES = {
   hacker: {
     layers: [
-      {url:'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', opts:{subdomains:'abcd', maxZoom:19, opacity:0.85}},
+      {url:'/tiles/{z}/{x}/{y}.png', opts:{subdomains:'abcd', maxZoom:19, opacity:0.85}},
       {url:'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', opts:{maxZoom:19, opacity:0.12}},
     ],
     bg:'#060a10', attr:'&copy;CartoDB &copy;OSM',
   },
   dark: {
-    layers: [{url:'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', opts:{subdomains:'abcd', maxZoom:19, opacity:1}}],
+    layers: [{url:'/tiles/{z}/{x}/{y}.png', opts:{subdomains:'abcd', maxZoom:19, opacity:1}}],
     bg:'#0a0a0a', attr:'&copy;CartoDB &copy;OSM',
   },
   midnight: {
