@@ -409,6 +409,7 @@
         <a href="./wardriving.html" class="w-full px-3 py-2 rounded-xl text-left text-sm font-semibold border border-slate-400/20 bg-slate-800/40 text-slate-300 hover:text-white hover:bg-slate-700/50 transition block"><i class="fa-solid fa-satellite-dish mr-2"></i>Wardriving Map</a>
         <a href="./adsb.html" class="w-full px-3 py-2 rounded-xl text-left text-sm font-semibold border border-slate-400/20 bg-slate-800/40 text-slate-300 hover:text-white hover:bg-slate-700/50 transition block"><i class="fa-solid fa-plane mr-2"></i>ADS-B Radar</a>
         <a href="./gnss.html" class="w-full px-3 py-2 rounded-xl text-left text-sm font-semibold border border-slate-400/20 bg-slate-800/40 text-slate-300 hover:text-white hover:bg-slate-700/50 transition block"><i class="fa-solid fa-satellite mr-2"></i>GNSS Tracker</a>
+        <a href="./noaa.html" class="w-full px-3 py-2 rounded-xl text-left text-sm font-semibold border border-slate-400/20 bg-slate-800/40 text-slate-300 hover:text-white hover:bg-slate-700/50 transition block"><i class="fa-solid fa-satellite-dish mr-2"></i>NOAA Satellite Receiver</a>
         <a href="./sdr.html" class="w-full px-3 py-2 rounded-xl text-left text-sm font-semibold border border-slate-400/20 bg-slate-800/40 text-slate-300 hover:text-white hover:bg-slate-700/50 transition block"><i class="fa-solid fa-broadcast-tower mr-2"></i>SDR Radio</a>
         <a href="./honeypot.html" class="w-full px-3 py-2 rounded-xl text-left text-sm font-semibold border border-slate-400/20 bg-slate-800/40 text-slate-300 hover:text-white hover:bg-slate-700/50 transition block"><i class="fa-solid fa-shield-halved mr-2"></i>Honeypot SIEM</a>
         <a href="./pcap.html" class="w-full px-3 py-2 rounded-xl text-left text-sm font-semibold border border-slate-400/20 bg-slate-800/40 text-slate-300 hover:text-white hover:bg-slate-700/50 transition block"><i class="fa-solid fa-magnifying-glass-chart mr-2"></i>PCAP Analyzer</a>
@@ -423,6 +424,9 @@
               </div>
               <button id="payloadsRefresh" type="button" class="px-2 py-1 text-[10px] rounded-md bg-slate-800/70 border border-slate-600/40 text-slate-200 hover:bg-slate-700/70 transition">Refresh</button>
             </div>
+          </div>
+          <div class="px-2 pb-2">
+            <input id="payloadSearch" type="text" placeholder="Search payloads..." oninput="filterPayloads(this.value)" class="w-full px-3 py-1.5 text-xs rounded-lg bg-slate-900/80 border border-slate-600/40 text-slate-200 placeholder-slate-500 focus:outline-none focus:border-emerald-500/50">
           </div>
           <div id="payloadSidebar" class="space-y-2 px-2 pb-2">
             <!-- payload categories injected by app.js -->
@@ -774,6 +778,35 @@
   <script src="./vendor/js/xterm-addon-fit.min.js"></script>
   <script src="./shared.js"></script>
   <script src="./app.js"></script>
+  <script>
+  function filterPayloads(q){
+    q=q.toLowerCase().trim();
+    const sidebar=document.getElementById('payloadSidebar');
+    sidebar.querySelectorAll('[data-category]').forEach(cat=>{
+      let anyVisible=false;
+      cat.querySelectorAll('button,a').forEach(btn=>{
+        const name=(btn.textContent||'').toLowerCase();
+        const match=!q||name.includes(q);
+        btn.style.display=match?'':'none';
+        if(match)anyVisible=true;
+      });
+      cat.style.display=(!q||anyVisible)?'':'none';
+    });
+    if(!sidebar.querySelector('[data-category]')){
+      sidebar.querySelectorAll('details').forEach(det=>{
+        let anyVisible=false;
+        det.querySelectorAll('button,a').forEach(btn=>{
+          const name=(btn.textContent||'').toLowerCase();
+          const match=!q||name.includes(q);
+          btn.style.display=match?'':'none';
+          if(match)anyVisible=true;
+        });
+        det.style.display=(!q||anyVisible)?'':'none';
+        if(q&&anyVisible)det.open=true;
+      });
+    }
+  }
+  </script>
 </body>
 </html>
 
