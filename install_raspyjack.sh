@@ -208,6 +208,9 @@ PACKAGES=(
   git i2c-tools rtl-sdr \
   ffmpeg yt-dlp gpsd gpsd-clients
 )
+# NOTE: ffmpeg + yt-dlp (above) power the media payloads:
+#   utilities/youtube.py, utilities/video_player.py, utilities/tv.py (RaspyJack TV).
+# python3-numpy / python3-pil (above) are required by their framebuffer render path.
 
 # CardputerZero extra packages
 if [[ "$DISPLAY_TYPE" == "CARDPUTER_320" ]]; then
@@ -253,7 +256,7 @@ sudo pip3 install --break-system-packages smbus2 2>/dev/null \
 # Upgrade yt-dlp to latest (apt version is often outdated, YouTube breaks compatibility)
 step "Upgrading yt-dlp to latest version …"
 sudo pip3 install --upgrade yt-dlp --break-system-packages --ignore-installed yt-dlp 2>/dev/null \
-  || warn "yt-dlp upgrade failed – YouTube payload may not work"
+  || warn "yt-dlp upgrade failed – YouTube / TV media payloads may not work"
 
 # GPS python library
 step "Installing gpsd-py3 …"
