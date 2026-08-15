@@ -1190,6 +1190,7 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
             or parsed.path.startswith("/api/sdr/")
             or parsed.path.startswith("/api/ism/")
             or parsed.path.startswith("/api/gnss/")
+            or parsed.path.startswith("/api/noaa/")
             or parsed.path.startswith("/api/honeypot/")
         ):
             query = parse_qs(parsed.query or "")
@@ -1265,6 +1266,16 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
 
             if parsed.path == "/api/gnss/live":
                 self._handle_gnss_live()
+                return
+
+            if parsed.path == "/api/noaa/live":
+                self._handle_noaa_live()
+                return
+            if parsed.path == "/api/noaa/image":
+                self._handle_noaa_image(query)
+                return
+            if parsed.path == "/api/noaa/gallery":
+                self._handle_noaa_gallery()
                 return
 
             if parsed.path == "/api/honeypot/live":
@@ -1422,6 +1433,35 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
             _kill_payload("gnss_skyplot.py")
             try:
                 Path("/dev/shm/rj_gnss_live.json").unlink(missing_ok=True)
+            except Exception:
+                pass
+            _json_response(self, {"ok": True, "status": "stopped"})
+            return
+        if parsed.path == "/api/noaa/start":
+            query = parse_qs(parsed.query or "")
+            if not _auth_ok(self, query):
+                _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
+                return
+            try:
+                request_path = Path("/dev/shm/rj_payload_request.json")
+                request_path.write_text(json.dumps({
+                    "action": "start",
+                    "path": "sdr/sdr_noaa.py",
+                    "args": ["--auto"],
+                }))
+                _json_response(self, {"ok": True, "status": "starting"})
+            except Exception as exc:
+                _json_response(self, {"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+        if parsed.path == "/api/noaa/stop":
+            query = parse_qs(parsed.query or "")
+            if not _auth_ok(self, query):
+                _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
+                return
+            _kill_payload("sdr_noaa.py")
+            subprocess.run(["pkill", "-9", "rtl_fm"], capture_output=True)
+            try:
+                Path("/dev/shm/rj_noaa_live.json").unlink(missing_ok=True)
             except Exception:
                 pass
             _json_response(self, {"ok": True, "status": "stopped"})
@@ -2307,6 +2347,55 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
                 _json_response(self, {"ts": 0, "satellites": [], "total": 0, "fix": {}})
         else:
             _json_response(self, {"ts": 0, "satellites": [], "total": 0, "fix": {}})
+
+    # ------------------------------------------------------------------
+    # NOAA Satellite Receiver
+    # ------------------------------------------------------------------
+
+    _NOAA_LIVE_PATH = Path("/dev/shm/rj_noaa_live.json")
+    _NOAA_LOOT_DIR = "/root/Raspyjack/loot/SDR/noaa"
+
+    def _handle_noaa_live(self) -> None:
+        if self._NOAA_LIVE_PATH.exists():
+            try:
+                raw = self._NOAA_LIVE_PATH.read_text(encoding="utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(raw.encode())
+            except Exception:
+                _json_response(self, {"ts": 0, "capturing": False, "passes": [], "captures": []})
+        else:
+            _json_response(self, {"ts": 0, "capturing": False, "passes": [], "captures": []})
+
+    def _handle_noaa_image(self, query: dict) -> None:
+        path = (query.get("path") or [""])[0] if isinstance(query.get("path"), list) else str(query.get("path", ""))
+        if not path:
+            path = os.path.join(self._NOAA_LOOT_DIR, "current.png")
+        allowed = self._NOAA_LOOT_DIR
+        if not path.startswith(allowed) or ".." in path:
+            self.send_response(403)
+            self.end_headers()
+            return
+        if os.path.isfile(path):
+            self.send_response(200)
+            self.send_header("Content-Type", "image/png")
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            with open(path, "rb") as f:
+                self.wfile.write(f.read())
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def _handle_noaa_gallery(self) -> None:
+        result = []
+        if os.path.isdir(self._NOAA_LOOT_DIR):
+            for f in sorted(os.listdir(self._NOAA_LOOT_DIR), reverse=True):
+                if f.endswith(".png") and f != "current.png":
+                    fp = os.path.join(self._NOAA_LOOT_DIR, f)
+                    result.append({"file": f, "path": fp, "size": os.path.getsize(fp)})
+        _json_response(self, result)
 
     def _handle_ism_start(self) -> None:
         body = _read_json(self) or {}

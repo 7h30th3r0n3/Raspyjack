@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RaspyJack NOAA Satellite Receiver</title>
+  <link rel="stylesheet" href="./vendor/css/fontawesome.min.css">
+  <style>
+    :root{color-scheme:dark;--bg:#05060a;--panel:#080c14;--border:#0f1a2a;--accent:#00ccff;--green:#00ff88;--red:#ff3333;--orange:#ff8800;--yellow:#ffaa00;--card:#0a0e18}
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:#ccc;height:100vh;display:flex;flex-direction:column;overflow:hidden}
+    ::-webkit-scrollbar{width:4px}
+    ::-webkit-scrollbar-thumb{background:#1a2844;border-radius:2px}
+
+    #topbar{height:42px;background:#0a0e1a;display:flex;align-items:center;padding:0 12px;gap:8px;border-bottom:1px solid var(--border);flex-shrink:0}
+    #topbar h1{font-size:13px;color:var(--accent);white-space:nowrap;display:flex;align-items:center;gap:5px}
+    .status-badge{padding:2px 8px;border-radius:5px;font-size:10px;font-weight:700;font-family:'Courier New',monospace}
+    .status-idle{background:rgba(100,100,100,.1);color:#555;border:1px solid #333}
+    .status-waiting{background:rgba(255,200,0,.1);color:var(--yellow);border:1px solid rgba(255,200,0,.3);animation:blink 2s infinite}
+    .status-capturing{background:rgba(255,50,50,.1);color:var(--red);border:1px solid rgba(255,50,50,.3);animation:blink 1s infinite}
+    .status-done{background:rgba(0,255,136,.1);color:var(--green);border:1px solid rgba(0,255,136,.3)}
+    @keyframes blink{0%,100%{opacity:1}50%{opacity:.5}}
+    .tb-k{font-size:10px;font-family:'Courier New',monospace;display:flex;align-items:center;gap:3px;white-space:nowrap}
+    .tb-k i{color:#2a4060;font-size:8px}
+    .tb-k .v{font-weight:600}
+    .tb-k .u{color:#2a4060;font-size:8px}
+    .spacer{flex:1}
+    #topbar a{color:#3a5070;font-size:10px;text-decoration:none;white-space:nowrap}
+    #topbar a:hover{color:var(--accent)}
+    .live-btn{background:#111830;color:#888;border:1px solid #1a2844;padding:3px 10px;border-radius:5px;font-size:10px;cursor:pointer;display:flex;align-items:center;gap:4px}
+    .live-btn:hover{color:#fff;background:#1a2850}
+    .live-btn.on{border-color:var(--accent);color:var(--accent)}
+    .live-dot{display:none;color:var(--green);font-size:6px;animation:blink 1.5s infinite}
+
+    #main{display:flex;flex:1;min-height:0}
+
+    #imagePanel{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#030508;position:relative;min-width:0}
+    #satImage{max-width:100%;max-height:100%;object-fit:contain;display:none}
+    #imageOverlay{text-align:center;color:#1a3050}
+    #imageOverlay i{font-size:48px;display:block;margin-bottom:12px}
+    #imageOverlay .title{font-size:16px;margin-bottom:6px}
+    #imageOverlay .sub{font-size:11px;color:#0f2030}
+    #progressBar{position:absolute;bottom:0;left:0;right:0;height:4px;background:#0a1020}
+    #progressFill{height:100%;background:var(--accent);width:0;transition:width 1s}
+    #progressLabel{position:absolute;bottom:8px;right:8px;font-size:9px;color:#3a5070;font-family:'Courier New',monospace}
+    #captureInfo{position:absolute;top:8px;left:8px;font-size:9px;color:#4a6080;font-family:'Courier New',monospace}
+
+    #rightPanel{width:340px;display:flex;flex-direction:column;border-left:1px solid var(--border);flex-shrink:0;min-height:0}
+    #tabBar{display:flex;border-bottom:1px solid var(--border);flex-shrink:0}
+    .tab-btn{flex:1;padding:6px 0;text-align:center;font-size:9px;color:#4a6080;cursor:pointer;border-bottom:2px solid transparent;transition:all .15s}
+    .tab-btn:hover{color:#ccc}
+    .tab-btn.on{color:var(--accent);border-bottom-color:var(--accent)}
+    .tab-pane{display:none;flex:1;overflow-y:auto;padding:8px 10px}
+    .tab-pane.on{display:block}
+
+    .pass-row{display:flex;align-items:center;gap:6px;padding:6px 0;border-bottom:1px solid #080c14;font-size:10px;cursor:pointer;transition:background .1s}
+    .pass-row:hover{background:rgba(0,204,255,.03)}
+    .pass-row.next{background:rgba(0,204,255,.05);border-left:3px solid var(--accent);padding-left:6px}
+    .pass-sat{font-weight:700;min-width:55px}
+    .pass-time{font-family:'Courier New',monospace;min-width:40px;color:var(--accent)}
+    .pass-el{font-family:'Courier New',monospace;min-width:30px;font-weight:600}
+    .pass-dir{color:#4a6080;min-width:40px}
+    .pass-dur{color:#4a6080;font-family:'Courier New',monospace;min-width:40px}
+    .pass-freq{color:#3a5070;font-size:9px}
+
+    .gallery-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:6px}
+    .gallery-item{cursor:pointer;border:1px solid var(--border);border-radius:6px;overflow:hidden;transition:border-color .15s}
+    .gallery-item:hover{border-color:var(--accent)}
+    .gallery-item img{width:100%;height:80px;object-fit:cover;display:block}
+    .gallery-item .gi-name{font-size:8px;padding:3px 5px;color:#4a6080;font-family:'Courier New',monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+    .stat-row{display:flex;justify-content:space-between;padding:4px 0;font-size:10px;border-bottom:1px solid #080c14}
+    .stat-row .sl{color:#4a6080}
+    .stat-row .sv{font-family:'Courier New',monospace}
+
+    .countdown{font-size:24px;font-weight:700;font-family:'Courier New',monospace;color:var(--accent);margin-top:8px}
+
+    @media(max-width:700px){
+      #main{flex-direction:column}
+      #rightPanel{width:100%;height:50%;border-left:none;border-top:1px solid var(--border)}
+      #imagePanel{min-height:200px}
+    }
+  </style>
+</head>
+<body>
+<script>fetch("/api/auth/me",{credentials:"include"}).then(r=>{if(!r.ok)throw 0;return r.json()}).then(d=>{if(!d||!d.authenticated)throw 0}).catch(()=>{document.body.innerHTML='<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;gap:16px;font-family:sans-serif;background:#05060a"><i class="fa-solid fa-lock" style="font-size:48px;color:#f43f5e"></i><h2 style="color:#e2e8f0">Authentication Required</h2><p style="color:#94a3b8">Please log in first.</p><a href="./index.html" style="color:#00ccff;text-decoration:none;padding:8px 20px;border:1px solid #00ccff;border-radius:6px">Login</a></div>'})</script>
+
+<div id="topbar">
+  <h1><i class="fa-solid fa-satellite-dish"></i> NOAA Receiver</h1>
+  <span id="statusBadge" class="status-badge status-idle">IDLE</span>
+  <div class="tb-k"><i class="fa-solid fa-satellite"></i><span class="v" id="kSat">--</span></div>
+  <div class="tb-k"><i class="fa-solid fa-signal"></i><span class="v" id="kFreq">--</span><span class="u">MHz</span></div>
+  <div class="spacer"></div>
+  <button id="btnLive" class="live-btn" onclick="toggleLive()"><i class="fa-solid fa-tower-broadcast"></i> Live <i class="fa-solid fa-circle live-dot" id="liveDot"></i></button>
+  <a href="./index.html"><i class="fa-solid fa-arrow-left"></i> WebUI</a>
+</div>
+
+<div id="main">
+  <div id="imagePanel">
+    <img id="satImage" alt="Satellite image">
+    <div id="imageOverlay">
+      <i class="fa-solid fa-satellite-dish"></i>
+      <div class="title">NOAA Satellite Receiver</div>
+      <div class="sub">Start the receiver to capture weather satellite images</div>
+      <div class="sub" style="margin-top:4px">Images are received at 137 MHz during satellite passes</div>
+      <div id="nextPassInfo" style="margin-top:12px;font-size:11px;color:#2a4060"></div>
+      <div id="countdownEl" class="countdown"></div>
+    </div>
+    <div id="captureInfo"></div>
+    <div id="progressBar" style="display:none"><div id="progressFill"></div></div>
+    <div id="progressLabel"></div>
+  </div>
+
+  <div id="rightPanel">
+    <div id="tabBar">
+      <div class="tab-btn on" onclick="showTab('passes')"><i class="fa-solid fa-clock"></i> Passes</div>
+      <div class="tab-btn" onclick="showTab('gallery')"><i class="fa-solid fa-images"></i> Gallery</div>
+      <div class="tab-btn" onclick="showTab('status')"><i class="fa-solid fa-info-circle"></i> Status</div>
+    </div>
+    <div class="tab-pane on" id="tabPasses">
+      <div style="font-size:8px;color:#3a5070;margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px">Upcoming satellite passes</div>
+      <div id="passList"></div>
+    </div>
+    <div class="tab-pane" id="tabGallery">
+      <div id="galleryGrid" class="gallery-grid"></div>
+      <div id="galleryEmpty" style="text-align:center;padding:30px;color:#1a3050;font-size:11px"><i class="fa-solid fa-images" style="font-size:24px;display:block;margin-bottom:8px"></i>No captured images yet</div>
+    </div>
+    <div class="tab-pane" id="tabStatus">
+      <div id="statusContent"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+let isLive=false,pollIv=null,data={};
+
+function showTab(t){
+  const tabs=['passes','gallery','status'];
+  document.querySelectorAll('.tab-btn').forEach((b,i)=>b.classList.toggle('on',tabs[i]===t));
+  document.querySelectorAll('.tab-pane').forEach(p=>p.classList.toggle('on',p.id==='tab'+t.charAt(0).toUpperCase()+t.slice(1)));
+}
+
+function toggleLive(){
+  const btn=document.getElementById('btnLive');
+  const dot=document.getElementById('liveDot');
+  if(isLive){
+    isLive=false;clearInterval(pollIv);pollIv=null;
+    btn.classList.remove('on');dot.style.display='none';
+    fetch('/api/noaa/stop',{method:'POST',credentials:'include'}).catch(()=>{});
+  } else {
+    isLive=true;btn.classList.add('on');dot.style.display='inline';
+    fetch('/api/noaa/start',{method:'POST',credentials:'include'}).then(()=>{
+      setTimeout(()=>{poll();pollIv=setInterval(poll,3000)},3000);
+    }).catch(()=>{});
+  }
+}
+
+function fmtDur(s){return Math.floor(s/60)+'m'+('0'+s%60).slice(-2)+'s'}
+
+function poll(){
+  fetch('/api/noaa/live',{credentials:'include'}).then(r=>r.json()).then(d=>{
+    if(!d||!d.ts)return;
+    data=d;
+
+    const badge=document.getElementById('statusBadge');
+    if(d.capturing){
+      badge.textContent='CAPTURING';badge.className='status-badge status-capturing';
+    } else if(d.passes&&d.passes.length){
+      badge.textContent='WAITING';badge.className='status-badge status-waiting';
+    } else {
+      badge.textContent='IDLE';badge.className='status-badge status-idle';
+    }
+
+    document.getElementById('kSat').textContent=d.satellite||'--';
+    document.getElementById('kFreq').textContent=d.frequency||'--';
+
+    // Image
+    const img=document.getElementById('satImage');
+    const overlay=document.getElementById('imageOverlay');
+    if(d.image_path&&d.image_lines>0){
+      img.src='/api/noaa/image?t='+Date.now();
+      img.style.display='block';
+      overlay.style.display='none';
+    } else {
+      img.style.display='none';
+      overlay.style.display='block';
+    }
+
+    // Progress
+    const pbar=document.getElementById('progressBar');
+    if(d.capturing){
+      pbar.style.display='block';
+      document.getElementById('progressFill').style.width=d.progress_pct+'%';
+      document.getElementById('progressLabel').textContent=d.elapsed+'s / '+d.duration+'s ('+d.progress_pct+'%)';
+      document.getElementById('captureInfo').textContent=d.satellite+' · '+d.frequency+' MHz · '+d.image_lines+' lines';
+    } else {
+      pbar.style.display='none';
+      document.getElementById('progressLabel').textContent='';
+      document.getElementById('captureInfo').textContent='';
+    }
+
+    // Next pass countdown
+    if(!d.capturing&&d.passes&&d.passes.length){
+      const next=d.passes[0];
+      const diff=next.start_ts-Date.now()/1000;
+      document.getElementById('nextPassInfo').textContent='Next: '+next.satellite+' at '+next.start+' ('+next.max_el+'° '+next.direction+')';
+      if(diff>0){
+        const h=Math.floor(diff/3600),m=Math.floor(diff%3600/60),s=Math.floor(diff%60);
+        document.getElementById('countdownEl').textContent=(h>0?h+'h ':'')+(m>0?m+'m ':'')+(s+'s');
+      } else {
+        document.getElementById('countdownEl').textContent='NOW!';
+      }
+    }
+
+    // Passes
+    renderPasses(d.passes||[]);
+    // Gallery
+    renderGallery(d.captures||[]);
+    // Status
+    renderStatus(d);
+  }).catch(()=>{});
+}
+
+function renderPasses(passes){
+  const el=document.getElementById('passList');
+  if(!passes.length){el.innerHTML='<div style="text-align:center;padding:20px;color:#1a3050;font-size:11px"><i class="fa-solid fa-clock" style="font-size:20px;display:block;margin-bottom:6px"></i>No passes predicted<br><span style="font-size:9px">Start the payload to predict passes</span></div>';return}
+  el.innerHTML=passes.map((p,i)=>{
+    const elCol=p.max_el>=60?'var(--green)':p.max_el>=30?'var(--yellow)':'var(--red)';
+    return '<div class="pass-row'+(i===0?' next':'')+'">'+
+      '<span class="pass-sat" style="color:var(--accent)">'+p.satellite.replace('NOAA ','N')+'</span>'+
+      '<span class="pass-time">'+p.start+'</span>'+
+      '<span class="pass-el" style="color:'+elCol+'">'+p.max_el+'°</span>'+
+      '<span class="pass-dir">'+p.direction+'</span>'+
+      '<span class="pass-dur">'+fmtDur(p.duration)+'</span>'+
+      '<span class="pass-freq">'+p.freq+'MHz</span>'+
+    '</div>';
+  }).join('');
+}
+
+function renderGallery(captures){
+  const grid=document.getElementById('galleryGrid');
+  const empty=document.getElementById('galleryEmpty');
+  if(!captures.length){grid.innerHTML='';empty.style.display='block';return}
+  empty.style.display='none';
+  grid.innerHTML=captures.map(c=>{
+    return '<div class="gallery-item" onclick="viewImage(\''+c.path+'\')">'+
+      '<img src="/api/noaa/image?path='+encodeURIComponent(c.path)+'&t='+Date.now()+'" loading="lazy">'+
+      '<div class="gi-name">'+c.file.replace('.png','')+'</div>'+
+    '</div>';
+  }).join('');
+}
+
+function viewImage(path){
+  const img=document.getElementById('satImage');
+  img.src='/api/noaa/image?path='+encodeURIComponent(path)+'&t='+Date.now();
+  img.style.display='block';
+  document.getElementById('imageOverlay').style.display='none';
+}
+
+function renderStatus(d){
+  const el=document.getElementById('statusContent');
+  const obs=d.observer||{};
+  let h='';
+  h+='<div class="stat-row"><span class="sl">Observer</span><span class="sv">'+(obs.lat?obs.lat.toFixed(4)+', '+obs.lon.toFixed(4):'--')+'</span></div>';
+  h+='<div class="stat-row"><span class="sl">Altitude</span><span class="sv">'+(obs.alt||0).toFixed(0)+' m</span></div>';
+  h+='<div class="stat-row"><span class="sl">TLE Age</span><span class="sv">'+(d.tle_age||'--')+'</span></div>';
+  h+='<div class="stat-row"><span class="sl">Upcoming</span><span class="sv">'+(d.passes?d.passes.length:0)+' passes</span></div>';
+  h+='<div class="stat-row"><span class="sl">Captures</span><span class="sv">'+(d.captures?d.captures.length:0)+' images</span></div>';
+  h+='<div class="stat-row"><span class="sl">Capturing</span><span class="sv" style="color:'+(d.capturing?'var(--red)':'#555')+'">'+(d.capturing?'YES — '+d.satellite:'NO')+'</span></div>';
+  if(d.capturing){
+    h+='<div class="stat-row"><span class="sl">Progress</span><span class="sv">'+d.progress_pct+'% ('+d.elapsed+'s / '+d.duration+'s)</span></div>';
+    h+='<div class="stat-row"><span class="sl">Lines decoded</span><span class="sv">'+d.image_lines+'</span></div>';
+  }
+  h+='<div style="margin-top:12px;font-size:9px;color:#2a4060">';
+  h+='<b>How it works:</b><br>';
+  h+='NOAA weather satellites orbit at 850km and pass overhead several times a day. ';
+  h+='They transmit real-time images of Earth on 137 MHz using Automatic Picture Transmission (APT). ';
+  h+='The RTL-SDR receives the FM signal, which is decoded into a grayscale image showing ';
+  h+='cloud cover, land, and sea from space.<br><br>';
+  h+='<b>Tips:</b><br>';
+  h+='• Best results with a V-dipole or QFH antenna tuned for 137 MHz<br>';
+  h+='• Higher elevation passes (60°+) give better images<br>';
+  h+='• Capture lasts 10-15 minutes per pass<br>';
+  h+='• Images show visible light (day) or infrared (night)';
+  h+='</div>';
+  el.innerHTML=h;
+}
+
+// Auto-detect running
+fetch('/api/noaa/live',{credentials:'include'}).then(r=>r.json()).then(d=>{
+  if(d&&d.ts>0){
+    data=d;
+    isLive=true;
+    document.getElementById('btnLive').classList.add('on');
+    document.getElementById('liveDot').style.display='inline';
+    poll();pollIv=setInterval(poll,3000);
+  }
+}).catch(()=>{});
+</script>
+</body>
+</html>
