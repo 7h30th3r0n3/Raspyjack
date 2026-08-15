@@ -125,12 +125,31 @@ def _read_battery():
 
     data["soc"] = _voltage_to_soc(data["voltage_mv"])
 
-    data["status"] = _read_sysfs("status") or "Unknown"
-    data["health"] = _read_sysfs("health") or "Unknown"
-    data["technology"] = _read_sysfs("technology") or "Unknown"
+    raw_status = _read_sysfs("status") or "Unknown"
+    data["status"] = raw_status
+    data["technology"] = _read_sysfs("technology") or "Li-ion"
     data["cycle_count"] = _read_int("cycle_count")
     data["present"] = _read_sysfs("present") == "1"
-    data["capacity_level"] = _read_sysfs("capacity_level") or "Unknown"
+
+    soc = data.get("soc", 0) or 0
+    if soc > 80:
+        data["health"] = "Good"
+        data["capacity_level"] = "Full" if soc > 95 else "High"
+    elif soc > 40:
+        data["health"] = "Good"
+        data["capacity_level"] = "Normal"
+    elif soc > 15:
+        data["health"] = "Good"
+        data["capacity_level"] = "Low"
+    else:
+        data["health"] = "Good"
+        data["capacity_level"] = "Critical"
+
+    mv = data.get("voltage_mv") or 0
+    if mv < 2800:
+        data["health"] = "Check battery"
+    if raw_status == "Charging":
+        data["capacity_level"] = f"Charging ({soc}%)"
 
     return data
 
