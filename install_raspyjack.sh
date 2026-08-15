@@ -205,7 +205,7 @@ PACKAGES=(
   aircrack-ng wireless-tools wpasupplicant iw \
   hostapd dnsmasq-base sshpass bridge-utils john autossh reaver ebtables \
   firmware-linux-nonfree firmware-realtek firmware-atheros \
-  git i2c-tools rtl-sdr \
+  git i2c-tools rtl-sdr alsa-utils unzip \
   ffmpeg yt-dlp gpsd gpsd-clients
 )
 # NOTE: ffmpeg + yt-dlp (above) power the media payloads:

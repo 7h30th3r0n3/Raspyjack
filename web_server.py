@@ -7,7 +7,8 @@ Serves the static WebUI and exposes a small, read-only API to browse loot/.
 Routes:
   /                  -> static WebUI (web/)
   /api/loot/list      -> JSON directory listing (read-only)
-  /api/loot/download  -> file download (read-only)
+  /api/loot/download  -> file download / media stream, HTTP Range (read-only)
+  /api/loot/archive   -> zip of a loot folder (read-only)
   /api/loot/view      -> text preview (read-only)
     /api/loot/nmap      -> normalized Nmap XML (read-only)
   /api/system/status  -> live system monitor metrics
@@ -38,8 +39,10 @@ import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
+import zipfile
 from http import HTTPStatus
 from http.cookies import SimpleCookie
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -1224,6 +1227,9 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
             if parsed.path == "/api/loot/download":
                 self._handle_loot_download(query)
                 return
+            if parsed.path == "/api/loot/archive":
+                self._handle_loot_archive(query)
+                return
             if parsed.path == "/api/loot/view":
                 self._handle_loot_view(query)
                 return
@@ -1610,6 +1616,9 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
             "evil_portal",
             "exfiltration",
             "remote_access",
+            "ai",
+            "utilities",
+            "hardware",
             "general",
             "examples",
             "games",
@@ -1887,6 +1896,35 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
         except Exception as exc:
             _json_response(self, {"error": f"delete error: {exc}"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
 
+    def _parse_range(self, size: int):
+        """Parse a single-range 'Range: bytes=' header. Returns (start, end) or None.
+
+        end is inclusive. Unsatisfiable ranges raise ValueError so the caller can
+        emit 416. Multi-range and non-byte units are ignored (treated as full body).
+        """
+        header = self.headers.get("Range", "").strip()
+        if not header.startswith("bytes=") or "," in header:
+            return None
+        spec = header[len("bytes="):].strip()
+        start_s, _, end_s = spec.partition("-")
+        try:
+            if start_s == "":
+                # suffix range: last N bytes
+                n = int(end_s)
+                if n <= 0:
+                    raise ValueError
+                start = max(0, size - n)
+                end = size - 1
+            else:
+                start = int(start_s)
+                end = int(end_s) if end_s else size - 1
+        except ValueError:
+            raise ValueError("invalid range")
+        end = min(end, size - 1)
+        if start > end or start >= size:
+            raise ValueError("unsatisfiable")
+        return start, end
+
     def _handle_loot_download(self, query: dict) -> None:
         raw = unquote(query.get("path", [""])[0])
         target = _safe_loot_path(raw)
@@ -1894,23 +1932,109 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
             _json_response(self, {"error": "not found"}, status=HTTPStatus.NOT_FOUND)
             return
 
+        # ?inline=1 serves the file for in-browser playback/viewing instead of
+        # forcing a download, so an <audio> tag or a new tab can stream it.
+        inline = str(query.get("inline", [""])[0]).strip().lower() in {"1", "true", "yes", "on"}
+        disposition = "inline" if inline else "attachment"
+
         ctype, _ = mimetypes.guess_type(str(target))
         ctype = ctype or "application/octet-stream"
         try:
             size = target.stat().st_size
-            self.send_response(HTTPStatus.OK)
+
+            try:
+                rng = self._parse_range(size)
+            except ValueError:
+                self.send_response(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
+                self.send_header("Content-Range", f"bytes */{size}")
+                self.end_headers()
+                return
+
+            if rng is None:
+                start, end = 0, size - 1
+                status = HTTPStatus.OK
+            else:
+                start, end = rng
+                status = HTTPStatus.PARTIAL_CONTENT
+
+            length = end - start + 1
+            self.send_response(status)
             self.send_header("Content-Type", ctype)
-            self.send_header("Content-Length", str(size))
-            self.send_header("Content-Disposition", f'attachment; filename="{target.name}"')
+            self.send_header("Content-Length", str(length))
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Content-Disposition", f'{disposition}; filename="{target.name}"')
+            if status == HTTPStatus.PARTIAL_CONTENT:
+                self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
             self.end_headers()
+
             with target.open("rb") as f:
+                f.seek(start)
+                remaining = length
+                while remaining > 0:
+                    chunk = f.read(min(1024 * 1024, remaining))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    remaining -= len(chunk)
+        except (BrokenPipeError, ConnectionResetError):
+            # Client seeked/closed mid-stream; normal for media playback.
+            pass
+        except Exception:
+            _json_response(self, {"error": "read error"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+
+    def _handle_loot_archive(self, query: dict) -> None:
+        """Stream a .zip of a loot folder so all files (e.g. recordings) pull at once."""
+        raw = unquote(query.get("path", [""])[0])
+        target = _safe_loot_path(raw)
+        if target is None or not target.exists() or not target.is_dir():
+            _json_response(self, {"error": "not found"}, status=HTTPStatus.NOT_FOUND)
+            return
+
+        loot_root = LOOT_DIR.resolve()
+        arc_name = (target.name or "loot") + ".zip"
+        tmp = None
+        try:
+            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
+            with zipfile.ZipFile(tmp, "w", zipfile.ZIP_STORED) as zf:
+                for root, _dirs, files in os.walk(target):
+                    root_path = Path(root)
+                    # Never follow a symlink out of the loot tree.
+                    if not (root_path.resolve() == loot_root or loot_root in root_path.resolve().parents):
+                        continue
+                    for fname in files:
+                        fpath = root_path / fname
+                        try:
+                            if fpath.is_symlink() or not fpath.is_file():
+                                continue
+                            if loot_root not in fpath.resolve().parents:
+                                continue
+                            zf.write(fpath, fpath.relative_to(target).as_posix())
+                        except (OSError, ValueError):
+                            continue
+            tmp.flush()
+            tmp.close()
+            size = os.path.getsize(tmp.name)
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "application/zip")
+            self.send_header("Content-Length", str(size))
+            self.send_header("Content-Disposition", f'attachment; filename="{arc_name}"')
+            self.end_headers()
+            with open(tmp.name, "rb") as f:
                 while True:
                     chunk = f.read(1024 * 1024)
                     if not chunk:
                         break
                     self.wfile.write(chunk)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
         except Exception:
-            _json_response(self, {"error": "read error"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            _json_response(self, {"error": "archive error"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+        finally:
+            if tmp is not None:
+                try:
+                    os.unlink(tmp.name)
+                except OSError:
+                    pass
 
     def _handle_loot_view(self, query: dict) -> None:
         raw = unquote(query.get("path", [""])[0])

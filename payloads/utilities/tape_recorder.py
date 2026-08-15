@@ -34,7 +34,10 @@ import LCD_Config
 from PIL import Image, ImageDraw
 from payloads._display_helper import ScaledDraw, scaled_font, SX, SY
 from payloads._input_helper import get_button
-from payloads._audio_helper import get_audio_card, get_alsa_dev
+from payloads._audio_helper import (
+    get_audio_card, get_alsa_dev, get_capture_dev,
+    enable_capture, disable_capture, get_capture_label,
+)
 
 try:
     import evdev_keys
@@ -84,7 +87,9 @@ _play_proc = None
 _rec_start = 0.0
 _play_start = 0.0
 _level_rms = 0
-_alsa_dev = "default"
+_capture_dev = "default"
+_playback_dev = "default"
+_mic_label = ""
 _volume = 25
 
 C_BG = (10, 10, 15)
@@ -112,48 +117,20 @@ signal.signal(signal.SIGTERM, _sig)
 
 
 def _detect_alsa_dev():
-    global _alsa_dev
-    try:
-        r = subprocess.run(["aplay", "-l"], capture_output=True, text=True, timeout=3)
-        for line in r.stdout.split("\n"):
-            if "card" in line.lower() and ":" in line:
-                card_num = line.split(":")[0].replace("card", "").strip()
-                if any(k in line.upper() for k in ["ES8388", "ES8389", "ES8390"]):
-                    _alsa_dev = f"plughw:{card_num},0"
-                    return
-                elif "HDMI" not in line.upper():
-                    _alsa_dev = f"plughw:{card_num},0"
-    except Exception:
-        pass
+    global _capture_dev, _playback_dev, _mic_label
+    _capture_dev = get_capture_dev()
+    _playback_dev = get_alsa_dev()
+    _mic_label = get_capture_label()
 
 
 def _enable_mic():
-    """Enable analog mic: PIO_G9 LOW + AMIC mode + gain up."""
-    subprocess.run(
-        ["i2cset", "-f", "-y", "1", "0x4f", "0x06", "0x01"],
-        capture_output=True, timeout=2)
-    subprocess.run(
-        ["amixer", "-c", get_audio_card(), "cset", "name=ADC MUX", "0"],
-        capture_output=True, timeout=2)
-    subprocess.run(
-        ["amixer", "-c", get_audio_card(), "cset", "name=ADCL PGA Volume", "12"],
-        capture_output=True, timeout=2)
-    subprocess.run(
-        ["amixer", "-c", get_audio_card(), "cset", "name=ADCR PGA Volume", "12"],
-        capture_output=True, timeout=2)
-    subprocess.run(
-        ["amixer", "-c", get_audio_card(), "cset", "name=ADCL Capture Volume", "220"],
-        capture_output=True, timeout=2)
-    subprocess.run(
-        ["amixer", "-c", get_audio_card(), "cset", "name=ADCR Capture Volume", "220"],
-        capture_output=True, timeout=2)
+    """Power up the selected mic (USB, or built-in analog via AU_EN + ADC path)."""
+    enable_capture()
 
 
 def _disable_mic():
-    """Restore PIO_G9 HIGH (default state)."""
-    subprocess.run(
-        ["i2cset", "-f", "-y", "1", "0x4f", "0x06", "0x03"],
-        capture_output=True, timeout=2)
+    """Release the mic. No-op for USB."""
+    disable_capture()
 
 
 def _ensure_loot_dir():
@@ -215,7 +192,7 @@ def _start_recording():
     _enable_mic()
     time.sleep(0.2)
     _rec_proc = subprocess.Popen(
-        ["arecord", "-D", _alsa_dev, "-f", FORMAT, "-r", str(RATE),
+        ["arecord", "-D", _capture_dev, "-f", FORMAT, "-r", str(RATE),
          "-c", str(CHANNELS), "-t", "raw"],
         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     _rec_start = time.time()
@@ -303,7 +280,7 @@ def _start_playback(path):
         ["amixer", "-c", get_audio_card(), "sset", "DACR", "180"],
         capture_output=True, timeout=2)
     _play_proc = subprocess.Popen(
-        ["aplay", "-D", _alsa_dev, path],
+        ["aplay", "-D", _playback_dev, path],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     _play_start = time.time()
     _playing = True
@@ -384,6 +361,10 @@ def _draw_recording_screen(elapsed, level):
 
         _draw_meter(d, 30, 130, W - 60, 10, level)
 
+        d.text((W // 2, 150), _mic_label, font=font_sm, fill=C_DIM,
+               anchor="mm") if hasattr(d, 'textbbox') else d.text(
+                   (30, 144), _mic_label, font=font_sm, fill=C_DIM)
+
         d.text((W // 2, H - 14), "OK: Stop", font=font_sm, fill=C_DIM,
                anchor="mm") if hasattr(d, 'textbbox') else d.text(
                    (W // 2 - 20, H - 20), "OK: Stop", font=font_sm, fill=C_DIM)
@@ -397,6 +378,7 @@ def _draw_recording_screen(elapsed, level):
 
         d.text((64, 50), _fmt_duration(elapsed), font=font_lg, fill=C_WHITE)
         _draw_meter(d, 10, 75, 108, 6, level)
+        d.text((64, 92), _mic_label[:18], font=font_sm, fill=C_DIM)
         d.text((64, 110), "OK: Stop", font=font_sm, fill=C_DIM)
 
     LCD.LCD_ShowImage(img, 0, 0)
