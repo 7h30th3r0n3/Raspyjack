@@ -45,7 +45,7 @@
     #globeLegend{position:absolute;bottom:10px;left:10px;display:flex;gap:8px;font-size:9px}
     .gl-item{display:flex;align-items:center;gap:3px;color:#4a6080}
     .gl-dot{width:8px;height:8px;border-radius:50%}
-    #satPopup{display:none;position:absolute;background:rgba(8,12,20,.95);border:1px solid var(--border);border-radius:8px;padding:12px;min-width:200px;z-index:100;backdrop-filter:blur(8px);box-shadow:0 8px 24px rgba(0,0,0,.5)}
+    #satPopup{display:none;position:fixed;background:rgba(8,12,20,.95);border:1px solid var(--border);border-radius:8px;padding:12px;min-width:200px;z-index:100;backdrop-filter:blur(8px);box-shadow:0 8px 24px rgba(0,0,0,.5)}
     #satPopup .sp-title{font-size:12px;font-weight:700;margin-bottom:6px}
     #satPopup .sp-row{display:flex;justify-content:space-between;font-size:9px;padding:2px 0}
     #satPopup .sp-lbl{color:#4a6080}
@@ -164,8 +164,8 @@
     <div class="gl-item"><div class="gl-dot" style="background:var(--gal)"></div>Galileo</div>
     <div class="gl-item"><div class="gl-dot" style="background:var(--bds)"></div>BeiDou</div>
   </div>
-  <div id="satPopup"><span class="sp-close" onclick="closeSatPopup()">✕</span><div class="sp-title" id="spTitle"></div><div id="spBody"></div></div>
 </div>
+<div id="satPopup"><span class="sp-close" onclick="closeSatPopup()">✕</span><div class="sp-title" id="spTitle"></div><div id="spBody"></div></div>
 <div class="main-pane" id="mapPane"><div id="mapEl"></div></div>
 <div class="main-pane" id="skyPane">
   <div id="skyFilters">
@@ -297,7 +297,7 @@ gc.addEventListener('mousedown',e=>{gDrag=true;gAutoRot=false;clearTimeout(gAuto
 gc.addEventListener('mousemove',e=>{if(!gDrag)return;gRot.lon-=(e.clientX-gLastMouse.x)*0.4;gRot.lat=Math.max(-89,Math.min(89,gRot.lat+(e.clientY-gLastMouse.y)*0.4));gLastMouse={x:e.clientX,y:e.clientY};drawGlobe()});
 gc.addEventListener('mouseup',()=>{gDrag=false;if(gAutoRotEnabled)gAutoTimer=setTimeout(()=>{gAutoRot=true},120000)});
 gc.addEventListener('mouseleave',()=>{if(gDrag){gDrag=false;if(gAutoRotEnabled)gAutoTimer=setTimeout(()=>{gAutoRot=true},120000)}});
-gc.addEventListener('wheel',e=>{e.preventDefault();gZoom=Math.max(0.4,Math.min(4,gZoom*(e.deltaY>0?0.9:1.1)));drawGlobe()},{passive:false});
+gc.addEventListener('wheel',e=>{e.preventDefault();gZoom=Math.max(0.08,Math.min(4,gZoom*(e.deltaY>0?0.9:1.1)));drawGlobe()},{passive:false});
 gc.addEventListener('click',e=>{
   const rect=gc.getBoundingClientRect();
   const mx=e.clientX-rect.left,my=e.clientY-rect.top;
@@ -451,7 +451,7 @@ function drawGlobe(){
   // Orbit rings
   const orbits=[{alt:20180,col:'rgba(0,200,255,0.06)'},{alt:23222,col:'rgba(0,255,100,0.04)'}];
   orbits.forEach(o=>{
-    const s=1+o.alt/30000;
+    const s=1+o.alt/6371;
     gx.strokeStyle=o.col;gx.lineWidth=0.5;gx.setLineDash([3,5]);
     gx.beginPath();gx.arc(cx,cy,R*s,0,Math.PI*2);gx.stroke();
   });
@@ -463,7 +463,7 @@ function drawGlobe(){
     if(!fix.lat)return;
     const alt=ALT_KM[s.constellation]||20000;
     const gp=satGroundPos(fix.lat,fix.lon,s.elev,s.azim,alt);
-    const orbitScale=1+alt/30000;
+    const orbitScale=1+alt/6371;
     const p=proj3d(gp.lat,gp.lon,orbitScale);
     if(!p.visible)return;
     s._gx=p.x;s._gy=p.y;
@@ -807,8 +807,48 @@ function resizeHorizon(){
   drawHorizon();
 }
 
+let _hSatPositions=[];
+
+let _hClickStart={x:0,y:0};
+hc.addEventListener('mousedown',e=>{_hClickStart={x:e.clientX,y:e.clientY}});
+hc.addEventListener('mouseup',e=>{
+  if(Math.hypot(e.clientX-_hClickStart.x,e.clientY-_hClickStart.y)>5)return;
+  const rect=hc.getBoundingClientRect();
+  const mx=e.clientX-rect.left,my=e.clientY-rect.top;
+  let closest=null,minD=25;
+  _hSatPositions.forEach(sp=>{
+    const d=Math.hypot(sp.x-mx,sp.y-my);
+    if(d<minD){minD=d;closest=sp.sat}
+  });
+  if(closest){
+    const s=closest;
+    const col=COL[s.constellation]||'#888';
+    const nm=satName(s.constellation,s.prn);
+    const info=satInfo(s.constellation,s.prn);
+    const alt=ALT_KM[s.constellation]||20000;
+    const prefix=(NAM[s.constellation]||'?')[0];
+    const popup=document.getElementById('satPopup');
+    document.getElementById('spTitle').innerHTML='<span style="color:'+col+'">'+prefix+s.prn+'</span> '+nm;
+    let body='<div class="sp-row"><span class="sp-lbl">Constellation</span><span class="sp-val" style="color:'+col+'">'+(NAM[s.constellation]||'?')+'</span></div>';
+    body+='<div class="sp-row"><span class="sp-lbl">Elevation</span><span class="sp-val">'+s.elev+'°</span></div>';
+    body+='<div class="sp-row"><span class="sp-lbl">Azimuth</span><span class="sp-val">'+s.azim+'°</span></div>';
+    body+='<div class="sp-row"><span class="sp-lbl">SNR</span><span class="sp-val" style="color:'+(s.snr>=35?'var(--green)':s.snr>=20?'var(--yellow)':'var(--red)')+'">'+(s.snr>0?s.snr+' dB':'No signal')+'</span></div>';
+    body+='<div class="sp-row"><span class="sp-lbl">Altitude</span><span class="sp-val">'+alt.toLocaleString()+' km</span></div>';
+    if(info&&info.block)body+='<div class="sp-row"><span class="sp-lbl">Block</span><span class="sp-val">'+info.block+'</span></div>';
+    if(info&&info.year)body+='<div class="sp-row"><span class="sp-lbl">Launch</span><span class="sp-val">'+info.year+'</span></div>';
+    if(s.used_in_fix)body+='<div class="sp-row"><span class="sp-lbl">Status</span><span class="sp-val" style="color:var(--green)">Used in fix</span></div>';
+    document.getElementById('spBody').innerHTML=body;
+    popup.style.display='block';
+    popup.style.left=Math.min(e.clientX,window.innerWidth-220)+'px';
+    popup.style.top=Math.min(e.clientY-10,window.innerHeight-200)+'px';
+  } else {
+    closeSatPopup();
+  }
+});
+
 function drawHorizon(){
   const w=hc.width,h=hc.height;if(!w)return;
+  _hSatPositions=[];
   hx.clearRect(0,0,w,h);
 
   const skyH=h*0.85;
@@ -896,6 +936,7 @@ function drawHorizon(){
     const r=s.snr>0?Math.max(4,Math.min(10,3+s.snr/8)):3;
     const nm=satName(s.constellation,s.prn);
     const prefix=(NAM[s.constellation]||'?')[0];
+    _hSatPositions.push({x,y,sat:s});
 
     if(s.snr>0){
       // Glow
