@@ -782,29 +782,24 @@
   function filterPayloads(q){
     q=q.toLowerCase().trim();
     const sidebar=document.getElementById('payloadSidebar');
-    sidebar.querySelectorAll('[data-category]').forEach(cat=>{
+    // Each category is a div.rounded-xl containing a button[data-cat] + a hidden/visible div with items
+    sidebar.querySelectorAll(':scope > div').forEach(catDiv=>{
+      const catBtn=catDiv.querySelector('button[data-cat]');
+      const itemsWrap=catDiv.querySelector(':scope > div:last-child');
+      if(!itemsWrap)return;
+      const items=itemsWrap.querySelectorAll(':scope > div');
       let anyVisible=false;
-      cat.querySelectorAll('button,a').forEach(btn=>{
-        const name=(btn.textContent||'').toLowerCase();
+      items.forEach(item=>{
+        const name=(item.querySelector('.truncate')||item).textContent.toLowerCase();
         const match=!q||name.includes(q);
-        btn.style.display=match?'':'none';
+        item.style.display=match?'':'none';
         if(match)anyVisible=true;
       });
-      cat.style.display=(!q||anyVisible)?'':'none';
+      catDiv.style.display=(!q||anyVisible)?'':'none';
+      if(q&&anyVisible&&itemsWrap.classList.contains('hidden')){
+        itemsWrap.classList.remove('hidden');
+      }
     });
-    if(!sidebar.querySelector('[data-category]')){
-      sidebar.querySelectorAll('details').forEach(det=>{
-        let anyVisible=false;
-        det.querySelectorAll('button,a').forEach(btn=>{
-          const name=(btn.textContent||'').toLowerCase();
-          const match=!q||name.includes(q);
-          btn.style.display=match?'':'none';
-          if(match)anyVisible=true;
-        });
-        det.style.display=(!q||anyVisible)?'':'none';
-        if(q&&anyVisible)det.open=true;
-      });
-    }
   }
   </script>
 </body>
