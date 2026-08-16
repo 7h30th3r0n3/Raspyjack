@@ -336,7 +336,7 @@ def _az_to_dir(az):
     return dirs[round(az / 45) % 8]
 
 
-def _decode_apt_partial(raw_path, sample_rate=20800):
+def _decode_apt_partial(raw_path, sample_rate=48000):
     try:
         file_size = os.path.getsize(raw_path)
         if file_size < sample_rate * 4:
@@ -388,8 +388,8 @@ def _decode_apt_partial(raw_path, sample_rate=20800):
 
 def _capture_thread(freq, duration, raw_path, state):
     cmd = [
-        "rtl_fm", "-f", f"{freq}M", "-s", "20800",
-        "-g", "20", "-E", "deemp", "-p", "0",
+        "rtl_fm", "-f", f"{freq}M", "-s", "48000",
+        "-g", "49.6", "-E", "deemp", "-p", "0",
     ]
     try:
         subprocess.run(["pkill", "-9", "rtl_fm"], capture_output=True)
@@ -703,7 +703,7 @@ def main():
 
                         def _auto_capture(p=next_pass):
                             _capture_thread(p["freq"], p["duration"], raw_path, state)
-                            arr = _decode_apt_partial(raw_path, 20800)
+                            arr = _decode_apt_partial(raw_path, 48000)
                             if arr is not None:
                                 path = _save_image(arr, p["satellite"])
                                 state["image_path"] = path
@@ -717,7 +717,7 @@ def main():
                         def _auto_live():
                             while state.get("capturing") and _running:
                                 time.sleep(5)
-                                arr = _decode_apt_partial(raw_path, 20800)
+                                arr = _decode_apt_partial(raw_path, 48000)
                                 if arr is not None:
                                     current_png = os.path.join(LOOT_DIR, "current.png")
                                     Image.fromarray(arr, "L").save(current_png)
@@ -784,7 +784,7 @@ def main():
 
                     def _capture_and_decode():
                         _capture_thread(p["freq"], p["duration"], raw_path, state)
-                        arr = _decode_apt_partial(raw_path, 20800)
+                        arr = _decode_apt_partial(raw_path, 48000)
                         if arr is not None:
                             path = _save_image(arr, p["satellite"])
                             state["image_path"] = path
@@ -797,7 +797,7 @@ def main():
                     def _live_decode():
                         while state.get("capturing") and _running:
                             time.sleep(5)
-                            arr = _decode_apt_partial(raw_path, 20800)
+                            arr = _decode_apt_partial(raw_path, 48000)
                             if arr is not None:
                                 current_png = os.path.join(LOOT_DIR, "current.png")
                                 Image.fromarray(arr, "L").save(current_png)
