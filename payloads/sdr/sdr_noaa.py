@@ -93,7 +93,11 @@ def _btn():
     return b
 
 
+OBSERVER_CONFIG = "/root/Raspyjack/config/observer.json"
+
+
 def _get_observer():
+    # 1. Try GNSS live
     try:
         with open("/dev/shm/rj_gnss_live.json") as f:
             d = json.load(f)
@@ -102,7 +106,22 @@ def _get_observer():
             return fix["lat"], fix["lon"], fix.get("alt", 0)
     except Exception:
         pass
-    return 48.85, 2.35, 50
+    # 2. Try user config file
+    try:
+        with open(OBSERVER_CONFIG) as f:
+            cfg = json.load(f)
+        if cfg.get("lat") and cfg.get("lon"):
+            return cfg["lat"], cfg["lon"], cfg.get("alt", 0)
+    except Exception:
+        pass
+    # 3. Fallback
+    return 0.0, 0.0, 0
+
+
+def _save_observer(lat, lon, alt=0):
+    os.makedirs(os.path.dirname(OBSERVER_CONFIG), exist_ok=True)
+    with open(OBSERVER_CONFIG, "w") as f:
+        json.dump({"lat": lat, "lon": lon, "alt": alt}, f)
 
 
 def _download_tle():

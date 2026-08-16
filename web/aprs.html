@@ -70,6 +70,8 @@
       #rightPanel{width:100%;height:45%;border-left:none;border-top:1px solid var(--border)}
     }
   </style>
+<script src="./theme.js"></script>
+<script src="./map-styles.js"></script>
 </head>
 <body>
 <script>fetch("/api/auth/me",{credentials:"include"}).then(r=>{if(!r.ok)throw 0;return r.json()}).then(d=>{if(!d||!d.authenticated)throw 0}).catch(()=>{document.body.innerHTML='<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;gap:16px;font-family:sans-serif;background:#05060a"><i class="fa-solid fa-lock" style="font-size:48px;color:#f43f5e"></i><h2 style="color:#e2e8f0">Authentication Required</h2><p style="color:#94a3b8">Please log in first.</p><a href="./index.html" style="color:#00ccff;text-decoration:none;padding:8px 20px;border:1px solid #00ccff;border-radius:6px">Login</a></div>'})</script>
@@ -134,8 +136,7 @@ function fmtDur(s){const m=Math.floor(s/60);return m+'m'+('0'+s%60).slice(-2)+'s
 
 function initMap(){
   leafletMap=L.map('map',{zoomControl:true,attributionControl:false,worldCopyJump:true,minZoom:2}).setView([0,0],10);
-  L.tileLayer('/tiles/{z}/{x}/{y}.png',{maxZoom:19}).addTo(leafletMap);
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{maxZoom:19,subdomains:'abcd'}).addTo(leafletMap);
+  _rjAddMapStyleControl(leafletMap);
   obsMarker=L.circleMarker([0,0],{radius:6,fillColor:'#00ccff',fillOpacity:1,color:'#fff',weight:2}).addTo(leafletMap);
   obsMarker.bindTooltip('YOU',{permanent:true,direction:'right',className:'',offset:[8,0]});
 }

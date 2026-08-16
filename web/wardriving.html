@@ -110,6 +110,8 @@
     .detail-sec { display:inline-block; padding:2px 8px; border-radius:4px; font-size:12px; font-weight:600; margin:6px 0; }
     .detail-gps { margin-top:10px; padding:6px 8px; background:#0a1020; border-radius:4px; font-size:10px; color:#888; }
   </style>
+<script src="./theme.js"></script>
+<script src="./map-styles.js"></script>
 </head>
 <body>
 <script>fetch("/api/auth/me",{credentials:"include"}).then(r=>{if(!r.ok)throw 0;return r.json()}).then(d=>{if(!d||!d.authenticated)throw 0}).catch(()=>{document.body.innerHTML='<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;gap:16px;font-family:sans-serif;background:#05060a"><i class="fa-solid fa-lock" style="font-size:48px;color:#f43f5e"></i><h2 style="color:#e2e8f0">Authentication Required</h2><p style="color:#94a3b8">Please log in through the WebUI first.</p><a href="./index.html" style="color:#00ccff;text-decoration:none;padding:8px 20px;border:1px solid #00ccff;border-radius:6px;margin-top:8px">Go to Login</a></div>'})</script>
@@ -227,6 +229,7 @@ L.Icon.Default.prototype.options.imagePath = './vendor/leaflet/';
 const canvasRenderer = L.canvas({padding:0.5});
 const map = L.map('map', {zoomControl:false, preferCanvas:true}).setView([49.18,-0.37],14);
 L.control.zoom({position:'topright'}).addTo(map);
+if(window._rjAddMapStyleControl)_rjAddMapStyleControl(map,'bottomright');
 
 const THEMES = {
   hacker: {

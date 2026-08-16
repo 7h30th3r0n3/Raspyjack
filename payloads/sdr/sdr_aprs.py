@@ -135,7 +135,7 @@ def _bearing_arrow(deg):
 
 
 _APRS_POS_RE = re.compile(
-    r'[!=@/](\d{4}\.\d{2})([NS])[/\\I](\d{5}\.\d{2})([EW])'
+    r'(\d{4}\.\d{2})([NS])[/\\I](\d{5}\.\d{2})([EW])'
 )
 
 
@@ -336,9 +336,124 @@ def _write_live():
         time.sleep(2)
 
 
+_MAP_TILE_CACHE = "/root/Raspyjack/loot/SDR/aprs/.tilecache"
+_MAP_TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+_tile_download_lock = threading.Lock()
+_map_bg = None
+_map_bbox = None
+
+
+def _lat_to_merc(lat):
+    lat = max(-85.0, min(85.0, lat))
+    return math.log(math.tan(math.pi / 4 + math.radians(lat) / 2))
+
+
+def _fetch_map_tile(z, x, y):
+    os.makedirs(_MAP_TILE_CACHE, exist_ok=True)
+    cache_path = os.path.join(_MAP_TILE_CACHE, f"{z}_{x}_{y}.png")
+    if os.path.isfile(cache_path):
+        try:
+            return Image.open(cache_path).convert("RGB")
+        except Exception:
+            pass
+    url = _MAP_TILE_URL.format(z=z, x=x, y=y)
+    try:
+        import urllib.request
+        from io import BytesIO
+        with _tile_download_lock:
+            if os.path.isfile(cache_path):
+                return Image.open(cache_path).convert("RGB")
+            req = urllib.request.Request(url, headers={"User-Agent": "RaspyJack/1.0"})
+            with urllib.request.urlopen(req, timeout=4) as resp:
+                data = resp.read()
+            with open(cache_path, "wb") as f:
+                f.write(data)
+            return Image.open(BytesIO(data)).convert("RGB")
+    except Exception:
+        return None
+
+
+def _build_map_bg(lat, lon, width, height, zoom=12):
+    from PIL import ImageEnhance
+    n = 2 ** zoom
+    x_center = int((lon + 180.0) / 360.0 * n)
+    lat_rad = math.radians(max(-85, min(85, lat)))
+    y_center = int((1.0 - math.log(math.tan(lat_rad) + 1.0 / math.cos(lat_rad)) / math.pi) / 2.0 * n)
+    big = Image.new("RGB", (3 * 256, 3 * 256), (10, 14, 20))
+    for dx in range(-1, 2):
+        for dy in range(-1, 2):
+            tile = _fetch_map_tile(zoom, x_center + dx, y_center + dy)
+            if tile:
+                big.paste(tile, ((dx + 1) * 256, (dy + 1) * 256))
+    nw_lon = (x_center - 1) / n * 360.0 - 180.0
+    se_lon = (x_center + 2) / n * 360.0 - 180.0
+    nw_lat = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * (y_center - 1) / n))))
+    se_lat = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * (y_center + 2) / n))))
+    darkened = ImageEnhance.Brightness(big).enhance(0.45)
+    resized = darkened.resize((width, height), Image.LANCZOS)
+    return resized, (_lat_to_merc(nw_lat), _lat_to_merc(se_lat), nw_lon, se_lon)
+
+
+def _map_project(lat, lon, bbox, width, height):
+    nw_merc, se_merc, nw_lon, se_lon = bbox
+    merc_span = nw_merc - se_merc
+    lon_span = se_lon - nw_lon
+    if merc_span == 0 or lon_span == 0:
+        return width // 2, height // 2
+    merc = _lat_to_merc(lat)
+    x = int((lon - nw_lon) / lon_span * width)
+    y = int((nw_merc - merc) / merc_span * height)
+    return x, y
+
+
+_map_last_count = 0
+
+
+def _best_zoom(obs, stations):
+    if not stations:
+        return 12
+    lats = [obs[0]] + [s["lat"] for s in stations if s.get("lat")]
+    lons = [obs[1]] + [s["lon"] for s in stations if s.get("lon")]
+    if len(lats) < 2:
+        return 12
+    lat_span = max(lats) - min(lats)
+    lon_span = max(lons) - min(lons)
+    span = max(lat_span, lon_span)
+    if span > 8:
+        return 5
+    if span > 4:
+        return 6
+    if span > 2:
+        return 7
+    if span > 1:
+        return 8
+    if span > 0.5:
+        return 9
+    if span > 0.2:
+        return 10
+    if span > 0.1:
+        return 11
+    return 12
+
+
 def _draw_map(selected):
+    global _map_bg, _map_bbox, _map_last_count
     img = Image.new("RGB", (W, H), (5, 8, 15))
     draw = ImageDraw.Draw(img)
+
+    obs = _get_observer()
+
+    with _lock:
+        slist = [s for s in _stations.values() if s.get("lat")]
+    cur_count = len(slist)
+
+    if obs[0] and (_map_bg is None or cur_count != _map_last_count):
+        z = _best_zoom(obs, slist)
+        _map_bg, _map_bbox = _build_map_bg(obs[0], obs[1], W, H - SY(22), zoom=z)
+        _map_last_count = cur_count
+
+    if _map_bg and _map_bbox:
+        img.paste(_map_bg, (0, SY(12)))
 
     draw.rectangle([(0, 0), (W, SY(12))], fill=(10, 15, 25))
     draw.text((SX(2), SY(2)), "APRS MAP", font=font_sm, fill=(0, 200, 255))
@@ -347,29 +462,22 @@ def _draw_map(selected):
     if _receiving:
         draw.ellipse([W - SX(12), SY(3), W - SX(6), SY(9)], fill=(255, 0, 0))
 
-    obs = _get_observer()
-    cx, cy = W // 2, H // 2 + SY(3)
-    R = min(W, H) // 2 - SY(16)
+    if obs[0] and _map_bbox:
+        ox, oy = _map_project(obs[0], obs[1], _map_bbox, W, H - SY(22))
+        oy += SY(12)
+        draw.ellipse([ox - 3, oy - 3, ox + 3, oy + 3], fill=(0, 200, 255))
 
-    draw.ellipse([cx - 2, cy - 2, cx + 2, cy + 2], fill=(0, 200, 255))
-
-    with _lock:
-        slist = sorted(_stations.values(), key=lambda s: s.get("distance_km", 0))
-
-    if slist:
-        max_dist = max(s["distance_km"] for s in slist) or 1
+        with _lock:
+            slist = list(_stations.values())
         for s in slist:
-            if s["distance_km"] == 0:
+            if s.get("lat") is None:
                 continue
-            d = min(1.0, s["distance_km"] / max_dist)
-            angle = math.radians(s["bearing"] - 90)
-            sx = cx + int(d * R * math.cos(angle))
-            sy = cy + int(d * R * math.sin(angle))
-            col = TYPE_COLORS.get(s["type"], (150, 150, 150))
-            draw.ellipse([sx - 2, sy - 2, sx + 2, sy + 2], fill=col)
-            draw.text((sx + SX(3), sy - SY(3)), s["callsign"][:6], font=font_xs, fill=col)
-
-    draw.text((cx, H - SY(16)), f"Range: {max_dist:.0f} km" if slist else "No stations", font=font_xs, fill=(60, 70, 90), anchor="ma")
+            sx, sy = _map_project(s["lat"], s["lon"], _map_bbox, W, H - SY(22))
+            sy += SY(12)
+            if 0 <= sx < W and SY(12) <= sy < H - SY(10):
+                col = TYPE_COLORS.get(s["type"], (150, 150, 150))
+                draw.ellipse([sx - 2, sy - 2, sx + 2, sy + 2], fill=col)
+                draw.text((sx + SX(3), sy - SY(2)), s["callsign"][:6], font=font_xs, fill=col)
 
     draw.rectangle([(0, H - SY(10)), (W, H)], fill=(10, 15, 25))
     draw.text((SX(2), H - SY(9)), "OK:Rec K1:View K3:Exit", font=font_xs, fill=(40, 50, 65))

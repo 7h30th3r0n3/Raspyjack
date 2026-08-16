@@ -197,6 +197,7 @@
     .toast{position:fixed;bottom:24px;right:24px;background:rgba(0,255,136,.12);border:1px solid var(--green);color:var(--green);padding:10px 20px;border-radius:8px;font-size:12px;z-index:200;display:none}
     @media(max-width:900px){#dashL{display:none}#dashBot{flex-direction:column;height:auto}#donutW,#heatW{width:100%;border:none}}
   </style>
+<script src="./theme.js"></script>
 </head>
 <body>
 <script>fetch("/api/auth/me",{credentials:"include"}).then(r=>{if(!r.ok)throw 0;return r.json()}).then(d=>{if(!d||!d.authenticated)throw 0}).catch(()=>{document.body.innerHTML='<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;gap:16px;font-family:sans-serif;background:#05060a"><i class="fa-solid fa-lock" style="font-size:48px;color:#f43f5e"></i><h2 style="color:#e2e8f0">Authentication Required</h2><p style="color:#94a3b8">Please log in through the WebUI first.</p><a href="./index.html" style="color:#00ccff;text-decoration:none;padding:8px 20px;border:1px solid #00ccff;border-radius:6px;margin-top:8px">Go to Login</a></div>'})</script>

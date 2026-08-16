@@ -89,6 +89,8 @@
       #imagePanel{min-height:200px}
     }
   </style>
+<script src="./theme.js"></script>
+<script src="./map-styles.js"></script>
 </head>
 <body>
 <script src="./vendor/leaflet/leaflet.js"></script>
@@ -107,6 +109,7 @@
 <div id="mainTabs" style="display:flex;background:#070a12;border-bottom:1px solid var(--border);flex-shrink:0">
   <div class="main-tab on" onclick="showMainTab('capture')"><i class="fa-solid fa-satellite-dish"></i> Capture</div>
   <div class="main-tab" onclick="showMainTab('map')"><i class="fa-solid fa-map-location-dot"></i> Map</div>
+  <div class="main-tab" onclick="showMainTab('gallery')"><i class="fa-solid fa-images"></i> Gallery</div>
 </div>
 
 <div class="main-pane on" id="paneCapture" style="display:flex">
@@ -127,21 +130,21 @@
   <div id="rightPanel">
     <div id="tabBar">
       <div class="tab-btn on" onclick="showSubTab('passes')"><i class="fa-solid fa-clock"></i> Passes</div>
-      <div class="tab-btn" onclick="showSubTab('gallery')"><i class="fa-solid fa-images"></i> Gallery</div>
       <div class="tab-btn" onclick="showSubTab('status')"><i class="fa-solid fa-info-circle"></i> Status</div>
     </div>
     <div class="sub-pane on" id="subPasses" style="overflow-y:auto;padding:8px 10px;flex:1">
       <div style="font-size:8px;color:#3a5070;margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px">Upcoming satellite passes</div>
       <div id="passList"></div>
     </div>
-    <div class="sub-pane" id="subGallery" style="display:none;overflow-y:auto;padding:8px 10px;flex:1">
-      <div id="galleryGrid" class="gallery-grid"></div>
-      <div id="galleryEmpty" style="text-align:center;padding:30px;color:#1a3050;font-size:11px"><i class="fa-solid fa-images" style="font-size:24px;display:block;margin-bottom:8px"></i>No captured images yet</div>
-    </div>
     <div class="sub-pane" id="subStatus" style="display:none;overflow-y:auto;padding:8px 10px;flex:1">
       <div id="statusContent"></div>
     </div>
   </div>
+</div>
+
+<div class="main-pane" id="paneGallery" style="display:none;overflow-y:auto;padding:16px">
+  <div id="galleryGrid" class="gallery-grid" style="grid-template-columns:repeat(auto-fill,minmax(180px,1fr))"></div>
+  <div id="galleryEmpty" style="text-align:center;padding:60px;color:#1a3050;font-size:12px"><i class="fa-solid fa-images" style="font-size:36px;display:block;margin-bottom:10px"></i>No captured images yet</div>
 </div>
 
 <div class="main-pane" id="paneMap" style="display:none">
@@ -164,13 +167,13 @@ setInterval(()=>{
 },1000);
 
 function showMainTab(t){
-  const tabs=['capture','map'];
+  const tabs=['capture','map','gallery'];
   document.querySelectorAll('.main-tab').forEach((b,i)=>b.classList.toggle('on',tabs[i]===t));
   document.querySelectorAll('.main-pane').forEach(p=>{p.style.display=p.id==='pane'+t.charAt(0).toUpperCase()+t.slice(1)?'flex':'none'});
   if(t==='map'){if(!_noaaMap)initNoaaMap();else setTimeout(()=>_noaaMap.invalidateSize(),100)}
 }
 function showSubTab(t){
-  const tabs=['passes','gallery','status'];
+  const tabs=['passes','status'];
   document.querySelectorAll('.tab-btn').forEach((b,i)=>b.classList.toggle('on',tabs[i]===t));
   document.querySelectorAll('.sub-pane').forEach(p=>{p.style.display=p.id==='sub'+t.charAt(0).toUpperCase()+t.slice(1)?'block':'none'});
 }
@@ -278,24 +281,39 @@ function renderPasses(passes){
   }).join('');
 }
 
+let _galleryHash='';
 function renderGallery(captures){
+  const hash=captures.map(c=>c.file).join(',');
+  if(hash===_galleryHash)return;
+  _galleryHash=hash;
   const grid=document.getElementById('galleryGrid');
   const empty=document.getElementById('galleryEmpty');
   if(!captures.length){grid.innerHTML='';empty.style.display='block';return}
   empty.style.display='none';
+  const ts=Date.now();
   grid.innerHTML=captures.map(c=>{
-    return '<div class="gallery-item" onclick="viewImage(\''+c.path+'\')">'+
-      '<img src="/api/noaa/image?path='+encodeURIComponent(c.path)+'&t='+Date.now()+'" loading="lazy">'+
+    return '<div class="gallery-item" onclick="viewImage(\''+c.path.replace(/'/g,"\\'")+'\')">'+
+      '<img src="/api/noaa/image?path='+encodeURIComponent(c.path)+'&t='+ts+'" loading="lazy">'+
       '<div class="gi-name">'+c.file.replace('.png','')+'</div>'+
     '</div>';
   }).join('');
 }
 
 function viewImage(path){
-  const img=document.getElementById('satImage');
+  const overlay=document.createElement('div');
+  overlay.style.cssText='position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.9);z-index:9999;display:flex;align-items:center;justify-content:center;cursor:pointer';
+  overlay.onclick=function(){document.body.removeChild(overlay)};
+  const img=document.createElement('img');
   img.src='/api/noaa/image?path='+encodeURIComponent(path)+'&t='+Date.now();
-  img.style.display='block';
-  document.getElementById('imageOverlay').style.display='none';
+  img.style.cssText='max-width:95%;max-height:95%;object-fit:contain;border-radius:8px;box-shadow:0 0 40px rgba(0,0,0,.5)';
+  const close=document.createElement('div');
+  close.textContent='✕';
+  close.style.cssText='position:absolute;top:16px;right:20px;color:#fff;font-size:24px;cursor:pointer';
+  const name=document.createElement('div');
+  name.textContent=path.split('/').pop().replace('.png','');
+  name.style.cssText='position:absolute;bottom:16px;left:50%;transform:translateX(-50%);color:#888;font-size:11px;font-family:Courier New,monospace';
+  overlay.appendChild(img);overlay.appendChild(close);overlay.appendChild(name);
+  document.body.appendChild(overlay);
 }
 
 function renderStatus(d){
@@ -345,6 +363,7 @@ let _noaaMap=null,_noaaObsMarker=null,_noaaMapCentered=false,_noaaCircle=null,_n
 
 function initNoaaMap(){
   _noaaMap=L.map('noaaMapEl',{zoomControl:true,attributionControl:false,worldCopyJump:true,minZoom:2}).setView([49,0],5);
+  _rjAddMapStyleControl(_noaaMap);
   L.tileLayer('/tiles/{z}/{x}/{y}.png',{maxZoom:19}).addTo(_noaaMap);
   L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{maxZoom:19,subdomains:'abcd'}).addTo(_noaaMap);
   _noaaObsMarker=L.circleMarker([0,0],{radius:6,fillColor:'#00ccff',fillOpacity:1,color:'#fff',weight:2}).addTo(_noaaMap);
