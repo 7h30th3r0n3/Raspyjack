@@ -328,9 +328,7 @@ def _ecef_to_azel(r_sat, obs_lat, obs_lon, obs_alt, jd, fr):
 
 
 def _gmst(jd, fr):
-    T = (jd + fr - 2451545.0) / 36525.0
-    g = 1.7533685592 + 6.2831853072 * (jd - 2451545.0 + fr) + 6.77e-6 * T * T
-    return g % (2 * math.pi)
+    return math.radians((280.46061837 + 360.98564736629 * (jd + fr - 2451545.0)) % 360)
 
 
 def _az_to_dir(az):
