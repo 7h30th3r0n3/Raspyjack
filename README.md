@@ -376,6 +376,7 @@ Raspyjack/
 │   ├── exfiltration/      # HTTP, DNS, BLE, Discord, SMB, FTP, USB, Dropbox
 │   ├── evasion/           # Evasion techniques
 │   ├── remote_access/     # Reverse shell, Discord C2, HTTPS stealth shell
+│   ├── ai/                # Offline voice journal, speech-to-text, object/bird detection
 │   ├── evil_portal/       # Captive portal with 84 templates, whitelist, SSID editor, credential capture
 │   ├── dead_drop/         # WiFi file sharing with dashboard
 │   ├── utilities/         # Weather, IRC, morse, translator, video player, interface manager, system monitor

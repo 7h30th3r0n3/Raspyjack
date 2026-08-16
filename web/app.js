@@ -77,6 +77,8 @@
   const lootPreviewClose = document.getElementById("lootPreviewClose");
   const lootPreviewDownload = document.getElementById("lootPreviewDownload");
   const lootPreviewMeta = document.getElementById("lootPreviewMeta");
+  const lootPreviewAudio = document.getElementById("lootPreviewAudio");
+  const lootZip = document.getElementById("lootZip");
   const nmapVizModal = document.getElementById("nmapVizModal");
   const nmapVizTitle = document.getElementById("nmapVizTitle");
   const nmapVizMeta = document.getElementById("nmapVizMeta");
@@ -1394,17 +1396,43 @@
     lootUpBtn.classList.toggle("cursor-not-allowed", disabled);
   }
 
-  function openPreview({ title, content, meta, downloadUrl }) {
+  const AUDIO_EXTS = ["wav", "mp3", "ogg", "oga", "flac", "m4a", "aac", "opus", "webm"];
+
+  function isAudioFile(name) {
+    const ext = String(name || "").split(".").pop().toLowerCase();
+    return AUDIO_EXTS.includes(ext);
+  }
+
+  function openPreview({ title, content, meta, downloadUrl, audioUrl }) {
     if (!lootPreview) return;
     if (lootPreviewTitle) lootPreviewTitle.textContent = title || "Preview";
-    if (lootPreviewBody) lootPreviewBody.textContent = content || "";
     if (lootPreviewMeta) lootPreviewMeta.textContent = meta || "";
     if (lootPreviewDownload) lootPreviewDownload.href = downloadUrl || "#";
+    if (lootPreviewAudio) {
+      if (audioUrl) {
+        lootPreviewAudio.src = audioUrl;
+        lootPreviewAudio.classList.remove("hidden");
+      } else {
+        lootPreviewAudio.pause();
+        lootPreviewAudio.removeAttribute("src");
+        lootPreviewAudio.load();
+        lootPreviewAudio.classList.add("hidden");
+      }
+    }
+    if (lootPreviewBody) {
+      lootPreviewBody.textContent = audioUrl ? "" : content || "";
+      lootPreviewBody.classList.toggle("hidden", !!audioUrl);
+    }
     lootPreview.classList.remove("hidden");
   }
 
   function closePreview() {
     if (!lootPreview) return;
+    if (lootPreviewAudio) {
+      lootPreviewAudio.pause();
+      lootPreviewAudio.removeAttribute("src");
+      lootPreviewAudio.load();
+    }
     lootPreview.classList.add("hidden");
   }
 
@@ -1849,6 +1877,7 @@
       lootState = { path: data.path || "", parent: data.parent || "" };
       setLootPath(lootState.path);
       updateLootUp();
+      updateLootZip(data.items || []);
       renderLoot(data.items || []);
       setLootStatus("Ready");
     } catch (e) {
@@ -1857,7 +1886,27 @@
     }
   }
 
+  function updateLootZip(items) {
+    if (!lootZip) return;
+    const hasFiles = (items || []).some((it) => it && it.type !== "dir");
+    lootZip.href = getApiUrl("/api/loot/archive", { path: lootState.path || "" });
+    const label =
+      lootState.path && lootState.path.includes("/")
+        ? lootState.path.split("/").pop()
+        : lootState.path || "loot";
+    lootZip.textContent = `Download ${label} (.zip)`;
+    lootZip.classList.toggle("hidden", !hasFiles);
+  }
+
   async function previewLootFile(path, name) {
+    if (isAudioFile(name)) {
+      // inline=1 streams for playback (Range-enabled) instead of forcing a download.
+      const audioUrl = getApiUrl("/api/loot/download", { path, inline: "1" });
+      const downloadUrl = getApiUrl("/api/loot/download", { path });
+      openPreview({ title: name, meta: "Audio", downloadUrl, audioUrl });
+      setLootStatus("Ready");
+      return;
+    }
     setLootStatus("Loading preview...");
     try {
       const url = getApiUrl("/api/loot/view", { path });
