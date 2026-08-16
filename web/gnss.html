@@ -532,7 +532,7 @@ function spRow(l,v,c){return`<div class="sp-row"><span class="sp-lbl">${l}</span
 // ═════════════════════════════════════════════════════════════════════
 // LEAFLET MAP
 // ═════════════════════════════════════════════════════════════════════
-let leafletMap=null,lMarker=null,lAccCircle=null,lTrail=null,lSatMarkers=[],lSatLines=[],lSatTrails={};
+let leafletMap=null,lMarker=null,lAccCircle=null,lTrail=null,lSatMarkers=[],lSatLines=[],lSatTrails={},_mapCentered=false;
 function initMap(){
   leafletMap=L.map('mapEl',{zoomControl:true,attributionControl:false,worldCopyJump:true,minZoom:2}).setView([48.85,2.35],3);
   L.tileLayer('/tiles/{z}/{x}/{y}.png',{maxZoom:19}).addTo(leafletMap);
@@ -547,7 +547,7 @@ function updateMap(){
   lMarker.setLatLng(ll);
   lAccCircle.setLatLng(ll).setRadius(Math.max(5,(fix.hdop||5)*5));
   if(posHistory.length>0)lTrail.setLatLngs(posHistory.map(p=>[p.lat,p.lon]));
-  if(posHistory.length===1)leafletMap.setView(ll,14);
+  if(!_mapCentered&&fix.lat){_mapCentered=true;leafletMap.setView(ll,6)}
 
   // Update satellite markers without removing them (avoids zoom/pan interruption)
   const newKeys=new Set();

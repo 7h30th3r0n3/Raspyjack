@@ -256,26 +256,51 @@ def _az_to_dir(az):
     return dirs[round(az / 45) % 8]
 
 
-def _decode_apt_partial(raw_path, sample_rate=48000):
+def _decode_apt_partial(raw_path, sample_rate=20800):
     try:
-        data = np.fromfile(raw_path, dtype=np.int16)
-        if len(data) < sample_rate * 2:
+        file_size = os.path.getsize(raw_path)
+        if file_size < sample_rate * 4:
             return None
-        from scipy.signal import hilbert, resample
-        target_rate = 20800
-        if sample_rate != target_rate:
-            new_len = int(len(data) * target_rate / sample_rate)
-            data = resample(data, new_len)
-        analytic = hilbert(data.astype(np.float64))
-        envelope = np.abs(analytic)
-        if envelope.max() - envelope.min() < 1:
-            return None
-        envelope = (envelope - envelope.min()) / (envelope.max() - envelope.min()) * 255
+
+        samples_per_line = int(sample_rate / 2)
+        chunk_lines = 8
+        chunk_samples = samples_per_line * chunk_lines
         pixels_per_line = 2080
-        lines = len(envelope) // pixels_per_line
-        if lines < 2:
+
+        result_lines = []
+        offset = 0
+        total_samples = file_size // 2
+
+        while offset + chunk_samples <= total_samples:
+            with open(raw_path, "rb") as f:
+                f.seek(offset * 2)
+                raw = f.read(chunk_samples * 2)
+            chunk = np.frombuffer(raw, dtype=np.int16).astype(np.float32)
+
+            from scipy.signal import hilbert
+            envelope = np.abs(hilbert(chunk))
+
+            ratio = pixels_per_line / samples_per_line
+            for line_i in range(chunk_lines):
+                start = line_i * samples_per_line
+                end = start + samples_per_line
+                if end > len(envelope):
+                    break
+                line_env = envelope[start:end]
+                indices = np.linspace(0, len(line_env) - 1, pixels_per_line).astype(int)
+                row = line_env[indices]
+                result_lines.append(row)
+
+            offset += chunk_samples
+
+        if len(result_lines) < 2:
             return None
-        image = envelope[:lines * pixels_per_line].reshape(lines, pixels_per_line).astype(np.uint8)
+
+        image = np.stack(result_lines)
+        mn, mx = image.min(), image.max()
+        if mx - mn < 1:
+            return None
+        image = ((image - mn) / (mx - mn) * 255).astype(np.uint8)
         return image
     except Exception:
         return None
@@ -283,7 +308,7 @@ def _decode_apt_partial(raw_path, sample_rate=48000):
 
 def _capture_thread(freq, duration, raw_path, state):
     cmd = [
-        "rtl_fm", "-f", f"{freq}M", "-s", "48000",
+        "rtl_fm", "-f", f"{freq}M", "-s", "20800",
         "-g", "40", "-E", "deemp", "-p", "0",
     ]
     try:
@@ -567,21 +592,21 @@ def main():
                 passes.clear()
                 passes.extend(_passes)
 
-                now = datetime.now(timezone.utc)
+                now_ts = time.time()
                 next_pass = None
                 for p in passes:
-                    start = datetime.fromisoformat(p["start_utc"])
-                    if start > now and not state.get("capturing"):
+                    start_ts = p.get("start_ts", 0)
+                    end_ts = p.get("end_ts", 0)
+                    if end_ts > now_ts and not state.get("capturing"):
                         next_pass = p
                         break
 
                 if next_pass:
-                    start = datetime.fromisoformat(next_pass["start_utc"])
-                    wait = (start - now).total_seconds()
+                    wait = next_pass["start_ts"] - now_ts
                     state["next_pass"] = next_pass
                     state["next_pass_seconds"] = max(0, int(wait))
 
-                    if wait <= 10 and not state.get("capturing"):
+                    if wait <= 30 and not state.get("capturing"):
                         state["capturing"] = True
                         state["satellite"] = next_pass["satellite"]
                         state["frequency"] = next_pass["freq"]
@@ -594,7 +619,7 @@ def main():
 
                         def _auto_capture(p=next_pass):
                             _capture_thread(p["freq"], p["duration"], raw_path, state)
-                            arr = _decode_apt_partial(raw_path, 48000)
+                            arr = _decode_apt_partial(raw_path, 20800)
                             if arr is not None:
                                 path = _save_image(arr, p["satellite"])
                                 state["image_path"] = path
@@ -608,7 +633,7 @@ def main():
                         def _auto_live():
                             while state.get("capturing") and _running:
                                 time.sleep(5)
-                                arr = _decode_apt_partial(raw_path, 48000)
+                                arr = _decode_apt_partial(raw_path, 20800)
                                 if arr is not None:
                                     current_png = os.path.join(LOOT_DIR, "current.png")
                                     Image.fromarray(arr, "L").save(current_png)
@@ -675,7 +700,7 @@ def main():
 
                     def _capture_and_decode():
                         _capture_thread(p["freq"], p["duration"], raw_path, state)
-                        arr = _decode_apt_partial(raw_path, 48000)
+                        arr = _decode_apt_partial(raw_path, 20800)
                         if arr is not None:
                             path = _save_image(arr, p["satellite"])
                             state["image_path"] = path
@@ -688,7 +713,7 @@ def main():
                     def _live_decode():
                         while state.get("capturing") and _running:
                             time.sleep(5)
-                            arr = _decode_apt_partial(raw_path, 48000)
+                            arr = _decode_apt_partial(raw_path, 20800)
                             if arr is not None:
                                 current_png = os.path.join(LOOT_DIR, "current.png")
                                 Image.fromarray(arr, "L").save(current_png)
