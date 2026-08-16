@@ -1191,6 +1191,7 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
             or parsed.path.startswith("/api/ism/")
             or parsed.path.startswith("/api/gnss/")
             or parsed.path.startswith("/api/noaa/")
+            or parsed.path.startswith("/api/aprs/")
             or parsed.path.startswith("/api/honeypot/")
         ):
             query = parse_qs(parsed.query or "")
@@ -1266,6 +1267,10 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
 
             if parsed.path == "/api/gnss/live":
                 self._handle_gnss_live()
+                return
+
+            if parsed.path == "/api/aprs/live":
+                self._handle_aprs_live()
                 return
 
             if parsed.path == "/api/noaa/live":
@@ -1433,6 +1438,36 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
             _kill_payload("gnss_skyplot.py")
             try:
                 Path("/dev/shm/rj_gnss_live.json").unlink(missing_ok=True)
+            except Exception:
+                pass
+            _json_response(self, {"ok": True, "status": "stopped"})
+            return
+        if parsed.path == "/api/aprs/start":
+            query = parse_qs(parsed.query or "")
+            if not _auth_ok(self, query):
+                _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
+                return
+            try:
+                request_path = Path("/dev/shm/rj_payload_request.json")
+                request_path.write_text(json.dumps({
+                    "action": "start",
+                    "path": "sdr/sdr_aprs.py",
+                    "args": ["--auto"],
+                }))
+                _json_response(self, {"ok": True, "status": "starting"})
+            except Exception as exc:
+                _json_response(self, {"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+        if parsed.path == "/api/aprs/stop":
+            query = parse_qs(parsed.query or "")
+            if not _auth_ok(self, query):
+                _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
+                return
+            _kill_payload("sdr_aprs.py")
+            subprocess.run(["pkill", "-9", "direwolf"], capture_output=True)
+            subprocess.run(["pkill", "-9", "rtl_fm"], capture_output=True)
+            try:
+                Path("/dev/shm/rj_aprs_live.json").unlink(missing_ok=True)
             except Exception:
                 pass
             _json_response(self, {"ok": True, "status": "stopped"})
@@ -2354,6 +2389,21 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
 
     _NOAA_LIVE_PATH = Path("/dev/shm/rj_noaa_live.json")
     _NOAA_LOOT_DIR = "/root/Raspyjack/loot/SDR/noaa"
+
+    _APRS_LIVE_PATH = Path("/dev/shm/rj_aprs_live.json")
+
+    def _handle_aprs_live(self) -> None:
+        if self._APRS_LIVE_PATH.exists():
+            try:
+                raw = self._APRS_LIVE_PATH.read_text(encoding="utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(raw.encode())
+            except Exception:
+                _json_response(self, {"ts": 0, "running": False, "total_stations": 0, "stations": [], "recent_packets": []})
+        else:
+            _json_response(self, {"ts": 0, "running": False, "total_stations": 0, "stations": [], "recent_packets": []})
 
     def _handle_noaa_live(self) -> None:
         if self._NOAA_LIVE_PATH.exists():

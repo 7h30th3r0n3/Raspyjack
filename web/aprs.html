@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RaspyJack APRS Monitor</title>
+  <link rel="stylesheet" href="./vendor/css/fontawesome.min.css">
+  <link rel="stylesheet" href="./vendor/leaflet/leaflet.css">
+  <style>
+    :root{color-scheme:dark;--bg:#05060a;--panel:#080c14;--border:#0f1a2a;--accent:#00ccff;--green:#00ff88;--red:#ff3333;--orange:#ff8800;--yellow:#ffaa00;--card:#0a0e18}
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:#ccc;height:100vh;display:flex;flex-direction:column;overflow:hidden}
+    ::-webkit-scrollbar{width:4px}
+    ::-webkit-scrollbar-thumb{background:#1a2844;border-radius:2px}
+
+    #topbar{height:42px;background:#0a0e1a;display:flex;align-items:center;padding:0 12px;gap:8px;border-bottom:1px solid var(--border);flex-shrink:0;overflow-x:auto}
+    #topbar h1{font-size:13px;color:var(--accent);white-space:nowrap;display:flex;align-items:center;gap:5px}
+    .tb-k{font-size:10px;font-family:'Courier New',monospace;display:flex;align-items:center;gap:3px;white-space:nowrap}
+    .tb-k i{color:#2a4060;font-size:8px}
+    .tb-k .v{font-weight:600}
+    .tb-k .u{color:#2a4060;font-size:8px}
+    .tb-sep{width:1px;height:16px;background:#1a2844;flex-shrink:0}
+    .spacer{flex:1}
+    #topbar a{color:#3a5070;font-size:10px;text-decoration:none;white-space:nowrap}
+    #topbar a:hover{color:var(--accent)}
+    .live-btn{background:#111830;color:#888;border:1px solid #1a2844;padding:3px 10px;border-radius:5px;font-size:10px;cursor:pointer;display:flex;align-items:center;gap:4px}
+    .live-btn:hover{color:#fff;background:#1a2850}
+    .live-btn.on{border-color:var(--accent);color:var(--accent)}
+    .live-dot{display:none;color:var(--green);font-size:6px}
+    @keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+    .status-badge{padding:2px 8px;border-radius:5px;font-size:10px;font-weight:700;font-family:'Courier New',monospace}
+    .status-on{background:rgba(0,255,136,.1);color:var(--green);border:1px solid rgba(0,255,136,.3)}
+    .status-off{background:rgba(100,100,100,.1);color:#555;border:1px solid #333}
+
+    #main{display:flex;flex:1;min-height:0}
+    #mapPanel{flex:1;position:relative;min-width:0}
+    #map{width:100%;height:100%;background:#030508}
+    .leaflet-control-attribution{display:none!important}
+    .leaflet-container{background:#030508!important}
+
+    #rightPanel{width:340px;display:flex;flex-direction:column;border-left:1px solid var(--border);flex-shrink:0;min-height:0}
+    #tabBar{display:flex;border-bottom:1px solid var(--border);flex-shrink:0}
+    .tab-btn{flex:1;padding:6px 0;text-align:center;font-size:9px;color:#4a6080;cursor:pointer;border-bottom:2px solid transparent;transition:all .15s;display:flex;align-items:center;justify-content:center;gap:4px}
+    .tab-btn:hover{color:#ccc}
+    .tab-btn.on{color:var(--accent);border-bottom-color:var(--accent)}
+    .tab-pane{display:none;flex:1;overflow-y:auto;padding:0}
+    .tab-pane.on{display:block}
+
+    .stn-row{display:flex;align-items:center;gap:6px;padding:6px 10px;border-bottom:1px solid #080c14;cursor:pointer;transition:background .1s;font-size:10px}
+    .stn-row:hover{background:rgba(0,204,255,.04)}
+    .stn-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+    .stn-call{font-family:'Courier New',monospace;font-weight:700;min-width:75px;color:var(--accent)}
+    .stn-dist{font-family:'Courier New',monospace;min-width:50px;color:var(--orange)}
+    .stn-bear{min-width:15px;color:#4a6080}
+    .stn-ago{color:#3a5070;font-size:9px;margin-left:auto}
+    .stn-pkts{color:#3a5070;font-size:9px;min-width:20px;text-align:right}
+
+    .pkt-row{padding:4px 10px;border-bottom:1px solid #080c14;font-size:9px;font-family:'Courier New',monospace}
+    .pkt-ts{color:#2a4060;margin-right:6px}
+    .pkt-from{color:var(--accent);font-weight:600;margin-right:6px}
+    .pkt-data{color:#6a7a94;word-break:break-all}
+
+    .sort-bar{display:flex;gap:2px;padding:4px 10px;border-bottom:1px solid var(--border);flex-shrink:0}
+    .sort-btn{padding:2px 6px;border-radius:3px;font-size:8px;cursor:pointer;border:1px solid #1a2844;background:none;color:#555;transition:all .12s}
+    .sort-btn:hover{color:#ccc}
+    .sort-btn.on{border-color:var(--accent);color:var(--accent);background:rgba(0,204,255,.06)}
+
+    @media(max-width:700px){
+      #main{flex-direction:column}
+      #rightPanel{width:100%;height:45%;border-left:none;border-top:1px solid var(--border)}
+    }
+  </style>
+</head>
+<body>
+<script>fetch("/api/auth/me",{credentials:"include"}).then(r=>{if(!r.ok)throw 0;return r.json()}).then(d=>{if(!d||!d.authenticated)throw 0}).catch(()=>{document.body.innerHTML='<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;gap:16px;font-family:sans-serif;background:#05060a"><i class="fa-solid fa-lock" style="font-size:48px;color:#f43f5e"></i><h2 style="color:#e2e8f0">Authentication Required</h2><p style="color:#94a3b8">Please log in first.</p><a href="./index.html" style="color:#00ccff;text-decoration:none;padding:8px 20px;border:1px solid #00ccff;border-radius:6px">Login</a></div>'})</script>
+
+<div id="topbar">
+  <h1><i class="fa-solid fa-tower-broadcast"></i> APRS Monitor</h1>
+  <span id="statusBadge" class="status-badge status-off">IDLE</span>
+  <div class="tb-sep"></div>
+  <div class="tb-k"><i class="fa-solid fa-broadcast-tower"></i><span class="v" id="kStations">0</span><span class="u">STN</span></div>
+  <div class="tb-k"><i class="fa-solid fa-envelope"></i><span class="v" id="kPackets">0</span><span class="u">PKT</span></div>
+  <div class="tb-k"><i class="fa-solid fa-gauge"></i><span class="v" id="kRate">0</span><span class="u">/min</span></div>
+  <div class="tb-k"><i class="fa-solid fa-ruler"></i><span class="v" id="kFarthest">0</span><span class="u">km</span></div>
+  <div class="spacer"></div>
+  <button id="btnLive" class="live-btn" onclick="toggleLive()"><i class="fa-solid fa-tower-broadcast"></i> Live <i class="fa-solid fa-circle live-dot" id="liveDot"></i></button>
+  <a href="./index.html"><i class="fa-solid fa-arrow-left"></i> WebUI</a>
+</div>
+
+<div id="main">
+  <div id="mapPanel"><div id="map"></div></div>
+  <div id="rightPanel">
+    <div id="tabBar">
+      <div class="tab-btn on" onclick="showTab('stations')"><i class="fa-solid fa-broadcast-tower"></i> Stations</div>
+      <div class="tab-btn" onclick="showTab('packets')"><i class="fa-solid fa-terminal"></i> Packets</div>
+    </div>
+    <div class="tab-pane on" id="stationsPane">
+      <div class="sort-bar">
+        <span class="sort-btn on" data-s="dist" onclick="setSort('dist')">Distance</span>
+        <span class="sort-btn" data-s="recent" onclick="setSort('recent')">Recent</span>
+        <span class="sort-btn" data-s="packets" onclick="setSort('packets')">Packets</span>
+        <span class="sort-btn" data-s="call" onclick="setSort('call')">Callsign</span>
+        <span style="margin-left:auto;font-size:8px;color:#3a5070" id="stnCount"></span>
+      </div>
+      <div id="stationList"></div>
+    </div>
+    <div class="tab-pane" id="packetsPane">
+      <div id="packetList"></div>
+    </div>
+  </div>
+</div>
+
+<script src="./vendor/leaflet/leaflet.js"></script>
+<script>
+const TYPE_COLORS={tracker:'#00c8ff',digi:'#00ff88',weather:'#ffc800',igate:'#cc66ff',other:'#888'};
+const TYPE_ICONS={tracker:'fa-car',digi:'fa-tower-broadcast',weather:'fa-cloud-sun',igate:'fa-server',other:'fa-question'};
+let data={},isLive=false,pollIv=null,sortMode='dist',_mapCentered=false;
+let leafletMap=null,obsMarker=null,stnMarkers={},stnLines=[];
+
+function showTab(id){
+  document.querySelectorAll('.tab-btn').forEach((b,i)=>b.classList.toggle('on',['stations','packets'][i]===id));
+  document.querySelectorAll('.tab-pane').forEach(p=>p.classList.toggle('on',p.id===id+'Pane'));
+}
+
+function setSort(s){
+  sortMode=s;
+  document.querySelectorAll('.sort-btn').forEach(b=>b.classList.toggle('on',b.dataset.s===s));
+  renderStations();
+}
+
+function bearArrow(deg){return '↑↗→↘↓↙←↖'[Math.floor(((deg+22.5)%360)/45)]}
+function fmtAgo(ts){const s=Math.floor(Date.now()/1000-ts);return s<60?s+'s':s<3600?Math.floor(s/60)+'m':Math.floor(s/3600)+'h'}
+function fmtDur(s){const m=Math.floor(s/60);return m+'m'+('0'+s%60).slice(-2)+'s'}
+
+function initMap(){
+  leafletMap=L.map('map',{zoomControl:true,attributionControl:false,worldCopyJump:true,minZoom:2}).setView([0,0],10);
+  L.tileLayer('/tiles/{z}/{x}/{y}.png',{maxZoom:19}).addTo(leafletMap);
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{maxZoom:19,subdomains:'abcd'}).addTo(leafletMap);
+  obsMarker=L.circleMarker([0,0],{radius:6,fillColor:'#00ccff',fillOpacity:1,color:'#fff',weight:2}).addTo(leafletMap);
+  obsMarker.bindTooltip('YOU',{permanent:true,direction:'right',className:'',offset:[8,0]});
+}
+
+function updateMap(){
+  if(!leafletMap||!data.observer)return;
+  const obs=data.observer;
+  obsMarker.setLatLng([obs.lat,obs.lon]);
+  if(!_mapCentered&&obs.lat){_mapCentered=true;leafletMap.setView([obs.lat,obs.lon],10)}
+
+  // Remove old lines
+  stnLines.forEach(l=>leafletMap.removeLayer(l));
+  stnLines=[];
+
+  const stations=data.stations||[];
+  const currentKeys=new Set();
+
+  stations.forEach(s=>{
+    if(!s.lat||!s.lon)return;
+    const key=s.callsign;
+    currentKeys.add(key);
+    const col=TYPE_COLORS[s.type]||'#888';
+    const icon=TYPE_ICONS[s.type]||'fa-question';
+
+    if(stnMarkers[key]){
+      stnMarkers[key].setLatLng([s.lat,s.lon]);
+    } else {
+      const m=L.circleMarker([s.lat,s.lon],{radius:6,fillColor:col,fillOpacity:0.8,color:col,weight:1.5,opacity:0.6}).addTo(leafletMap);
+      m.bindPopup('');
+      stnMarkers[key]=m;
+    }
+    stnMarkers[key].setPopupContent(
+      '<div style="font-size:11px;min-width:180px">'+
+      '<div style="font-weight:700;color:'+col+';margin-bottom:4px"><i class="fa-solid '+icon+'"></i> '+s.callsign+'</div>'+
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:2px;font-size:9px">'+
+      '<span style="color:#4a6080">Distance</span><span>'+s.distance_km+' km '+bearArrow(s.bearing)+'</span>'+
+      '<span style="color:#4a6080">Bearing</span><span>'+s.bearing+'°</span>'+
+      '<span style="color:#4a6080">Type</span><span style="color:'+col+'">'+s.type+'</span>'+
+      '<span style="color:#4a6080">Packets</span><span>'+s.packets+'</span>'+
+      '<span style="color:#4a6080">Last seen</span><span>'+fmtAgo(s.last_seen)+'</span>'+
+      (s.path?'<span style="color:#4a6080">Path</span><span style="font-size:8px">'+s.path+'</span>':'')+
+      (s.comment?'<span style="color:#4a6080;grid-column:1/-1">'+s.comment+'</span>':'')+
+      '</div></div>'
+    );
+
+    // Line from observer
+    const line=L.polyline([[obs.lat,obs.lon],[s.lat,s.lon]],{color:col,weight:1,opacity:0.12,dashArray:'4,6'}).addTo(leafletMap);
+    stnLines.push(line);
+  });
+
+  // Remove stale markers
+  Object.keys(stnMarkers).forEach(k=>{
+    if(!currentKeys.has(k)){leafletMap.removeLayer(stnMarkers[k]);delete stnMarkers[k]}
+  });
+}
+
+function renderStations(){
+  const el=document.getElementById('stationList');
+  let stations=(data.stations||[]).slice();
+  if(sortMode==='dist')stations.sort((a,b)=>a.distance_km-b.distance_km);
+  else if(sortMode==='recent')stations.sort((a,b)=>b.last_seen-a.last_seen);
+  else if(sortMode==='packets')stations.sort((a,b)=>b.packets-a.packets);
+  else if(sortMode==='call')stations.sort((a,b)=>a.callsign.localeCompare(b.callsign));
+
+  document.getElementById('stnCount').textContent=stations.length+' stations';
+
+  if(!stations.length){el.innerHTML='<div style="padding:40px;text-align:center;color:#1a3050;font-size:11px"><i class="fa-solid fa-broadcast-tower" style="font-size:24px;display:block;margin-bottom:8px"></i>No APRS stations received yet<br><span style="font-size:9px">Start the receiver on 144.800 MHz</span></div>';return}
+
+  el.innerHTML=stations.map(s=>{
+    const col=TYPE_COLORS[s.type]||'#888';
+    return '<div class="stn-row" onclick="focusStation(\''+s.callsign+'\','+s.lat+','+s.lon+')">'+
+      '<div class="stn-dot" style="background:'+col+'"></div>'+
+      '<span class="stn-call" style="color:'+col+'">'+s.callsign+'</span>'+
+      '<span class="stn-dist">'+s.distance_km+'km</span>'+
+      '<span class="stn-bear">'+bearArrow(s.bearing)+'</span>'+
+      '<span class="stn-pkts">'+s.packets+'x</span>'+
+      '<span class="stn-ago">'+fmtAgo(s.last_seen)+'</span>'+
+    '</div>';
+  }).join('');
+}
+
+function renderPackets(){
+  const el=document.getElementById('packetList');
+  const pkts=data.recent_packets||[];
+  if(!pkts.length){el.innerHTML='<div style="padding:40px;text-align:center;color:#1a3050;font-size:11px"><i class="fa-solid fa-terminal" style="font-size:24px;display:block;margin-bottom:8px"></i>No packets yet</div>';return}
+  el.innerHTML=pkts.slice().reverse().map(p=>{
+    const d=new Date(p.ts*1000);
+    const ts=d.toLocaleTimeString();
+    return '<div class="pkt-row"><span class="pkt-ts">'+ts+'</span><span class="pkt-from">'+p.from+'</span><span class="pkt-data">'+escHtml(p.data.substring(0,80))+'</span></div>';
+  }).join('');
+}
+
+function escHtml(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML}
+
+function focusStation(call,lat,lon){
+  if(leafletMap&&lat&&lon){
+    leafletMap.setView([lat,lon],13);
+    if(stnMarkers[call])stnMarkers[call].openPopup();
+  }
+}
+
+function poll(){
+  fetch('/api/aprs/live',{credentials:'include'}).then(r=>r.json()).then(d=>{
+    if(!d||!d.ts)return;
+    data=d;
+
+    const badge=document.getElementById('statusBadge');
+    badge.textContent=d.running?'RECEIVING':'IDLE';
+    badge.className='status-badge '+(d.running?'status-on':'status-off');
+
+    document.getElementById('kStations').textContent=d.total_stations||0;
+    document.getElementById('kPackets').textContent=d.total_packets||0;
+    document.getElementById('kRate').textContent=d.packets_per_min||0;
+    document.getElementById('kFarthest').textContent=d.farthest_km||0;
+
+    updateMap();
+    renderStations();
+    renderPackets();
+  }).catch(()=>{});
+}
+
+function toggleLive(){
+  const btn=document.getElementById('btnLive');
+  const dot=document.getElementById('liveDot');
+  if(isLive){
+    isLive=false;clearInterval(pollIv);pollIv=null;
+    btn.classList.remove('on');dot.style.display='none';
+    fetch('/api/aprs/stop',{method:'POST',credentials:'include'}).catch(()=>{});
+  } else {
+    isLive=true;btn.classList.add('on');dot.style.display='inline';dot.style.animation='blink 1.5s infinite';
+    fetch('/api/aprs/start',{method:'POST',credentials:'include'}).then(()=>{
+      setTimeout(()=>{poll();pollIv=setInterval(poll,3000)},3000);
+    }).catch(()=>{});
+  }
+}
+
+// Init
+initMap();
+// Auto-detect running
+fetch('/api/aprs/live',{credentials:'include'}).then(r=>r.json()).then(d=>{
+  if(d&&d.ts>0&&d.running){
+    isLive=true;
+    document.getElementById('btnLive').classList.add('on');
+    document.getElementById('liveDot').style.display='inline';
+    document.getElementById('liveDot').style.animation='blink 1.5s infinite';
+    data=d;updateMap();renderStations();renderPackets();
+    pollIv=setInterval(poll,3000);
+  }
+}).catch(()=>{});
+</script>
+</body>
+</html>
