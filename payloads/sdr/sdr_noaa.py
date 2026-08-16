@@ -209,6 +209,69 @@ def _predict_passes(tle_sats, obs_lat, obs_lon, obs_alt, hours=24):
     return passes
 
 
+def _ecef_to_latlon(r_sat, jd, fr):
+    gmst = _gmst(jd, fr)
+    x, y, z = r_sat
+    lon = math.atan2(y, x) - gmst
+    lon = math.degrees(lon)
+    lon = ((lon + 180) % 360) - 180
+    r = math.sqrt(x * x + y * y + z * z)
+    lat = math.degrees(math.asin(z / r))
+    alt = r - 6371
+    return round(lat, 4), round(lon, 4), round(alt, 1)
+
+
+def _get_sat_positions(tle_sats):
+    from sgp4.api import jday
+    now = datetime.now(timezone.utc)
+    jd, fr = jday(now.year, now.month, now.day, now.hour, now.minute,
+                  now.second + now.microsecond / 1e6)
+    positions = []
+    for name, data in tle_sats.items():
+        sat = data["sat"]
+        e, r, v = sat.sgp4(jd, fr)
+        if e != 0:
+            continue
+        lat, lon, alt = _ecef_to_latlon(r, jd, fr)
+        positions.append({
+            "satellite": name,
+            "lat": lat,
+            "lon": lon,
+            "alt_km": alt,
+            "freq": data["freq"],
+        })
+    return positions
+
+
+_orbit_cache = {"ts": 0, "tracks": {}}
+
+
+def _get_orbit_tracks(tle_sats, hours=2, step_min=1):
+    now_ts = time.time()
+    if now_ts - _orbit_cache["ts"] < 300 and _orbit_cache["tracks"]:
+        return _orbit_cache["tracks"]
+
+    from sgp4.api import jday
+    now = datetime.now(timezone.utc)
+    tracks = {}
+    for name, data in tle_sats.items():
+        sat = data["sat"]
+        pts = []
+        for i in range(0, hours * 60, step_min):
+            t = now + timedelta(minutes=i)
+            jd, fr = jday(t.year, t.month, t.day, t.hour, t.minute, t.second)
+            e, r, v = sat.sgp4(jd, fr)
+            if e != 0:
+                continue
+            lat, lon, _ = _ecef_to_latlon(r, jd, fr)
+            local_t = t.astimezone()
+            pts.append([lat, lon, local_t.strftime("%H:%M")])
+        tracks[name] = pts
+    _orbit_cache["ts"] = now_ts
+    _orbit_cache["tracks"] = tracks
+    return tracks
+
+
 def _ecef_to_azel(r_sat, obs_lat, obs_lon, obs_alt, jd, fr):
     lat_r = math.radians(obs_lat)
     lon_r = math.radians(obs_lon)
@@ -309,7 +372,7 @@ def _decode_apt_partial(raw_path, sample_rate=20800):
 def _capture_thread(freq, duration, raw_path, state):
     cmd = [
         "rtl_fm", "-f", f"{freq}M", "-s", "20800",
-        "-g", "40", "-E", "deemp", "-p", "0",
+        "-g", "20", "-E", "deemp", "-p", "0",
     ]
     try:
         subprocess.run(["pkill", "-9", "rtl_fm"], capture_output=True)
@@ -352,12 +415,16 @@ def _list_captures():
     return [{"file": f, "path": os.path.join(LOOT_DIR, f)} for f in files[:20]]
 
 
-def _write_live(state, passes):
+def _write_live(state, passes, tle_sats=None):
     while _running:
         try:
             obs = _get_observer()
+            sat_positions = _get_sat_positions(tle_sats) if tle_sats else []
+            orbit_tracks = _get_orbit_tracks(tle_sats) if tle_sats else {}
             payload = {
                 "ts": time.time(),
+                "sat_positions": sat_positions,
+                "orbit_tracks": orbit_tracks,
                 "capturing": state.get("capturing", False),
                 "satellite": state.get("satellite", ""),
                 "frequency": state.get("frequency", 0),
@@ -578,7 +645,7 @@ def main():
         "proc": None,
     }
 
-    threading.Thread(target=_write_live, args=(state, passes), daemon=True).start()
+    threading.Thread(target=_write_live, args=(state, passes, tle_sats), daemon=True).start()
 
     view = 0
     scroll = 0

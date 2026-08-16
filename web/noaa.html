@@ -51,7 +51,12 @@
     .tab-btn{flex:1;padding:6px 0;text-align:center;font-size:9px;color:#4a6080;cursor:pointer;border-bottom:2px solid transparent;transition:all .15s}
     .tab-btn:hover{color:#ccc}
     .tab-btn.on{color:var(--accent);border-bottom-color:var(--accent)}
+    .main-tab{flex:1;padding:7px 0;text-align:center;font-size:10px;color:#3a5070;cursor:pointer;border-bottom:2px solid transparent;transition:all .15s;display:flex;align-items:center;justify-content:center;gap:5px}
+    .main-tab:hover{color:#ccc;background:rgba(0,204,255,.02)}
+    .main-tab.on{color:var(--accent);border-bottom-color:var(--accent);background:rgba(0,204,255,.04)}
+    .main-pane{flex:1;min-height:0;position:relative}
     .leaflet-container{background:#030508!important}
+    .sat-label{background:rgba(8,12,20,.85)!important;border:1px solid rgba(100,100,100,.3)!important;color:#ccc!important;font-size:9px!important;font-family:'Courier New',monospace!important;padding:1px 5px!important;border-radius:3px!important;box-shadow:none!important}
     .leaflet-control-attribution{display:none!important}
     .tab-pane{display:none;flex:1;overflow-y:auto;padding:8px 10px}
     .tab-pane.on{display:block}
@@ -86,6 +91,7 @@
   </style>
 </head>
 <body>
+<script src="./vendor/leaflet/leaflet.js"></script>
 <script>fetch("/api/auth/me",{credentials:"include"}).then(r=>{if(!r.ok)throw 0;return r.json()}).then(d=>{if(!d||!d.authenticated)throw 0}).catch(()=>{document.body.innerHTML='<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;gap:16px;font-family:sans-serif;background:#05060a"><i class="fa-solid fa-lock" style="font-size:48px;color:#f43f5e"></i><h2 style="color:#e2e8f0">Authentication Required</h2><p style="color:#94a3b8">Please log in first.</p><a href="./index.html" style="color:#00ccff;text-decoration:none;padding:8px 20px;border:1px solid #00ccff;border-radius:6px">Login</a></div>'})</script>
 
 <div id="topbar">
@@ -98,9 +104,14 @@
   <a href="./index.html"><i class="fa-solid fa-arrow-left"></i> WebUI</a>
 </div>
 
-<div id="main">
-  <div id="imagePanel">
-    <img id="satImage" alt="Satellite image">
+<div id="mainTabs" style="display:flex;background:#070a12;border-bottom:1px solid var(--border);flex-shrink:0">
+  <div class="main-tab on" onclick="showMainTab('capture')"><i class="fa-solid fa-satellite-dish"></i> Capture</div>
+  <div class="main-tab" onclick="showMainTab('map')"><i class="fa-solid fa-map-location-dot"></i> Map</div>
+</div>
+
+<div class="main-pane on" id="paneCapture" style="display:flex">
+  <div id="imagePanel" style="flex:1;position:relative;overflow:hidden;background:#030508;display:flex;align-items:center;justify-content:center;min-width:0">
+    <img id="satImage" alt="Satellite image" style="max-width:100%;max-height:100%;display:none">
     <div id="imageOverlay">
       <i class="fa-solid fa-satellite-dish"></i>
       <div class="title">NOAA Satellite Receiver</div>
@@ -109,33 +120,32 @@
       <div id="nextPassInfo" style="margin-top:12px;font-size:11px;color:#2a4060"></div>
       <div id="countdownEl" class="countdown"></div>
     </div>
-    <div id="captureInfo"></div>
-    <div id="progressBar" style="display:none"><div id="progressFill"></div></div>
-    <div id="progressLabel"></div>
+    <div id="captureInfo" style="position:absolute;top:8px;left:8px;font-size:10px;color:var(--accent);font-family:'Courier New',monospace"></div>
+    <div id="progressBar" style="display:none;position:absolute;bottom:0;left:0;right:0;height:4px;background:#0a1020"><div id="progressFill" style="height:100%;background:var(--accent);width:0;transition:width 1s"></div></div>
+    <div id="progressLabel" style="position:absolute;bottom:8px;right:8px;font-size:9px;color:#3a5070;font-family:'Courier New',monospace"></div>
   </div>
-
   <div id="rightPanel">
     <div id="tabBar">
-      <div class="tab-btn on" onclick="showTab('passes')"><i class="fa-solid fa-clock"></i> Passes</div>
-      <div class="tab-btn" onclick="showTab('gallery')"><i class="fa-solid fa-images"></i> Gallery</div>
-      <div class="tab-btn" onclick="showTab('status')"><i class="fa-solid fa-info-circle"></i> Status</div>
-      <div class="tab-btn" onclick="showTab('map')"><i class="fa-solid fa-map"></i> Map</div>
+      <div class="tab-btn on" onclick="showSubTab('passes')"><i class="fa-solid fa-clock"></i> Passes</div>
+      <div class="tab-btn" onclick="showSubTab('gallery')"><i class="fa-solid fa-images"></i> Gallery</div>
+      <div class="tab-btn" onclick="showSubTab('status')"><i class="fa-solid fa-info-circle"></i> Status</div>
     </div>
-    <div class="tab-pane on" id="tabPasses">
+    <div class="sub-pane on" id="subPasses" style="overflow-y:auto;padding:8px 10px;flex:1">
       <div style="font-size:8px;color:#3a5070;margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px">Upcoming satellite passes</div>
       <div id="passList"></div>
     </div>
-    <div class="tab-pane" id="tabGallery">
+    <div class="sub-pane" id="subGallery" style="display:none;overflow-y:auto;padding:8px 10px;flex:1">
       <div id="galleryGrid" class="gallery-grid"></div>
       <div id="galleryEmpty" style="text-align:center;padding:30px;color:#1a3050;font-size:11px"><i class="fa-solid fa-images" style="font-size:24px;display:block;margin-bottom:8px"></i>No captured images yet</div>
     </div>
-    <div class="tab-pane" id="tabStatus">
+    <div class="sub-pane" id="subStatus" style="display:none;overflow-y:auto;padding:8px 10px;flex:1">
       <div id="statusContent"></div>
     </div>
-    <div class="tab-pane" id="tabMap" style="padding:0">
-      <div id="noaaMapEl" style="width:100%;height:100%;min-height:300px;background:#030508"></div>
-    </div>
   </div>
+</div>
+
+<div class="main-pane" id="paneMap" style="display:none">
+  <div id="noaaMapEl" style="width:100%;height:100%;background:#030508"></div>
 </div>
 
 <script>
@@ -153,11 +163,16 @@ setInterval(()=>{
   }
 },1000);
 
-function showTab(t){
-  const tabs=['passes','gallery','status','map'];
+function showMainTab(t){
+  const tabs=['capture','map'];
+  document.querySelectorAll('.main-tab').forEach((b,i)=>b.classList.toggle('on',tabs[i]===t));
+  document.querySelectorAll('.main-pane').forEach(p=>{p.style.display=p.id==='pane'+t.charAt(0).toUpperCase()+t.slice(1)?'flex':'none'});
+  if(t==='map'){if(!_noaaMap)initNoaaMap();else setTimeout(()=>_noaaMap.invalidateSize(),100)}
+}
+function showSubTab(t){
+  const tabs=['passes','gallery','status'];
   document.querySelectorAll('.tab-btn').forEach((b,i)=>b.classList.toggle('on',tabs[i]===t));
-  document.querySelectorAll('.tab-pane').forEach(p=>p.classList.toggle('on',p.id==='tab'+t.charAt(0).toUpperCase()+t.slice(1)));
-  if(t==='map'){if(!_noaaMap)initNoaaMap();else _noaaMap.invalidateSize()}
+  document.querySelectorAll('.sub-pane').forEach(p=>{p.style.display=p.id==='sub'+t.charAt(0).toUpperCase()+t.slice(1)?'block':'none'});
 }
 
 function toggleLive(){
@@ -326,7 +341,7 @@ fetch('/api/noaa/live',{credentials:'include'}).then(r=>r.json()).then(d=>{
 // ═════════════════════════════════════════
 // NOAA MAP — observer position + satellite ground track
 // ═════════════════════════════════════════
-let _noaaMap=null,_noaaObsMarker=null,_noaaMapCentered=false,_noaaSatMarker=null,_noaaTrack=null,_noaaCircle=null;
+let _noaaMap=null,_noaaObsMarker=null,_noaaMapCentered=false,_noaaCircle=null,_noaaPassTracks=[],_noaaPassMarkers=[],_noaaTracksDrawn=false;
 
 function initNoaaMap(){
   _noaaMap=L.map('noaaMapEl',{zoomControl:true,attributionControl:false,worldCopyJump:true,minZoom:2}).setView([49,0],5);
@@ -334,9 +349,6 @@ function initNoaaMap(){
   L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{maxZoom:19,subdomains:'abcd'}).addTo(_noaaMap);
   _noaaObsMarker=L.circleMarker([0,0],{radius:6,fillColor:'#00ccff',fillOpacity:1,color:'#fff',weight:2}).addTo(_noaaMap);
   _noaaCircle=L.circle([0,0],{radius:2500000,color:'#00ccff',weight:1,opacity:0.1,fillOpacity:0.02,dashArray:'6,6'}).addTo(_noaaMap);
-  _noaaTrack=L.polyline([],{color:'#ff4444',weight:2,opacity:0.6}).addTo(_noaaMap);
-  _noaaSatMarker=L.marker([0,0],{icon:L.divIcon({html:'<div style="font-size:20px;text-shadow:0 0 8px rgba(255,50,50,.8)">🛰️</div>',iconSize:[24,24],iconAnchor:[12,12]})}).addTo(_noaaMap);
-  _noaaSatMarker.setOpacity(0);
   updateNoaaMap();
 }
 
@@ -349,48 +361,54 @@ function updateNoaaMap(){
   _noaaObsMarker.bindPopup('<b>You</b><br>'+obs.lat.toFixed(4)+'°, '+obs.lon.toFixed(4)+'°');
   if(!_noaaMapCentered){_noaaMapCentered=true;_noaaMap.setView([obs.lat,obs.lon],5)}
 
-  // Show satellite position during capture or next pass
-  const passes=data.passes||[];
-  if(data.capturing&&passes.length){
-    const p=passes[0];
-    if(p.start_ts&&p.end_ts){
-      const now=Date.now()/1000;
-      const progress=Math.max(0,Math.min(1,(now-p.start_ts)/(p.end_ts-p.start_ts)));
-      const startAz=(p.direction||'').split('→')[0];
-      const endAz=(p.direction||'').split('→')[1];
-      // Approximate satellite ground track as arc from start to end direction
-      const Re=6371,alt=850;
-      const gamma=Math.acos(Re/(Re+alt));
-      const azDirs={N:0,NE:45,E:90,SE:135,S:180,SW:225,W:270,NW:315};
-      const az1=(azDirs[startAz]||0)*Math.PI/180;
-      const az2=(azDirs[endAz]||180)*Math.PI/180;
-      const az=az1+(az2-az1)*progress;
-      const dist=gamma*(1-2*Math.abs(progress-0.5));
-      const lat1=obs.lat*Math.PI/180,lon1=obs.lon*Math.PI/180;
-      const satLat=Math.asin(Math.sin(lat1)*Math.cos(dist)+Math.cos(lat1)*Math.sin(dist)*Math.cos(az));
-      const satLon=lon1+Math.atan2(Math.sin(az)*Math.sin(dist)*Math.cos(lat1),Math.cos(dist)-Math.sin(lat1)*Math.sin(satLat));
-      const sLat=satLat*180/Math.PI,sLon=satLon*180/Math.PI;
-      _noaaSatMarker.setLatLng([sLat,sLon]).setOpacity(1);
-      _noaaSatMarker.bindPopup('<b>'+data.satellite+'</b><br>'+data.frequency+' MHz<br>Progress: '+data.progress_pct+'%');
+  // Show real-time satellite positions from SGP4
+  _noaaPassMarkers.forEach(m=>_noaaMap.removeLayer(m));
+  _noaaPassTracks.forEach(t=>_noaaMap.removeLayer(t));
+  _noaaPassMarkers=[];_noaaPassTracks=[];
 
-      // Build track
-      const pts=[];
-      for(let i=0;i<=20;i++){
-        const t=i/20;
-        const a=az1+(az2-az1)*t;
-        const d=gamma*(1-2*Math.abs(t-0.5));
-        const la=Math.asin(Math.sin(lat1)*Math.cos(d)+Math.cos(lat1)*Math.sin(d)*Math.cos(a));
-        const lo=lon1+Math.atan2(Math.sin(a)*Math.sin(d)*Math.cos(lat1),Math.cos(d)-Math.sin(lat1)*Math.sin(la));
-        pts.push([la*180/Math.PI,lo*180/Math.PI]);
-      }
-      _noaaTrack.setLatLngs(pts);
+  const satColors={'NOAA 15':'#ff4444','NOAA 18':'#44aaff','NOAA 19':'#44ff88'};
+
+  // Draw 24h orbit tracks with time markers
+  const tracks=data.orbit_tracks||{};
+  for(const[name,pts] of Object.entries(tracks)){
+    if(!pts||pts.length<2)continue;
+    const col=satColors[name]||'#ff8800';
+    let segment=[];let segTimes=[];
+    function addSeg(){
+      if(segment.length<2)return;
+      const line=L.polyline(segment,{color:col,weight:1.5,opacity:0.15,dashArray:'4,6'}).addTo(_noaaMap);
+      line.on('click',()=>{
+        _noaaPassTracks.forEach(t=>{t.setStyle({weight:1.5,opacity:0.15})});
+        line.setStyle({weight:3,opacity:0.7});
+      });
+      _noaaPassTracks.push(line);
     }
-  } else {
-    _noaaSatMarker.setOpacity(0);
-    _noaaTrack.setLatLngs([]);
+    for(let i=0;i<pts.length;i++){
+      if(segment.length>0&&Math.abs(pts[i][1]-segment[segment.length-1][1])>180){
+        addSeg();segment=[];segTimes=[];
+      }
+      segment.push([pts[i][0],pts[i][1]]);
+      segTimes.push(pts[i][2]||'');
+      // Time markers every 30 min (every 15 points at 2min step)
+      if(pts[i][2]&&i%15===0){
+        const tm=L.circleMarker([pts[i][0],pts[i][1]],{radius:2,fillColor:col,fillOpacity:0.4,color:col,weight:0.5,opacity:0.3}).addTo(_noaaMap);
+        tm.bindTooltip(name.replace('NOAA ','N')+' · '+pts[i][2],{direction:'top',offset:[0,-4],className:'sat-label'});
+        _noaaPassTracks.push(tm);
+      }
+    }
+    addSeg();
   }
+
+  // Current positions
+  (data.sat_positions||[]).forEach(s=>{
+    const col=satColors[s.satellite]||'#ff8800';
+    const m=L.circleMarker([s.lat,s.lon],{radius:7,fillColor:col,fillOpacity:0.9,color:'#fff',weight:1.5}).addTo(_noaaMap);
+    m.bindTooltip(s.satellite.replace('NOAA ','N'),{permanent:true,direction:'right',offset:[8,0],className:'sat-label'});
+    m.bindPopup('<b style="color:'+col+'">'+s.satellite+'</b><br>Alt: '+Math.round(s.alt_km)+' km<br>Freq: '+s.freq+' MHz<br>Lat: '+s.lat+'°<br>Lon: '+s.lon+'°');
+    _noaaPassMarkers.push(m);
+  });
+
 }
 </script>
-<script src="./vendor/leaflet/leaflet.js"></script>
 </body>
 </html>

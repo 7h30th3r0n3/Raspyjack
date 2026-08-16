@@ -178,12 +178,12 @@ def _parse_direwolf_line(line):
     line = line.strip()
     if not line:
         return None
-    m = re.match(r'\[(\d+)\]\s+(\S+?)>(\S+?):(.*)', line)
+    m = re.match(r'\[\d+[\.\d]*\]\s+(\S+?)>(\S+?):(.*)', line)
     if not m:
         return None
-    from_call = m.group(2)
-    to_via = m.group(3)
-    data = m.group(4)
+    from_call = m.group(1)
+    to_via = m.group(2)
+    data = m.group(3)
     parts = to_via.split(",")
     to_call = parts[0] if parts else ""
     path = ",".join(parts[1:]) if len(parts) > 1 else ""
@@ -207,15 +207,17 @@ def _parse_direwolf_line(line):
 def _receiver_thread():
     global _rtl_proc, _dw_proc, _total_packets
     try:
-        _rtl_proc = subprocess.Popen(
-            ["rtl_fm", "-f", f"{APRS_FREQ}M", "-s", "22050", "-g", "40"],
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-        )
+        subprocess.run(["pkill", "-9", "rtl_fm"], capture_output=True)
+        subprocess.run(["pkill", "-9", "direwolf"], capture_output=True)
+        time.sleep(0.5)
+        script = os.path.join(os.path.dirname(__file__), "_aprs_rx.sh")
         _dw_proc = subprocess.Popen(
-            ["direwolf", "-r", "22050", "-t", "0", "-b", "16", "-"],
-            stdin=_rtl_proc.stdout, stdout=subprocess.PIPE,
+            ["bash", script],
+            stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL, text=True, bufsize=1,
+            start_new_session=True,
         )
+        time.sleep(1.5)
         for line in _dw_proc.stdout:
             if not _receiving or not _running:
                 break
