@@ -135,7 +135,7 @@ function fmtAgo(ts){const s=Math.floor(Date.now()/1000-ts);return s<60?s+'s':s<3
 function fmtDur(s){const m=Math.floor(s/60);return m+'m'+('0'+s%60).slice(-2)+'s'}
 
 function initMap(){
-  leafletMap=L.map('map',{zoomControl:true,attributionControl:false,worldCopyJump:true,minZoom:2}).setView([0,0],10);
+  leafletMap=L.map('map',{zoomControl:true,attributionControl:false,worldCopyJump:true,minZoom:2}).setView([0,0],2);
   _rjAddMapStyleControl(leafletMap);
   obsMarker=L.circleMarker([0,0],{radius:6,fillColor:'#00ccff',fillOpacity:1,color:'#fff',weight:2}).addTo(leafletMap);
   obsMarker.bindTooltip('YOU',{permanent:true,direction:'right',className:'',offset:[8,0]});

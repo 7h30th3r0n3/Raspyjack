@@ -177,7 +177,6 @@ def main():
     rw, rh = lcd.width, lcd.height
     s = max(1, S(1))
 
-    # Default: Caen
     zoom = 15
     cx, cy = _lat_lon_to_tile(48.8566, 2.3522, zoom)
 
