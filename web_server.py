@@ -311,6 +311,368 @@ _SCANNER_AUDIO = Path("/dev/shm/rj_scanner_audio.pcm")
 _SCANNER_ACTIVITY_MAX = 100
 
 
+# ---------------------------------------------------------------------------
+# FM Station Database — location-based lookup for FM Broadcast band
+# ---------------------------------------------------------------------------
+
+_FM_STATIONS_CACHE = Path("/root/Raspyjack/config/fm_stations.json")
+_FM_STATIONS: list[dict] = []
+_FM_COUNTRY: str = ""
+_FM_LAT: float = 0.0
+_FM_LON: float = 0.0
+_FM_LOADING: bool = False
+_FM_LAST_ERROR: str = ""
+_FM_LOCK = threading.Lock()
+
+
+def _fm_get_location() -> tuple[str, float, float]:
+    """Detect country and coordinates from GNSS, observer config, or IP."""
+    country = ""
+    lat, lon = 0.0, 0.0
+
+    # 1. Try GNSS live data
+    try:
+        gnss_path = Path("/dev/shm/rj_gnss_live.json")
+        if gnss_path.exists():
+            gnss = json.loads(gnss_path.read_text(encoding="utf-8"))
+            fix = gnss.get("fix", {})
+            glat = fix.get("lat", 0)
+            glon = fix.get("lon", 0)
+            if glat and glon:
+                lat, lon = float(glat), float(glon)
+    except Exception:
+        pass
+
+    # 2. Try observer config
+    if not lat:
+        try:
+            obs_path = Path("/root/Raspyjack/config/observer.json")
+            if obs_path.exists():
+                obs = json.loads(obs_path.read_text(encoding="utf-8"))
+                olat = obs.get("lat", 0)
+                olon = obs.get("lon", 0)
+                if olat and olon:
+                    lat, lon = float(olat), float(olon)
+        except Exception:
+            pass
+
+    # 3. IP geolocation fallback
+    try:
+        import urllib.request
+        req = urllib.request.Request(
+            "http://ip-api.com/json/",
+            headers={"User-Agent": "RaspyJack/1.0"},
+        )
+        with urllib.request.urlopen(req, timeout=5) as r:
+            data = json.loads(r.read().decode("utf-8"))
+            country = data.get("countryCode", "")
+            if not lat:
+                lat = float(data.get("lat", 0))
+                lon = float(data.get("lon", 0))
+    except Exception:
+        pass
+
+    if not country:
+        country = "FR"  # default fallback
+
+    return country, lat, lon
+
+
+def _fm_download_anfr(lat: float, lon: float) -> list[dict]:
+    """Download FM stations from ANFR open data (France only).
+
+    Uses the ANFR open-data portal to fetch FM transmitter locations and
+    frequencies near the given coordinates, sorted by distance.
+    """
+    import urllib.request
+    import urllib.parse
+    import math
+
+    stations: list[dict] = []
+
+    # ANFR open data: query FM stations
+    # The dataset "anfr-support" contains all broadcast transmitters
+    base_url = "https://data.anfr.fr/api/explore/v2.1/catalog/datasets/observatoire_2g_3g_4g/exports/json"
+
+    # Alternative: use the "donnees-sur-les-installations-radioelectriques" dataset
+    # which has FM broadcast stations
+    try:
+        # Try the radioelectric installations dataset with FM filter
+        api_url = (
+            "https://data.anfr.fr/api/explore/v2.1/catalog/datasets/"
+            "donnees-sur-les-installations-radioelectriques-de-plus-de-5-watts-702a5/exports/json"
+            "?where=nature_emetteur%3D%22FM%22"
+            "&limit=5000"
+            "&select=nom_station,frequence_mhz,coordonnees,commune"
+        )
+        req = urllib.request.Request(
+            api_url, headers={"User-Agent": "RaspyJack/1.0"},
+        )
+        with urllib.request.urlopen(req, timeout=15) as r:
+            data = json.loads(r.read().decode("utf-8"))
+
+        for entry in data:
+            freq_mhz = entry.get("frequence_mhz")
+            name = entry.get("nom_station", "").strip()
+            city = entry.get("commune", "").strip()
+            coords = entry.get("coordonnees", {})
+
+            if not freq_mhz or not name:
+                continue
+
+            try:
+                freq_mhz = float(freq_mhz)
+            except (ValueError, TypeError):
+                continue
+
+            # Only keep FM broadcast range (87.5 - 108 MHz)
+            if freq_mhz < 87.5 or freq_mhz > 108.0:
+                continue
+
+            slat = float(coords.get("lat", 0)) if coords else 0
+            slon = float(coords.get("lon", 0)) if coords else 0
+
+            # Calculate distance if we have coordinates
+            dist = 9999.0
+            if lat and lon and slat and slon:
+                dlat = math.radians(slat - lat)
+                dlon = math.radians(slon - lon)
+                a = (math.sin(dlat / 2) ** 2
+                     + math.cos(math.radians(lat))
+                     * math.cos(math.radians(slat))
+                     * math.sin(dlon / 2) ** 2)
+                dist = 6371.0 * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+            stations.append({
+                "freq": int(round(freq_mhz * 1e6)),
+                "freq_mhz": round(freq_mhz, 1),
+                "name": name,
+                "city": city,
+                "dist_km": round(dist, 1),
+            })
+
+        # Sort by distance, keep only stations within 150 km
+        stations = sorted(stations, key=lambda s: s["dist_km"])
+        stations = [s for s in stations if s["dist_km"] <= 150]
+
+        # Deduplicate by frequency (keep closest)
+        seen_freqs: set[int] = set()
+        unique: list[dict] = []
+        for s in stations:
+            freq_key = round(s["freq"] / 100000)  # group within 100kHz
+            if freq_key not in seen_freqs:
+                seen_freqs.add(freq_key)
+                unique.append(s)
+        return unique
+
+    except Exception:
+        return []
+
+
+def _fm_download_radio_browser(country: str) -> list[dict]:
+    """Fallback: download station names from Radio Browser API.
+
+    This gives internet radio station names (not FM frequencies), but many
+    share names with their FM counterparts, useful for display purposes.
+    """
+    import urllib.request
+
+    stations: list[dict] = []
+    try:
+        url = (
+            f"https://de1.api.radio-browser.info/json/stations/search"
+            f"?limit=200&countrycode={country}"
+            f"&order=clickcount&reverse=true&hidebroken=true"
+        )
+        req = urllib.request.Request(
+            url, headers={"User-Agent": "RaspyJack/1.0"},
+        )
+        with urllib.request.urlopen(req, timeout=10) as r:
+            data = json.loads(r.read().decode("utf-8"))
+
+        for s in data:
+            name = s.get("name", "").strip()
+            if not name:
+                continue
+            stations.append({
+                "name": name,
+                "country": s.get("countrycode", ""),
+                "tags": s.get("tags", ""),
+                "votes": s.get("votes", 0),
+            })
+    except Exception:
+        pass
+    return stations
+
+
+# Built-in French FM station database (major national stations and typical
+# frequencies).  These are the most common frequencies for the main French
+# national radio networks.  Because FM frequencies vary by transmitter
+# site, only the most widespread allocations are listed.
+_FM_BUILTIN_FR: list[dict] = [
+    {"freq": 87600000, "freq_mhz": 87.6, "name": "FRANCE INTER", "city": ""},
+    {"freq": 87800000, "freq_mhz": 87.8, "name": "FRANCE CULTURE", "city": ""},
+    {"freq": 88200000, "freq_mhz": 88.2, "name": "FRANCE MUSIQUE", "city": ""},
+    {"freq": 89000000, "freq_mhz": 89.0, "name": "RFI", "city": ""},
+    {"freq": 89900000, "freq_mhz": 89.9, "name": "TSF JAZZ", "city": ""},
+    {"freq": 90400000, "freq_mhz": 90.4, "name": "NOSTALGIE", "city": ""},
+    {"freq": 90900000, "freq_mhz": 90.9, "name": "CHERIE FM", "city": ""},
+    {"freq": 91300000, "freq_mhz": 91.3, "name": "FRANCE INFO", "city": ""},
+    {"freq": 91700000, "freq_mhz": 91.7, "name": "FRANCE BLEU", "city": ""},
+    {"freq": 92100000, "freq_mhz": 92.1, "name": "LE MOUV'", "city": ""},
+    {"freq": 93100000, "freq_mhz": 93.1, "name": "FIP", "city": ""},
+    {"freq": 93500000, "freq_mhz": 93.5, "name": "EUROPE 1", "city": ""},
+    {"freq": 93900000, "freq_mhz": 93.9, "name": "RFM", "city": ""},
+    {"freq": 94800000, "freq_mhz": 94.8, "name": "RIRE ET CHANSONS", "city": ""},
+    {"freq": 95600000, "freq_mhz": 95.6, "name": "CONTACT FM", "city": ""},
+    {"freq": 96000000, "freq_mhz": 96.0, "name": "SKYROCK", "city": ""},
+    {"freq": 96400000, "freq_mhz": 96.4, "name": "BFM BUSINESS", "city": ""},
+    {"freq": 97100000, "freq_mhz": 97.1, "name": "FRANCE INTER", "city": ""},
+    {"freq": 97400000, "freq_mhz": 97.4, "name": "FRANCE CULTURE", "city": ""},
+    {"freq": 98200000, "freq_mhz": 98.2, "name": "RADIO CLASSIQUE", "city": ""},
+    {"freq": 98800000, "freq_mhz": 98.8, "name": "RMC", "city": ""},
+    {"freq": 99000000, "freq_mhz": 99.0, "name": "FUN RADIO", "city": ""},
+    {"freq": 100300000, "freq_mhz": 100.3, "name": "NRJ", "city": ""},
+    {"freq": 100700000, "freq_mhz": 100.7, "name": "OUIFM", "city": ""},
+    {"freq": 101100000, "freq_mhz": 101.1, "name": "VIRGIN RADIO", "city": ""},
+    {"freq": 101500000, "freq_mhz": 101.5, "name": "RADIO NOVA", "city": ""},
+    {"freq": 101900000, "freq_mhz": 101.9, "name": "RTL2", "city": ""},
+    {"freq": 103500000, "freq_mhz": 103.5, "name": "RTL", "city": ""},
+    {"freq": 104300000, "freq_mhz": 104.3, "name": "RFM", "city": ""},
+    {"freq": 104700000, "freq_mhz": 104.7, "name": "EUROPE 2", "city": ""},
+    {"freq": 105100000, "freq_mhz": 105.1, "name": "FIP", "city": ""},
+    {"freq": 105500000, "freq_mhz": 105.5, "name": "FRANCE INFO", "city": ""},
+    {"freq": 106200000, "freq_mhz": 106.2, "name": "RMC INFO", "city": ""},
+    {"freq": 106700000, "freq_mhz": 106.7, "name": "BFM", "city": ""},
+    {"freq": 107100000, "freq_mhz": 107.1, "name": "FRANCE BLEU", "city": ""},
+    {"freq": 107700000, "freq_mhz": 107.7, "name": "MOUV'", "city": ""},
+]
+
+
+def _fm_load_cache() -> bool:
+    """Load FM stations from disk cache. Return True if loaded."""
+    global _FM_STATIONS, _FM_COUNTRY, _FM_LAT, _FM_LON
+    try:
+        if _FM_STATIONS_CACHE.exists():
+            data = json.loads(_FM_STATIONS_CACHE.read_text(encoding="utf-8"))
+            age = time.time() - data.get("ts", 0)
+            if age < 86400:  # cache valid for 24 hours
+                _FM_STATIONS = data.get("stations", [])
+                _FM_COUNTRY = data.get("country", "")
+                _FM_LAT = data.get("lat", 0.0)
+                _FM_LON = data.get("lon", 0.0)
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def _fm_save_cache() -> None:
+    """Persist FM stations to disk cache."""
+    try:
+        _FM_STATIONS_CACHE.parent.mkdir(parents=True, exist_ok=True)
+        _FM_STATIONS_CACHE.write_text(json.dumps({
+            "country": _FM_COUNTRY,
+            "lat": _FM_LAT,
+            "lon": _FM_LON,
+            "stations": _FM_STATIONS,
+            "ts": time.time(),
+        }), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _fm_snap_freq(freq_hz: int) -> int:
+    """Snap a detected frequency to the nearest known FM station (±50kHz)."""
+    with _FM_LOCK:
+        stations = _FM_STATIONS
+    if not stations:
+        return freq_hz
+    best_dist = 50001
+    best_freq = freq_hz
+    for s in stations:
+        sf = s.get("freq", 0)
+        if not sf:
+            continue
+        dist = abs(freq_hz - sf)
+        if dist < best_dist:
+            best_dist = dist
+            best_freq = sf
+    return best_freq if best_dist <= 50000 else freq_hz
+
+
+def _fm_download_stations() -> None:
+    """Background task: download FM stations based on detected location."""
+    global _FM_STATIONS, _FM_COUNTRY, _FM_LAT, _FM_LON
+    global _FM_LOADING, _FM_LAST_ERROR
+
+    with _FM_LOCK:
+        if _FM_LOADING:
+            return
+        _FM_LOADING = True
+
+    try:
+        country, lat, lon = _fm_get_location()
+
+        with _FM_LOCK:
+            _FM_COUNTRY = country
+            _FM_LAT = lat
+            _FM_LON = lon
+
+        stations: list[dict] = []
+
+        # For France, try ANFR open data first
+        if country == "FR":
+            stations = _fm_download_anfr(lat, lon)
+
+        # If ANFR failed or not France, use built-in database
+        if not stations and country == "FR":
+            stations = list(_FM_BUILTIN_FR)
+            for s in stations:
+                s["dist_km"] = 0
+
+        with _FM_LOCK:
+            _FM_STATIONS = stations
+            _FM_LAST_ERROR = ""
+
+        _fm_save_cache()
+
+    except Exception as exc:
+        with _FM_LOCK:
+            _FM_LAST_ERROR = str(exc)
+    finally:
+        with _FM_LOCK:
+            _FM_LOADING = False
+
+
+def _fm_ensure_loaded() -> None:
+    """Ensure FM stations are loaded, triggering download if needed."""
+    with _FM_LOCK:
+        if _FM_STATIONS or _FM_LOADING:
+            return
+
+    if _fm_load_cache():
+        return
+
+    # Start background download
+    threading.Thread(target=_fm_download_stations, daemon=True).start()
+
+
+def _fm_get_stations_response() -> dict:
+    """Build the API response for FM stations."""
+    _fm_ensure_loaded()
+    with _FM_LOCK:
+        return {
+            "country": _FM_COUNTRY,
+            "lat": _FM_LAT,
+            "lon": _FM_LON,
+            "loading": _FM_LOADING,
+            "error": _FM_LAST_ERROR,
+            "count": len(_FM_STATIONS),
+            "stations": list(_FM_STATIONS),
+        }
+
+
 class _ScannerManager:
     """Manages an rtl_fm subprocess for radio frequency scanning."""
 
@@ -342,6 +704,8 @@ class _ScannerManager:
         self._watchlist: list[dict] = list(self._DEFAULT_WATCHLIST)
         self._watch_idx = 0
         self._priority_idx = 0
+        self._rds: dict = {"ps": "", "rt": "", "pty": "", "pi": ""}
+        self._rds_proc = None
 
     @property
     def running(self) -> bool:
@@ -390,6 +754,7 @@ class _ScannerManager:
     def stop(self) -> None:
         self._running = False
         self._scanning = False
+        self._stop_rds()
         if self._proc:
             try:
                 self._proc.terminate()
@@ -401,6 +766,7 @@ class _ScannerManager:
                     pass
             self._proc = None
         subprocess.run(["pkill", "-9", "rtl_fm"], capture_output=True)
+        subprocess.run(["pkill", "-9", "redsea"], capture_output=True)
         try:
             _SCANNER_LIVE.unlink(missing_ok=True)
         except Exception:
@@ -410,12 +776,27 @@ class _ScannerManager:
         except Exception:
             pass
 
+    def _stop_rds(self) -> None:
+        if self._rds_proc:
+            try:
+                self._rds_proc.terminate()
+                self._rds_proc.wait(timeout=2)
+            except Exception:
+                try:
+                    self._rds_proc.kill()
+                except Exception:
+                    pass
+            self._rds_proc = None
+        self._rds = {"ps": "", "rt": "", "pty": "", "pi": ""}
+
     def _start_rtl_fm(self) -> None:
         """Launch rtl_fm for the current frequency and modulation."""
+        self._stop_rds()
         band = _SCANNER_BANDS[self._band_idx]
         mod_flag = band["mod"]
         sdr_rate = band.get("sdr_rate", band["rate"])
         out_rate = band["rate"]
+        is_fm_broadcast = band["name"] == "FM Broadcast"
 
         cmd = [
             "rtl_fm",
@@ -434,8 +815,82 @@ class _ScannerManager:
                 cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
             )
             threading.Thread(target=self._reader, daemon=True).start()
+
         except Exception:
             self._proc = None
+
+    def _rds_quick_decode(self) -> None:
+        """Quick RDS decode: brief MPX capture before audio starts."""
+        if not self._running:
+            return
+        freq = self._freq
+        try:
+            cmd = (f"rtl_fm -f {freq} -M fm -s 171000 -l 0 -g 49.6"
+                   f" - 2>/dev/null | timeout 4 redsea --input mpx"
+                   f" -r 171000 -p 2>/dev/null")
+            result = subprocess.run(
+                cmd, shell=True, capture_output=True, text=True, timeout=8,
+            )
+            for line in (result.stdout or "").strip().splitlines():
+                try:
+                    data = json.loads(line)
+                    with self._lock:
+                        if "ps" in data:
+                            self._rds["ps"] = data["ps"].strip()
+                        elif "partial_ps" in data:
+                            ps = data["partial_ps"].strip()
+                            if len(ps) > len(self._rds.get("ps", "")):
+                                self._rds["ps"] = ps
+                        if "radiotext" in data:
+                            self._rds["rt"] = data["radiotext"].strip()
+                        elif "partial_radiotext" in data:
+                            rt = data["partial_radiotext"].strip()
+                            if len(rt) > len(self._rds.get("rt", "")):
+                                self._rds["rt"] = rt
+                        if "prog_type" in data and data["prog_type"] != "No PTY":
+                            self._rds["pty"] = data["prog_type"]
+                        if "pi" in data:
+                            self._rds["pi"] = data["pi"]
+                except (json.JSONDecodeError, KeyError):
+                    pass
+        except Exception:
+            pass
+
+    def _rds_parser(self) -> None:
+        """Parse JSON RDS data from redsea stderr."""
+        proc = self._rds_proc
+        if not proc:
+            return
+        try:
+            for line in proc.stderr:
+                if not self._running:
+                    break
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                    with self._lock:
+                        if "ps" in data:
+                            self._rds["ps"] = data["ps"].strip()
+                        elif "partial_ps" in data:
+                            ps = data["partial_ps"].strip()
+                            if len(ps) > len(self._rds.get("ps", "")):
+                                self._rds["ps"] = ps
+                        if "radiotext" in data:
+                            self._rds["rt"] = data["radiotext"].strip()
+                        elif "partial_radiotext" in data:
+                            rt = data["partial_radiotext"].strip()
+                            if len(rt) > len(self._rds.get("rt", "")):
+                                self._rds["rt"] = rt
+                        if "prog_type" in data and data["prog_type"] != "No PTY":
+                            self._rds["pty"] = data["prog_type"]
+                        if "pi" in data:
+                            self._rds["pi"] = data["pi"]
+                except (json.JSONDecodeError, KeyError):
+                    pass
+        except Exception:
+            pass
 
     def _reader(self) -> None:
         """Read PCM data from rtl_fm stdout, write to buffer, compute signal."""
@@ -488,9 +943,13 @@ class _ScannerManager:
                 continue
 
             # Phase 2: listen to each active freq
+            is_fm = band["name"] == "FM Broadcast"
             for freq in active_freqs:
                 if not self._running or self._mode != "scan":
                     break
+
+                if is_fm:
+                    freq = _fm_snap_freq(freq)
 
                 with self._lock:
                     self._freq = freq
@@ -622,6 +1081,7 @@ class _ScannerManager:
 
     def _retune(self) -> None:
         """Kill current rtl_fm and restart on current frequency."""
+        self._rds = {"ps": "", "rt": "", "pty": "", "pi": ""}
         if self._proc:
             try:
                 self._proc.terminate()
@@ -676,6 +1136,7 @@ class _ScannerManager:
                         "activity_log": list(
                             self._activity_log[-_SCANNER_ACTIVITY_MAX:]
                         ),
+                        "rds": dict(self._rds) if band["name"] == "FM Broadcast" else None,
                         "bands": [
                             {
                                 "name": b["name"],
@@ -699,6 +1160,8 @@ class _ScannerManager:
         """Handle control commands."""
         if action == "tune":
             freq = int(kwargs.get("freq", self._freq))
+            if _SCANNER_BANDS[self._band_idx]["name"] == "FM Broadcast":
+                freq = _fm_snap_freq(freq)
             with self._lock:
                 self._freq = freq
                 self._mode = "manual"
@@ -1781,6 +2244,9 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
             if parsed.path == "/api/scanner/audio":
                 self._handle_scanner_audio()
                 return
+            if parsed.path == "/api/scanner/fm_stations":
+                self._handle_scanner_fm_stations()
+                return
 
             if parsed.path == "/api/gnss/live":
                 self._handle_gnss_live()
@@ -2112,7 +2578,6 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
                 return
             self._handle_honeypot_stop()
             return
-
         if parsed.path in ("/api/payloads/start", "/api/payloads/run"):
             query = parse_qs(parsed.query or "")
             if not _auth_ok(self, query):
@@ -3707,6 +4172,11 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
             _json_response(self, result, status=HTTPStatus.BAD_REQUEST)
         else:
             _json_response(self, result)
+
+    def _handle_scanner_fm_stations(self) -> None:
+        """Return FM station database for the detected location."""
+        _json_response(self, _fm_get_stations_response())
+
 
 
 def main() -> None:

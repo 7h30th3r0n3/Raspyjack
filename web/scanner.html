@@ -142,6 +142,33 @@
     #bbar .accent{color:var(--accent)}
     #bbar .green{color:var(--green)}
 
+    /* FM Stations panel */
+    .fm-panel{border-bottom:1px solid var(--border)}
+    .fm-header{padding:8px 12px;font-size:11px;font-weight:700;color:#ff3399;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:6px;flex-shrink:0;cursor:pointer;user-select:none}
+    .fm-header i{font-size:12px}
+    .fm-header .fm-count{margin-left:auto;font-size:9px;color:var(--dim);font-weight:400}
+    .fm-header .fm-toggle{margin-left:4px;font-size:8px;color:var(--dim);transition:transform .2s}
+    .fm-header .fm-toggle.open{transform:rotate(90deg)}
+    .fm-body{max-height:0;overflow:hidden;transition:max-height .3s ease}
+    .fm-body.open{max-height:300px;overflow-y:auto}
+    .fm-body::-webkit-scrollbar{width:4px}
+    .fm-body::-webkit-scrollbar-thumb{background:#1a2844;border-radius:2px}
+    .fm-loading{text-align:center;padding:16px;color:var(--dim);font-size:10px}
+    .fm-loading i{animation:pulse 1.5s infinite}
+    .fm-empty{text-align:center;padding:16px;color:#1a3050;font-size:10px}
+    .fm-search{padding:4px 8px;border-bottom:1px solid #0a0e18}
+    .fm-search input{width:100%;padding:3px 6px;border:1px solid #1a2844;border-radius:3px;background:#0a1020;color:var(--accent);font-size:10px;outline:none}
+    .fm-search input::placeholder{color:#1a3050}
+    .fm-item{padding:4px 12px;display:flex;align-items:center;gap:6px;font-size:10px;cursor:pointer;transition:background .1s;border-bottom:1px solid #0a0e18}
+    .fm-item:hover{background:#0c1828}
+    .fm-item.active{background:rgba(255,51,153,.08);border-left:2px solid #ff3399}
+    .fm-item .fm-freq{font-family:'Courier New',monospace;color:#ff3399;font-weight:600;min-width:55px;font-size:11px}
+    .fm-item .fm-name{color:#ccc;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
+    .fm-item .fm-city{color:var(--dim);font-size:9px;max-width:60px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .fm-item .fm-dist{color:var(--dim);font-size:8px;white-space:nowrap}
+    .fm-refresh{background:none;border:1px solid #1a2844;color:#555;border-radius:3px;padding:1px 6px;font-size:9px;cursor:pointer;transition:all .12s}
+    .fm-refresh:hover{color:var(--accent);border-color:var(--accent)}
+
     /* Keyboard hint */
     .kbd-hint{margin-top:auto;padding:12px;border-top:1px solid var(--border);font-size:8px;color:#1a3050;line-height:1.6}
     .kbd-hint kbd{padding:1px 4px;border:1px solid #1a2844;border-radius:2px;font-family:'Courier New',monospace;font-size:8px;color:#3a5070}
@@ -273,6 +300,24 @@
       <button id="wlAddBtn" title="Add frequency">+</button>
     </div>
     <div class="wl-list" id="wlList"></div>
+
+    <!-- FM Station Database -->
+    <div class="fm-panel" id="fmPanel" style="display:none">
+      <div class="fm-header" id="fmHeader">
+        <i class="fa-solid fa-radio"></i> FM Stations
+        <span class="fm-count" id="fmCount"></span>
+        <button class="fm-refresh" id="fmRefresh" title="Refresh station list"><i class="fa-solid fa-rotate"></i></button>
+        <span class="fm-toggle" id="fmToggle"><i class="fa-solid fa-chevron-right"></i></span>
+      </div>
+      <div class="fm-body" id="fmBody">
+        <div class="fm-search">
+          <input type="text" id="fmSearch" placeholder="Search stations...">
+        </div>
+        <div id="fmList">
+          <div class="fm-loading" id="fmLoading"><i class="fa-solid fa-spinner fa-spin"></i> Loading stations...</div>
+        </div>
+      </div>
+    </div>
 
     <div class="log-header">
       <i class="fa-solid fa-list"></i> Activity Log
@@ -976,6 +1021,142 @@ function updateBottomBar(s){
   }
 }
 
+/* ── FM Station Database ── */
+const fmPanel   = document.getElementById('fmPanel');
+const fmHeader  = document.getElementById('fmHeader');
+const fmBody    = document.getElementById('fmBody');
+const fmToggle  = document.getElementById('fmToggle');
+const fmList    = document.getElementById('fmList');
+const fmLoading = document.getElementById('fmLoading');
+const fmCount   = document.getElementById('fmCount');
+const fmSearch  = document.getElementById('fmSearch');
+const fmRefresh = document.getElementById('fmRefresh');
+
+let fmStations = [];
+let fmLoaded = false;
+let fmOpen = true;
+let fmCurrentBand = '';
+let fmFetchTimer = null;
+
+fmHeader.addEventListener('click', (e) => {
+  if(e.target.closest('.fm-refresh')) return;
+  fmOpen = !fmOpen;
+  fmBody.classList.toggle('open', fmOpen);
+  fmToggle.classList.toggle('open', fmOpen);
+});
+
+fmRefresh.addEventListener('click', (e) => {
+  e.stopPropagation();
+  fmLoaded = false;
+  fmStations = [];
+  fmList.innerHTML = '<div class="fm-loading"><i class="fa-solid fa-spinner fa-spin"></i> Refreshing...</div>';
+  fetchFmStations();
+});
+
+fmSearch.addEventListener('input', () => {
+  renderFmStations();
+});
+// Prevent keyboard shortcuts from firing while typing in search
+fmSearch.addEventListener('keydown', (e) => {
+  e.stopPropagation();
+});
+
+async function fetchFmStations(){
+  try {
+    const r = await apiFetch('/api/scanner/fm_stations');
+    const data = await r.json();
+    if(data.loading){
+      fmList.innerHTML = '<div class="fm-loading"><i class="fa-solid fa-spinner fa-spin"></i> Downloading station database...</div>';
+      // Retry in 2 seconds
+      if(fmFetchTimer) clearTimeout(fmFetchTimer);
+      fmFetchTimer = setTimeout(fetchFmStations, 2000);
+      return;
+    }
+    if(data.error){
+      fmList.innerHTML = '<div class="fm-empty"><i class="fa-solid fa-triangle-exclamation"></i> ' + data.error + '</div>';
+      return;
+    }
+    fmStations = data.stations || [];
+    fmLoaded = true;
+    fmCount.textContent = fmStations.length + ' stations';
+    renderFmStations();
+  } catch(e){
+    fmList.innerHTML = '<div class="fm-empty">Failed to load stations</div>';
+  }
+}
+
+function renderFmStations(){
+  const query = (fmSearch.value || '').trim().toLowerCase();
+  let filtered = fmStations;
+  if(query){
+    filtered = fmStations.filter(s =>
+      (s.name || '').toLowerCase().includes(query) ||
+      (s.city || '').toLowerCase().includes(query) ||
+      String(s.freq_mhz || '').includes(query)
+    );
+  }
+  fmCount.textContent = filtered.length + ' / ' + fmStations.length;
+
+  if(!filtered.length){
+    fmList.innerHTML = '<div class="fm-empty">No stations found</div>';
+    return;
+  }
+
+  let html = '';
+  const currentFreq = state ? state.freq : 0;
+  filtered.forEach(s => {
+    const freqStr = (s.freq_mhz || (s.freq / 1e6)).toFixed(1);
+    const isActive = currentFreq && Math.abs(currentFreq - s.freq) < 100000;
+    const distStr = s.dist_km !== undefined && s.dist_km < 9999 ? s.dist_km + ' km' : '';
+    html += '<div class="fm-item' + (isActive ? ' active' : '') + '" data-freq="' + s.freq + '">'
+      + '<span class="fm-freq">' + freqStr + '</span>'
+      + '<span class="fm-name">' + (s.name || '?') + '</span>'
+      + (s.city ? '<span class="fm-city">' + s.city + '</span>' : '')
+      + (distStr ? '<span class="fm-dist">' + distStr + '</span>' : '')
+      + '</div>';
+  });
+  fmList.innerHTML = html;
+
+  // Click handlers
+  fmList.querySelectorAll('.fm-item').forEach(el => {
+    el.addEventListener('click', () => {
+      const freq = parseInt(el.dataset.freq);
+      if(!freq) return;
+      if(isLive){
+        apiPost('/api/scanner/control',{action:'tune',freq:freq});
+      } else {
+        const sq = parseInt(sqSlider.value);
+        // Find FM Broadcast band index
+        let fmBandIdx = 0;
+        if(state && state.bands){
+          state.bands.forEach((b, i) => { if(b.name === 'FM Broadcast') fmBandIdx = i; });
+        }
+        apiPost('/api/scanner/start',{band_idx:fmBandIdx, mode:'manual', squelch:sq, freq:freq});
+        isLive = true;
+        mode = 'manual';
+        updateLiveButton();
+        updateModeButtons();
+        setTimeout(startAudio, 1500);
+      }
+    });
+  });
+}
+
+function updateFmPanel(bandName){
+  const isFM = bandName === 'FM Broadcast';
+  fmPanel.style.display = isFM ? '' : 'none';
+  if(isFM && !fmLoaded && fmCurrentBand !== 'FM Broadcast'){
+    fmCurrentBand = 'FM Broadcast';
+    fmBody.classList.add('open');
+    fmToggle.classList.add('open');
+    fetchFmStations();
+  }
+  // Re-render to update active highlighting
+  if(isFM && fmLoaded){
+    renderFmStations();
+  }
+}
+
 /* ── Poll loop ── */
 let pollTimer = null;
 async function poll(){
@@ -1025,6 +1206,9 @@ async function poll(){
       bandLabel.textContent = data.band || '--';
       modBadge.textContent = (data.modulation || '--').toUpperCase();
 
+      // FM station panel visibility
+      updateFmPanel(data.band || '');
+
       // Signal meter
       updateMeter(data.signal_level || 0, data.squelch || 50);
 
@@ -1057,6 +1241,13 @@ async function poll(){
       }
       updateMeter(0, parseInt(sqSlider.value));
       scanBarBox.style.display = 'none';
+
+      // FM panel when stopped — show based on selected band
+      const stopBands = data.bands || [];
+      const stopBi = parseInt(bandSel.value) || 0;
+      if(stopBands[stopBi]){
+        updateFmPanel(stopBands[stopBi].name || '');
+      }
     }
 
     // Watchlist (always update)
