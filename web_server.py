@@ -286,6 +286,509 @@ _ism_manager = _ISMManager()
 
 
 # ---------------------------------------------------------------------------
+# Scanner Manager — radio frequency scanner using rtl_fm (watchlist mode)
+# ---------------------------------------------------------------------------
+
+_SCANNER_BANDS = [
+    {"name": "Airband", "start": 118000000, "end": 137000000, "mod": "am",
+     "rate": 16000, "step": 25000, "desc": "Aviation 118-137 MHz",
+     "sdr_rate": 48000},
+    {"name": "Marine VHF", "start": 156000000, "end": 163000000, "mod": "fm",
+     "rate": 16000, "step": 25000, "desc": "Marine 156-163 MHz",
+     "sdr_rate": 24000},
+    {"name": "PMR446", "start": 446006250, "end": 446193750, "mod": "fm",
+     "rate": 16000, "step": 12500, "desc": "PMR446 446.0-446.2 MHz",
+     "sdr_rate": 24000},
+    {"name": "FM Broadcast", "start": 87500000, "end": 108000000, "mod": "wbfm",
+     "rate": 32000, "step": 100000, "desc": "FM Radio 87.5-108 MHz",
+     "sdr_rate": 170000},
+    {"name": "SAMU/Emergency", "start": 150000000, "end": 174000000, "mod": "fm",
+     "rate": 16000, "step": 12500, "desc": "Emergency 150-174 MHz",
+     "sdr_rate": 24000},
+]
+_SCANNER_LIVE = Path("/dev/shm/rj_scanner_live.json")
+_SCANNER_AUDIO = Path("/dev/shm/rj_scanner_audio.pcm")
+_SCANNER_ACTIVITY_MAX = 100
+
+
+class _ScannerManager:
+    """Manages an rtl_fm subprocess for radio frequency scanning."""
+
+    _DEFAULT_WATCHLIST = [
+        {"freq": 121500000, "label": "Emergency", "mod": "usb"},
+        {"freq": 123450000, "label": "Air-Air", "mod": "usb"},
+        {"freq": 156800000, "label": "Marine Ch16", "mod": "fm"},
+        {"freq": 446006250, "label": "PMR446 Ch1", "mod": "fm"},
+    ]
+    _DWELL_TIME = 0.8
+    _HOLD_DELAY = 3.0
+    _HOLD_MAX = 15
+
+    def __init__(self):
+        self._proc = None
+        self._lock = threading.Lock()
+        self._running = False
+        self._mode = "scan"
+        self._band_idx = 0
+        self._freq = 0
+        self._squelch = 50
+        self._signal_level = 0.0
+        self._scanning = False
+        self._paused_on_signal = False
+        self._signal_start = 0.0
+        self._skip_signal = False
+        self._activity_log: list[dict] = []
+        self._start_time = 0.0
+        self._watchlist: list[dict] = list(self._DEFAULT_WATCHLIST)
+        self._watch_idx = 0
+        self._priority_idx = 0
+
+    @property
+    def running(self) -> bool:
+        return self._running
+
+    def start(self, band_idx: int = 0, mode: str = "scan",
+              freq: int = 0, squelch: int = 50) -> None:
+        self.stop()
+        if band_idx < 0 or band_idx >= len(_SCANNER_BANDS):
+            band_idx = 0
+        self._band_idx = band_idx
+        self._mode = mode
+        self._squelch = max(0, min(100, squelch))
+        self._activity_log = []
+        self._paused_on_signal = False
+        self._skip_signal = False
+        self._signal_level = 0.0
+        self._start_time = time.time()
+        self._watch_idx = 0
+
+        band = _SCANNER_BANDS[band_idx]
+        if mode == "manual" and freq > 0:
+            self._freq = int(freq)
+        else:
+            self._freq = band["start"]
+
+        self._scanning = mode == "scan"
+
+        for prog in ("rtl_fm", "rtl_433", "rtl_adsb", "rtl_sdr", "rtl_power"):
+            subprocess.run(["pkill", "-9", prog], capture_output=True)
+        time.sleep(0.3)
+
+        try:
+            _SCANNER_AUDIO.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+        self._running = True
+
+        threading.Thread(target=self._writer, daemon=True).start()
+        if mode == "scan":
+            threading.Thread(target=self._scan_loop, daemon=True).start()
+        else:
+            self._start_rtl_fm()
+
+    def stop(self) -> None:
+        self._running = False
+        self._scanning = False
+        if self._proc:
+            try:
+                self._proc.terminate()
+                self._proc.wait(timeout=3)
+            except Exception:
+                try:
+                    self._proc.kill()
+                except Exception:
+                    pass
+            self._proc = None
+        subprocess.run(["pkill", "-9", "rtl_fm"], capture_output=True)
+        try:
+            _SCANNER_LIVE.unlink(missing_ok=True)
+        except Exception:
+            pass
+        try:
+            _SCANNER_AUDIO.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    def _start_rtl_fm(self) -> None:
+        """Launch rtl_fm for the current frequency and modulation."""
+        band = _SCANNER_BANDS[self._band_idx]
+        mod_flag = band["mod"]
+        sdr_rate = band.get("sdr_rate", band["rate"])
+        out_rate = band["rate"]
+
+        cmd = [
+            "rtl_fm",
+            "-M", mod_flag,
+            "-f", str(self._freq),
+            "-s", str(sdr_rate),
+            "-r", str(out_rate),
+            "-l", "0",
+            "-g", "49.6",
+            "-E", "deemp",
+            "-A", "fast",
+        ]
+
+        try:
+            self._proc = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            )
+            threading.Thread(target=self._reader, daemon=True).start()
+        except Exception:
+            self._proc = None
+
+    def _reader(self) -> None:
+        """Read PCM data from rtl_fm stdout, write to buffer, compute signal."""
+        import math as _math
+        import struct as _struct
+
+        proc = self._proc
+        if not proc:
+            return
+        try:
+            while self._running and proc.poll() is None:
+                chunk = proc.stdout.read(4096)
+                if not chunk:
+                    break
+                try:
+                    with open(str(_SCANNER_AUDIO), "ab") as f:
+                        f.write(chunk)
+                except Exception:
+                    pass
+                try:
+                    n = len(chunk) // 2
+                    if n > 0:
+                        samples = _struct.unpack(f"<{n}h", chunk[:n * 2])
+                        rms = _math.sqrt(sum(s * s for s in samples) / n)
+                        db = 20 * _math.log10(max(rms, 1) / 32768)
+                        level = max(0.0, min(100.0, (db + 40) * 2.5))
+                        with self._lock:
+                            self._signal_level = round(level, 1)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    def _scan_loop(self) -> None:
+        """Hybrid scanner: rtl_power sweep → listen to active freqs → repeat."""
+        while self._running and self._mode == "scan":
+            band = _SCANNER_BANDS[self._band_idx]
+
+            # Phase 1: fast sweep
+            with self._lock:
+                self._paused_on_signal = False
+                self._scanning = True
+            active_freqs = self._quick_sweep(band)
+
+            if not self._running or self._mode != "scan":
+                break
+
+            if not active_freqs:
+                time.sleep(0.5)
+                continue
+
+            # Phase 2: listen to each active freq
+            for freq in active_freqs:
+                if not self._running or self._mode != "scan":
+                    break
+
+                with self._lock:
+                    self._freq = freq
+                    self._scanning = True
+                    self._paused_on_signal = False
+                self._retune()
+                time.sleep(0.5)
+
+                # HOLD — rtl_power already confirmed signal, listen directly
+                with self._lock:
+                    self._paused_on_signal = True
+                    self._scanning = False
+                    self._signal_start = time.time()
+                    self._skip_signal = False
+
+                hold_start = time.time()
+                while self._running and self._mode == "scan":
+                    time.sleep(0.2)
+                    elapsed = time.time() - hold_start
+                    with self._lock:
+                        skip = self._skip_signal
+                    if skip:
+                        break
+                    if elapsed >= self._HOLD_MAX:
+                        break
+
+                if self._running and self._mode == "scan":
+                    duration = time.time() - self._signal_start
+                    self._log_activity(duration)
+                    with self._lock:
+                        self._paused_on_signal = False
+                        self._skip_signal = False
+
+    def _quick_sweep(self, band: dict) -> list[int]:
+        """Fast band sweep with rtl_power, return active frequencies."""
+        if self._proc:
+            try:
+                self._proc.terminate()
+                self._proc.wait(timeout=2)
+            except Exception:
+                try:
+                    self._proc.kill()
+                except Exception:
+                    pass
+            self._proc = None
+        subprocess.run(["pkill", "-9", "rtl_fm"], capture_output=True)
+        time.sleep(0.2)
+
+        cmd = (f"rtl_power -f {band['start']}:{band['end']}:{band['step']}"
+               f" -g 40 -i 1 -e 2 -1")
+        try:
+            result = subprocess.run(
+                cmd, shell=True, capture_output=True, text=True, timeout=10,
+            )
+        except (subprocess.TimeoutExpired, Exception):
+            return []
+
+        if not result.stdout:
+            return []
+
+        all_powers = []
+        for line in result.stdout.strip().splitlines():
+            parts = line.split(",")
+            if len(parts) < 7:
+                continue
+            try:
+                f_start = float(parts[2])
+                f_step = float(parts[4])
+                powers = [float(x) for x in parts[6:]]
+                for i, p in enumerate(powers):
+                    all_powers.append((int(f_start + i * f_step), p))
+            except (ValueError, IndexError):
+                continue
+
+        if not all_powers:
+            return []
+
+        sorted_p = sorted(p for _, p in all_powers)
+        median = sorted_p[len(sorted_p) // 2]
+        threshold = median + 8.0
+
+        active = sorted(
+            [(f, p) for f, p in all_powers if p > threshold],
+            key=lambda x: -x[1],
+        )
+        return [f for f, _ in active[:10]]
+
+    def _step_freq(self, direction: int) -> None:
+        """Step to next/prev frequency in band and retune rtl_fm."""
+        band = _SCANNER_BANDS[self._band_idx]
+        new_freq = self._freq + (band["step"] * direction)
+        if new_freq > band["end"]:
+            new_freq = band["start"]
+        elif new_freq < band["start"]:
+            new_freq = band["end"]
+        with self._lock:
+            self._freq = new_freq
+        self._retune()
+
+    def _change_band(self, idx: int) -> None:
+        """Switch band without resetting mode/squelch."""
+        if idx < 0 or idx >= len(_SCANNER_BANDS):
+            return
+        saved_mode = self._mode
+        saved_sq = self._squelch
+        self.stop()
+        self._band_idx = idx
+        self._freq = _SCANNER_BANDS[idx]["start"]
+        self._squelch = saved_sq
+        self._mode = saved_mode
+        self._activity_log = []
+        self._paused_on_signal = False
+        self._signal_level = 0.0
+        self._start_time = time.time()
+
+        for prog in ("rtl_fm", "rtl_433", "rtl_adsb", "rtl_sdr", "rtl_power"):
+            subprocess.run(["pkill", "-9", prog], capture_output=True)
+        time.sleep(0.3)
+        try:
+            _SCANNER_AUDIO.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+        self._running = True
+        self._start_rtl_fm()
+        threading.Thread(target=self._writer, daemon=True).start()
+        if self._mode == "scan":
+            threading.Thread(target=self._scan_loop, daemon=True).start()
+
+    def _retune(self) -> None:
+        """Kill current rtl_fm and restart on current frequency."""
+        if self._proc:
+            try:
+                self._proc.terminate()
+                self._proc.wait(timeout=1)
+            except Exception:
+                try:
+                    self._proc.kill()
+                except Exception:
+                    pass
+            self._proc = None
+        time.sleep(0.1)
+        self._start_rtl_fm()
+
+    def _log_activity(self, duration: float) -> None:
+        entry = {
+            "ts": time.time(),
+            "freq": self._freq,
+            "freq_display": f"{self._freq / 1e6:.3f}",
+            "signal": self._signal_level,
+            "band": _SCANNER_BANDS[self._band_idx]["name"],
+            "duration": round(duration, 1),
+        }
+        with self._lock:
+            self._activity_log.append(entry)
+            if len(self._activity_log) > _SCANNER_ACTIVITY_MAX:
+                self._activity_log.pop(0)
+
+    def _writer(self) -> None:
+        """Persist live state to JSON every second."""
+        while self._running:
+            try:
+                with self._lock:
+                    band = _SCANNER_BANDS[self._band_idx]
+                    payload = {
+                        "ts": time.time(),
+                        "running": self._running,
+                        "mode": self._mode,
+                        "band": band["name"],
+                        "band_idx": self._band_idx,
+                        "freq": self._freq,
+                        "freq_display": f"{self._freq / 1e6:.3f}",
+                        "modulation": band["mod"],
+                        "squelch": self._squelch,
+                        "signal_level": self._signal_level,
+                        "scanning": self._mode == "scan"
+                        and not self._paused_on_signal,
+                        "paused_on_signal": self._paused_on_signal,
+                        "sample_rate": band["rate"],
+                        "watchlist": list(self._watchlist),
+                        "watch_idx": self._watch_idx % max(1, len(self._watchlist)),
+                        "priority_idx": self._priority_idx,
+                        "activity_log": list(
+                            self._activity_log[-_SCANNER_ACTIVITY_MAX:]
+                        ),
+                        "bands": [
+                            {
+                                "name": b["name"],
+                                "desc": b["desc"],
+                                "start": b["start"],
+                                "end": b["end"],
+                                "mod": b["mod"],
+                            }
+                            for b in _SCANNER_BANDS
+                        ],
+                    }
+                tmp = str(_SCANNER_LIVE) + ".tmp"
+                with open(tmp, "w") as f:
+                    json.dump(payload, f)
+                os.replace(tmp, str(_SCANNER_LIVE))
+            except Exception:
+                pass
+            time.sleep(1.0)
+
+    def control(self, action: str, **kwargs) -> dict:
+        """Handle control commands."""
+        if action == "tune":
+            freq = int(kwargs.get("freq", self._freq))
+            with self._lock:
+                self._freq = freq
+                self._mode = "manual"
+                self._scanning = False
+                self._paused_on_signal = False
+            self._retune()
+            return {"ok": True}
+
+        if action == "squelch":
+            with self._lock:
+                self._squelch = max(0, min(100, int(kwargs.get("level", 50))))
+            return {"ok": True}
+
+        if action == "scan":
+            with self._lock:
+                self._mode = "scan"
+                self._scanning = True
+                self._paused_on_signal = False
+            threading.Thread(target=self._scan_loop, daemon=True).start()
+            return {"ok": True}
+
+        if action == "hold":
+            with self._lock:
+                self._mode = "manual"
+                self._scanning = False
+                self._paused_on_signal = False
+            return {"ok": True}
+
+        if action == "band":
+            idx = int(kwargs.get("idx", 0))
+            if 0 <= idx < len(_SCANNER_BANDS):
+                if self._running:
+                    self._change_band(idx)
+                else:
+                    self._band_idx = idx
+                    self._freq = _SCANNER_BANDS[idx]["start"]
+            return {"ok": True}
+
+        if action == "step":
+            direction = int(kwargs.get("dir", 1))
+            self._step_freq(direction)
+            return {"ok": True}
+
+        if action == "next":
+            if self._mode == "scan":
+                with self._lock:
+                    self._skip_signal = True
+            else:
+                self._step_freq(1)
+            return {"ok": True}
+
+        if action == "hold_time":
+            seconds = int(kwargs.get("seconds", 15))
+            self._HOLD_MAX = max(3, min(120, seconds))
+            return {"ok": True}
+
+        if action == "watchlist":
+            freqs = kwargs.get("freqs", [])
+            if isinstance(freqs, list) and freqs:
+                wl = []
+                for item in freqs:
+                    if isinstance(item, dict) and "freq" in item:
+                        wl.append({
+                            "freq": int(item["freq"]),
+                            "label": str(item.get("label", "")),
+                            "mod": str(item.get("mod", "usb")),
+                        })
+                    elif isinstance(item, (int, float)):
+                        wl.append({"freq": int(item), "label": "", "mod": "usb"})
+                if wl:
+                    with self._lock:
+                        self._watchlist = wl
+                        self._watch_idx = 0
+                        self._priority_idx = 0
+            return {"ok": True, "count": len(self._watchlist)}
+
+        if action == "priority":
+            idx = int(kwargs.get("idx", 0))
+            with self._lock:
+                if 0 <= idx < len(self._watchlist):
+                    self._priority_idx = idx
+            return {"ok": True}
+
+        return {"error": f"unknown action: {action}"}
+
+
+_scanner_manager = _ScannerManager()
+
+
+# ---------------------------------------------------------------------------
 # Generic payload process manager — direct subprocess, no LCD payload dance
 # ---------------------------------------------------------------------------
 
@@ -1193,9 +1696,10 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
             or parsed.path.startswith("/api/sdr/")
             or parsed.path.startswith("/api/ism/")
             or parsed.path.startswith("/api/gnss/")
-            or parsed.path.startswith("/api/noaa/")
+            or parsed.path.startswith("/api/meteor/")
             or parsed.path.startswith("/api/aprs/")
             or parsed.path.startswith("/api/honeypot/")
+            or parsed.path.startswith("/api/scanner/")
         ):
             query = parse_qs(parsed.query or "")
             if parsed.path == "/api/auth/bootstrap-status":
@@ -1271,6 +1775,13 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
                 self._handle_ism_live()
                 return
 
+            if parsed.path == "/api/scanner/live":
+                self._handle_scanner_live()
+                return
+            if parsed.path == "/api/scanner/audio":
+                self._handle_scanner_audio()
+                return
+
             if parsed.path == "/api/gnss/live":
                 self._handle_gnss_live()
                 return
@@ -1279,14 +1790,14 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
                 self._handle_aprs_live()
                 return
 
-            if parsed.path == "/api/noaa/live":
-                self._handle_noaa_live()
+            if parsed.path == "/api/meteor/live":
+                self._handle_meteor_live()
                 return
-            if parsed.path == "/api/noaa/image":
-                self._handle_noaa_image(query)
+            if parsed.path == "/api/meteor/image":
+                self._handle_meteor_image(query)
                 return
-            if parsed.path == "/api/noaa/gallery":
-                self._handle_noaa_gallery()
+            if parsed.path == "/api/meteor/gallery":
+                self._handle_meteor_gallery()
                 return
 
             if parsed.path == "/api/honeypot/live":
@@ -1340,6 +1851,14 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/auth/ws-ticket":
             query = parse_qs(parsed.query or "")
             self._handle_auth_ws_ticket(query)
+            return
+
+        if parsed.path == "/api/system/kill_process":
+            query = parse_qs(parsed.query or "")
+            if not _auth_ok(self, query):
+                _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
+                return
+            self._handle_system_kill_process()
             return
 
         if parsed.path == "/api/system/restart-ui":
@@ -1420,6 +1939,27 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
                 return
             self._handle_ism_control()
             return
+        if parsed.path == "/api/scanner/start":
+            query = parse_qs(parsed.query or "")
+            if not _auth_ok(self, query):
+                _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
+                return
+            self._handle_scanner_start()
+            return
+        if parsed.path == "/api/scanner/stop":
+            query = parse_qs(parsed.query or "")
+            if not _auth_ok(self, query):
+                _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
+                return
+            self._handle_scanner_stop()
+            return
+        if parsed.path == "/api/scanner/control":
+            query = parse_qs(parsed.query or "")
+            if not _auth_ok(self, query):
+                _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
+                return
+            self._handle_scanner_control()
+            return
         if parsed.path == "/api/gnss/start":
             query = parse_qs(parsed.query or "")
             if not _auth_ok(self, query):
@@ -1478,7 +2018,7 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
                 pass
             _json_response(self, {"ok": True, "status": "stopped"})
             return
-        if parsed.path == "/api/noaa/start":
+        if parsed.path == "/api/meteor/start":
             query = parse_qs(parsed.query or "")
             if not _auth_ok(self, query):
                 _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
@@ -1487,22 +2027,53 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
                 request_path = Path("/dev/shm/rj_payload_request.json")
                 request_path.write_text(json.dumps({
                     "action": "start",
-                    "path": "sdr/sdr_noaa.py",
+                    "path": "sdr/sdr_meteor.py",
                     "args": ["--auto"],
                 }))
                 _json_response(self, {"ok": True, "status": "starting"})
             except Exception as exc:
                 _json_response(self, {"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
             return
-        if parsed.path == "/api/noaa/stop":
+        if parsed.path == "/api/meteor/stop":
             query = parse_qs(parsed.query or "")
             if not _auth_ok(self, query):
                 _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
                 return
-            _kill_payload("sdr_noaa.py")
-            subprocess.run(["pkill", "-9", "rtl_fm"], capture_output=True)
+            _kill_payload("sdr_meteor.py")
+            for p in ("satdump", "rtl_sdr", "rtl_fm"):
+                subprocess.run(["pkill", "-9", p], capture_output=True)
             try:
-                Path("/dev/shm/rj_noaa_live.json").unlink(missing_ok=True)
+                Path("/dev/shm/rj_meteor_live.json").unlink(missing_ok=True)
+            except Exception:
+                pass
+            _json_response(self, {"ok": True, "status": "stopped"})
+            return
+        if parsed.path == "/api/meteor/capture_now":
+            query = parse_qs(parsed.query or "")
+            if not _auth_ok(self, query):
+                _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
+                return
+            body = _read_json(self) or {}
+            freq = float(body.get("freq", 137.9))
+            sat = str(body.get("satellite", "METEOR-M2 4"))
+            ctrl = {"action": "capture_now", "freq": freq, "satellite": sat, "duration": 900}
+            try:
+                ctrl_path = Path("/dev/shm/rj_meteor_control.json")
+                ctrl_path.write_text(json.dumps(ctrl))
+                _json_response(self, {"ok": True, "status": "capturing", "freq": freq, "satellite": sat})
+            except Exception as exc:
+                _json_response(self, {"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+        if parsed.path == "/api/meteor/stop_capture":
+            query = parse_qs(parsed.query or "")
+            if not _auth_ok(self, query):
+                _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
+                return
+            for p in ("satdump", "rtl_sdr", "rtl_fm"):
+                subprocess.run(["pkill", "-9", p], capture_output=True)
+            ctrl = {"action": "stop_capture"}
+            try:
+                Path("/dev/shm/rj_meteor_control.json").write_text(json.dumps(ctrl))
             except Exception:
                 pass
             _json_response(self, {"ok": True, "status": "stopped"})
@@ -1513,6 +2084,26 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
                 _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
                 return
             self._handle_honeypot_start()
+            return
+        if parsed.path == "/api/meteor/set_position":
+            query = parse_qs(parsed.query or "")
+            if not _auth_ok(self, query):
+                _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
+                return
+            body = _read_json(self) or {}
+            lat = float(body.get("lat", 0))
+            lon = float(body.get("lon", 0))
+            if lat == 0 and lon == 0:
+                _json_response(self, {"error": "invalid coordinates"}, status=HTTPStatus.BAD_REQUEST)
+                return
+            try:
+                cfg_dir = ROOT_DIR / "config"
+                cfg_dir.mkdir(parents=True, exist_ok=True)
+                cfg_path = cfg_dir / "observer.json"
+                cfg_path.write_text(json.dumps({"lat": lat, "lon": lon, "alt": 0}))
+                _json_response(self, {"ok": True, "lat": lat, "lon": lon})
+            except Exception as exc:
+                _json_response(self, {"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
             return
         if parsed.path == "/api/honeypot/stop":
             query = parse_qs(parsed.query or "")
@@ -2171,15 +2762,21 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
     def _handle_wardriving_session(self, query: dict) -> None:
         """Serve a specific session CSV file, filtering bad GPS."""
         path = query.get("path", [""])[0]
-        if not path or not path.startswith("/root/Raspyjack/loot/wardriving/"):
+        if not path:
             self.send_response(403)
             self.end_headers()
             return
-        if os.path.isfile(path):
+        resolved = Path(path).resolve()
+        allowed = (LOOT_DIR / "wardriving").resolve()
+        if allowed not in resolved.parents and resolved != allowed:
+            self.send_response(403)
+            self.end_headers()
+            return
+        if resolved.is_file():
             self.send_response(200)
             self.send_header("Content-Type", "text/csv")
             self.end_headers()
-            with open(path, "r") as f:
+            with open(str(resolved), "r") as f:
                 for i, line in enumerate(f):
                     if i < 2:
                         self.wfile.write(line.encode())
@@ -2254,13 +2851,17 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
 
     def _handle_adsb_session(self, query: dict) -> None:
         path = (query.get("path") or [""])[0] if isinstance(query.get("path"), list) else str(query.get("path", ""))
-        allowed_prefix = "/root/Raspyjack/loot/SDR/adsb/"
-        if not path.startswith(allowed_prefix) or ".." in path:
+        if not path:
             _json_response(self, {"error": "invalid path"}, status=HTTPStatus.BAD_REQUEST)
             return
-        if os.path.isfile(path):
+        resolved = Path(path).resolve()
+        allowed = (LOOT_DIR / "SDR" / "adsb").resolve()
+        if allowed not in resolved.parents and resolved != allowed:
+            _json_response(self, {"error": "invalid path"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        if resolved.is_file():
             try:
-                raw = Path(path).read_text(encoding="utf-8")
+                raw = resolved.read_text(encoding="utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()
@@ -2508,11 +3109,11 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
             _json_response(self, {"ts": 0, "satellites": [], "total": 0, "fix": {}})
 
     # ------------------------------------------------------------------
-    # NOAA Satellite Receiver
+    # Meteor M2 Satellite Receiver
     # ------------------------------------------------------------------
 
-    _NOAA_LIVE_PATH = Path("/dev/shm/rj_noaa_live.json")
-    _NOAA_LOOT_DIR = "/root/Raspyjack/loot/SDR/noaa"
+    _METEOR_LIVE_PATH = Path("/dev/shm/rj_meteor_live.json")
+    _METEOR_LOOT_DIR = "/root/Raspyjack/loot/SDR/meteor"
 
     _APRS_LIVE_PATH = Path("/dev/shm/rj_aprs_live.json")
 
@@ -2529,24 +3130,24 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
         else:
             _json_response(self, {"ts": 0, "running": False, "total_stations": 0, "stations": [], "recent_packets": []})
 
-    def _handle_noaa_live(self) -> None:
-        if self._NOAA_LIVE_PATH.exists():
+    def _handle_meteor_live(self) -> None:
+        if self._METEOR_LIVE_PATH.exists():
             try:
-                raw = self._NOAA_LIVE_PATH.read_text(encoding="utf-8")
+                raw = self._METEOR_LIVE_PATH.read_text(encoding="utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()
                 self.wfile.write(raw.encode())
             except Exception:
-                _json_response(self, {"ts": 0, "capturing": False, "passes": [], "captures": []})
+                _json_response(self, {"ts": 0, "capturing": False, "status": "idle", "passes": [], "captures": []})
         else:
-            _json_response(self, {"ts": 0, "capturing": False, "passes": [], "captures": []})
+            _json_response(self, {"ts": 0, "capturing": False, "status": "idle", "passes": [], "captures": []})
 
-    def _handle_noaa_image(self, query: dict) -> None:
+    def _handle_meteor_image(self, query: dict) -> None:
         path = (query.get("path") or [""])[0] if isinstance(query.get("path"), list) else str(query.get("path", ""))
         if not path:
-            path = os.path.join(self._NOAA_LOOT_DIR, "current.png")
-        allowed = self._NOAA_LOOT_DIR
+            path = os.path.join(self._METEOR_LOOT_DIR, "current.png")
+        allowed = self._METEOR_LOOT_DIR
         if not path.startswith(allowed) or ".." in path:
             self.send_response(403)
             self.end_headers()
@@ -2562,12 +3163,12 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
 
-    def _handle_noaa_gallery(self) -> None:
+    def _handle_meteor_gallery(self) -> None:
         result = []
-        if os.path.isdir(self._NOAA_LOOT_DIR):
-            for f in sorted(os.listdir(self._NOAA_LOOT_DIR), reverse=True):
+        if os.path.isdir(self._METEOR_LOOT_DIR):
+            for f in sorted(os.listdir(self._METEOR_LOOT_DIR), reverse=True):
                 if f.endswith(".png") and f != "current.png":
-                    fp = os.path.join(self._NOAA_LOOT_DIR, f)
+                    fp = os.path.join(self._METEOR_LOOT_DIR, f)
                     result.append({"file": f, "path": fp, "size": os.path.getsize(fp)})
         _json_response(self, result)
 
@@ -2638,13 +3239,17 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
 
     def _handle_honeypot_session(self, query: dict) -> None:
         path = (query.get("path") or [""])[0] if isinstance(query.get("path"), list) else str(query.get("path", ""))
-        allowed = "/root/Raspyjack/loot/honeypot/"
-        if not path.startswith(allowed) or ".." in path:
+        if not path:
             _json_response(self, {"error": "invalid path"}, status=HTTPStatus.BAD_REQUEST)
             return
-        if os.path.isfile(path):
+        resolved = Path(path).resolve()
+        allowed = (LOOT_DIR / "honeypot").resolve()
+        if allowed not in resolved.parents and resolved != allowed:
+            _json_response(self, {"error": "invalid path"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        if resolved.is_file():
             try:
-                raw = Path(path).read_text(encoding="utf-8")
+                raw = resolved.read_text(encoding="utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()
@@ -2686,6 +3291,37 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
             except Exception:
                 pass
 
+            procs = []
+            try:
+                my_pid = os.getpid()
+                ps_out = subprocess.run(
+                    ["ps", "-eo", "pid,%cpu,%mem,comm,args",
+                     "--no-headers", "--sort=-%cpu"],
+                    capture_output=True, text=True, timeout=3,
+                )
+                for line in ps_out.stdout.strip().splitlines():
+                    parts = line.split(None, 4)
+                    if len(parts) < 5:
+                        continue
+                    pid = int(parts[0])
+                    if pid == my_pid or pid <= 2:
+                        continue
+                    name = parts[4]
+                    if name.startswith("[") and name.endswith("]"):
+                        continue
+                    if "ps -eo" in name:
+                        continue
+                    procs.append({
+                        "pid": pid,
+                        "cpu": float(parts[1]),
+                        "mem": float(parts[2]),
+                        "name": parts[4],
+                    })
+                    if len(procs) >= 25:
+                        break
+            except Exception:
+                pass
+
             _json_response(self, {
                 "cpu_percent": round(cpu, 1),
                 "mem_used": mem_used,
@@ -2698,9 +3334,30 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
                 "interfaces": ifaces,
                 "payload_running": payload_running,
                 "payload_path": payload_path,
+                "hostname": socket.gethostname(),
+                "processes": procs,
             })
         except Exception as exc:
             _json_response(self, {"error": f"status error: {exc}"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+
+    def _handle_system_kill_process(self) -> None:
+        body = _read_json(self)
+        if body is None:
+            _json_response(self, {"error": "invalid JSON"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        pid = body.get("pid")
+        if not isinstance(pid, int) or pid <= 1:
+            _json_response(self, {"error": "pid must be an integer > 1"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        try:
+            os.kill(pid, 9)
+            _json_response(self, {"ok": True})
+        except ProcessLookupError:
+            _json_response(self, {"error": f"no such process: {pid}"}, status=HTTPStatus.NOT_FOUND)
+        except PermissionError:
+            _json_response(self, {"error": f"permission denied for pid {pid}"}, status=HTTPStatus.FORBIDDEN)
+        except Exception as exc:
+            _json_response(self, {"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
 
     def _handle_system_restart_ui(self) -> None:
         try:
@@ -2915,6 +3572,141 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
         else:
             threading.Thread(target=_tailscale_run_install_and_up, daemon=True).start()
         _json_response(self, {"ok": True})
+
+    # ── Scanner handlers ──
+
+    def _handle_scanner_live(self) -> None:
+        if _SCANNER_LIVE.exists():
+            try:
+                raw = _SCANNER_LIVE.read_text(encoding="utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(raw.encode())
+            except Exception:
+                _json_response(self, self._scanner_empty_state())
+        else:
+            _json_response(self, self._scanner_empty_state())
+
+    @staticmethod
+    def _scanner_empty_state() -> dict:
+        return {
+            "ts": 0, "running": False, "mode": "scan", "band": "",
+            "band_idx": 0, "freq": 0, "freq_display": "0.000",
+            "modulation": "", "squelch": 50, "signal_level": 0,
+            "scanning": False, "paused_on_signal": False,
+            "sample_rate": 16000, "watchlist": [], "watch_idx": 0,
+            "priority_idx": 0, "activity_log": [],
+            "bands": [
+                {"name": b["name"], "desc": b["desc"], "start": b["start"],
+                 "end": b["end"], "mod": b["mod"]}
+                for b in _SCANNER_BANDS
+            ],
+        }
+
+    def _handle_scanner_audio(self) -> None:
+        """Stream demodulated audio as WAV from the scanner PCM buffer."""
+        pcm_path = str(_SCANNER_AUDIO)
+
+        sample_rate = 16000
+        try:
+            if _SCANNER_LIVE.exists():
+                st = json.loads(
+                    _SCANNER_LIVE.read_text(encoding="utf-8")
+                )
+                sample_rate = int(st.get("sample_rate", 16000))
+        except Exception:
+            pass
+
+        try:
+            import struct as _st
+
+            wav_header = bytearray(44)
+            wav_header[0:4] = b"RIFF"
+            _st.pack_into("<I", wav_header, 4, 0x7FFFFFFF)
+            wav_header[8:12] = b"WAVE"
+            wav_header[12:16] = b"fmt "
+            _st.pack_into("<I", wav_header, 16, 16)
+            _st.pack_into("<H", wav_header, 20, 1)
+            _st.pack_into("<H", wav_header, 22, 1)
+            _st.pack_into("<I", wav_header, 24, sample_rate)
+            _st.pack_into("<I", wav_header, 28, sample_rate * 2)
+            _st.pack_into("<H", wav_header, 32, 2)
+            _st.pack_into("<H", wav_header, 34, 16)
+            wav_header[36:40] = b"data"
+            _st.pack_into("<I", wav_header, 40, 0x7FFFFFFF)
+
+            self.send_response(200)
+            self.send_header("Content-Type", "audio/wav")
+            self.send_header("Cache-Control", "no-cache, no-store")
+            self.end_headers()
+            self.wfile.write(wav_header)
+            self.wfile.flush()
+
+            silence = b"\x00" * 2400
+            pos = 0
+            while _scanner_manager.running:
+                if not os.path.exists(pcm_path):
+                    self.wfile.write(silence)
+                    self.wfile.flush()
+                    time.sleep(0.1)
+                    continue
+                try:
+                    if pos == 0:
+                        fsize = os.path.getsize(pcm_path)
+                        pos = max(0, fsize - sample_rate * 2)
+                    with open(pcm_path, "rb") as f:
+                        f.seek(pos)
+                        chunk = f.read(16384)
+                    if chunk:
+                        pos += len(chunk)
+                        self.wfile.write(chunk)
+                        self.wfile.flush()
+                    else:
+                        time.sleep(0.05)
+                except OSError:
+                    time.sleep(0.1)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
+
+    def _handle_scanner_start(self) -> None:
+        body = _read_json(self) or {}
+        band_idx = int(body.get("band_idx", 0))
+        mode = str(body.get("mode", "scan")).strip()
+        freq = int(body.get("freq", 0))
+        squelch = int(body.get("squelch", 50))
+        if mode not in ("scan", "manual"):
+            mode = "scan"
+        _scanner_manager.start(
+            band_idx=band_idx, mode=mode, freq=freq, squelch=squelch,
+        )
+        _json_response(self, {"ok": True, "status": "running"})
+
+    def _handle_scanner_stop(self) -> None:
+        _scanner_manager.stop()
+        _json_response(self, {"ok": True, "status": "stopped"})
+
+    def _handle_scanner_control(self) -> None:
+        body = _read_json(self)
+        if body is None:
+            _json_response(self, {"error": "invalid json"},
+                           status=HTTPStatus.BAD_REQUEST)
+            return
+        action = str(body.get("action", "")).strip()
+        valid_actions = ("tune", "squelch", "scan", "hold", "band", "step",
+                         "next", "watchlist", "priority", "hold_time")
+        if action not in valid_actions:
+            _json_response(
+                self, {"error": f"unknown action: {action}"},
+                status=HTTPStatus.BAD_REQUEST,
+            )
+            return
+        kwargs = {k: v for k, v in body.items() if k != "action"}
+        result = _scanner_manager.control(action, **kwargs)
+        if "error" in result:
+            _json_response(self, result, status=HTTPStatus.BAD_REQUEST)
+        else:
+            _json_response(self, result)
 
 
 def main() -> None:

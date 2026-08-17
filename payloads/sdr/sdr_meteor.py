@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-RaspyJack Payload -- NOAA Satellite Image Receiver
+RaspyJack Payload -- Meteor M2 Satellite Receiver
 ====================================================
 Author: 7h30th3r0n3
 
-Receive weather satellite images from space using RTL-SDR.
-Predicts NOAA-15/18/19 passes, captures APT signal, decodes
-images line-by-line in real time.
+Receive weather satellite images from space using RTL-SDR + SatDump.
+Predicts Meteor M2-3/M2-4 passes, captures LRPT QPSK signal, decodes
+images with SatDump.
 
 Controls:
   OK    : Start capture / Auto-capture next pass
@@ -15,7 +15,7 @@ Controls:
   KEY2  : Update TLE (needs internet)
   KEY3  : Exit
 
-Requires: rtl-sdr, python3-scipy, python3-sgp4
+Requires: rtl-sdr, satdump, python3-sgp4
 """
 
 import os
@@ -23,6 +23,7 @@ import sys
 import math
 import time
 import json
+import shutil
 import signal
 import subprocess
 import threading
@@ -31,7 +32,6 @@ from collections import deque
 
 sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..", "..")))
 
-import numpy as np
 import RPi.GPIO as GPIO
 import LCD_1in44
 import LCD_Config
@@ -56,19 +56,20 @@ font_sm = scaled_font(7)
 font_xs = scaled_font(6)
 font_lg = scaled_font(12)
 
-LIVE_PATH = "/dev/shm/rj_noaa_live.json"
-LOOT_DIR = "/root/Raspyjack/loot/SDR/noaa"
-TLE_PATH = os.path.join(os.path.dirname(__file__), "data", "noaa_tle.txt")
-TLE_URL = "https://celestrak.org/NORAD/elements/gp.php?GROUP=noaa&FORMAT=tle"
+LIVE_PATH = "/dev/shm/rj_meteor_live.json"
+LOOT_DIR = "/root/Raspyjack/loot/SDR/meteor"
+TLE_PATH = os.path.join(os.path.dirname(__file__), "data", "meteor_tle.txt")
+TLE_URL = "https://celestrak.org/NORAD/elements/gp.php?GROUP=weather&FORMAT=tle"
 DEBOUNCE = 0.18
 _last_btn = 0
 _running = True
 
-NOAA_SATS = {
-    "NOAA 15": {"freq": 137.6200, "norad": 25338},
-    "NOAA 18": {"freq": 137.9125, "norad": 28654},
-    "NOAA 19": {"freq": 137.1000, "norad": 33591},
+METEOR_SATS = {
+    "METEOR-M2 3": {"freq": 137900000, "freq_mhz": 137.9, "backup_freq": 137100000},
+    "METEOR-M2 4": {"freq": 137900000, "freq_mhz": 137.9, "backup_freq": 137100000},
 }
+
+SAMPLE_RATE = 288000
 
 VIEWS = ["Passes", "Live", "Gallery", "Status"]
 
@@ -152,11 +153,18 @@ def _load_tle():
             if not l1.startswith("1") or not l2.startswith("2"):
                 i += 1
                 continue
-            for sat_name, info in NOAA_SATS.items():
-                if sat_name.upper() in name or str(info["norad"]) in l1:
+            for sat_name, info in METEOR_SATS.items():
+                if sat_name.upper() in name:
                     try:
                         sat = Satrec.twoline2rv(l1, l2, WGS72)
-                        sats[sat_name] = {"sat": sat, "freq": info["freq"], "l1": l1, "l2": l2}
+                        sats[sat_name] = {
+                            "sat": sat,
+                            "freq": info["freq"],
+                            "freq_mhz": info["freq_mhz"],
+                            "backup_freq": info["backup_freq"],
+                            "l1": l1,
+                            "l2": l2,
+                        }
                     except Exception:
                         pass
             i += 3
@@ -172,7 +180,8 @@ def _predict_passes(tle_sats, obs_lat, obs_lon, obs_alt, hours=24):
 
     for sat_name, data in tle_sats.items():
         sat = data["sat"]
-        freq = data["freq"]
+        freq_mhz = data["freq_mhz"]
+        freq_hz = data["freq"]
         step_min = 0.5
         in_pass = False
         pass_start = None
@@ -204,7 +213,7 @@ def _predict_passes(tle_sats, obs_lat, obs_lon, obs_alt, hours=24):
                     if max_el >= 15:
                         end_az = az
                         dur = (t - pass_start).total_seconds()
-                        direction = _az_to_dir(start_az) + "→" + _az_to_dir(end_az)
+                        direction = _az_to_dir(start_az) + ">" + _az_to_dir(end_az)
                         local_start = pass_start.astimezone()
                         local_end = t.astimezone()
                         passes.append({
@@ -217,7 +226,8 @@ def _predict_passes(tle_sats, obs_lat, obs_lon, obs_alt, hours=24):
                             "max_el": round(max_el),
                             "direction": direction,
                             "duration": round(dur),
-                            "freq": freq,
+                            "freq": freq_mhz,
+                            "freq_hz": freq_hz,
                         })
                     in_pass = False
                     max_el = 0
@@ -257,7 +267,7 @@ def _get_sat_positions(tle_sats):
             "lat": lat,
             "lon": lon,
             "alt_km": alt,
-            "freq": data["freq"],
+            "freq": data["freq_mhz"],
         })
     return positions
 
@@ -336,97 +346,98 @@ def _az_to_dir(az):
     return dirs[round(az / 45) % 8]
 
 
-def _decode_apt_partial(raw_path, sample_rate=48000):
-    try:
-        file_size = os.path.getsize(raw_path)
-        if file_size < sample_rate * 4:
-            return None
-
-        samples_per_line = int(sample_rate / 2)
-        chunk_lines = 8
-        chunk_samples = samples_per_line * chunk_lines
-        pixels_per_line = 2080
-
-        result_lines = []
-        offset = 0
-        total_samples = file_size // 2
-
-        while offset + chunk_samples <= total_samples:
-            with open(raw_path, "rb") as f:
-                f.seek(offset * 2)
-                raw = f.read(chunk_samples * 2)
-            chunk = np.frombuffer(raw, dtype=np.int16).astype(np.float32)
-
-            from scipy.signal import hilbert
-            envelope = np.abs(hilbert(chunk))
-
-            ratio = pixels_per_line / samples_per_line
-            for line_i in range(chunk_lines):
-                start = line_i * samples_per_line
-                end = start + samples_per_line
-                if end > len(envelope):
-                    break
-                line_env = envelope[start:end]
-                indices = np.linspace(0, len(line_env) - 1, pixels_per_line).astype(int)
-                row = line_env[indices]
-                result_lines.append(row)
-
-            offset += chunk_samples
-
-        if len(result_lines) < 2:
-            return None
-
-        image = np.stack(result_lines)
-        mn, mx = image.min(), image.max()
-        if mx - mn < 1:
-            return None
-        image = ((image - mn) / (mx - mn) * 255).astype(np.uint8)
-        return image
-    except Exception:
-        return None
-
-
-def _capture_thread(freq, duration, raw_path, state):
-    cmd = [
-        "rtl_fm", "-f", f"{freq}M", "-s", "48000",
-        "-g", "49.6", "-E", "deemp", "-p", "0",
-    ]
-    try:
-        subprocess.run(["pkill", "-9", "rtl_fm"], capture_output=True)
-        time.sleep(0.5)
-        with open(raw_path, "wb") as out:
-            proc = subprocess.Popen(cmd, stdout=out, stderr=subprocess.DEVNULL)
-            state["proc"] = proc
-            state["start_time"] = time.time()
-            deadline = time.time() + duration + 30
-            while _running and time.time() < deadline and state.get("capturing"):
-                time.sleep(1)
-            proc.terminate()
-            try:
-                proc.wait(timeout=5)
-            except Exception:
-                proc.kill()
-    except Exception:
-        pass
-    state["capturing"] = False
-    state["proc"] = None
-
-
-def _save_image(image_array, sat_name):
+def _save_image_from_file(src_path, sat_name):
+    """Copy a decoded image to the loot directory with a timestamped name."""
     os.makedirs(LOOT_DIR, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    name = sat_name.replace(" ", "")
-    path = os.path.join(LOOT_DIR, f"{name}_{ts}.png")
-    img = Image.fromarray(image_array, "L")
-    img.save(path)
-    return path
+    name = sat_name.replace(" ", "").replace("-", "")
+    ext = os.path.splitext(src_path)[1] or ".png"
+    dest = os.path.join(LOOT_DIR, f"{name}_{ts}{ext}")
+    shutil.copy2(src_path, dest)
+    return dest
+
+
+def _capture_thread(freq_hz, duration, raw_path, output_dir, state):
+    """Capture and decode with SatDump live mode (direct RTL-SDR access)."""
+    for prog in ("rtl_fm", "rtl_sdr", "satdump"):
+        subprocess.run(["pkill", "-9", prog], capture_output=True)
+    time.sleep(0.5)
+
+    state["status"] = "capturing"
+    os.makedirs(output_dir, exist_ok=True)
+
+    cmd = [
+        "satdump", "live", "meteor_m2-x_lrpt",
+        output_dir,
+        "--source", "rtlsdr",
+        "--frequency", str(freq_hz),
+        "--samplerate", "1024000",
+        "--gain", "40",
+        "--dc_block",
+        "--timeout", str(duration),
+    ]
+
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL)
+        state["proc"] = proc
+        state["start_time"] = time.time()
+        deadline = time.time() + duration + 60
+        while _running and time.time() < deadline and state.get("capturing"):
+            # Check for images during capture (live decode)
+            img_count = 0
+            for root, dirs, files in os.walk(output_dir):
+                for f in files:
+                    if f.endswith(".png"):
+                        img_count += 1
+                        src = os.path.join(root, f)
+                        current_png = os.path.join(LOOT_DIR, "current.png")
+                        try:
+                            shutil.copy2(src, current_png)
+                            state["image_path"] = current_png
+                        except Exception:
+                            pass
+            state["image_count"] = img_count
+            if img_count > 0:
+                state["status"] = "decoding"
+            time.sleep(5)
+
+        proc.terminate()
+        try:
+            proc.wait(timeout=10)
+        except Exception:
+            proc.kill()
+    except Exception:
+        pass
+
+    # Collect final images
+    images = []
+    for root, dirs, files in os.walk(output_dir):
+        for f in files:
+            if f.endswith(".png"):
+                images.append(os.path.join(root, f))
+
+    state["image_count"] = len(images)
+    if images:
+        best = max(images, key=os.path.getsize)
+        dest = _save_image_from_file(best, state.get("satellite", "Meteor"))
+        state["image_path"] = dest
+        current_png = os.path.join(LOOT_DIR, "current.png")
+        try:
+            shutil.copy2(best, current_png)
+        except Exception:
+            pass
+
+    state["capturing"] = False
+    state["status"] = "idle"
+    state["proc"] = None
 
 
 def _list_captures():
     if not os.path.isdir(LOOT_DIR):
         return []
     files = sorted(
-        [f for f in os.listdir(LOOT_DIR) if f.endswith(".png")],
+        [f for f in os.listdir(LOOT_DIR) if f.endswith(".png") and f != "current.png"],
         reverse=True,
     )
     return [{"file": f, "path": os.path.join(LOOT_DIR, f)} for f in files[:20]]
@@ -443,15 +454,14 @@ def _write_live(state, passes, tle_sats=None):
                 "sat_positions": sat_positions,
                 "orbit_tracks": orbit_tracks,
                 "capturing": state.get("capturing", False),
+                "status": state.get("status", "idle"),
                 "satellite": state.get("satellite", ""),
                 "frequency": state.get("frequency", 0),
                 "progress_pct": 0,
                 "elapsed": 0,
                 "duration": state.get("duration", 0),
-                "signal_detected": state.get("signal_detected", False),
                 "image_path": state.get("image_path", ""),
-                "image_width": 2080,
-                "image_lines": state.get("image_lines", 0),
+                "image_count": state.get("image_count", 0),
                 "passes": passes[:10],
                 "observer": {"lat": obs[0], "lon": obs[1], "alt": obs[2]},
                 "captures": _list_captures(),
@@ -509,9 +519,10 @@ def _draw_passes(passes, scroll):
             el = p["max_el"]
             el_col = (0, 255, 0) if el >= 60 else (255, 200, 0) if el >= 30 else (255, 80, 80)
 
-            draw.text((SX(2), y + SY(1)), p["satellite"].replace("NOAA ", "N"), font=font_sm, fill=(0, 200, 255))
+            short = p["satellite"].replace("METEOR-M2 ", "M")
+            draw.text((SX(2), y + SY(1)), short, font=font_sm, fill=(0, 200, 255))
             draw.text((SX(22), y + SY(1)), p["start"], font=font_sm, fill=(200, 200, 200))
-            draw.text((SX(50), y + SY(1)), f"{el}°", font=font_sm, fill=el_col)
+            draw.text((SX(50), y + SY(1)), f"{el}", font=font_sm, fill=el_col)
             draw.text((SX(70), y + SY(1)), p["direction"], font=font_xs, fill=(100, 120, 150))
             draw.text((SX(2), y + SY(11)), f"{p['freq']}MHz", font=font_xs, fill=(80, 100, 130))
             draw.text((SX(50), y + SY(11)), f"{p['duration'] // 60}m{p['duration'] % 60:02d}s", font=font_xs, fill=(80, 100, 130))
@@ -529,33 +540,41 @@ def _draw_live(state):
 
     draw.rectangle([(0, 0), (W, SY(12))], fill=(10, 15, 25))
     sat = state.get("satellite", "--")
+    status = state.get("status", "idle")
     if state.get("capturing"):
-        draw.ellipse([SX(2), SY(3), SX(8), SY(9)], fill=(255, 0, 0))
-        draw.text((SX(10), SY(2)), f"REC {sat}", font=font_sm, fill=(255, 80, 80))
+        if status == "decoding":
+            draw.text((SX(2), SY(2)), f"DECODE {sat}", font=font_sm, fill=(255, 200, 0))
+        else:
+            draw.ellipse([SX(2), SY(3), SX(8), SY(9)], fill=(255, 0, 0))
+            draw.text((SX(10), SY(2)), f"REC {sat}", font=font_sm, fill=(255, 80, 80))
     else:
         draw.text((SX(2), SY(2)), "WAITING", font=font_sm, fill=(80, 100, 130))
 
     if state.get("image_path") and os.path.isfile(state["image_path"]):
         try:
-            sat_img = Image.open(state["image_path"]).convert("L")
+            sat_img = Image.open(state["image_path"]).convert("RGB")
             display_h = H - SY(24)
             ratio = min(W / sat_img.width, display_h / sat_img.height)
             new_w = int(sat_img.width * ratio)
             new_h = int(sat_img.height * ratio)
             sat_img = sat_img.resize((new_w, new_h), Image.NEAREST)
             x_off = (W - new_w) // 2
-            img.paste(sat_img.convert("RGB"), (x_off, SY(14)))
+            img.paste(sat_img, (x_off, SY(14)))
         except Exception:
             pass
     elif state.get("capturing"):
         elapsed = time.time() - state.get("start_time", time.time())
         dur = state.get("duration", 600)
-        pct = min(100, int(elapsed / max(1, dur) * 100))
-        draw.text((W // 2, H // 2 - SY(5)), f"{pct}%", font=font_lg, fill=(0, 200, 255), anchor="mm")
-        bar_w = W - SX(20)
-        draw.rectangle([(SX(10), H // 2 + SY(5)), (SX(10) + bar_w, H // 2 + SY(11))], fill=(15, 20, 30))
-        draw.rectangle([(SX(10), H // 2 + SY(5)), (SX(10) + int(bar_w * pct / 100), H // 2 + SY(11))], fill=(0, 200, 255))
-        draw.text((W // 2, H // 2 + SY(18)), f"{int(elapsed)}s / {dur}s", font=font_xs, fill=(80, 100, 130), anchor="mm")
+        if status == "decoding":
+            draw.text((W // 2, H // 2 - SY(5)), "DECODING", font=font_lg, fill=(255, 200, 0), anchor="mm")
+            draw.text((W // 2, H // 2 + SY(10)), "SatDump processing...", font=font_xs, fill=(80, 100, 130), anchor="mm")
+        else:
+            pct = min(100, int(elapsed / max(1, dur) * 100))
+            draw.text((W // 2, H // 2 - SY(5)), f"{pct}%", font=font_lg, fill=(0, 200, 255), anchor="mm")
+            bar_w = W - SX(20)
+            draw.rectangle([(SX(10), H // 2 + SY(5)), (SX(10) + bar_w, H // 2 + SY(11))], fill=(15, 20, 30))
+            draw.rectangle([(SX(10), H // 2 + SY(5)), (SX(10) + int(bar_w * pct / 100), H // 2 + SY(11))], fill=(0, 200, 255))
+            draw.text((W // 2, H // 2 + SY(18)), f"{int(elapsed)}s / {dur}s", font=font_xs, fill=(80, 100, 130), anchor="mm")
     else:
         draw.text((W // 2, H // 2), "OK to start capture", font=font_sm, fill=(40, 50, 65), anchor="mm")
 
@@ -607,7 +626,7 @@ def _draw_status(state, passes):
         ("TLE age", ""),
         ("Passes", f"{len(passes)} upcoming"),
         ("Captures", f"{len(_list_captures())}"),
-        ("Capturing", "YES" if state.get("capturing") else "NO"),
+        ("Status", state.get("status", "idle")),
         ("RTL-SDR", ""),
     ]
 
@@ -615,20 +634,47 @@ def _draw_status(state, passes):
         age = time.time() - os.path.getmtime(TLE_PATH)
         items[3] = ("TLE age", f"{int(age / 3600)}h" if age < 86400 else f"{int(age / 86400)}d")
 
-    r = subprocess.run(["rtl_test", "-t"], capture_output=True, timeout=3)
-    items[7] = ("RTL-SDR", "Found" if r.returncode == 0 else "Not found")
+    try:
+        r = subprocess.run(["rtl_test", "-t"], capture_output=True, timeout=3)
+        items[7] = ("RTL-SDR", "Found" if r.returncode == 0 else "Not found")
+    except Exception:
+        items[7] = ("RTL-SDR", "Not found")
 
     for label, value in items:
         draw.text((SX(4), y), label, font=font_xs, fill=(60, 70, 90))
-        col = (0, 255, 0) if value in ("OK", "Found", "YES") else (200, 200, 200)
-        if value in ("MISSING", "Not found", "NO"):
+        col = (0, 255, 0) if value in ("OK", "Found", "idle") else (200, 200, 200)
+        if value in ("MISSING", "Not found"):
             col = (255, 80, 80)
+        if value in ("capturing", "decoding"):
+            col = (255, 200, 0)
         draw.text((SX(55), y), value, font=font_sm, fill=col)
         y += SY(11)
 
     draw.rectangle([(0, H - SY(10)), (W, H)], fill=(10, 15, 25))
     draw.text((SX(2), H - SY(9)), "K1:View K2:Update TLE", font=font_xs, fill=(40, 50, 65))
     LCD.LCD_ShowImage(img, 0, 0)
+
+
+def _start_capture(state, sat_name, freq_hz, freq_mhz, duration):
+    """Start a capture in a background thread."""
+    state["capturing"] = True
+    state["satellite"] = sat_name
+    state["frequency"] = freq_mhz
+    state["duration"] = duration
+    state["image_path"] = ""
+    state["image_count"] = 0
+    state["status"] = "capturing"
+
+    os.makedirs(LOOT_DIR, exist_ok=True)
+    raw_path = os.path.join(LOOT_DIR, "capture_raw.cs16")
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_dir = os.path.join(LOOT_DIR, f"satdump_{ts}")
+
+    threading.Thread(
+        target=_capture_thread,
+        args=(freq_hz, duration, raw_path, output_dir, state),
+        daemon=True,
+    ).start()
 
 
 def main():
@@ -652,13 +698,13 @@ def main():
 
     state = {
         "capturing": False,
+        "status": "idle",
         "satellite": "",
         "frequency": 0,
         "duration": 0,
         "start_time": 0,
         "image_path": "",
-        "image_lines": 0,
-        "signal_detected": False,
+        "image_count": 0,
         "proc": None,
     }
 
@@ -691,42 +737,40 @@ def main():
                     state["next_pass_seconds"] = max(0, int(wait))
 
                     if wait <= 30 and not state.get("capturing"):
-                        state["capturing"] = True
-                        state["satellite"] = next_pass["satellite"]
-                        state["frequency"] = next_pass["freq"]
-                        state["duration"] = next_pass["duration"]
-                        state["image_path"] = ""
-                        state["image_lines"] = 0
+                        _start_capture(
+                            state,
+                            next_pass["satellite"],
+                            next_pass.get("freq_hz", next_pass.get("freq", 137900000)),
+                            next_pass["freq"],
+                            next_pass["duration"],
+                        )
 
-                        os.makedirs(LOOT_DIR, exist_ok=True)
-                        raw_path = os.path.join(LOOT_DIR, "capture_raw.s16")
-
-                        def _auto_capture(p=next_pass):
-                            _capture_thread(p["freq"], p["duration"], raw_path, state)
-                            arr = _decode_apt_partial(raw_path, 48000)
-                            if arr is not None:
-                                path = _save_image(arr, p["satellite"])
-                                state["image_path"] = path
-                                state["image_lines"] = arr.shape[0]
-                                current_png = os.path.join(LOOT_DIR, "current.png")
-                                Image.fromarray(arr, "L").save(current_png)
+                # Check for manual capture request
+                ctrl_path = "/dev/shm/rj_meteor_control.json"
+                try:
+                    if os.path.exists(ctrl_path):
+                        with open(ctrl_path) as cf:
+                            ctrl = json.load(cf)
+                        os.unlink(ctrl_path)
+                        if ctrl.get("action") == "stop_capture":
                             state["capturing"] = False
+                            for p in ("satdump", "rtl_fm", "rtl_sdr"):
+                                subprocess.run(["pkill", "-9", p], capture_output=True)
+                            state["status"] = "idle"
+                        elif ctrl.get("action") == "capture_now":
+                            if state.get("capturing"):
+                                state["capturing"] = False
+                                subprocess.run(["pkill", "-9", "rtl_fm"], capture_output=True)
+                                time.sleep(0.5)
+                            freq_mhz = float(ctrl.get("freq", 137.9))
+                            freq_hz = int(freq_mhz * 1e6)
+                            sat_name = str(ctrl.get("satellite", "METEOR-M2 4"))
+                            dur = int(ctrl.get("duration", 900))
+                            _start_capture(state, sat_name, freq_hz, freq_mhz, dur)
+                except Exception:
+                    pass
 
-                        threading.Thread(target=_auto_capture, daemon=True).start()
-
-                        def _auto_live():
-                            while state.get("capturing") and _running:
-                                time.sleep(5)
-                                arr = _decode_apt_partial(raw_path, 48000)
-                                if arr is not None:
-                                    current_png = os.path.join(LOOT_DIR, "current.png")
-                                    Image.fromarray(arr, "L").save(current_png)
-                                    state["image_path"] = current_png
-                                    state["image_lines"] = arr.shape[0]
-
-                        threading.Thread(target=_auto_live, daemon=True).start()
-
-                time.sleep(10)
+                time.sleep(3)
 
         _auto_thread = threading.Thread(target=_auto_scheduler, daemon=True)
         _auto_thread.start()
@@ -771,44 +815,14 @@ def main():
                     state["capturing"] = False
                 elif passes and not state.get("capturing"):
                     p = passes[0]
-                    state["capturing"] = True
-                    state["satellite"] = p["satellite"]
-                    state["frequency"] = p["freq"]
-                    state["duration"] = p["duration"]
-                    state["image_path"] = ""
-                    state["image_lines"] = 0
+                    freq_hz = p.get("freq_hz", int(p["freq"] * 1e6))
+                    _start_capture(state, p["satellite"], freq_hz, p["freq"], p["duration"])
                     view = 1
-
-                    os.makedirs(LOOT_DIR, exist_ok=True)
-                    raw_path = os.path.join(LOOT_DIR, "capture_raw.s16")
-
-                    def _capture_and_decode():
-                        _capture_thread(p["freq"], p["duration"], raw_path, state)
-                        arr = _decode_apt_partial(raw_path, 48000)
-                        if arr is not None:
-                            path = _save_image(arr, p["satellite"])
-                            state["image_path"] = path
-                            state["image_lines"] = arr.shape[0]
-                            current_png = os.path.join(LOOT_DIR, "current.png")
-                            Image.fromarray(arr, "L").save(current_png)
-
-                    threading.Thread(target=_capture_and_decode, daemon=True).start()
-
-                    def _live_decode():
-                        while state.get("capturing") and _running:
-                            time.sleep(5)
-                            arr = _decode_apt_partial(raw_path, 48000)
-                            if arr is not None:
-                                current_png = os.path.join(LOOT_DIR, "current.png")
-                                Image.fromarray(arr, "L").save(current_png)
-                                state["image_path"] = current_png
-                                state["image_lines"] = arr.shape[0]
-
-                    threading.Thread(target=_live_decode, daemon=True).start()
 
             time.sleep(0.15)
     finally:
         state["capturing"] = False
+        subprocess.run(["pkill", "-9", "rtl_fm"], capture_output=True)
         subprocess.run(["pkill", "-9", "rtl_fm"], capture_output=True)
         try:
             os.unlink(LIVE_PATH)

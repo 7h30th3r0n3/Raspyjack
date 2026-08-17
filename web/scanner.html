@@ -1,0 +1,1085 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RaspyJack Radio Scanner</title>
+  <link rel="stylesheet" href="./vendor/css/fontawesome.min.css">
+  <script src="./theme.js"></script>
+  <style>
+    :root{color-scheme:dark;--bg:#05060a;--panel:#080c14;--border:#0f1a2a;--accent:#00ccff;--green:#00ff88;--red:#ff3333;--orange:#ff8800;--yellow:#ffaa00;--card:#0a0e18;--dim:#3a5070}
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:#ccc;overflow-x:hidden;height:100vh;display:flex;flex-direction:column}
+
+    /* Topbar */
+    #topbar{height:44px;background:#0a0e1a;display:flex;align-items:center;padding:0 12px;gap:8px;border-bottom:1px solid var(--border);flex-shrink:0;z-index:500}
+    #topbar h1{font-size:13px;color:var(--accent);white-space:nowrap;margin-right:4px;display:flex;align-items:center;gap:6px}
+    #topbar h1 i{font-size:15px}
+    .tb{background:#111830;color:#888;border:1px solid #1a2844;padding:4px 10px;border-radius:5px;font-size:11px;cursor:pointer;white-space:nowrap;display:inline-flex;align-items:center;gap:4px;font-weight:600;transition:all .15s}
+    .tb:hover{color:#fff;background:#1a2850}
+    .tb.on{border-color:var(--accent);color:var(--accent);background:rgba(0,204,255,.08)}
+    .tb.live{border-color:var(--green);color:var(--green);background:rgba(0,255,136,.06)}
+    .tb.live .dot{background:var(--green);animation:pulse 1.5s infinite}
+    .tb.stopping{border-color:var(--orange);color:var(--orange)}
+    .dot{width:6px;height:6px;border-radius:50%;background:#333;flex-shrink:0}
+    .spacer{flex:1;min-width:4px}
+    select.band-sel{background:#111830;color:var(--accent);border:1px solid #1a2844;padding:4px 8px;border-radius:5px;font-size:11px;cursor:pointer;font-family:inherit}
+    select.band-sel option{background:#0a0e18;color:#ccc}
+    .slider-wrap{display:flex;align-items:center;gap:4px;font-size:9px;color:var(--dim)}
+    .slider-wrap label{white-space:nowrap;min-width:36px}
+    .slider-wrap .val{font-family:'Courier New',monospace;color:var(--accent);min-width:24px;text-align:right}
+    input[type=range]{-webkit-appearance:none;appearance:none;height:3px;background:#1a2844;border-radius:2px;outline:none;cursor:pointer;width:80px}
+    input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:10px;height:10px;border-radius:50%;background:var(--accent);cursor:pointer;border:2px solid #0a0e1a}
+    #topbar a.back{color:#555;font-size:10px;text-decoration:none;white-space:nowrap}
+    #topbar a.back:hover{color:var(--accent)}
+    @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+
+    /* Main layout */
+    #main{flex:1;display:flex;min-height:0;overflow:hidden}
+    #left{flex:7;display:flex;flex-direction:column;padding:16px 20px;gap:12px;overflow-y:auto}
+    #right{flex:3;min-width:240px;max-width:360px;border-left:1px solid var(--border);display:flex;flex-direction:column;background:#070a12}
+
+    /* Frequency display */
+    .freq-box{text-align:center;padding:12px 0 8px}
+    .freq-digits{display:inline-flex;align-items:center;gap:0;user-select:none}
+    .freq-col{display:flex;flex-direction:column;align-items:center;gap:0}
+    .freq-col .d-btn{width:36px;height:22px;display:flex;align-items:center;justify-content:center;background:transparent;border:1px solid transparent;border-radius:4px;color:#1a3050;font-size:12px;cursor:pointer;transition:all .12s;padding:0;line-height:1}
+    .freq-col .d-btn:hover{color:var(--accent);border-color:rgba(0,204,255,.3);background:rgba(0,204,255,.06)}
+    .freq-col .d-btn:active{transform:scale(.9);color:#fff}
+    .freq-col .d-val{font-family:'Courier New',monospace;font-size:52px;font-weight:700;color:var(--accent);line-height:1;padding:0 1px;min-width:32px;text-align:center;text-shadow:0 0 20px rgba(0,204,255,.3)}
+    .freq-dot{font-family:'Courier New',monospace;font-size:52px;font-weight:700;color:var(--dim);line-height:1;padding:0;align-self:flex-end;margin-bottom:0}
+    .freq-unit{font-size:18px;color:var(--dim);margin-left:8px;font-weight:400;align-self:flex-end;margin-bottom:8px}
+    .freq-input-row{display:flex;align-items:center;justify-content:center;gap:6px;margin-top:6px}
+    .freq-input{width:120px;padding:4px 8px;border:1px solid #1a2844;border-radius:5px;background:#0a1020;color:var(--accent);font-family:'Courier New',monospace;font-size:16px;font-weight:700;text-align:center;outline:none;transition:border-color .15s}
+    .freq-input:focus{border-color:var(--accent);box-shadow:0 0 8px rgba(0,204,255,.15)}
+    .freq-input::placeholder{color:#1a3050;font-weight:400}
+    .freq-band{font-size:14px;color:#4a6080;margin-top:4px;display:flex;align-items:center;justify-content:center;gap:8px}
+    .freq-band .mod-badge{padding:2px 8px;border-radius:3px;font-size:10px;font-weight:700;text-transform:uppercase;border:1px solid #1a2844;color:var(--orange)}
+
+    /* Signal indicator */
+    .signal-row{display:flex;align-items:center;gap:12px;justify-content:center;margin-top:4px}
+    .signal-badge{padding:4px 16px;border-radius:4px;font-size:12px;font-weight:700;letter-spacing:1px}
+    .signal-badge.scanning{background:rgba(0,204,255,.1);border:1px solid rgba(0,204,255,.3);color:var(--accent);animation:scan-pulse 1s infinite}
+    .signal-badge.signal{background:rgba(0,255,136,.1);border:1px solid rgba(0,255,136,.4);color:var(--green)}
+    .signal-badge.idle{background:rgba(100,100,100,.1);border:1px solid #1a2844;color:#555}
+    @keyframes scan-pulse{0%,100%{opacity:1}50%{opacity:.5}}
+
+    /* Signal meter */
+    .meter-box{margin-top:8px}
+    .meter-label{font-size:9px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;display:flex;justify-content:space-between}
+    .meter-wrap{height:18px;background:#0a1020;border-radius:3px;border:1px solid #1a2844;position:relative;overflow:hidden}
+    .meter-fill{height:100%;border-radius:2px;transition:width .2s;min-width:0}
+    .meter-squelch{position:absolute;top:0;bottom:0;width:2px;background:var(--red);z-index:2;transition:left .2s}
+    .meter-squelch::after{content:'SQ';position:absolute;top:-12px;left:-6px;font-size:7px;color:var(--red);font-weight:700}
+    .meter-value{position:absolute;right:4px;top:0;line-height:18px;font-size:9px;font-family:'Courier New',monospace;color:#ddd;text-shadow:0 0 3px #000;z-index:3}
+
+    /* Audio spectrum */
+    .viz-box{margin-top:8px;border:1px solid #1a2844;border-radius:4px;overflow:hidden;background:#030508}
+    .viz-box canvas{width:100%;display:block}
+    #specCanvas{height:60px}
+
+    /* Scan animation */
+    .scan-bar{margin-top:12px}
+    .scan-bar-label{font-size:9px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}
+    .scan-bar-track{height:6px;background:#0a1020;border-radius:3px;border:1px solid #1a2844;position:relative;overflow:hidden}
+    .scan-bar-pos{position:absolute;top:0;bottom:0;width:3px;background:var(--accent);border-radius:2px;transition:left .3s;box-shadow:0 0 6px var(--accent)}
+
+    /* Tuning buttons */
+    .tune-row{display:flex;align-items:center;justify-content:center;gap:6px;margin-top:12px}
+    .tune-btn{padding:6px 16px;border:1px solid #1a2844;background:#0a1020;color:#888;border-radius:5px;cursor:pointer;font-size:11px;font-weight:600;transition:all .15s}
+    .tune-btn:hover{color:var(--accent);border-color:var(--accent);background:rgba(0,204,255,.05)}
+    .tune-btn:active{transform:scale(.95)}
+    .tune-btn i{margin-right:4px}
+
+    /* Watchlist */
+    .wl-header{padding:8px 12px;font-size:11px;font-weight:700;color:var(--green);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:6px;flex-shrink:0}
+    .wl-header .wl-actions{margin-left:auto;display:flex;gap:4px}
+    .wl-header .wl-btn{background:none;border:1px solid #1a2844;color:#555;border-radius:3px;padding:1px 6px;font-size:9px;cursor:pointer;transition:all .12s}
+    .wl-header .wl-btn:hover{color:var(--accent);border-color:var(--accent)}
+    .wl-list{max-height:200px;overflow-y:auto;padding:2px 0}
+    .wl-item{padding:4px 12px;display:flex;align-items:center;gap:6px;font-size:10px;cursor:pointer;transition:background .1s;border-bottom:1px solid #0a0e18}
+    .wl-item:hover{background:#0c1828}
+    .wl-item.active{background:rgba(0,204,255,.08);border-left:2px solid var(--accent)}
+    .wl-item.priority .wl-star{color:var(--yellow)}
+    .wl-item .wl-freq{font-family:'Courier New',monospace;color:var(--accent);font-weight:600;min-width:70px}
+    .wl-item .wl-label{color:#888;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .wl-item .wl-star{color:#333;font-size:8px;cursor:pointer}
+    .wl-item .wl-del{color:#333;font-size:9px;cursor:pointer;padding:0 2px}
+    .wl-item .wl-del:hover{color:var(--red)}
+    .wl-add{display:flex;gap:4px;padding:6px 8px;border-bottom:1px solid var(--border)}
+    .wl-add input{flex:1;padding:3px 6px;border:1px solid #1a2844;border-radius:3px;background:#0a1020;color:var(--accent);font-family:'Courier New',monospace;font-size:10px;outline:none}
+    .wl-add input::placeholder{color:#1a3050}
+    .wl-add button{padding:3px 8px;border:1px solid #1a2844;border-radius:3px;background:#0a1020;color:#888;font-size:9px;cursor:pointer}
+    .wl-add button:hover{color:var(--green);border-color:var(--green)}
+
+    /* Activity log */
+    .log-header{padding:10px 12px;font-size:11px;font-weight:700;color:var(--accent);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:6px;flex-shrink:0}
+    .log-header i{font-size:12px}
+    .log-header .count{margin-left:auto;font-size:9px;color:var(--dim);font-weight:400}
+    .log-list{flex:1;overflow-y:auto;padding:4px 0}
+    .log-list::-webkit-scrollbar{width:4px}
+    .log-list::-webkit-scrollbar-thumb{background:#1a2844;border-radius:2px}
+    .log-empty{text-align:center;padding:40px 16px;color:#1a3050;font-size:12px}
+    .log-empty i{font-size:24px;display:block;margin-bottom:8px}
+    .log-item{padding:6px 12px;border-bottom:1px solid #0a0e18;font-size:10px;cursor:pointer;transition:background .1s}
+    .log-item:hover{background:#0c1828}
+    .log-item .li-top{display:flex;align-items:center;gap:6px;margin-bottom:2px}
+    .log-item .li-freq{font-family:'Courier New',monospace;color:var(--accent);font-weight:600;font-size:11px}
+    .log-item .li-band{padding:1px 4px;border-radius:2px;font-size:8px;font-weight:600;border:1px solid #1a2844}
+    .log-item .li-band.Airband{color:#00ccff;border-color:rgba(0,204,255,.3)}
+    .log-item .li-band.Marine{color:#00ff88;border-color:rgba(0,255,136,.3)}
+    .log-item .li-band.PMR446{color:#ff8800;border-color:rgba(255,136,0,.3)}
+    .log-item .li-band.FM{color:#ff3399;border-color:rgba(255,51,153,.3)}
+    .log-item .li-band.SAMU{color:#ff3333;border-color:rgba(255,51,51,.3)}
+    .log-item .li-time{margin-left:auto;color:var(--dim);font-size:9px}
+    .log-item .li-bottom{display:flex;align-items:center;gap:8px;color:var(--dim)}
+    .log-item .li-signal{font-family:'Courier New',monospace}
+    .log-item .li-dur{font-family:'Courier New',monospace}
+
+    /* Bottom bar */
+    #bbar{height:28px;background:#0a0e1a;display:flex;align-items:center;padding:0 12px;gap:10px;border-top:1px solid var(--border);flex-shrink:0;font-size:9px;color:var(--dim)}
+    #bbar .info{font-family:'Courier New',monospace}
+    #bbar .accent{color:var(--accent)}
+    #bbar .green{color:var(--green)}
+
+    /* Keyboard hint */
+    .kbd-hint{margin-top:auto;padding:12px;border-top:1px solid var(--border);font-size:8px;color:#1a3050;line-height:1.6}
+    .kbd-hint kbd{padding:1px 4px;border:1px solid #1a2844;border-radius:2px;font-family:'Courier New',monospace;font-size:8px;color:#3a5070}
+
+    /* Responsive */
+    @media(max-width:768px){
+      #main{flex-direction:column}
+      #right{max-width:none;min-width:0;border-left:none;border-top:1px solid var(--border);max-height:40vh}
+      .freq-digits{font-size:40px}
+      #topbar{flex-wrap:wrap;height:auto;padding:6px 8px;gap:4px}
+      input[type=range]{width:60px}
+    }
+  </style>
+</head>
+<body>
+
+<!-- Topbar -->
+<div id="topbar">
+  <h1><i class="fa-solid fa-tower-broadcast"></i> Radio Scanner</h1>
+  <select id="bandSel" class="band-sel" title="Band preset"></select>
+  <button id="btnScan" class="tb on" title="Scan mode"><i class="fa-solid fa-magnifying-glass"></i> Scan</button>
+  <button id="btnManual" class="tb" title="Manual tuning"><i class="fa-solid fa-sliders"></i> Manual</button>
+  <button id="btnLive" class="tb" title="Start / Stop">
+    <span class="dot"></span> <span id="liveLabel">Start</span>
+  </button>
+  <div class="slider-wrap">
+    <label><i class="fa-solid fa-volume-off"></i></label>
+    <input type="range" id="volSlider" min="0" max="500" value="100" title="Volume (max 5x boost)">
+    <span class="val" id="volVal">100</span>
+  </div>
+  <div class="slider-wrap">
+    <label>SQ</label>
+    <input type="range" id="sqSlider" min="0" max="100" value="50" title="Squelch">
+    <span class="val" id="sqVal">50</span>
+  </div>
+  <div class="slider-wrap">
+    <label>Hold</label>
+    <input type="range" id="holdSlider" min="3" max="60" value="15" step="1" title="Hold time on signal (seconds)">
+    <span class="val" id="holdVal">15s</span>
+  </div>
+  <select id="eqPreset" class="band-sel" title="Audio filter preset">
+    <option value="voice">Voice</option>
+    <option value="wide">Wide</option>
+    <option value="raw">Raw</option>
+    <option value="custom">Custom</option>
+  </select>
+  <div class="slider-wrap">
+    <label>HP</label>
+    <input type="range" id="hpSlider" min="0" max="2000" value="250" step="10" title="High-pass cutoff (Hz)">
+    <span class="val" id="hpVal">250</span>
+  </div>
+  <div class="slider-wrap">
+    <label>LP</label>
+    <input type="range" id="lpSlider" min="500" max="8000" value="3200" step="100" title="Low-pass cutoff (Hz)">
+    <span class="val" id="lpVal">3.2k</span>
+  </div>
+  <span class="spacer"></span>
+  <a href="./index.html" class="back"><i class="fa-solid fa-arrow-left"></i> Dashboard</a>
+</div>
+
+<!-- Main -->
+<div id="main">
+  <!-- Left: frequency + meters -->
+  <div id="left">
+    <div class="freq-box">
+      <div class="freq-digits" id="freqDisplay">----.---<span class="freq-unit">MHz</span></div>
+      <div class="freq-input-row">
+        <input type="text" id="freqInput" class="freq-input" placeholder="132.550" title="Enter frequency in MHz">
+        <button id="btnGoFreq" class="tune-btn" title="Tune to frequency"><i class="fa-solid fa-play"></i> Go</button>
+      </div>
+      <div class="freq-band">
+        <span id="bandLabel">--</span>
+        <span class="mod-badge" id="modBadge">--</span>
+      </div>
+    </div>
+
+    <div class="signal-row">
+      <span class="signal-badge idle" id="statusBadge">IDLE</span>
+    </div>
+
+    <div class="meter-box">
+      <div class="meter-label">
+        <span>Signal Level</span>
+        <span id="sigDbVal" style="font-family:'Courier New',monospace">0</span>
+      </div>
+      <div class="meter-wrap">
+        <div class="meter-fill" id="meterFill"></div>
+        <div class="meter-squelch" id="meterSq"></div>
+        <div class="meter-value" id="meterVal">0%</div>
+      </div>
+    </div>
+
+    <!-- Audio Spectrum -->
+    <div class="viz-box" id="vizBox">
+      <canvas id="specCanvas"></canvas>
+    </div>
+
+    <div class="scan-bar" id="scanBarBox">
+      <div class="scan-bar-label">Scan Position</div>
+      <div class="scan-bar-track">
+        <div class="scan-bar-pos" id="scanPos"></div>
+      </div>
+    </div>
+
+    <div class="tune-row">
+      <button class="tune-btn" id="btnScanHold" title="Scan / Hold toggle (Space)"><i class="fa-solid fa-pause"></i> Hold</button>
+      <button class="tune-btn" id="btnNext" title="Skip to next signal (N)"><i class="fa-solid fa-forward"></i> Next</button>
+    </div>
+
+    <div class="kbd-hint">
+      <kbd>Space</kbd> Scan/Hold &nbsp;
+      <kbd>N</kbd> Next &nbsp;
+      <kbd>+</kbd> <kbd>-</kbd> Squelch &nbsp;
+      <kbd>&uarr;</kbd> <kbd>&darr;</kbd> Volume
+    </div>
+  </div>
+
+  <!-- Right: watchlist + activity log -->
+  <div id="right">
+    <div class="wl-header">
+      <i class="fa-solid fa-bookmark"></i> Watchlist
+      <div class="wl-actions">
+        <button class="wl-btn" id="wlReset" title="Reset to default">Reset</button>
+      </div>
+    </div>
+    <div class="wl-add">
+      <input type="text" id="wlFreqIn" placeholder="132.550" title="Frequency MHz">
+      <input type="text" id="wlLabelIn" placeholder="Label" title="Label" style="max-width:70px">
+      <button id="wlAddBtn" title="Add frequency">+</button>
+    </div>
+    <div class="wl-list" id="wlList"></div>
+
+    <div class="log-header">
+      <i class="fa-solid fa-list"></i> Activity Log
+      <span class="count" id="logCount">0 entries</span>
+    </div>
+    <div class="log-list" id="logList">
+      <div class="log-empty" id="logEmpty">
+        <i class="fa-solid fa-radio"></i>
+        Detected transmissions will appear here
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Bottom bar -->
+<div id="bbar">
+  <span class="info accent" id="bbBand">--</span>
+  <span class="info" id="bbRange">--</span>
+  <span class="spacer"></span>
+  <span class="info" id="bbMode">Mode: --</span>
+  <span class="info green" id="bbStatus">Stopped</span>
+</div>
+
+<!-- Hidden audio element for WAV streaming -->
+<audio id="audioEl" crossorigin="anonymous" preload="none"></audio>
+
+<script>
+(function(){
+'use strict';
+
+/* ── Auth ── */
+fetch("/api/auth/me",{credentials:"include"}).then(r=>{if(!r.ok)throw 0;return r.json()}).then(d=>{if(!d||!d.authenticated)throw 0}).catch(()=>{document.body.innerHTML='<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;gap:16px;font-family:sans-serif;background:#05060a"><i class="fa-solid fa-lock" style="font-size:48px;color:#f43f5e"></i><h2 style="color:#e2e8f0">Authentication Required</h2><p style="color:#94a3b8">Please log in through the WebUI first.</p><a href="./index.html" style="color:#00ccff;text-decoration:none;padding:8px 20px;border:1px solid #00ccff;border-radius:6px;margin-top:8px">Go to Login</a></div>'});
+
+async function apiFetch(path, opts){
+  const o = Object.assign({credentials:'include'}, opts || {});
+  const r = await fetch(path, o);
+  if(r.status === 401){location.href='./index.html';throw new Error('unauthorized');}
+  return r;
+}
+async function apiPost(path, body){
+  return apiFetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body||{}),credentials:'include'});
+}
+
+/* ── DOM refs ── */
+const bandSel    = document.getElementById('bandSel');
+const btnScan    = document.getElementById('btnScan');
+const btnManual  = document.getElementById('btnManual');
+const btnLive    = document.getElementById('btnLive');
+const liveLabel  = document.getElementById('liveLabel');
+const volSlider  = document.getElementById('volSlider');
+const volVal     = document.getElementById('volVal');
+const sqSlider   = document.getElementById('sqSlider');
+const sqVal      = document.getElementById('sqVal');
+const freqDisplay= document.getElementById('freqDisplay');
+const bandLabel  = document.getElementById('bandLabel');
+const modBadge   = document.getElementById('modBadge');
+const statusBadge= document.getElementById('statusBadge');
+const meterFill  = document.getElementById('meterFill');
+const meterSq    = document.getElementById('meterSq');
+const meterVal   = document.getElementById('meterVal');
+const sigDbVal   = document.getElementById('sigDbVal');
+const scanPos    = document.getElementById('scanPos');
+const scanBarBox = document.getElementById('scanBarBox');
+const btnScanHold= document.getElementById('btnScanHold');
+const logList    = document.getElementById('logList');
+const logEmpty   = document.getElementById('logEmpty');
+const logCount   = document.getElementById('logCount');
+const bbBand     = document.getElementById('bbBand');
+const bbRange    = document.getElementById('bbRange');
+const bbMode     = document.getElementById('bbMode');
+const bbStatus   = document.getElementById('bbStatus');
+const audioEl    = document.getElementById('audioEl');
+const eqPreset   = document.getElementById('eqPreset');
+const specCanvas = document.getElementById('specCanvas');
+const specCtx    = specCanvas.getContext('2d');
+
+/* ── State ── */
+let state = null;
+let isLive = false;
+let mode = 'scan';
+let audioCtx = null;
+let gainNode = null;
+let hpFilter = null;
+let lpFilter = null;
+let notchFilter = null;
+let analyser = null;
+let mediaSource = null;
+let audioConnected = false;
+let vizAnimId = null;
+
+/* ── Band selector ── */
+function populateBands(bands){
+  if(!bands || !bands.length) return;
+  bandSel.innerHTML = '';
+  bands.forEach((b,i) => {
+    const o = document.createElement('option');
+    o.value = i;
+    o.textContent = b.name + ' (' + b.desc + ')';
+    bandSel.appendChild(o);
+  });
+}
+
+bandSel.addEventListener('change', () => {
+  const idx = parseInt(bandSel.value);
+  if(isLive){
+    apiPost('/api/scanner/control',{action:'band',idx:idx});
+  }
+});
+
+/* ── Mode buttons ── */
+btnScan.addEventListener('click', () => {
+  mode = 'scan';
+  updateModeButtons();
+  if(isLive) apiPost('/api/scanner/control',{action:'scan'});
+});
+btnManual.addEventListener('click', () => {
+  mode = 'manual';
+  updateModeButtons();
+  if(isLive) apiPost('/api/scanner/control',{action:'hold'});
+});
+function updateModeButtons(){
+  btnScan.classList.toggle('on', mode==='scan');
+  btnManual.classList.toggle('on', mode==='manual');
+  btnNext.disabled = false;
+  btnNext.style.opacity = '1';
+}
+
+/* ── Live button ── */
+btnLive.addEventListener('click', async () => {
+  if(isLive){
+    await apiPost('/api/scanner/stop');
+    stopAudio();
+    isLive = false;
+    updateLiveButton();
+  } else {
+    const sq = parseInt(sqSlider.value);
+    const bandIdx = parseInt(bandSel.value);
+    await apiPost('/api/scanner/start',{band_idx:bandIdx, mode:mode, squelch:sq});
+    isLive = true;
+    updateLiveButton();
+    setTimeout(startAudio, 1500);
+  }
+});
+function updateLiveButton(){
+  btnLive.classList.toggle('live', isLive);
+  liveLabel.textContent = isLive ? 'Stop' : 'Start';
+}
+
+/* ── Hold time slider ── */
+const holdSlider = document.getElementById('holdSlider');
+const holdVal = document.getElementById('holdVal');
+let holdDebounce = null;
+holdSlider.addEventListener('input', () => {
+  holdVal.textContent = holdSlider.value + 's';
+  if(holdDebounce) clearTimeout(holdDebounce);
+  holdDebounce = setTimeout(() => {
+    if(isLive) apiPost('/api/scanner/control',{action:'hold_time',seconds:parseInt(holdSlider.value)});
+  }, 300);
+});
+
+/* ── Direct frequency input ── */
+const freqInput = document.getElementById('freqInput');
+const btnGoFreq = document.getElementById('btnGoFreq');
+
+function tuneToInput(){
+  const val = freqInput.value.trim().replace(',','.');
+  const mhz = parseFloat(val);
+  if(isNaN(mhz) || mhz < 1) return;
+  const hz = Math.round(mhz * 1e6);
+  if(isLive){
+    apiPost('/api/scanner/control',{action:'tune',freq:hz});
+  } else {
+    const sq = parseInt(sqSlider.value);
+    apiPost('/api/scanner/start',{band_idx:parseInt(bandSel.value), mode:'manual', squelch:sq, freq:hz});
+    isLive = true;
+    mode = 'manual';
+    updateLiveButton();
+    updateModeButtons();
+    setTimeout(startAudio, 1500);
+  }
+  freqInput.blur();
+}
+btnGoFreq.addEventListener('click', tuneToInput);
+freqInput.addEventListener('keydown', (e) => {
+  if(e.key === 'Enter'){e.preventDefault();tuneToInput();}
+});
+
+/* ── Squelch slider ── */
+let sqDebounce = null;
+sqSlider.addEventListener('input', () => {
+  sqVal.textContent = sqSlider.value;
+  if(sqDebounce) clearTimeout(sqDebounce);
+  sqDebounce = setTimeout(() => {
+    if(isLive) apiPost('/api/scanner/control',{action:'squelch',level:parseInt(sqSlider.value)});
+  }, 300);
+});
+
+/* ── Volume slider ── */
+volSlider.addEventListener('input', () => {
+  volVal.textContent = volSlider.value;
+  if(gainNode) gainNode.gain.value = parseInt(volSlider.value) / 100;
+});
+
+/* ── EQ preset + HP/LP sliders ── */
+const hpSlider = document.getElementById('hpSlider');
+const hpVal    = document.getElementById('hpVal');
+const lpSlider = document.getElementById('lpSlider');
+const lpVal    = document.getElementById('lpVal');
+
+const EQ_PRESETS = {
+  voice:  {hp:250,  lp:3200},
+  wide:   {hp:80,   lp:6000},
+  raw:    {hp:0,    lp:0},
+};
+
+function fmtHz(v){return v>=1000?(v/1000).toFixed(1)+'k':v;}
+
+eqPreset.addEventListener('change', () => {
+  const p = eqPreset.value;
+  if(p !== 'custom'){
+    const cfg = EQ_PRESETS[p];
+    hpSlider.value = cfg.hp;
+    hpVal.textContent = fmtHz(cfg.hp);
+    lpSlider.value = cfg.lp || 8000;
+    lpVal.textContent = cfg.lp ? fmtHz(cfg.lp) : 'off';
+  }
+  applyEQFromSliders();
+});
+
+hpSlider.addEventListener('input', () => {
+  hpVal.textContent = fmtHz(parseInt(hpSlider.value));
+  eqPreset.value = 'custom';
+  applyEQFromSliders();
+});
+lpSlider.addEventListener('input', () => {
+  lpVal.textContent = fmtHz(parseInt(lpSlider.value));
+  eqPreset.value = 'custom';
+  applyEQFromSliders();
+});
+
+function applyEQFromSliders(){
+  const hp = parseInt(hpSlider.value);
+  const lp = parseInt(lpSlider.value);
+  const preset = eqPreset.value;
+  const isRaw = preset === 'raw';
+
+  if(hpFilter){
+    if(!isRaw && hp > 0){hpFilter.type='highpass';hpFilter.frequency.value=hp;hpFilter.Q.value=1.0;}
+    else {hpFilter.type='allpass';hpFilter.frequency.value=1;}
+  }
+  if(lpFilter){
+    if(!isRaw){lpFilter.type='lowpass';lpFilter.frequency.value=lp;lpFilter.Q.value=2.0;}
+    else {lpFilter.type='allpass';lpFilter.frequency.value=20000;}
+  }
+  if(notchFilter){
+    notchFilter.type='allpass';notchFilter.frequency.value=1;
+  }
+}
+function applyEQ(preset){
+  eqPreset.value = preset;
+  eqPreset.dispatchEvent(new Event('change'));
+}
+
+/* ── Scan/Hold button ── */
+btnScanHold.addEventListener('click', () => {
+  if(!isLive) return;
+  if(state && state.mode === 'scan'){
+    mode = 'manual';
+    apiPost('/api/scanner/control',{action:'hold'});
+  } else {
+    mode = 'scan';
+    apiPost('/api/scanner/control',{action:'scan'});
+  }
+  updateModeButtons();
+});
+
+/* ── Next button ── */
+const btnNext = document.getElementById('btnNext');
+btnNext.addEventListener('click', () => {
+  if(isLive) apiPost('/api/scanner/control',{action:'next'});
+});
+
+/* ── Keyboard shortcuts ── */
+document.addEventListener('keydown', (e) => {
+  if(e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+  switch(e.key){
+    case 'ArrowRight':
+      e.preventDefault();
+      if(isLive) apiPost('/api/scanner/control',{action:'step',dir:1});
+      break;
+    case 'ArrowLeft':
+      e.preventDefault();
+      if(isLive) apiPost('/api/scanner/control',{action:'step',dir:-1});
+      break;
+    case ' ':
+      e.preventDefault();
+      btnScanHold.click();
+      break;
+    case 'n': case 'N':
+      e.preventDefault();
+      btnNext.click();
+      break;
+    case '+': case '=':
+      e.preventDefault();
+      sqSlider.value = Math.min(100, parseInt(sqSlider.value)+5);
+      sqSlider.dispatchEvent(new Event('input'));
+      break;
+    case '-': case '_':
+      e.preventDefault();
+      sqSlider.value = Math.max(0, parseInt(sqSlider.value)-5);
+      sqSlider.dispatchEvent(new Event('input'));
+      break;
+    case 'ArrowUp':
+      e.preventDefault();
+      volSlider.value = Math.min(100, parseInt(volSlider.value)+5);
+      volSlider.dispatchEvent(new Event('input'));
+      break;
+    case 'ArrowDown':
+      e.preventDefault();
+      volSlider.value = Math.max(0, parseInt(volSlider.value)-5);
+      volSlider.dispatchEvent(new Event('input'));
+      break;
+  }
+});
+
+/* ── Audio with EQ chain + visualizer ── */
+let _audioRetry = null;
+let _audioWanted = false;
+
+function _initAudioCtx(){
+  if(audioCtx) return;
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  hpFilter = audioCtx.createBiquadFilter();
+  lpFilter = audioCtx.createBiquadFilter();
+  notchFilter = audioCtx.createBiquadFilter();
+  analyser = audioCtx.createAnalyser();
+  gainNode = audioCtx.createGain();
+  analyser.fftSize = 256;
+  analyser.smoothingTimeConstant = 0.8;
+  gainNode.gain.value = parseInt(volSlider.value) / 100;
+  hpFilter.connect(lpFilter);
+  lpFilter.connect(notchFilter);
+  notchFilter.connect(analyser);
+  analyser.connect(gainNode);
+  gainNode.connect(audioCtx.destination);
+  applyEQFromSliders();
+}
+
+function startAudio(){
+  _audioWanted = true;
+  if(_audioRetry) clearInterval(_audioRetry);
+  _tryPlayAudio();
+  _audioRetry = setInterval(() => {
+    if(!_audioWanted){clearInterval(_audioRetry);_audioRetry=null;return;}
+    if(audioEl.paused || audioEl.ended || audioEl.error){
+      _tryPlayAudio();
+    }
+  }, 3000);
+}
+
+function _tryPlayAudio(){
+  try {
+    _initAudioCtx();
+    if(audioCtx.state === 'suspended') audioCtx.resume();
+
+    audioEl.src = '/api/scanner/audio?t=' + Date.now();
+    audioEl.load();
+
+    if(!audioConnected){
+      mediaSource = audioCtx.createMediaElementSource(audioEl);
+      mediaSource.connect(hpFilter);
+      audioConnected = true;
+    }
+
+    audioEl.play().then(() => {
+      startViz();
+    }).catch((e) => {
+      console.warn('Audio play blocked, will retry:', e.message);
+    });
+  } catch(err) {
+    console.error('Audio error:', err);
+  }
+}
+
+function stopAudio(){
+  _audioWanted = false;
+  if(_audioRetry){clearInterval(_audioRetry);_audioRetry=null;}
+  try {
+    audioEl.pause();
+    audioEl.removeAttribute('src');
+    audioEl.load();
+  } catch(e){}
+  stopViz();
+}
+
+/* ── Audio Spectrum Visualizer ── */
+function startViz(){
+  if(vizAnimId) return;
+  function draw(){
+    vizAnimId = requestAnimationFrame(draw);
+    if(!analyser) return;
+    const bufLen = analyser.frequencyBinCount;
+    const data = new Uint8Array(bufLen);
+    analyser.getByteFrequencyData(data);
+
+    const w = specCanvas.width = specCanvas.clientWidth;
+    const h = specCanvas.height = specCanvas.clientHeight || 60;
+    specCtx.fillStyle = '#030508';
+    specCtx.fillRect(0,0,w,h);
+
+    // Filled area
+    specCtx.beginPath();
+    specCtx.moveTo(0, h);
+    for(let i=0; i<bufLen; i++){
+      const x = (i/bufLen)*w;
+      const y = h - (data[i]/255)*h;
+      if(i===0) specCtx.moveTo(x,y);
+      else specCtx.lineTo(x,y);
+    }
+    specCtx.lineTo(w, h);
+    specCtx.closePath();
+    const grad = specCtx.createLinearGradient(0,h,0,0);
+    grad.addColorStop(0,'rgba(0,40,80,0.3)');
+    grad.addColorStop(0.5,'rgba(0,200,255,0.15)');
+    grad.addColorStop(1,'rgba(0,255,136,0.35)');
+    specCtx.fillStyle = grad;
+    specCtx.fill();
+
+    // Line
+    specCtx.strokeStyle = 'rgba(0,204,255,0.8)';
+    specCtx.lineWidth = 1.5;
+    specCtx.beginPath();
+    for(let i=0; i<bufLen; i++){
+      const x = (i/bufLen)*w;
+      const y = h - (data[i]/255)*h;
+      if(i===0) specCtx.moveTo(x,y);
+      else specCtx.lineTo(x,y);
+    }
+    specCtx.stroke();
+  }
+  draw();
+}
+
+function stopViz(){
+  if(vizAnimId){cancelAnimationFrame(vizAnimId);vizAnimId=null;}
+  const w = specCanvas.width = specCanvas.clientWidth;
+  const h = specCanvas.height = specCanvas.clientHeight || 60;
+  specCtx.fillStyle = '#030508';
+  specCtx.fillRect(0,0,w,h);
+}
+
+/* ── Watchlist ── */
+const wlList = document.getElementById('wlList');
+const wlFreqIn = document.getElementById('wlFreqIn');
+const wlLabelIn = document.getElementById('wlLabelIn');
+const wlAddBtn = document.getElementById('wlAddBtn');
+const wlReset = document.getElementById('wlReset');
+let _localWatchlist = [];
+let _lastWlHash = '';
+
+function renderWatchlist(wl, activeIdx, priorityIdx){
+  const hash = JSON.stringify(wl) + activeIdx + priorityIdx;
+  if(hash === _lastWlHash) return;
+  _lastWlHash = hash;
+  _localWatchlist = wl;
+  wlList.innerHTML = '';
+  wl.forEach((item, i) => {
+    const div = document.createElement('div');
+    div.className = 'wl-item' + (i===activeIdx?' active':'') + (i===priorityIdx?' priority':'');
+    const freqStr = (item.freq/1e6).toFixed(3);
+    div.innerHTML =
+      '<span class="wl-star" data-i="'+i+'" title="Set as priority"><i class="fa-solid fa-star"></i></span>' +
+      '<span class="wl-freq">'+freqStr+'</span>' +
+      '<span class="wl-label">'+(item.label||item.mod||'')+'</span>' +
+      '<span class="wl-del" data-i="'+i+'" title="Remove"><i class="fa-solid fa-xmark"></i></span>';
+    div.addEventListener('click', (e) => {
+      if(e.target.closest('.wl-star')){
+        apiPost('/api/scanner/control',{action:'priority',idx:i});
+        return;
+      }
+      if(e.target.closest('.wl-del')){
+        const nw = _localWatchlist.filter((_,j)=>j!==i);
+        apiPost('/api/scanner/control',{action:'watchlist',freqs:nw});
+        return;
+      }
+      if(isLive) apiPost('/api/scanner/control',{action:'tune',freq:item.freq});
+    });
+    wlList.appendChild(div);
+  });
+}
+
+wlAddBtn.addEventListener('click', () => {
+  const val = wlFreqIn.value.trim().replace(',','.');
+  const mhz = parseFloat(val);
+  if(isNaN(mhz) || mhz < 1) return;
+  const hz = Math.round(mhz * 1e6);
+  const label = wlLabelIn.value.trim() || '';
+  const nw = [..._localWatchlist, {freq:hz, label:label, mod:'usb'}];
+  apiPost('/api/scanner/control',{action:'watchlist',freqs:nw});
+  wlFreqIn.value = '';
+  wlLabelIn.value = '';
+});
+wlFreqIn.addEventListener('keydown', (e) => {
+  if(e.key==='Enter'){e.preventDefault();wlAddBtn.click();}
+});
+
+wlReset.addEventListener('click', () => {
+  apiPost('/api/scanner/control',{action:'watchlist',freqs:[
+    {freq:121500000,label:'Emergency',mod:'usb'},
+    {freq:123450000,label:'Air-Air',mod:'usb'},
+    {freq:156800000,label:'Marine Ch16',mod:'fm'},
+    {freq:446006250,label:'PMR446 Ch1',mod:'fm'},
+  ]});
+});
+
+/* ── Frequency display with ▲/▼ buttons per digit ── */
+let _lastFreqStr = '';
+function renderFreqDisplay(freqHz, freqStr){
+  if(!freqStr || freqStr === '0.000'){
+    if(_lastFreqStr === '0.000') return;
+    _lastFreqStr = '0.000';
+    freqDisplay.innerHTML = '<span class="freq-col"><span class="d-val" style="color:var(--dim)">----.---</span></span><span class="freq-unit">MHz</span>';
+    return;
+  }
+  // Only rebuild DOM when digits change
+  if(freqStr === _lastFreqStr) return;
+  _lastFreqStr = freqStr;
+
+  const parts = freqStr.split('.');
+  const intPart = (parts[0] || '0').padStart(4, ' ');
+  const decPart = parts[1] || '000';
+
+  let html = '';
+  // Integer digits
+  for(let i=0; i<intPart.length; i++){
+    const place = Math.pow(10, 6 + (intPart.length - 1 - i));
+    if(intPart[i] === ' '){
+      html += '<div class="freq-col" style="visibility:hidden"><button class="d-btn">▲</button><span class="d-val">0</span><button class="d-btn">▼</button></div>';
+    } else {
+      html += '<div class="freq-col"><button class="d-btn" data-step="'+place+'" data-dir="1">▲</button><span class="d-val">'+intPart[i]+'</span><button class="d-btn" data-step="'+place+'" data-dir="-1">▼</button></div>';
+    }
+  }
+  // Dot
+  html += '<span class="freq-dot">.</span>';
+  // Decimal digits
+  for(let i=0; i<decPart.length; i++){
+    const place = Math.pow(10, 6 - 1 - i);
+    html += '<div class="freq-col"><button class="d-btn" data-step="'+place+'" data-dir="1">▲</button><span class="d-val">'+decPart[i]+'</span><button class="d-btn" data-step="'+place+'" data-dir="-1">▼</button></div>';
+  }
+  html += '<span class="freq-unit">MHz</span>';
+  freqDisplay.innerHTML = html;
+
+  // Attach click handlers to ▲/▼ buttons
+  freqDisplay.querySelectorAll('.d-btn[data-step]').forEach(el => {
+    el.addEventListener('click', (e) => {
+      e.preventDefault();
+      if(!isLive || !state) return;
+      const step = parseInt(el.dataset.step);
+      const dir = parseInt(el.dataset.dir);
+      const newFreq = state.freq + step * dir;
+      apiPost('/api/scanner/control',{action:'tune',freq:newFreq});
+    });
+  });
+  // Scroll on digit values
+  freqDisplay.querySelectorAll('.freq-col').forEach(col => {
+    col.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      if(!isLive || !state) return;
+      const btn = col.querySelector('.d-btn[data-step]');
+      if(!btn) return;
+      const step = parseInt(btn.dataset.step);
+      const dir = e.deltaY < 0 ? 1 : -1;
+      apiPost('/api/scanner/control',{action:'tune',freq:state.freq + step * dir});
+    });
+  });
+}
+
+/* ── Signal meter ── */
+function updateMeter(level, squelch){
+  const pct = Math.max(0, Math.min(100, level));
+
+  // Color gradient: green -> yellow -> red
+  let color;
+  if(pct < 40) color = 'var(--green)';
+  else if(pct < 70) color = 'var(--yellow)';
+  else color = 'var(--red)';
+
+  meterFill.style.width = pct + '%';
+  meterFill.style.background = 'linear-gradient(90deg, #004400 0%, '+color+' '+Math.max(10,pct)+'%)';
+  meterSq.style.left = squelch + '%';
+  meterVal.textContent = Math.round(pct) + '%';
+  sigDbVal.textContent = Math.round(pct);
+}
+
+/* ── Scan position bar ── */
+function updateScanBar(freq, bandStart, bandEnd){
+  if(!bandStart || !bandEnd || bandEnd <= bandStart){
+    scanPos.style.left = '0%';
+    return;
+  }
+  const pct = ((freq - bandStart) / (bandEnd - bandStart)) * 100;
+  scanPos.style.left = Math.max(0, Math.min(100, pct)) + '%';
+}
+
+/* ── Status badge ── */
+function updateStatusBadge(s){
+  if(!s || !s.running){
+    statusBadge.className = 'signal-badge idle';
+    statusBadge.textContent = 'IDLE';
+  } else if(s.paused_on_signal){
+    statusBadge.className = 'signal-badge signal';
+    statusBadge.textContent = 'SIGNAL';
+  } else if(s.scanning){
+    statusBadge.className = 'signal-badge scanning';
+    statusBadge.textContent = 'SCANNING';
+  } else {
+    statusBadge.className = 'signal-badge idle';
+    statusBadge.textContent = 'LISTENING';
+  }
+}
+
+/* ── Activity log ── */
+let lastLogLen = 0;
+function updateLog(log){
+  if(!log || !log.length){
+    logEmpty.style.display = 'block';
+    logCount.textContent = '0 entries';
+    // Clear any log items
+    logList.querySelectorAll('.log-item').forEach(el => el.remove());
+    lastLogLen = 0;
+    return;
+  }
+  logEmpty.style.display = 'none';
+  logCount.textContent = log.length + ' entries';
+
+  // Only rebuild if length changed
+  if(log.length !== lastLogLen){
+    // Remove old items
+    logList.querySelectorAll('.log-item').forEach(el => el.remove());
+
+    // Render newest first
+    const reversed = [...log].reverse();
+    reversed.forEach(entry => {
+      const div = document.createElement('div');
+      div.className = 'log-item';
+
+      const ts = new Date(entry.ts * 1000);
+      const timeStr = ts.toLocaleTimeString();
+      const bandClass = (entry.band || '').split('/')[0].split(' ')[0];
+
+      div.innerHTML =
+        '<div class="li-top">' +
+          '<span class="li-freq">' + entry.freq_display + ' MHz</span>' +
+          '<span class="li-band '+bandClass+'">' + (entry.band||'') + '</span>' +
+          '<span class="li-time">' + timeStr + '</span>' +
+        '</div>' +
+        '<div class="li-bottom">' +
+          '<span class="li-signal"><i class="fa-solid fa-signal" style="font-size:8px"></i> ' + Math.round(entry.signal) + '%</span>' +
+          '<span class="li-dur"><i class="fa-solid fa-clock" style="font-size:8px"></i> ' + entry.duration + 's</span>' +
+        '</div>';
+
+      // Click to tune to this frequency
+      div.addEventListener('click', () => {
+        if(isLive){
+          apiPost('/api/scanner/control',{action:'tune',freq:entry.freq});
+        }
+      });
+
+      logList.appendChild(div);
+    });
+    lastLogLen = log.length;
+  }
+}
+
+/* ── Bottom bar ── */
+function updateBottomBar(s){
+  if(!s){
+    bbBand.textContent = '--';
+    bbRange.textContent = '--';
+    bbMode.textContent = 'Mode: --';
+    bbStatus.textContent = 'Stopped';
+    return;
+  }
+  bbBand.textContent = s.band || '--';
+
+  // Find current band range
+  const bands = s.bands || [];
+  const bi = s.band_idx || 0;
+  if(bands[bi]){
+    const b = bands[bi];
+    bbRange.textContent = (b.start/1e6).toFixed(1) + ' - ' + (b.end/1e6).toFixed(1) + ' MHz';
+  }
+
+  bbMode.textContent = 'Mode: ' + (s.mode === 'scan' ? 'Scan' : 'Manual');
+  if(s.running){
+    bbStatus.textContent = s.paused_on_signal ? 'Signal Detected' : (s.scanning ? 'Scanning...' : 'Listening');
+    bbStatus.style.color = s.paused_on_signal ? 'var(--green)' : 'var(--accent)';
+  } else {
+    bbStatus.textContent = 'Stopped';
+    bbStatus.style.color = 'var(--dim)';
+  }
+}
+
+/* ── Poll loop ── */
+let pollTimer = null;
+async function poll(){
+  try {
+    const r = await apiFetch('/api/scanner/live');
+    const data = await r.json();
+    state = data;
+
+    // Populate bands on first load (always, even when stopped)
+    if(data.bands && bandSel.options.length === 0){
+      populateBands(data.bands);
+    }
+
+    // Update running state
+    if(data.running && !isLive){
+      isLive = true;
+      updateLiveButton();
+    } else if(!data.running && isLive){
+      isLive = false;
+      updateLiveButton();
+      stopAudio();
+    }
+
+    // Only sync controls from server when scanner is actually running
+    if(data.running){
+      // Sync band selector
+      if(data.band_idx !== undefined && bandSel.value !== String(data.band_idx)){
+        bandSel.value = data.band_idx;
+      }
+
+      // Sync mode
+      if(data.mode){
+        mode = data.mode;
+        updateModeButtons();
+      }
+
+      // Sync squelch (only if user isn't dragging)
+      if(document.activeElement !== sqSlider && data.squelch !== undefined){
+        sqSlider.value = data.squelch;
+        sqVal.textContent = data.squelch;
+      }
+
+      // Frequency display
+      renderFreqDisplay(data.freq, data.freq_display);
+
+      // Band / modulation labels
+      bandLabel.textContent = data.band || '--';
+      modBadge.textContent = (data.modulation || '--').toUpperCase();
+
+      // Signal meter
+      updateMeter(data.signal_level || 0, data.squelch || 50);
+
+      // Scan position bar
+      const bands = data.bands || [];
+      const bi = data.band_idx || 0;
+      if(bands[bi]){
+        updateScanBar(data.freq, bands[bi].start, bands[bi].end);
+        scanBarBox.style.display = data.mode === 'scan' ? 'block' : 'none';
+      }
+
+      // Scan/Hold button label
+      if(data.mode === 'scan'){
+        btnScanHold.innerHTML = '<i class="fa-solid fa-pause"></i> Hold';
+      } else {
+        btnScanHold.innerHTML = '<i class="fa-solid fa-play"></i> Scan';
+      }
+
+      // Activity log
+      updateLog(data.activity_log);
+    } else {
+      // Not running — show local state, don't overwrite user choices
+      const bands = data.bands || [];
+      const bi = parseInt(bandSel.value) || 0;
+      if(bands[bi]){
+        bandLabel.textContent = bands[bi].name || '--';
+        modBadge.textContent = (bands[bi].mod || '--').toUpperCase();
+        const startFreq = bands[bi].start || 0;
+        renderFreqDisplay(startFreq, (startFreq/1e6).toFixed(3));
+      }
+      updateMeter(0, parseInt(sqSlider.value));
+      scanBarBox.style.display = 'none';
+    }
+
+    // Watchlist (always update)
+    if(data.watchlist){
+      renderWatchlist(data.watchlist, data.watch_idx||0, data.priority_idx||0);
+    }
+
+    // Status badge (always update)
+    updateStatusBadge(data);
+
+    // Bottom bar (always update)
+    updateBottomBar(data);
+
+  } catch(e){
+    // Ignore poll errors
+  }
+  pollTimer = setTimeout(poll, 1000);
+}
+
+/* ── Init ── */
+poll();
+
+})();
+</script>
+</body>
+</html>

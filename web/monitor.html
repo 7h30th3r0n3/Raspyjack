@@ -1,0 +1,1102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RaspyJack System Monitor</title>
+  <link rel="stylesheet" href="./vendor/css/fontawesome.min.css">
+  <script src="./theme.js"></script>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #05060a;
+      --panel: #080c14;
+      --border: #0f1a2a;
+      --accent: #00ccff;
+      --green: #00ff88;
+      --red: #ff3333;
+      --orange: #ff8800;
+      --yellow: #ffaa00;
+      --cyan: #00e5ff;
+      --purple: #c084fc;
+      --magenta: #e879f9;
+      --dim: #3a4666;
+      --text: #c8d0e0;
+      --text-dim: #556;
+      --glow-accent: 0 0 8px rgba(0, 204, 255, 0.25);
+      --glow-green: 0 0 8px rgba(0, 255, 136, 0.2);
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'Courier New', 'Consolas', monospace;
+      background: var(--bg);
+      color: var(--text);
+      height: 100vh;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Topbar ─────────────────────────────────────────── */
+    #topbar {
+      height: 38px;
+      min-height: 38px;
+      background: #0a0e1a;
+      display: flex;
+      align-items: center;
+      padding: 0 14px;
+      gap: 14px;
+      border-bottom: 1px solid var(--border);
+      font-size: 12px;
+    }
+    #topbar .back-link {
+      color: var(--dim);
+      text-decoration: none;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 11px;
+      transition: color 0.2s;
+    }
+    #topbar .back-link:hover { color: var(--accent); }
+    .top-hostname {
+      font-weight: 700;
+      color: var(--accent);
+      font-size: 13px;
+      letter-spacing: 0.5px;
+    }
+    .top-sep { color: #1a2844; }
+    .top-uptime { color: #7a8aaa; }
+    .top-payload {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .payload-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+    .payload-dot.on {
+      background: var(--green);
+      box-shadow: 0 0 6px var(--green);
+      animation: pulse 1.5s infinite;
+    }
+    .payload-dot.off {
+      background: var(--red);
+      box-shadow: 0 0 4px var(--red);
+    }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+    .payload-name { color: #7a8aaa; font-size: 11px; }
+    .payload-name.active { color: var(--green); }
+    .top-temp {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-weight: 700;
+    }
+    .top-temp-spark { width: 60px; height: 18px; }
+    .spacer { flex: 1; }
+    .live-dot {
+      color: var(--green);
+      font-size: 7px;
+      animation: pulse 1.5s infinite;
+    }
+
+    /* ── Main layout ───────────────────────────────────── */
+    #main {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      grid-template-rows: auto 1fr auto;
+      gap: 5px;
+      padding: 5px;
+      overflow: hidden;
+      min-height: 0;
+    }
+
+    /* ── Section boxes ─────────────────────────────────── */
+    .section {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      padding: 10px 12px;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      min-height: 0;
+      box-shadow: var(--glow-accent);
+      transition: box-shadow 0.3s;
+    }
+    .section:hover { box-shadow: 0 0 12px rgba(0, 204, 255, 0.35); }
+    .section-title {
+      font-size: 10px;
+      font-weight: 700;
+      color: var(--accent);
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      user-select: none;
+    }
+    .section-title i { font-size: 10px; }
+    .section-title .title-val {
+      margin-left: auto;
+      font-size: 11px;
+      letter-spacing: 0;
+    }
+
+    /* ── CPU Section ───────────────────────────────────── */
+    #cpu-section { grid-column: 1; grid-row: 1; }
+    .cpu-hero {
+      display: flex;
+      align-items: baseline;
+      gap: 12px;
+      margin-bottom: 6px;
+    }
+    .cpu-pct {
+      font-size: 42px;
+      font-weight: 700;
+      line-height: 1;
+      transition: color 0.3s;
+    }
+    .cpu-pct-unit { font-size: 18px; color: var(--dim); }
+    .cpu-bar-container { flex: 1; }
+
+    /* ── Bars (shared) ─────────────────────────────────── */
+    .bar-track {
+      height: 16px;
+      background: #0c1222;
+      border-radius: 3px;
+      overflow: hidden;
+      position: relative;
+    }
+    .bar-fill {
+      height: 100%;
+      border-radius: 3px;
+      transition: width 0.5s cubic-bezier(0.22, 1, 0.36, 1);
+      position: relative;
+    }
+    .bar-fill.cpu-gradient {
+      background: linear-gradient(90deg, var(--green), var(--yellow) 60%, var(--red));
+    }
+    .bar-fill.mem-gradient {
+      background: linear-gradient(90deg, #0ea5e9, var(--cyan));
+    }
+    .bar-fill.disk-gradient {
+      background: linear-gradient(90deg, var(--purple), var(--magenta));
+    }
+    .bar-pct-overlay {
+      position: absolute;
+      right: 6px;
+      top: 0;
+      height: 100%;
+      display: flex;
+      align-items: center;
+      font-size: 10px;
+      font-weight: 700;
+      color: #fff;
+      text-shadow: 0 0 4px rgba(0,0,0,0.8);
+    }
+
+    /* ── Sparkline canvas ──────────────────────────────── */
+    .spark-canvas {
+      width: 100%;
+      flex: 1;
+      min-height: 50px;
+      margin-top: 6px;
+    }
+
+    /* ── Load averages ─────────────────────────────────── */
+    .load-row {
+      display: flex;
+      gap: 14px;
+      margin-top: 6px;
+      font-size: 11px;
+    }
+    .load-item { display: flex; align-items: center; gap: 4px; }
+    .load-label { color: var(--dim); font-size: 10px; }
+    .load-val { font-weight: 700; }
+    .cores-info { color: var(--dim); font-size: 10px; margin-left: auto; }
+
+    /* ── Memory / Disk Section ─────────────────────────── */
+    #memdisk-section { grid-column: 2; grid-row: 1; }
+    .memdisk-block { margin-bottom: 10px; }
+    .memdisk-block:last-child { margin-bottom: 0; }
+    .sub-title {
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 1.2px;
+      margin-bottom: 5px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .sub-title.mem-color { color: var(--cyan); }
+    .sub-title.disk-color { color: var(--purple); }
+    .sub-title .sub-pct {
+      margin-left: auto;
+      font-size: 14px;
+      font-weight: 700;
+    }
+    .detail-grid {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 2px 10px;
+      font-size: 11px;
+      margin-top: 6px;
+    }
+    .detail-label { color: var(--dim); }
+    .detail-val { color: var(--text); text-align: right; }
+    .memdisk-sep {
+      border: none;
+      border-top: 1px solid var(--border);
+      margin: 10px 0;
+    }
+
+    /* ── Process Section ───────────────────────────────── */
+    #proc-section {
+      grid-column: 1 / -1;
+      grid-row: 2;
+    }
+    .proc-controls {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 6px;
+    }
+    .proc-search {
+      background: #0c1222;
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      color: var(--text);
+      font-family: 'Courier New', monospace;
+      font-size: 11px;
+      padding: 3px 8px;
+      outline: none;
+      width: 200px;
+      transition: border-color 0.2s;
+    }
+    .proc-search:focus { border-color: var(--accent); }
+    .proc-search::placeholder { color: var(--dim); }
+    .proc-count { color: var(--dim); font-size: 10px; margin-left: auto; }
+    .proc-scroll {
+      flex: 1;
+      overflow-y: auto;
+      min-height: 0;
+    }
+    .proc-scroll::-webkit-scrollbar { width: 4px; }
+    .proc-scroll::-webkit-scrollbar-track { background: transparent; }
+    .proc-scroll::-webkit-scrollbar-thumb { background: #1a2844; border-radius: 2px; }
+    .proc-table {
+      width: 100%;
+      font-size: 11px;
+      border-collapse: collapse;
+      table-layout: fixed;
+    }
+    .proc-table thead { position: sticky; top: 0; background: var(--panel); z-index: 1; }
+    .proc-table th {
+      text-align: left;
+      color: var(--accent);
+      font-weight: 600;
+      padding: 3px 6px;
+      border-bottom: 1px solid var(--border);
+      font-size: 10px;
+      text-transform: uppercase;
+      cursor: pointer;
+      user-select: none;
+      white-space: nowrap;
+      transition: color 0.2s;
+    }
+    .proc-table th:hover { color: #fff; }
+    .proc-table th .sort-arrow { font-size: 8px; margin-left: 3px; }
+    .proc-table td {
+      padding: 3px 6px;
+      white-space: nowrap;
+    }
+    .proc-table td.col-name {
+      white-space: normal;
+      word-break: break-all;
+      max-width: 0;
+      width: 100%;
+      cursor: pointer;
+    }
+    .proc-table td.col-name:hover { color: var(--accent); }
+    .proc-table tr:nth-child(even) { background: rgba(255, 255, 255, 0.015); }
+    .proc-table tr:hover { background: rgba(0, 204, 255, 0.04); }
+    .proc-table tr.selected { background: rgba(0, 204, 255, 0.08); border-left: 2px solid var(--accent); }
+    .col-pid { width: 55px; }
+    .col-name { width: auto; }
+
+    /* Process detail panel */
+    #procDetail {
+      display: none;
+      background: var(--panel);
+      border: 1px solid var(--accent);
+      border-radius: 6px;
+      padding: 10px 14px;
+      margin-top: 6px;
+      font-size: 10px;
+      box-shadow: var(--glow-accent);
+    }
+    #procDetail.open { display: block; }
+    #procDetail .pd-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--accent);
+    }
+    #procDetail .pd-close {
+      cursor: pointer;
+      color: var(--dim);
+      font-size: 14px;
+    }
+    #procDetail .pd-close:hover { color: var(--red); }
+    #procDetail .pd-grid {
+      display: grid;
+      grid-template-columns: 80px 1fr;
+      gap: 3px 8px;
+    }
+    #procDetail .pd-label { color: var(--dim); }
+    #procDetail .pd-val { color: var(--text); word-break: break-all; }
+    #procDetail .pd-cmd {
+      margin-top: 6px;
+      padding: 6px 8px;
+      background: rgba(0,0,0,.3);
+      border-radius: 4px;
+      font-family: 'Courier New', monospace;
+      font-size: 10px;
+      color: var(--green);
+      word-break: break-all;
+      white-space: pre-wrap;
+    }
+    #procDetail .pd-actions {
+      margin-top: 8px;
+      display: flex;
+      gap: 6px;
+    }
+    #procDetail .pd-kill {
+      padding: 4px 12px;
+      border: 1px solid var(--red);
+      border-radius: 4px;
+      background: rgba(255,51,51,.1);
+      color: var(--red);
+      font-size: 10px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    #procDetail .pd-kill:hover { background: rgba(255,51,51,.25); }
+    .col-cpu, .col-mem { width: 65px; text-align: right; }
+    .col-kill { width: 36px; text-align: center; }
+    .kill-btn {
+      background: none;
+      border: 1px solid transparent;
+      color: var(--red);
+      font-size: 12px;
+      cursor: pointer;
+      padding: 1px 5px;
+      border-radius: 3px;
+      opacity: 0;
+      transition: opacity 0.15s, background 0.15s, border-color 0.15s;
+      font-family: 'Courier New', monospace;
+      font-weight: 700;
+    }
+    .proc-table tr:hover .kill-btn { opacity: 0.7; }
+    .kill-btn:hover {
+      opacity: 1 !important;
+      background: rgba(255, 51, 51, 0.15);
+      border-color: var(--red);
+    }
+
+    /* ── Network Section ───────────────────────────────── */
+    #net-section {
+      grid-column: 1 / -1;
+      grid-row: 3;
+      flex-direction: row;
+      align-items: center;
+      gap: 16px;
+      padding: 8px 14px;
+    }
+    .net-label {
+      font-size: 10px;
+      font-weight: 700;
+      color: var(--accent);
+      text-transform: uppercase;
+      letter-spacing: 1.2px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .net-badges {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      flex: 1;
+    }
+    .net-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: #0c1222;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 3px 10px;
+      font-size: 11px;
+    }
+    .net-badge .if-name {
+      color: var(--green);
+      font-weight: 700;
+    }
+    .net-badge .if-ip { color: #8a9abb; }
+    .net-hostname-badge {
+      color: var(--accent);
+      font-weight: 700;
+      font-size: 12px;
+    }
+
+    /* ── Tooltip ────────────────────────────────────────── */
+    [data-tooltip] { position: relative; }
+    [data-tooltip]:hover::after {
+      content: attr(data-tooltip);
+      position: absolute;
+      bottom: 100%;
+      left: 50%;
+      transform: translateX(-50%);
+      background: #1a2844;
+      color: var(--text);
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 10px;
+      white-space: nowrap;
+      z-index: 100;
+      pointer-events: none;
+      border: 1px solid var(--border);
+    }
+  </style>
+</head>
+<body>
+<script>fetch("/api/auth/me",{credentials:"include"}).then(r=>{if(!r.ok)throw 0;return r.json()}).then(d=>{if(!d||!d.authenticated)throw 0}).catch(()=>{document.body.innerHTML='<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;gap:16px;font-family:sans-serif;background:#05060a"><i class="fa-solid fa-lock" style="font-size:48px;color:#f43f5e"></i><h2 style="color:#e2e8f0">Authentication Required</h2><p style="color:#94a3b8">Please log in first.</p><a href="./index.html" style="color:#00ccff;text-decoration:none;padding:8px 20px;border:1px solid #00ccff;border-radius:6px">Login</a></div>'})</script>
+
+<!-- ── Topbar ──────────────────────────────────────────── -->
+<div id="topbar">
+  <a href="./index.html" class="back-link"><i class="fa-solid fa-arrow-left"></i> WebUI</a>
+  <span class="top-sep">|</span>
+  <span class="top-hostname" id="topHostname">--</span>
+  <span class="top-sep">|</span>
+  <span class="top-uptime" id="topUptime">--</span>
+  <span class="top-sep">|</span>
+  <div class="top-payload">
+    <span class="payload-dot off" id="topPayloadDot"></span>
+    <span class="payload-name" id="topPayloadName">--</span>
+  </div>
+  <span class="top-sep">|</span>
+  <div class="top-temp">
+    <i class="fa-solid fa-temperature-half" style="font-size:11px;color:var(--dim)"></i>
+    <span id="topTempVal" style="color:var(--dim)">--</span>
+    <canvas class="top-temp-spark" id="topTempSpark"></canvas>
+  </div>
+  <div class="spacer"></div>
+  <span class="live-dot">&#9679;</span>
+  <span style="font-size:10px;color:var(--dim)">LIVE</span>
+</div>
+
+<!-- ── Main Grid ──────────────────────────────────────── -->
+<div id="main">
+
+  <!-- CPU Section -->
+  <div class="section" id="cpu-section">
+    <div class="section-title">
+      <i class="fa-solid fa-microchip"></i> CPU
+      <span class="title-val" id="cpuCores" style="color:var(--dim)">-- core</span>
+    </div>
+    <div class="cpu-hero">
+      <div>
+        <span class="cpu-pct" id="cpuPct">--</span><span class="cpu-pct-unit">%</span>
+      </div>
+      <div class="cpu-bar-container">
+        <div class="bar-track">
+          <div class="bar-fill cpu-gradient" id="cpuBar" style="width:0%"></div>
+          <div class="bar-pct-overlay" id="cpuBarPct">0%</div>
+        </div>
+      </div>
+    </div>
+    <canvas class="spark-canvas" id="cpuSpark"></canvas>
+    <div class="load-row">
+      <div class="load-item">
+        <span class="load-label">1m</span>
+        <span class="load-val" id="load1">--</span>
+      </div>
+      <div class="load-item">
+        <span class="load-label">5m</span>
+        <span class="load-val" id="load5">--</span>
+      </div>
+      <div class="load-item">
+        <span class="load-label">15m</span>
+        <span class="load-val" id="load15">--</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Memory + Disk Section -->
+  <div class="section" id="memdisk-section">
+    <!-- Memory -->
+    <div class="memdisk-block">
+      <div class="sub-title mem-color">
+        <i class="fa-solid fa-memory"></i> Memory
+        <span class="sub-pct" id="memPct">--%</span>
+      </div>
+      <div class="bar-track">
+        <div class="bar-fill mem-gradient" id="memBar" style="width:0%"></div>
+        <div class="bar-pct-overlay" id="memBarPct">0%</div>
+      </div>
+      <div class="detail-grid">
+        <span class="detail-label">Used</span>
+        <span class="detail-val" id="memUsed">--</span>
+        <span class="detail-label">Total</span>
+        <span class="detail-val" id="memTotal">--</span>
+        <span class="detail-label">Free</span>
+        <span class="detail-val" id="memFree">--</span>
+      </div>
+    </div>
+    <hr class="memdisk-sep">
+    <!-- Disk -->
+    <div class="memdisk-block">
+      <div class="sub-title disk-color">
+        <i class="fa-solid fa-hard-drive"></i> Disk
+        <span class="sub-pct" id="diskPct">--%</span>
+      </div>
+      <div class="bar-track">
+        <div class="bar-fill disk-gradient" id="diskBar" style="width:0%"></div>
+        <div class="bar-pct-overlay" id="diskBarPct">0%</div>
+      </div>
+      <div class="detail-grid">
+        <span class="detail-label">Used</span>
+        <span class="detail-val" id="diskUsed">--</span>
+        <span class="detail-label">Total</span>
+        <span class="detail-val" id="diskTotal">--</span>
+        <span class="detail-label">Free</span>
+        <span class="detail-val" id="diskFree">--</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Process Section -->
+  <div class="section" id="proc-section">
+    <div class="section-title">
+      <i class="fa-solid fa-list-check"></i> Processes
+      <span class="title-val" id="procCount" style="color:var(--dim)">0 processes</span>
+    </div>
+    <div class="proc-controls">
+      <input type="text" class="proc-search" id="procSearch" placeholder="Filter processes...">
+      <span class="proc-count" id="procShown">--</span>
+    </div>
+    <div class="proc-scroll">
+      <table class="proc-table">
+        <thead>
+          <tr>
+            <th class="col-pid" data-sort="pid">PID <span class="sort-arrow"></span></th>
+            <th class="col-name" data-sort="name">Name <span class="sort-arrow"></span></th>
+            <th class="col-cpu" data-sort="cpu">CPU% <span class="sort-arrow" id="defaultSort"></span></th>
+            <th class="col-mem" data-sort="mem">MEM% <span class="sort-arrow"></span></th>
+            <th class="col-kill"></th>
+          </tr>
+        </thead>
+        <tbody id="procBody"></tbody>
+      </table>
+    </div>
+    <div id="procDetail">
+      <div class="pd-header">
+        <span><i class="fa-solid fa-info-circle"></i> Process Detail</span>
+        <span class="pd-close" onclick="closeProcDetail()">×</span>
+      </div>
+      <div class="pd-grid">
+        <span class="pd-label">PID</span><span class="pd-val" id="pdPid">--</span>
+        <span class="pd-label">CPU %</span><span class="pd-val" id="pdCpu">--</span>
+        <span class="pd-label">MEM %</span><span class="pd-val" id="pdMem">--</span>
+        <span class="pd-label">MEM (est.)</span><span class="pd-val" id="pdMemMB">--</span>
+      </div>
+      <div class="pd-cmd" id="pdCmd">--</div>
+      <div class="pd-actions">
+        <button class="pd-kill" id="pdKill"><i class="fa-solid fa-skull"></i> Kill -9</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Network Section -->
+  <div class="section" id="net-section">
+    <div class="net-label">
+      <i class="fa-solid fa-network-wired"></i> Network
+    </div>
+    <span class="net-hostname-badge" id="netHostname">--</span>
+    <div class="net-badges" id="netBadges">--</div>
+  </div>
+
+</div>
+
+<script>
+(function() {
+  'use strict';
+
+  /* ── State ───────────────────────────────────────────── */
+  var cpuHistory = [];
+  var tempHistory = [];
+  var MAX_HIST = 60;
+  var sortKey = 'cpu';
+  var sortDir = -1; // -1 = descending
+  var lastProcs = [];
+  var lastData = {};
+  var cpuCores = null;
+
+  /* ── Helpers ─────────────────────────────────────────── */
+  function fmtBytes(b) {
+    if (b == null) return '--';
+    if (b >= 1073741824) return (b / 1073741824).toFixed(2) + ' GB';
+    if (b >= 1048576) return (b / 1048576).toFixed(1) + ' MB';
+    if (b >= 1024) return (b / 1024).toFixed(0) + ' KB';
+    return b + ' B';
+  }
+
+  function fmtUptime(s) {
+    if (s == null) return '--';
+    var d = Math.floor(s / 86400);
+    var h = Math.floor((s % 86400) / 3600);
+    var m = Math.floor((s % 3600) / 60);
+    var sec = Math.floor(s % 60);
+    var parts = [];
+    if (d > 0) parts.push(d + 'd');
+    parts.push(h + 'h');
+    parts.push(m + 'm');
+    parts.push(sec + 's');
+    return parts.join(' ');
+  }
+
+  function cpuBarColor(pct) {
+    if (pct < 50) return 'var(--green)';
+    if (pct < 80) return 'var(--yellow)';
+    return 'var(--red)';
+  }
+
+  function tempColor(t) {
+    if (t == null) return 'var(--dim)';
+    if (t < 50) return 'var(--green)';
+    if (t < 70) return 'var(--yellow)';
+    return 'var(--red)';
+  }
+
+  function tempColorHex(t) {
+    if (t == null) return '#3a4666';
+    if (t < 50) return '#00ff88';
+    if (t < 70) return '#ffaa00';
+    return '#ff3333';
+  }
+
+  function loadColor(v) {
+    if (v < 0.7) return 'var(--green)';
+    if (v < 1.5) return 'var(--yellow)';
+    return 'var(--red)';
+  }
+
+  function procCpuColor(v) {
+    if (v < 5) return '#7a8abb';
+    if (v < 25) return 'var(--yellow)';
+    if (v < 50) return 'var(--orange)';
+    return 'var(--red)';
+  }
+
+  function escHtml(s) {
+    var d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
+  }
+
+  /* ── Sparkline Drawing ───────────────────────────────── */
+  function drawSparkline(canvas, data, strokeColor, fillColorTop, fillColorBottom) {
+    var ctx = canvas.getContext('2d');
+    var dpr = window.devicePixelRatio || 1;
+    var w = canvas.clientWidth;
+    var h = canvas.clientHeight;
+    if (w === 0 || h === 0) return;
+    canvas.width = w * dpr;
+    canvas.height = h * dpr;
+    ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, w, h);
+
+    if (data.length < 2) return;
+
+    var maxVal = Math.max(100, Math.max.apply(null, data));
+    var minVal = 0;
+    var range = maxVal - minVal || 1;
+    var step = w / (MAX_HIST - 1);
+    var startX = w - (data.length - 1) * step;
+
+    // Grid lines
+    ctx.strokeStyle = 'rgba(255,255,255,0.03)';
+    ctx.lineWidth = 0.5;
+    for (var g = 0; g <= 4; g++) {
+      var gy = h * g / 4;
+      ctx.beginPath();
+      ctx.moveTo(0, gy);
+      ctx.lineTo(w, gy);
+      ctx.stroke();
+    }
+
+    // Build smooth path with quadratic curves
+    var points = [];
+    for (var i = 0; i < data.length; i++) {
+      points.push({
+        x: startX + i * step,
+        y: h - ((data[i] - minVal) / range) * (h - 4) - 2
+      });
+    }
+
+    ctx.beginPath();
+    ctx.moveTo(points[0].x, points[0].y);
+    for (var j = 1; j < points.length; j++) {
+      var cx = (points[j - 1].x + points[j].x) / 2;
+      var cy1 = points[j - 1].y;
+      var cy2 = points[j].y;
+      ctx.bezierCurveTo(cx, cy1, cx, cy2, points[j].x, points[j].y);
+    }
+    ctx.strokeStyle = strokeColor;
+    ctx.lineWidth = 1.8;
+    ctx.stroke();
+
+    // Fill area under curve
+    ctx.lineTo(points[points.length - 1].x, h);
+    ctx.lineTo(points[0].x, h);
+    ctx.closePath();
+    var grad = ctx.createLinearGradient(0, 0, 0, h);
+    grad.addColorStop(0, fillColorTop || 'rgba(0,204,255,0.25)');
+    grad.addColorStop(1, fillColorBottom || 'rgba(0,204,255,0.02)');
+    ctx.fillStyle = grad;
+    ctx.fill();
+
+    // Current value dot
+    var last = points[points.length - 1];
+    ctx.beginPath();
+    ctx.arc(last.x, last.y, 3, 0, Math.PI * 2);
+    ctx.fillStyle = strokeColor;
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(last.x, last.y, 5, 0, Math.PI * 2);
+    ctx.strokeStyle = strokeColor;
+    ctx.lineWidth = 1;
+    ctx.globalAlpha = 0.3;
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+
+  function drawMiniSparkline(canvas, data, color) {
+    var ctx = canvas.getContext('2d');
+    var dpr = window.devicePixelRatio || 1;
+    var w = canvas.clientWidth;
+    var h = canvas.clientHeight;
+    if (w === 0 || h === 0) return;
+    canvas.width = w * dpr;
+    canvas.height = h * dpr;
+    ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, w, h);
+
+    if (data.length < 2) return;
+
+    var maxVal = Math.max.apply(null, data);
+    var minVal = Math.min.apply(null, data);
+    var range = maxVal - minVal || 1;
+    var step = w / (data.length - 1);
+
+    ctx.beginPath();
+    for (var i = 0; i < data.length; i++) {
+      var x = i * step;
+      var y = h - ((data[i] - minVal) / range) * (h - 4) - 2;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+  }
+
+  /* ── Sort ─────────────────────────────────────────────── */
+  function updateSortHeaders() {
+    var ths = document.querySelectorAll('.proc-table th[data-sort]');
+    for (var i = 0; i < ths.length; i++) {
+      var th = ths[i];
+      var arrow = th.querySelector('.sort-arrow');
+      if (th.getAttribute('data-sort') === sortKey) {
+        arrow.textContent = sortDir === -1 ? ' ▼' : ' ▲';
+        th.style.color = '#fff';
+      } else {
+        arrow.textContent = '';
+        th.style.color = '';
+      }
+    }
+  }
+
+  function sortProcs(procs) {
+    var sorted = procs.slice();
+    sorted.sort(function(a, b) {
+      var va, vb;
+      if (sortKey === 'pid') { va = a.pid; vb = b.pid; }
+      else if (sortKey === 'name') { va = (a.name || '').toLowerCase(); vb = (b.name || '').toLowerCase(); return va < vb ? sortDir * -1 : va > vb ? sortDir : 0; }
+      else if (sortKey === 'cpu') { va = a.cpu; vb = b.cpu; }
+      else if (sortKey === 'mem') { va = a.mem; vb = b.mem; }
+      else { va = 0; vb = 0; }
+      return (va - vb) * sortDir;
+    });
+    return sorted;
+  }
+
+  /* ── Kill Process ────────────────────────────────────── */
+  function killProcess(pid, name) {
+    var shortName = name.length > 40 ? name.substring(0, 40) + '...' : name;
+    if (!confirm('Kill process ' + pid + ' (' + shortName + ')?')) return;
+    fetch('/api/system/kill_process', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pid: pid })
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (d.error) alert('Error: ' + d.error);
+    })
+    .catch(function(e) { alert('Failed to kill process: ' + e); });
+  }
+
+  /* ── Render Processes ────────────────────────────────── */
+  var _selectedPid = null;
+
+  function renderProcs() {
+    var filter = (document.getElementById('procSearch').value || '').toLowerCase();
+    var procs = sortProcs(lastProcs);
+    var filtered = procs.filter(function(p) {
+      if (!filter) return true;
+      return (p.name || '').toLowerCase().indexOf(filter) !== -1 ||
+             String(p.pid).indexOf(filter) !== -1;
+    });
+
+    var html = '';
+    for (var i = 0; i < filtered.length; i++) {
+      var p = filtered[i];
+      var fullName = p.name || '';
+      var sel = p.pid === _selectedPid ? ' selected' : '';
+      html += '<tr class="' + sel + '" data-pid="' + p.pid + '">' +
+        '<td class="col-pid">' + p.pid + '</td>' +
+        '<td class="col-name" onclick="window._selectProc(' + p.pid + ')">' + escHtml(fullName) + '</td>' +
+        '<td class="col-cpu" style="color:' + procCpuColor(p.cpu) + '">' + p.cpu.toFixed(1) + '</td>' +
+        '<td class="col-mem">' + p.mem.toFixed(1) + '</td>' +
+        '<td class="col-kill"><button class="kill-btn" onclick="window._killProc(' + p.pid + ',' + JSON.stringify(escHtml(fullName)).replace(/"/g, '&quot;') + ')" title="Kill process">×</button></td>' +
+        '</tr>';
+    }
+    document.getElementById('procBody').innerHTML = html;
+    document.getElementById('procShown').textContent = filtered.length + ' / ' + procs.length + ' shown';
+    document.getElementById('procCount').textContent = procs.length + ' processes';
+    if (_selectedPid) updateProcDetail();
+  }
+
+  window._killProc = function(pid, name) { killProcess(pid, name); };
+
+  window._selectProc = function(pid) {
+    _selectedPid = (_selectedPid === pid) ? null : pid;
+    if (_selectedPid) {
+      updateProcDetail();
+      document.getElementById('procDetail').classList.add('open');
+    } else {
+      closeProcDetail();
+    }
+    renderProcs();
+  };
+
+  function updateProcDetail() {
+    var p = lastProcs.find(function(x) { return x.pid === _selectedPid; });
+    if (!p) { closeProcDetail(); return; }
+    var memTotal = lastData.mem_total || 1;
+    var memMB = (p.mem / 100 * memTotal / 1048576).toFixed(1);
+    document.getElementById('pdPid').textContent = p.pid;
+    document.getElementById('pdCpu').textContent = p.cpu.toFixed(1) + '%';
+    document.getElementById('pdCpu').style.color = procCpuColor(p.cpu);
+    document.getElementById('pdMem').textContent = p.mem.toFixed(1) + '%';
+    document.getElementById('pdMemMB').textContent = memMB + ' MB';
+    document.getElementById('pdCmd').textContent = p.name || '--';
+    document.getElementById('pdKill').onclick = function() { killProcess(p.pid, p.name); };
+  }
+
+  function closeProcDetail() {
+    _selectedPid = null;
+    document.getElementById('procDetail').classList.remove('open');
+    renderProcs();
+  }
+
+  /* ── Update UI ───────────────────────────────────────── */
+  function update(data) {
+    // CPU
+    var cpu = data.cpu_percent != null ? data.cpu_percent : 0;
+    cpuHistory.push(cpu);
+    if (cpuHistory.length > MAX_HIST) cpuHistory.shift();
+
+    var cpuPctEl = document.getElementById('cpuPct');
+    cpuPctEl.textContent = cpu.toFixed(1);
+    cpuPctEl.style.color = cpuBarColor(cpu);
+
+    var cpuBar = document.getElementById('cpuBar');
+    cpuBar.style.width = Math.min(cpu, 100) + '%';
+    document.getElementById('cpuBarPct').textContent = cpu.toFixed(0) + '%';
+
+    drawSparkline(
+      document.getElementById('cpuSpark'),
+      cpuHistory,
+      '#00ccff',
+      'rgba(0,204,255,0.3)',
+      'rgba(0,204,255,0.02)'
+    );
+
+    // Cores
+    if (cpuCores === null) {
+      cpuCores = 1; // Pi Zero default
+    }
+    document.getElementById('cpuCores').textContent = cpuCores + (cpuCores === 1 ? ' core' : ' cores');
+
+    // Load
+    var load = data.load || [0, 0, 0];
+    var load1El = document.getElementById('load1');
+    var load5El = document.getElementById('load5');
+    var load15El = document.getElementById('load15');
+    load1El.textContent = load[0].toFixed(2);
+    load1El.style.color = loadColor(load[0]);
+    load5El.textContent = load[1].toFixed(2);
+    load5El.style.color = loadColor(load[1]);
+    load15El.textContent = load[2].toFixed(2);
+    load15El.style.color = loadColor(load[2]);
+
+    // Memory
+    var memPct = data.mem_total > 0 ? (data.mem_used / data.mem_total * 100) : 0;
+    var memFree = data.mem_total > 0 ? (data.mem_total - data.mem_used) : 0;
+    document.getElementById('memPct').textContent = memPct.toFixed(1) + '%';
+    document.getElementById('memPct').style.color = memPct > 80 ? 'var(--red)' : 'var(--cyan)';
+    var memBar = document.getElementById('memBar');
+    memBar.style.width = Math.min(memPct, 100) + '%';
+    document.getElementById('memBarPct').textContent = memPct.toFixed(0) + '%';
+    document.getElementById('memUsed').textContent = fmtBytes(data.mem_used);
+    document.getElementById('memTotal').textContent = fmtBytes(data.mem_total);
+    document.getElementById('memFree').textContent = fmtBytes(memFree);
+
+    // Disk
+    var diskPct = data.disk_total > 0 ? (data.disk_used / data.disk_total * 100) : 0;
+    var diskFree = data.disk_total > 0 ? (data.disk_total - data.disk_used) : 0;
+    document.getElementById('diskPct').textContent = diskPct.toFixed(1) + '%';
+    document.getElementById('diskPct').style.color = diskPct > 80 ? 'var(--red)' : 'var(--purple)';
+    var diskBar = document.getElementById('diskBar');
+    diskBar.style.width = Math.min(diskPct, 100) + '%';
+    document.getElementById('diskBarPct').textContent = diskPct.toFixed(0) + '%';
+    document.getElementById('diskUsed').textContent = fmtBytes(data.disk_used);
+    document.getElementById('diskTotal').textContent = fmtBytes(data.disk_total);
+    document.getElementById('diskFree').textContent = fmtBytes(diskFree);
+
+    // Temperature (topbar)
+    var temp = data.temp_c;
+    var tempEl = document.getElementById('topTempVal');
+    if (temp != null) {
+      tempEl.textContent = temp.toFixed(1) + '°C';
+      tempEl.style.color = tempColor(temp);
+      tempHistory.push(temp);
+      if (tempHistory.length > MAX_HIST) tempHistory.shift();
+      drawMiniSparkline(document.getElementById('topTempSpark'), tempHistory, tempColorHex(temp));
+    } else {
+      tempEl.textContent = '--';
+      tempEl.style.color = 'var(--dim)';
+    }
+
+    // Uptime (topbar)
+    document.getElementById('topUptime').textContent = fmtUptime(data.uptime_s);
+
+    // Hostname (topbar + network)
+    var hostname = data.hostname || '--';
+    document.getElementById('topHostname').textContent = hostname;
+    document.getElementById('netHostname').textContent = hostname;
+
+    // Payload (topbar)
+    var payloadDot = document.getElementById('topPayloadDot');
+    var payloadName = document.getElementById('topPayloadName');
+    if (data.payload_running) {
+      payloadDot.className = 'payload-dot on';
+      var pname = data.payload_path ? data.payload_path.split('/').pop() : 'active';
+      payloadName.textContent = pname;
+      payloadName.className = 'payload-name active';
+    } else {
+      payloadDot.className = 'payload-dot off';
+      payloadName.textContent = 'idle';
+      payloadName.className = 'payload-name';
+    }
+
+    // Network badges
+    var ifaces = data.interfaces || [];
+    var badgesHtml = '';
+    for (var i = 0; i < ifaces.length; i++) {
+      badgesHtml += '<div class="net-badge">' +
+        '<span class="if-name">' + escHtml(ifaces[i].name) + '</span>' +
+        '<span class="if-ip">' + escHtml(ifaces[i].ip) + '</span>' +
+        '</div>';
+    }
+    if (ifaces.length === 0) {
+      badgesHtml = '<span style="color:var(--dim)">No interfaces</span>';
+    }
+    document.getElementById('netBadges').innerHTML = badgesHtml;
+
+    // Processes
+    lastData = data;
+    lastProcs = data.processes || [];
+    renderProcs();
+  }
+
+  /* ── Sort click handlers ─────────────────────────────── */
+  var ths = document.querySelectorAll('.proc-table th[data-sort]');
+  for (var i = 0; i < ths.length; i++) {
+    (function(th) {
+      th.addEventListener('click', function() {
+        var key = th.getAttribute('data-sort');
+        if (sortKey === key) {
+          sortDir = sortDir * -1;
+        } else {
+          sortKey = key;
+          sortDir = -1;
+        }
+        updateSortHeaders();
+        renderProcs();
+      });
+    })(ths[i]);
+  }
+  updateSortHeaders();
+
+  /* ── Filter input ────────────────────────────────────── */
+  document.getElementById('procSearch').addEventListener('input', function() {
+    renderProcs();
+  });
+
+  /* ── Polling ─────────────────────────────────────────── */
+  function poll() {
+    fetch('/api/system/status', { credentials: 'include' })
+      .then(function(r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+      })
+      .then(update)
+      .catch(function() {
+        // Silently retry on next poll
+      });
+  }
+
+  poll();
+  setInterval(poll, 2000);
+})();
+</script>
+</body>
+</html>

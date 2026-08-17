@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>RaspyJack NOAA Satellite Receiver</title>
+  <title>RaspyJack Meteor Satellite Receiver</title>
   <link rel="stylesheet" href="./vendor/css/fontawesome.min.css">
   <link rel="stylesheet" href="./vendor/leaflet/leaflet.css">
   <style>
@@ -19,6 +19,7 @@
     .status-idle{background:rgba(100,100,100,.1);color:#555;border:1px solid #333}
     .status-waiting{background:rgba(255,200,0,.1);color:var(--yellow);border:1px solid rgba(255,200,0,.3);animation:blink 2s infinite}
     .status-capturing{background:rgba(255,50,50,.1);color:var(--red);border:1px solid rgba(255,50,50,.3);animation:blink 1s infinite}
+    .status-decoding{background:rgba(255,170,0,.1);color:var(--orange);border:1px solid rgba(255,170,0,.3);animation:blink 1.5s infinite}
     .status-done{background:rgba(0,255,136,.1);color:var(--green);border:1px solid rgba(0,255,136,.3)}
     @keyframes blink{0%,100%{opacity:1}50%{opacity:.5}}
     .tb-k{font-size:10px;font-family:'Courier New',monospace;display:flex;align-items:center;gap:3px;white-space:nowrap}
@@ -97,11 +98,16 @@
 <script>fetch("/api/auth/me",{credentials:"include"}).then(r=>{if(!r.ok)throw 0;return r.json()}).then(d=>{if(!d||!d.authenticated)throw 0}).catch(()=>{document.body.innerHTML='<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;gap:16px;font-family:sans-serif;background:#05060a"><i class="fa-solid fa-lock" style="font-size:48px;color:#f43f5e"></i><h2 style="color:#e2e8f0">Authentication Required</h2><p style="color:#94a3b8">Please log in first.</p><a href="./index.html" style="color:#00ccff;text-decoration:none;padding:8px 20px;border:1px solid #00ccff;border-radius:6px">Login</a></div>'})</script>
 
 <div id="topbar">
-  <h1><i class="fa-solid fa-satellite-dish"></i> NOAA Receiver</h1>
+  <h1><i class="fa-solid fa-satellite-dish"></i> Meteor Receiver</h1>
   <span id="statusBadge" class="status-badge status-idle">IDLE</span>
   <div class="tb-k"><i class="fa-solid fa-satellite"></i><span class="v" id="kSat">--</span></div>
   <div class="tb-k"><i class="fa-solid fa-signal"></i><span class="v" id="kFreq">--</span><span class="u">MHz</span></div>
   <div class="spacer"></div>
+  <select id="manualSat" style="background:#111830;color:var(--accent);border:1px solid #1a2844;padding:3px 6px;border-radius:5px;font-size:10px;cursor:pointer">
+    <option value="137.9">Meteor M2-3 (137.9)</option>
+    <option value="137.9" selected>Meteor M2-4 (137.9)</option>
+  </select>
+  <button id="btnCapNow" class="live-btn" onclick="captureNow()"><i class="fa-solid fa-play"></i> Capture Now</button>
   <button id="btnLive" class="live-btn" onclick="toggleLive()"><i class="fa-solid fa-tower-broadcast"></i> Live <i class="fa-solid fa-circle live-dot" id="liveDot"></i></button>
   <a href="./index.html"><i class="fa-solid fa-arrow-left"></i> WebUI</a>
 </div>
@@ -117,9 +123,9 @@
     <img id="satImage" alt="Satellite image" style="max-width:100%;max-height:100%;display:none">
     <div id="imageOverlay">
       <i class="fa-solid fa-satellite-dish"></i>
-      <div class="title">NOAA Satellite Receiver</div>
+      <div class="title">Meteor Satellite Receiver</div>
       <div class="sub">Start the receiver to capture weather satellite images</div>
-      <div class="sub" style="margin-top:4px">Images are received at 137 MHz during satellite passes</div>
+      <div class="sub" style="margin-top:4px">Meteor M2 transmits LRPT on 137.9 MHz during satellite passes</div>
       <div id="nextPassInfo" style="margin-top:12px;font-size:11px;color:#2a4060"></div>
       <div id="countdownEl" class="countdown"></div>
     </div>
@@ -148,7 +154,7 @@
 </div>
 
 <div class="main-pane" id="paneMap" style="display:none">
-  <div id="noaaMapEl" style="width:100%;height:100%;background:#030508"></div>
+  <div id="meteorMapEl" style="width:100%;height:100%;background:#030508"></div>
 </div>
 
 <script>
@@ -170,12 +176,47 @@ function showMainTab(t){
   const tabs=['capture','map','gallery'];
   document.querySelectorAll('.main-tab').forEach((b,i)=>b.classList.toggle('on',tabs[i]===t));
   document.querySelectorAll('.main-pane').forEach(p=>{p.style.display=p.id==='pane'+t.charAt(0).toUpperCase()+t.slice(1)?'flex':'none'});
-  if(t==='map'){if(!_noaaMap)initNoaaMap();else setTimeout(()=>_noaaMap.invalidateSize(),100)}
+  if(t==='map'){if(!_meteorMap)initMeteorMap();else setTimeout(()=>_meteorMap.invalidateSize(),100)}
 }
 function showSubTab(t){
   const tabs=['passes','status'];
   document.querySelectorAll('.tab-btn').forEach((b,i)=>b.classList.toggle('on',tabs[i]===t));
   document.querySelectorAll('.sub-pane').forEach(p=>{p.style.display=p.id==='sub'+t.charAt(0).toUpperCase()+t.slice(1)?'block':'none'});
+}
+
+function captureNow(){
+  const btn=document.getElementById('btnCapNow');
+  // If capturing, stop it
+  if(data&&data.capturing){
+    fetch('/api/meteor/stop_capture',{method:'POST',credentials:'include'}).catch(()=>{});
+    return;
+  }
+  const sel=document.getElementById('manualSat');
+  const freq=sel.value;
+  const sat=sel.options[sel.selectedIndex].text.split(' (')[0];
+  if(!isLive){
+    fetch('/api/meteor/start',{method:'POST',credentials:'include'}).then(()=>{
+      isLive=true;
+      document.getElementById('btnLive').classList.add('on');
+      document.getElementById('liveDot').style.display='inline';
+      setTimeout(()=>{
+        fetch('/api/meteor/capture_now',{method:'POST',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({freq:parseFloat(freq),satellite:sat})}).catch(()=>{});
+        poll();pollIv=setInterval(poll,3000);
+      },3000);
+    });
+  } else {
+    fetch('/api/meteor/capture_now',{method:'POST',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({freq:parseFloat(freq),satellite:sat})}).catch(()=>{});
+  }
+}
+function updateCaptureButton(){
+  const btn=document.getElementById('btnCapNow');
+  if(data&&data.capturing){
+    btn.innerHTML='<i class="fa-solid fa-stop"></i> Stop Capture';
+    btn.style.borderColor='var(--red)';btn.style.color='var(--red)';
+  } else {
+    btn.innerHTML='<i class="fa-solid fa-play"></i> Capture Now';
+    btn.style.borderColor='';btn.style.color='';
+  }
 }
 
 function toggleLive(){
@@ -184,10 +225,10 @@ function toggleLive(){
   if(isLive){
     isLive=false;clearInterval(pollIv);pollIv=null;
     btn.classList.remove('on');dot.style.display='none';
-    fetch('/api/noaa/stop',{method:'POST',credentials:'include'}).catch(()=>{});
+    fetch('/api/meteor/stop',{method:'POST',credentials:'include'}).catch(()=>{});
   } else {
     isLive=true;btn.classList.add('on');dot.style.display='inline';
-    fetch('/api/noaa/start',{method:'POST',credentials:'include'}).then(()=>{
+    fetch('/api/meteor/start',{method:'POST',credentials:'include'}).then(()=>{
       setTimeout(()=>{poll();pollIv=setInterval(poll,3000)},3000);
     }).catch(()=>{});
   }
@@ -196,23 +237,21 @@ function toggleLive(){
 function fmtDur(s){return Math.floor(s/60)+'m'+('0'+s%60).slice(-2)+'s'}
 
 function poll(){
-  fetch('/api/noaa/live',{credentials:'include'}).then(r=>r.json()).then(d=>{
+  fetch('/api/meteor/live',{credentials:'include'}).then(r=>r.json()).then(d=>{
     if(!d||!d.ts)return;
     data=d;
 
     const badge=document.getElementById('statusBadge');
-    const auto=d.auto_mode?'AUTO · ':'';
-    if(d.capturing){
+    const auto=d.auto_mode?'AUTO \u00b7 ':'';
+    const status=d.status||'idle';
+    if(d.capturing&&status==='decoding'){
+      badge.textContent=auto+'DECODING';badge.className='status-badge status-decoding';
+    } else if(d.capturing){
       badge.textContent=auto+'CAPTURING';badge.className='status-badge status-capturing';
     } else if(d.passes&&d.passes.length){
       badge.textContent=auto+'WAITING';badge.className='status-badge status-waiting';
     } else {
       badge.textContent='IDLE';badge.className='status-badge status-idle';
-    }
-
-    // GPS position
-    if(d.observer&&d.observer.lat){
-      document.getElementById('kFreq').textContent=d.observer.lat.toFixed(4)+'°, '+d.observer.lon.toFixed(4)+'°';
     }
 
     document.getElementById('kSat').textContent=d.satellite||'--';
@@ -221,9 +260,12 @@ function poll(){
     // Image
     const img=document.getElementById('satImage');
     const overlay=document.getElementById('imageOverlay');
-    if(d.image_path&&d.image_lines>0){
-      img.src='/api/noaa/image?t='+Date.now();
+    if(d.image_path&&d.image_count>0){
+      img.src='/api/meteor/image?t='+Date.now();
       img.style.display='block';
+      overlay.style.display='none';
+    } else if(d.capturing){
+      img.style.display='none';
       overlay.style.display='none';
     } else {
       img.style.display='none';
@@ -235,19 +277,24 @@ function poll(){
     if(d.capturing){
       pbar.style.display='block';
       document.getElementById('progressFill').style.width=d.progress_pct+'%';
-      document.getElementById('progressLabel').textContent=d.elapsed+'s / '+d.duration+'s ('+d.progress_pct+'%)';
-      document.getElementById('captureInfo').textContent=d.satellite+' · '+d.frequency+' MHz · '+d.image_lines+' lines';
+      if(status==='decoding'){
+        document.getElementById('progressLabel').textContent='Decoding with SatDump...';
+        document.getElementById('captureInfo').textContent=d.satellite+' \u00b7 '+d.frequency+' MHz \u00b7 DECODING';
+      } else {
+        document.getElementById('progressLabel').textContent=d.elapsed+'s / '+d.duration+'s ('+d.progress_pct+'%)';
+        document.getElementById('captureInfo').textContent=d.satellite+' \u00b7 '+d.frequency+' MHz \u00b7 LRPT capture';
+      }
     } else {
       pbar.style.display='none';
       document.getElementById('progressLabel').textContent='';
       document.getElementById('captureInfo').textContent='';
     }
 
-    // Next pass countdown — store target time for 1s ticker
+    // Next pass countdown
     if(!d.capturing&&d.passes&&d.passes.length){
       const next=d.next_pass||d.passes[0];
       _nextPassTs=next.start_ts||0;
-      document.getElementById('nextPassInfo').textContent='Next: '+next.satellite+' at '+(next.start||'?')+' ('+next.max_el+'° max, '+next.direction+', '+fmtDur(next.duration)+')'+(d.auto_mode?' · AUTO-CAPTURE':'');
+      document.getElementById('nextPassInfo').textContent='Next: '+next.satellite+' at '+(next.start||'?')+' ('+next.max_el+'\u00b0 max, '+next.direction+', '+fmtDur(next.duration)+')'+(d.auto_mode?' \u00b7 AUTO-CAPTURE':'');
     } else if(!d.capturing){
       _nextPassTs=0;
       document.getElementById('nextPassInfo').textContent='No upcoming passes';
@@ -255,13 +302,14 @@ function poll(){
     }
     if(d.capturing)_nextPassTs=0;
 
+    updateCaptureButton();
     // Passes
     renderPasses(d.passes||[]);
     // Gallery
     renderGallery(d.captures||[]);
     // Status
     renderStatus(d);
-    updateNoaaMap();
+    updateMeteorMap();
   }).catch(()=>{});
 }
 
@@ -270,10 +318,11 @@ function renderPasses(passes){
   if(!passes.length){el.innerHTML='<div style="text-align:center;padding:20px;color:#1a3050;font-size:11px"><i class="fa-solid fa-clock" style="font-size:20px;display:block;margin-bottom:6px"></i>No passes predicted<br><span style="font-size:9px">Start the payload to predict passes</span></div>';return}
   el.innerHTML=passes.map((p,i)=>{
     const elCol=p.max_el>=60?'var(--green)':p.max_el>=30?'var(--yellow)':'var(--red)';
+    const shortName=p.satellite.replace('METEOR-M2 ','M');
     return '<div class="pass-row'+(i===0?' next':'')+'">'+
-      '<span class="pass-sat" style="color:var(--accent)">'+p.satellite.replace('NOAA ','N')+'</span>'+
+      '<span class="pass-sat" style="color:var(--accent)">'+shortName+'</span>'+
       '<span class="pass-time">'+p.start+'</span>'+
-      '<span class="pass-el" style="color:'+elCol+'">'+p.max_el+'°</span>'+
+      '<span class="pass-el" style="color:'+elCol+'">'+p.max_el+'\u00b0</span>'+
       '<span class="pass-dir">'+p.direction+'</span>'+
       '<span class="pass-dur">'+fmtDur(p.duration)+'</span>'+
       '<span class="pass-freq">'+p.freq+'MHz</span>'+
@@ -293,7 +342,7 @@ function renderGallery(captures){
   const ts=Date.now();
   grid.innerHTML=captures.map(c=>{
     return '<div class="gallery-item" onclick="viewImage(\''+c.path.replace(/'/g,"\\'")+'\')">'+
-      '<img src="/api/noaa/image?path='+encodeURIComponent(c.path)+'&t='+ts+'" loading="lazy">'+
+      '<img src="/api/meteor/image?path='+encodeURIComponent(c.path)+'&t='+ts+'" loading="lazy">'+
       '<div class="gi-name">'+c.file.replace('.png','')+'</div>'+
     '</div>';
   }).join('');
@@ -304,10 +353,10 @@ function viewImage(path){
   overlay.style.cssText='position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.9);z-index:9999;display:flex;align-items:center;justify-content:center;cursor:pointer';
   overlay.onclick=function(){document.body.removeChild(overlay)};
   const img=document.createElement('img');
-  img.src='/api/noaa/image?path='+encodeURIComponent(path)+'&t='+Date.now();
+  img.src='/api/meteor/image?path='+encodeURIComponent(path)+'&t='+Date.now();
   img.style.cssText='max-width:95%;max-height:95%;object-fit:contain;border-radius:8px;box-shadow:0 0 40px rgba(0,0,0,.5)';
   const close=document.createElement('div');
-  close.textContent='✕';
+  close.textContent='\u2715';
   close.style.cssText='position:absolute;top:16px;right:20px;color:#fff;font-size:24px;cursor:pointer';
   const name=document.createElement('div');
   name.textContent=path.split('/').pop().replace('.png','');
@@ -319,34 +368,49 @@ function viewImage(path){
 function renderStatus(d){
   const el=document.getElementById('statusContent');
   const obs=d.observer||{};
+  const status=d.status||'idle';
   let h='';
-  h+='<div class="stat-row"><span class="sl">Observer</span><span class="sv">'+(obs.lat?obs.lat.toFixed(4)+', '+obs.lon.toFixed(4):'--')+'</span></div>';
+  h+='<div class="stat-row"><span class="sl">Observer</span><span class="sv">'+(obs.lat?obs.lat.toFixed(4)+', '+obs.lon.toFixed(4):'--')+(obs.source?' ('+obs.source+')':'')+'</span></div>';
   h+='<div class="stat-row"><span class="sl">Altitude</span><span class="sv">'+(obs.alt||0).toFixed(0)+' m</span></div>';
+  h+='<div style="margin:6px 0;display:flex;gap:4px;align-items:center">';
+  h+='<input id="posLat" type="text" placeholder="Lat" style="width:70px;padding:3px 5px;border:1px solid #1a2844;border-radius:3px;background:#0a1020;color:var(--accent);font-size:10px;font-family:Courier New,monospace" value="'+(obs.lat||'')+'">';
+  h+='<input id="posLon" type="text" placeholder="Lon" style="width:70px;padding:3px 5px;border:1px solid #1a2844;border-radius:3px;background:#0a1020;color:var(--accent);font-size:10px;font-family:Courier New,monospace" value="'+(obs.lon||'')+'">';
+  h+='<button onclick="savePosition()" style="padding:3px 8px;border:1px solid #1a2844;border-radius:3px;background:#0a1020;color:#888;font-size:9px;cursor:pointer">Set</button>';
+  h+='</div>';
   h+='<div class="stat-row"><span class="sl">TLE Age</span><span class="sv">'+(d.tle_age||'--')+'</span></div>';
   h+='<div class="stat-row"><span class="sl">Upcoming</span><span class="sv">'+(d.passes?d.passes.length:0)+' passes</span></div>';
   h+='<div class="stat-row"><span class="sl">Captures</span><span class="sv">'+(d.captures?d.captures.length:0)+' images</span></div>';
-  h+='<div class="stat-row"><span class="sl">Capturing</span><span class="sv" style="color:'+(d.capturing?'var(--red)':'#555')+'">'+(d.capturing?'YES — '+d.satellite:'NO')+'</span></div>';
+  h+='<div class="stat-row"><span class="sl">Status</span><span class="sv" style="color:'+(d.capturing?'var(--red)':'#555')+'">'+status.toUpperCase()+(d.capturing?' \u2014 '+d.satellite:'')+'</span></div>';
   if(d.capturing){
     h+='<div class="stat-row"><span class="sl">Progress</span><span class="sv">'+d.progress_pct+'% ('+d.elapsed+'s / '+d.duration+'s)</span></div>';
-    h+='<div class="stat-row"><span class="sl">Lines decoded</span><span class="sv">'+d.image_lines+'</span></div>';
+    h+='<div class="stat-row"><span class="sl">Images found</span><span class="sv">'+(d.image_count||0)+'</span></div>';
   }
   h+='<div style="margin-top:12px;font-size:9px;color:#2a4060">';
   h+='<b>How it works:</b><br>';
-  h+='NOAA weather satellites orbit at 850km and pass overhead several times a day. ';
-  h+='They transmit real-time images of Earth on 137 MHz using Automatic Picture Transmission (APT). ';
-  h+='The RTL-SDR receives the FM signal, which is decoded into a grayscale image showing ';
+  h+='Meteor M2 weather satellites orbit at ~830km and pass overhead several times a day. ';
+  h+='They transmit real-time images of Earth on 137.9 MHz using LRPT (Low Rate Picture Transmission), a digital QPSK signal. ';
+  h+='The RTL-SDR captures raw IQ data, which SatDump decodes into color composite images showing ';
   h+='cloud cover, land, and sea from space.<br><br>';
   h+='<b>Tips:</b><br>';
-  h+='• Best results with a V-dipole or QFH antenna tuned for 137 MHz<br>';
-  h+='• Higher elevation passes (60°+) give better images<br>';
-  h+='• Capture lasts 10-15 minutes per pass<br>';
-  h+='• Images show visible light (day) or infrared (night)';
+  h+='&bull; Best results with a V-dipole or QFH antenna tuned for 137 MHz<br>';
+  h+='&bull; Higher elevation passes (60&deg;+) give better images<br>';
+  h+='&bull; Capture lasts 10-15 minutes per pass<br>';
+  h+='&bull; LRPT produces color images (visible + infrared channels)';
   h+='</div>';
   el.innerHTML=h;
 }
 
+function savePosition(){
+  const lat=parseFloat(document.getElementById('posLat').value);
+  const lon=parseFloat(document.getElementById('posLon').value);
+  if(isNaN(lat)||isNaN(lon)){alert('Invalid coordinates');return}
+  fetch('/api/meteor/set_position',{method:'POST',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({lat:lat,lon:lon})}).then(r=>r.json()).then(d=>{
+    if(d.ok){_meteorMapCentered=false;poll()}
+  }).catch(()=>{});
+}
+
 // Auto-detect running
-fetch('/api/noaa/live',{credentials:'include'}).then(r=>r.json()).then(d=>{
+fetch('/api/meteor/live',{credentials:'include'}).then(r=>r.json()).then(d=>{
   if(d&&d.ts>0){
     data=d;
     isLive=true;
@@ -356,38 +420,38 @@ fetch('/api/noaa/live',{credentials:'include'}).then(r=>r.json()).then(d=>{
   }
 }).catch(()=>{});
 
-// ═════════════════════════════════════════
-// NOAA MAP — observer position + satellite ground track
-// ═════════════════════════════════════════
-let _noaaMap=null,_noaaObsMarker=null,_noaaMapCentered=false,_noaaCircle=null,_noaaPassTracks=[],_noaaPassMarkers=[],_noaaTracksDrawn=false;
+// =============================================
+// METEOR MAP -- observer position + satellite ground track
+// =============================================
+let _meteorMap=null,_meteorObsMarker=null,_meteorMapCentered=false,_meteorCircle=null,_meteorPassTracks=[],_meteorPassMarkers=[],_meteorTracksDrawn=false;
 
-function initNoaaMap(){
-  _noaaMap=L.map('noaaMapEl',{zoomControl:true,attributionControl:false,worldCopyJump:true,minZoom:2}).setView([49,0],5);
-  _rjAddMapStyleControl(_noaaMap);
-  L.tileLayer('/tiles/{z}/{x}/{y}.png',{maxZoom:19}).addTo(_noaaMap);
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{maxZoom:19,subdomains:'abcd'}).addTo(_noaaMap);
-  _noaaObsMarker=L.circleMarker([0,0],{radius:6,fillColor:'#00ccff',fillOpacity:1,color:'#fff',weight:2}).addTo(_noaaMap);
-  _noaaCircle=L.circle([0,0],{radius:2500000,color:'#00ccff',weight:1,opacity:0.1,fillOpacity:0.02,dashArray:'6,6'}).addTo(_noaaMap);
-  updateNoaaMap();
+function initMeteorMap(){
+  _meteorMap=L.map('meteorMapEl',{zoomControl:true,attributionControl:false,worldCopyJump:true,minZoom:2}).setView([49,0],5);
+  _rjAddMapStyleControl(_meteorMap);
+  L.tileLayer('/tiles/{z}/{x}/{y}.png',{maxZoom:19}).addTo(_meteorMap);
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{maxZoom:19,subdomains:'abcd'}).addTo(_meteorMap);
+  _meteorObsMarker=L.circleMarker([0,0],{radius:6,fillColor:'#00ccff',fillOpacity:1,color:'#fff',weight:2}).addTo(_meteorMap);
+  _meteorCircle=L.circle([0,0],{radius:2500000,color:'#00ccff',weight:1,opacity:0.1,fillOpacity:0.02,dashArray:'6,6'}).addTo(_meteorMap);
+  updateMeteorMap();
 }
 
-function updateNoaaMap(){
-  if(!_noaaMap||!data.observer)return;
+function updateMeteorMap(){
+  if(!_meteorMap||!data.observer)return;
   const obs=data.observer;
   if(!obs.lat)return;
-  _noaaObsMarker.setLatLng([obs.lat,obs.lon]);
-  _noaaCircle.setLatLng([obs.lat,obs.lon]);
-  _noaaObsMarker.bindPopup('<b>You</b><br>'+obs.lat.toFixed(4)+'°, '+obs.lon.toFixed(4)+'°');
-  if(!_noaaMapCentered){_noaaMapCentered=true;_noaaMap.setView([obs.lat,obs.lon],5)}
+  _meteorObsMarker.setLatLng([obs.lat,obs.lon]);
+  _meteorCircle.setLatLng([obs.lat,obs.lon]);
+  _meteorObsMarker.bindPopup('<b>You</b><br>'+obs.lat.toFixed(4)+'\u00b0, '+obs.lon.toFixed(4)+'\u00b0');
+  if(!_meteorMapCentered){_meteorMapCentered=true;_meteorMap.setView([obs.lat,obs.lon],5)}
 
   // Show real-time satellite positions from SGP4
-  _noaaPassMarkers.forEach(m=>_noaaMap.removeLayer(m));
-  _noaaPassTracks.forEach(t=>_noaaMap.removeLayer(t));
-  _noaaPassMarkers=[];_noaaPassTracks=[];
+  _meteorPassMarkers.forEach(m=>_meteorMap.removeLayer(m));
+  _meteorPassTracks.forEach(t=>_meteorMap.removeLayer(t));
+  _meteorPassMarkers=[];_meteorPassTracks=[];
 
-  const satColors={'NOAA 15':'#ff4444','NOAA 18':'#44aaff','NOAA 19':'#44ff88'};
+  const satColors={'METEOR-M2 3':'#ff4444','METEOR-M2 4':'#44aaff'};
 
-  // Draw 24h orbit tracks with time markers
+  // Draw orbit tracks with time markers
   const tracks=data.orbit_tracks||{};
   for(const[name,pts] of Object.entries(tracks)){
     if(!pts||pts.length<2)continue;
@@ -395,12 +459,12 @@ function updateNoaaMap(){
     let segment=[];let segTimes=[];
     function addSeg(){
       if(segment.length<2)return;
-      const line=L.polyline(segment,{color:col,weight:1.5,opacity:0.15,dashArray:'4,6'}).addTo(_noaaMap);
+      const line=L.polyline(segment,{color:col,weight:1.5,opacity:0.15,dashArray:'4,6'}).addTo(_meteorMap);
       line.on('click',()=>{
-        _noaaPassTracks.forEach(t=>{t.setStyle({weight:1.5,opacity:0.15})});
+        _meteorPassTracks.forEach(t=>{t.setStyle({weight:1.5,opacity:0.15})});
         line.setStyle({weight:3,opacity:0.7});
       });
-      _noaaPassTracks.push(line);
+      _meteorPassTracks.push(line);
     }
     for(let i=0;i<pts.length;i++){
       if(segment.length>0&&Math.abs(pts[i][1]-segment[segment.length-1][1])>180){
@@ -408,11 +472,11 @@ function updateNoaaMap(){
       }
       segment.push([pts[i][0],pts[i][1]]);
       segTimes.push(pts[i][2]||'');
-      // Time markers every 30 min (every 15 points at 2min step)
+      // Time markers every 30 min
       if(pts[i][2]&&i%15===0){
-        const tm=L.circleMarker([pts[i][0],pts[i][1]],{radius:2,fillColor:col,fillOpacity:0.4,color:col,weight:0.5,opacity:0.3}).addTo(_noaaMap);
-        tm.bindTooltip(name.replace('NOAA ','N')+' · '+pts[i][2],{direction:'top',offset:[0,-4],className:'sat-label'});
-        _noaaPassTracks.push(tm);
+        const tm=L.circleMarker([pts[i][0],pts[i][1]],{radius:2,fillColor:col,fillOpacity:0.4,color:col,weight:0.5,opacity:0.3}).addTo(_meteorMap);
+        tm.bindTooltip(name.replace('METEOR-M2 ','M')+' \u00b7 '+pts[i][2],{direction:'top',offset:[0,-4],className:'sat-label'});
+        _meteorPassTracks.push(tm);
       }
     }
     addSeg();
@@ -421,10 +485,10 @@ function updateNoaaMap(){
   // Current positions
   (data.sat_positions||[]).forEach(s=>{
     const col=satColors[s.satellite]||'#ff8800';
-    const m=L.circleMarker([s.lat,s.lon],{radius:7,fillColor:col,fillOpacity:0.9,color:'#fff',weight:1.5}).addTo(_noaaMap);
-    m.bindTooltip(s.satellite.replace('NOAA ','N'),{permanent:true,direction:'right',offset:[8,0],className:'sat-label'});
-    m.bindPopup('<b style="color:'+col+'">'+s.satellite+'</b><br>Alt: '+Math.round(s.alt_km)+' km<br>Freq: '+s.freq+' MHz<br>Lat: '+s.lat+'°<br>Lon: '+s.lon+'°');
-    _noaaPassMarkers.push(m);
+    const m=L.circleMarker([s.lat,s.lon],{radius:7,fillColor:col,fillOpacity:0.9,color:'#fff',weight:1.5}).addTo(_meteorMap);
+    m.bindTooltip(s.satellite.replace('METEOR-M2 ','M'),{permanent:true,direction:'right',offset:[8,0],className:'sat-label'});
+    m.bindPopup('<b style="color:'+col+'">'+s.satellite+'</b><br>Alt: '+Math.round(s.alt_km)+' km<br>Freq: '+s.freq+' MHz<br>Lat: '+s.lat+'\u00b0<br>Lon: '+s.lon+'\u00b0');
+    _meteorPassMarkers.push(m);
   });
 
 }
