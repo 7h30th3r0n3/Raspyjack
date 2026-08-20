@@ -18,16 +18,30 @@ import json
 
 sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..", "..")))
 
-import RPi.GPIO as GPIO
 import LCD_1in44, LCD_Config
+if getattr(LCD_1in44, "_DISPLAY_TYPE", None) == "WAVESHARE_EPD_2IN7":
+    import epd_button_bridge  # noqa: F401 (patches RPi.GPIO.input/setup in this subprocess too)
+import RPi.GPIO as GPIO
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
 
-PINS = {
-    "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
-    "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16,
-}
+if getattr(LCD_1in44, "_DISPLAY_TYPE", None) == "WAVESHARE_EPD_2IN7":
+    PINS = {
+        "UP": epd_button_bridge.VIRTUAL_PIN["KEY_UP_PIN"],
+        "DOWN": epd_button_bridge.VIRTUAL_PIN["KEY_DOWN_PIN"],
+        "LEFT": epd_button_bridge.VIRTUAL_PIN["KEY_LEFT_PIN"],
+        "RIGHT": epd_button_bridge.VIRTUAL_PIN["KEY_RIGHT_PIN"],
+        "OK": epd_button_bridge.VIRTUAL_PIN["KEY_PRESS_PIN"],
+        "KEY1": epd_button_bridge.VIRTUAL_PIN["KEY1_PIN"],
+        "KEY2": epd_button_bridge.VIRTUAL_PIN["KEY2_PIN"],
+        "KEY3": epd_button_bridge.VIRTUAL_PIN["KEY3_PIN"],
+    }
+else:
+    PINS = {
+        "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
+        "OK": 13, "KEY1": 21, "KEY2": 20, "KEY3": 16,
+    }
 GPIO.setmode(GPIO.BCM)
 for pin in PINS.values():
     GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
@@ -43,6 +57,7 @@ CONF_PATH = "/root/Raspyjack/gui_conf.json"
 DISPLAY_OPTIONS = [
     ("ST7735_128", "1.44\" 128x128"),
     ("ST7789_240", "1.3\"  240x240"),
+    ("WAVESHARE_EPD_2IN7", "2.7\"  264x176 e-Paper"),
 ]
 
 
@@ -64,7 +79,7 @@ def _set_display_type(dtype):
     if "DISPLAY" not in data:
         data["DISPLAY"] = {}
     data["DISPLAY"]["type"] = dtype
-    data["DISPLAY"]["supported_types"] = ["ST7735_128", "ST7789_240"]
+    data["DISPLAY"]["supported_types"] = ["ST7735_128", "ST7789_240", "CARDPUTER_320", "WAVESHARE_EPD_2IN7"]
     with open(CONF_PATH, "w") as f:
         json.dump(data, f, indent=4)
 

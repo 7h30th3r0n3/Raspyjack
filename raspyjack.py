@@ -15,6 +15,8 @@ from PIL import Image, ImageDraw, ImageFont, ImageColor, ImageSequence, ImageOps
 import LCD_Config
 import LCD_1in44
 import RPi.GPIO as GPIO
+if getattr(LCD_1in44, "_DISPLAY_TYPE", None) == "WAVESHARE_EPD_2IN7":
+    import epd_button_bridge  # noqa: F401
 import socket
 import ipaddress
 import signal
@@ -708,6 +710,10 @@ def get_best_interface_prefer_eth() -> str:
 
 def Leave(poweroff: bool = False) -> None:
     _stop_evt.set()
+    try:
+        LCD.LCD_Sleep()  # no-op on non-EPD displays; avoids leaving the e-Paper powered on a static image
+    except Exception:
+        pass
     GPIO.cleanup()
     if poweroff:
         os.system("sync && poweroff")
@@ -960,18 +966,23 @@ def _write_config_atomic(data: dict) -> None:
 
 _flip_enabled = False  # screen + controls flipped 180 degrees
 
-_ORIGINAL_PINS = {
-    "KEY_UP_PIN": 6, "KEY_DOWN_PIN": 19,
-    "KEY_LEFT_PIN": 5, "KEY_RIGHT_PIN": 26,
-    "KEY_PRESS_PIN": 13, "KEY1_PIN": 21,
-    "KEY2_PIN": 20, "KEY3_PIN": 16,
-}
+if getattr(LCD_1in44, "_DISPLAY_TYPE", None) == "WAVESHARE_EPD_2IN7":
+    # Synthetic pins from epd_button_bridge (short/long press on the HAT's
+    # 4 physical buttons) — see that module for the physical->logical map.
+    _ORIGINAL_PINS = dict(epd_button_bridge.VIRTUAL_PIN)
+else:
+    _ORIGINAL_PINS = {
+        "KEY_UP_PIN": 6, "KEY_DOWN_PIN": 19,
+        "KEY_LEFT_PIN": 5, "KEY_RIGHT_PIN": 26,
+        "KEY_PRESS_PIN": 13, "KEY1_PIN": 21,
+        "KEY2_PIN": 20, "KEY3_PIN": 16,
+    }
 
 def SaveConfig() -> None:
     data = {
         "DISPLAY": {
             "type": getattr(LCD_1in44, '_DISPLAY_TYPE', 'ST7789_240'),
-            "supported_types": ["ST7735_128", "ST7789_240"],
+            "supported_types": ["ST7735_128", "ST7789_240", "CARDPUTER_320", "WAVESHARE_EPD_2IN7"],
             "flip": _flip_enabled,
         },
         "PINS":   _ORIGINAL_PINS,
@@ -5003,16 +5014,7 @@ icon_font = ImageFont.truetype('/usr/share/fonts/truetype/fontawesome/fa-solid-9
 font = text_font  # Keep backward compatibility
 
 ### Defining PINS, threads, loading JSON ###
-PINS = {
-    "KEY_UP_PIN": 6,
-    "KEY_DOWN_PIN": 19,
-    "KEY_LEFT_PIN": 5,
-    "KEY_RIGHT_PIN": 26,
-    "KEY_PRESS_PIN": 13,
-    "KEY1_PIN": 21,
-    "KEY2_PIN": 20,
-    "KEY3_PIN": 16
-}
+PINS = dict(_ORIGINAL_PINS)
 LoadConfig()
 m = DisposableMenu()
 

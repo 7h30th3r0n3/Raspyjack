@@ -28,6 +28,7 @@
 import LCD_Config
 import RPi.GPIO as GPIO
 import time
+import threading
 import numpy as np
 import os
 import json
@@ -35,7 +36,8 @@ from PIL import Image as PILImage, ImageOps
 
 # ---------------------------------------------------------------------------
 # Display type detection from gui_conf.json
-# Supported: "ST7735_128" (128x128), "ST7789_240" (240x240), "CARDPUTER_320" (320x170)
+# Supported: "ST7735_128" (128x128), "ST7789_240" (240x240), "CARDPUTER_320" (320x170),
+# "WAVESHARE_EPD_2IN7" (264x176, 1-bit e-Paper)
 # ---------------------------------------------------------------------------
 _DISPLAY_TYPE = "ST7735_128"  # default
 
@@ -77,6 +79,13 @@ if _DISPLAY_TYPE == "CARDPUTER_320":
     LCD_Y = 0
     LCD_X_MAXPIXEL = 320
     LCD_Y_MAXPIXEL = 170
+elif _DISPLAY_TYPE == "WAVESHARE_EPD_2IN7":
+    LCD_WIDTH  = 264
+    LCD_HEIGHT = 176
+    LCD_X = 0
+    LCD_Y = 0
+    LCD_X_MAXPIXEL = 264
+    LCD_Y_MAXPIXEL = 176
 elif _DISPLAY_TYPE == "ST7789_240":
     LCD_WIDTH  = 240
     LCD_HEIGHT = 240
@@ -97,10 +106,14 @@ else:
 # Scale helper – payloads import this: from LCD_1in44 import S
 # All coordinates are authored for 128; S() adapts them to the actual panel.
 # ---------------------------------------------------------------------------
-if _DISPLAY_TYPE == "CARDPUTER_320":
-    LCD_SCALE = LCD_HEIGHT / 128  # 1.328 — use height (constraining dimension) for widescreen
+if _DISPLAY_TYPE in ("CARDPUTER_320", "WAVESHARE_EPD_2IN7"):
+    LCD_SCALE = LCD_HEIGHT / 128  # widescreen panels — use height (constraining dimension)
 else:
     LCD_SCALE = LCD_WIDTH / 128  # 1.0 on 128x128, 1.875 on 240x240
+
+# EPD driver is only imported (and only needs to be installed) when actually selected.
+if _DISPLAY_TYPE == "WAVESHARE_EPD_2IN7":
+    from waveshare_epd import epd2in7_V2 as _epd_driver
 
 def S(v):
     """Scale a 128-base pixel value to the current display resolution."""
@@ -161,6 +174,50 @@ U2D_R2L = 6
 D2U_L2R = 7
 D2U_R2L = 8
 SCAN_DIR_DFT = U2D_R2L
+
+
+class _EPDRefreshPolicy:
+    """
+    Coalesces/throttles pushes to the e-Paper panel and decides full vs.
+    partial refresh, since the panel is far slower and more refresh-cycle
+    limited than the RGB LCDs LCD_ShowImage() was originally written for.
+    Every push() call is funneled through here so callers (the main dirty-flag
+    display loop, payload UIs, etc.) don't need to know anything about e-paper
+    refresh limits.
+    """
+    MIN_INTERVAL_S = 0.35          # never push more than ~3fps to the panel
+    FULL_REFRESH_EVERY = 20        # do a full refresh every Nth push to clear ghosting
+    FULL_REFRESH_MAX_AGE_S = 120   # ...or after this long since the last full refresh
+
+    def __init__(self):
+        self._last_push = 0.0
+        self._partial_count = 0
+        self._last_full = 0.0
+        self._lock = threading.Lock()
+
+    def push(self, lcd, img_1bit):
+        with self._lock:
+            now = time.monotonic()
+            if (now - self._last_push) < self.MIN_INTERVAL_S:
+                return
+            self._last_push = now
+            need_full = (
+                self._partial_count == 0
+                or self._partial_count >= self.FULL_REFRESH_EVERY
+                or (now - self._last_full) >= self.FULL_REFRESH_MAX_AGE_S
+            )
+            buf = lcd._epd.getbuffer(img_1bit)
+            if need_full:
+                lcd._epd.init()
+                lcd._epd.display(buf)
+                self._partial_count = 0
+                self._last_full = now
+            else:
+                lcd._epd.display_Partial(buf, 0, 0, lcd._epd.width, lcd._epd.height)
+                self._partial_count += 1
+
+
+_epd_refresh_policy = _EPDRefreshPolicy()
 
 
 class LCD:
@@ -479,6 +536,16 @@ class LCD:
     #			initialization
     #********************************************************************************/
     def LCD_Init(self, Lcd_ScanDir=None):
+        if self.display_type == "WAVESHARE_EPD_2IN7":
+            # The EPD driver owns its own GPIO/SPI init via epdconfig; it does
+            # not use LCD_Config at all.
+            self._epd = _epd_driver.EPD()
+            self._epd.init()
+            self._epd.Clear()
+            self.width = LCD_WIDTH
+            self.height = LCD_HEIGHT
+            return 0
+
         if (LCD_Config.GPIO_Init() != 0):
             return -1
 
@@ -537,6 +604,12 @@ class LCD:
         self.LCD_WriteReg(0x2C)
 
     def LCD_Clear(self):
+        if self.display_type == "WAVESHARE_EPD_2IN7":
+            # Re-init resets the panel to the full-refresh LUT, clearing any
+            # ghosting left over from partial refreshes.
+            self._epd.init()
+            self._epd.Clear()
+            return
         if self.display_type == "CARDPUTER_320":
             LCD_Config.fb_write(b'\x00' * LCD_Config.FB_SIZE)
             return
@@ -555,7 +628,12 @@ class LCD:
         if imwidth != self.width or imheight != self.height:
             Image = Image.resize((self.width, self.height))
 
-        if self.display_type == "CARDPUTER_320":
+        if self.display_type == "WAVESHARE_EPD_2IN7":
+            # Simple black/white threshold (no dithering); getbuffer() below
+            # handles the landscape<->native-portrait rotation itself.
+            img = Image.convert("L").point(lambda p: 255 if p >= 128 else 0, mode="1")
+            _epd_refresh_policy.push(self, img)
+        elif self.display_type == "CARDPUTER_320":
             img = Image.convert("RGB")
             arr = np.asarray(img)
             r = (arr[..., 0].astype(np.uint16) >> 3) << 11
@@ -593,3 +671,8 @@ class LCD:
                     _last_frame_save = now
             except Exception:
                 pass
+
+    def LCD_Sleep(self):
+        """Power down the e-Paper panel cleanly. No-op on other display types."""
+        if self.display_type == "WAVESHARE_EPD_2IN7" and getattr(self, "_epd", None):
+            self._epd.sleep()
