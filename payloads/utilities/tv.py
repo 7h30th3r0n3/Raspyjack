@@ -54,6 +54,7 @@ import LCD_Config
 from PIL import Image
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
+from payloads._audio_helper import set_playback_volume
 
 PINS = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
@@ -241,8 +242,7 @@ def _detect_alsa():
 def _set_vol(v):
     global _vol
     _vol = max(0, min(63, v))
-    subprocess.Popen(["amixer", "-c", _alsa_card, "sset", "Headphone", str(_vol)],
-                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    set_playback_volume(_vol)
 
 
 # ---------------------------------------------------------------------------

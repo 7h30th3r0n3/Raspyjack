@@ -37,6 +37,7 @@ from payloads._input_helper import get_button
 from payloads._audio_helper import (
     get_audio_card, get_alsa_dev, get_capture_dev,
     enable_capture, disable_capture, get_capture_label,
+    set_playback_volume,
 )
 
 try:
@@ -252,14 +253,7 @@ def _stop_recording():
 def _set_volume(vol):
     global _volume
     _volume = max(0, min(63, vol))
-    card = get_audio_card()
-    dac_val = int(75 + (_volume / 63 * 180))
-    subprocess.run(["amixer", "-c", card, "sset", "Headphone", str(_volume)],
-                   capture_output=True, timeout=2)
-    subprocess.run(["amixer", "-c", card, "sset", "DACL", str(dac_val)],
-                   capture_output=True, timeout=2)
-    subprocess.run(["amixer", "-c", card, "sset", "DACR", str(dac_val)],
-                   capture_output=True, timeout=2)
+    set_playback_volume(_volume)
     try:
         import smbus2
         bus = smbus2.SMBus(1)

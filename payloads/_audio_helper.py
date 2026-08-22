@@ -5,6 +5,7 @@ Usage:
     from payloads._audio_helper import get_capture_card, get_capture_dev
     from payloads._audio_helper import enable_capture, disable_capture
     from payloads._audio_helper import open_capture_stream, get_capture_label
+    from payloads._audio_helper import set_playback_volume
 
 USB microphones are preferred over the built-in ES838x codec when present.
 Set RASPYJACK_CAPTURE_DEV to force a device (e.g. "plughw:3,0").
@@ -205,6 +206,50 @@ def open_capture_stream(rate=16000, channels=1, fmt="S16_LE"):
         ["arecord", "-D", get_capture_dev(), "-f", fmt, "-r", str(rate),
          "-c", str(channels), "-t", "raw"],
         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+
+
+def _has_control(card, name):
+    try:
+        r = subprocess.run(["amixer", "-c", card, "sget", name],
+                           capture_output=True, timeout=2)
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+_vol_controls = None
+
+
+def _detect_vol_controls():
+    global _vol_controls
+    if _vol_controls is not None:
+        return _vol_controls
+    card = get_audio_card()
+    controls = []
+    if _has_control(card, "Headphone"):
+        controls.append(("Headphone", 19, 63))
+    if _has_control(card, "Speaker"):
+        controls.append(("Speaker", 0, 1))
+    if _has_control(card, "DACL"):
+        controls.append(("DACL", 75, 255))
+    if _has_control(card, "DACR"):
+        controls.append(("DACR", 75, 255))
+    _vol_controls = controls
+    return _vol_controls
+
+
+def set_playback_volume(vol_0_63):
+    """Set playback volume (0-63 scale). Auto-detects card and control names."""
+    card = get_audio_card()
+    controls = _detect_vol_controls()
+    ratio = max(0, min(63, vol_0_63)) / 63.0
+    for name, lo, hi in controls:
+        if name == "Speaker":
+            val = "on" if vol_0_63 > 0 else "off"
+        else:
+            val = str(int(lo + ratio * (hi - lo)))
+        subprocess.Popen(["amixer", "-c", card, "sset", name, val],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def list_capture_devices():

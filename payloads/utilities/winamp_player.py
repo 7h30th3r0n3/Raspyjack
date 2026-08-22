@@ -25,6 +25,7 @@ import LCD_Config
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import scaled_font, S, SX, SY
+from payloads._audio_helper import set_playback_volume
 from payloads._input_helper import get_button
 
 PINS = {
@@ -100,14 +101,7 @@ def _check_btn():
 def _set_vol(vol):
     global _volume
     _volume = max(0, min(100, vol))
-    dac_val = int(75 + (_volume * 180 / 100))
-    hp_val = int(19 + (_volume * 44 / 100))
-    subprocess.Popen(["amixer", "-c", "0", "sset", "Headphone", str(hp_val)],
-                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    subprocess.Popen(["amixer", "-c", "0", "sset", "DACL", str(dac_val)],
-                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    subprocess.Popen(["amixer", "-c", "0", "sset", "DACR", str(dac_val)],
-                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    set_playback_volume(int(_volume * 63 / 100))
     _tpa_enable()
 
 

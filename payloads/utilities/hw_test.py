@@ -31,7 +31,7 @@ import LCD_Config
 from PIL import Image, ImageDraw
 from payloads._display_helper import ScaledDraw, scaled_font
 from payloads._input_helper import get_button
-from payloads._audio_helper import get_audio_card, get_alsa_dev
+from payloads._audio_helper import get_audio_card, get_alsa_dev, set_playback_volume
 
 PINS = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
@@ -225,16 +225,10 @@ def test_es8389():
 def test_speaker():
     """Test speaker output."""
     try:
-        r = subprocess.run(["aplay", "-l"], capture_output=True, text=True, timeout=3)
-        card = "0"
-        for line in r.stdout.split("\n"):
-            if "ES8388" in line or "ES8389" in line:
-                card = line.split(":")[0].replace("card", "").strip()
-        subprocess.run(["amixer", "-c", card, "sset", "Headphone", "40"], capture_output=True, timeout=2)
-        subprocess.run(["amixer", "-c", card, "sset", "DACL", "80%"], capture_output=True, timeout=2)
-        subprocess.run(["amixer", "-c", card, "sset", "DACR", "80%"], capture_output=True, timeout=2)
+        card = get_audio_card()
+        set_playback_volume(40)
         p = subprocess.Popen(
-            ["speaker-test", "-D", f"plughw:CARD=ES8388Audio,DEV=0", "-c", "2", "-t", "sine", "-f", "440", "-l", "1"],
+            ["speaker-test", "-D", f"plughw:{card},0", "-c", "2", "-t", "sine", "-f", "440", "-l", "1"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         p.wait(timeout=5)
         return "PASS", "Tone played"

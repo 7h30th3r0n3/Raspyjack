@@ -130,12 +130,11 @@ signal.signal(signal.SIGINT, _sig)
 signal.signal(signal.SIGTERM, _sig)
 
 
+from payloads._audio_helper import set_playback_volume
+
+
 def _yt_set_vol(vol):
-    hp_val = int(19 + (vol * 44 / 63))
-    dac_val = int(75 + (vol * 180 / 63))
-    for name, val in [("Headphone", hp_val), ("DACL", dac_val), ("DACR", dac_val)]:
-        subprocess.Popen(["amixer", "-c", "0", "sset", name, str(val)],
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    set_playback_volume(vol)
 
 
 def _draw(img):
