@@ -981,47 +981,18 @@ def _check_deps():
     if not os.path.isfile("/usr/bin/ffmpeg"):
         missing_apt.append("ffmpeg")
 
-    yt_ok = False
-    try:
-        r = subprocess.run(["yt-dlp", "--version"], capture_output=True, timeout=5)
-        yt_ok = r.returncode == 0
-    except Exception:
-        pass
-    if not yt_ok:
+    import shutil
+    yt_path = shutil.which("yt-dlp")
+    if not yt_path:
         missing_apt.append("yt-dlp")
 
     if missing_apt:
         _show_msg("Installing...", " ".join(missing_apt), C["red"])
         subprocess.run(["apt-get", "install", "-y"] + missing_apt,
                        capture_output=True, timeout=120)
+        yt_path = shutil.which("yt-dlp")
 
-    # Upgrade yt-dlp only if version is older than 90 days
-    if yt_ok:
-        try:
-            r = subprocess.run(["yt-dlp", "--version"], capture_output=True, text=True, timeout=5)
-            ver = r.stdout.strip()
-            from datetime import datetime
-            ver_date = datetime.strptime(ver[:10], "%Y.%m.%d")
-            age_days = (datetime.now() - ver_date).days
-            if age_days > 90:
-                _show_msg("Updating...", f"yt-dlp ({ver})", C["red"])
-                subprocess.run(
-                    ["pip3", "install", "--upgrade", "yt-dlp",
-                     "--break-system-packages", "--ignore-installed", "yt-dlp"],
-                    capture_output=True, timeout=120)
-        except Exception:
-            pass
-
-    # Final check
-    has_ffmpeg = os.path.isfile("/usr/bin/ffmpeg")
-    has_ytdlp = False
-    try:
-        r = subprocess.run(["yt-dlp", "--version"], capture_output=True, timeout=5)
-        has_ytdlp = r.returncode == 0
-    except Exception:
-        pass
-
-    return has_ffmpeg and has_ytdlp
+    return os.path.isfile("/usr/bin/ffmpeg") and yt_path is not None
 
 
 DOWNLOAD_DIR = "/root/Raspyjack/loot/YouTube/Downloads"
