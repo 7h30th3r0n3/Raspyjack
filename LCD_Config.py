@@ -48,7 +48,7 @@ if _DISPLAY_TYPE != "CARDPUTER_320":
     for _i in range(4):
         try:
             with open(f"/sys/class/graphics/fb{_i}/name", "r") as _fb:
-                if "st7789v_m5st" in _fb.read():
+                if any(n in _fb.read() for n in ("st7789v_m5st", "panel-mipi-dbi")):
                     _DISPLAY_TYPE = "CARDPUTER_320"
                     break
         except Exception:
@@ -66,15 +66,15 @@ if _DISPLAY_TYPE == "CARDPUTER_320":
     LCD_CS_PIN = -1
     LCD_BL_PIN = -1
 
-    # Auto-detect framebuffer: find the one with st7789v_m5st
+    _FB_NAMES = ("st7789v_m5st", "panel-mipi-dbi")
     FB_DEVICE = os.environ.get("RJ_FB_DEVICE", "")
     if not FB_DEVICE:
-        FB_DEVICE = "/dev/fb0"  # default fallback
+        FB_DEVICE = "/dev/fb0"
         for _i in range(4):
             _fb_name_path = f"/sys/class/graphics/fb{_i}/name"
             try:
                 with open(_fb_name_path) as _fn:
-                    if "st7789v_m5st" in _fn.read():
+                    if any(n in _fn.read() for n in _FB_NAMES):
                         FB_DEVICE = f"/dev/fb{_i}"
                         break
             except Exception:
@@ -119,8 +119,17 @@ if _DISPLAY_TYPE == "CARDPUTER_320":
     def SPI_Write_Byte(data):
         pass
 
+    def _unblank_fb():
+        blank_path = FB_DEVICE.replace("/dev/", "/sys/class/graphics/") + "/blank"
+        try:
+            with open(blank_path, "w") as f:
+                f.write("0")
+        except Exception:
+            pass
+
     def GPIO_Init():
         _open_fb()
+        _unblank_fb()
         return 0
 
 else:

@@ -77,8 +77,9 @@ CHUNK_SAMPLES = MODEL_RATE * CHUNK_SECS
 MIN_CONFIDENCE = 0.25
 DEBOUNCE = 0.20
 AVAILABLE_LANGS = [
-    "en", "fr", "de", "es", "it", "pt", "nl", "pl", "ru", "ja",
-    "ko", "zh_CN", "ar", "tr", "sv", "da", "no", "fi", "cs", "hu",
+    "en_us", "en_uk", "fr", "de", "es", "it", "pt", "nl", "pl", "ru", "ja",
+    "ko", "zh", "ar", "tr", "sv", "da", "no", "fi", "cs", "hu",
+    "af", "ro", "sk", "sl", "th", "uk",
 ]
 
 _running = True
@@ -267,8 +268,16 @@ def _get_status():
         return _current_status
 
 
+def _kill_pipewire():
+    for proc in ["pipewire", "pipewire-pulse", "wireplumber"]:
+        subprocess.run(["pkill", "-9", proc],
+                       capture_output=True, timeout=2)
+
+
 def _listen_thread():
     global _listening
+    _kill_pipewire()
+    time.sleep(0.2)
     _enable_mic()
     time.sleep(0.3)
 
@@ -543,9 +552,9 @@ def _show_lang_menu():
         time.sleep(0.08)
 
 
-MODEL_URL = "https://github.com/kahst/BirdNET-Analyzer/raw/main/checkpoints/V2.4/BirdNET_GLOBAL_6K_V2.4_Model_FP16.tflite"
-LABELS_URL = "https://github.com/kahst/BirdNET-Analyzer/raw/main/checkpoints/V2.4/BirdNET_GLOBAL_6K_V2.4_Model_FP16_Labels.txt"
-L18N_BASE_URL = "https://github.com/kahst/BirdNET-Analyzer/raw/main/labels/V2.4"
+MODEL_ZIP_URL = "https://zenodo.org/records/15050749/files/BirdNET_v2.4_tflite_fp16.zip"
+MODEL_ZIP_TFLITE_NAME = "audio-model-fp16.tflite"
+MODEL_ZIP_LABELS_DIR = "labels"
 
 
 def _ensure_deps():
@@ -566,53 +575,84 @@ def _ensure_deps():
 
 
 def _ensure_model():
+    import zipfile
+    import tempfile
+    import shutil
     os.makedirs(MODEL_DIR, exist_ok=True)
-    if not os.path.isfile(MODEL_PATH):
-        _draw_loading("Downloading model (25MB)...")
+    model_ok = os.path.isfile(MODEL_PATH) and os.path.getsize(MODEL_PATH) > 0
+    labels_ok = os.path.isfile(LABELS_PATH) and os.path.getsize(LABELS_PATH) > 0
+    if model_ok and labels_ok:
+        return True
+    _draw_loading("Downloading model (50MB)...")
+    with tempfile.TemporaryDirectory() as tmp:
+        zip_path = os.path.join(tmp, "birdnet.zip")
         r = subprocess.run(
-            ["wget", "-q", "-O", MODEL_PATH, MODEL_URL],
-            capture_output=True, timeout=120)
-        if r.returncode != 0 or not os.path.isfile(MODEL_PATH):
+            ["wget", "-q", "--show-progress", "-O", zip_path, MODEL_ZIP_URL],
+            capture_output=True, timeout=300)
+        if r.returncode != 0 or not os.path.isfile(zip_path):
             _draw_error("Download failed", "BirdNET model")
             time.sleep(3)
             return False
-    if not os.path.isfile(LABELS_PATH):
-        _draw_loading("Downloading labels...")
-        subprocess.run(
-            ["wget", "-q", "-O", LABELS_PATH, LABELS_URL],
-            capture_output=True, timeout=30)
-    return os.path.isfile(MODEL_PATH) and os.path.isfile(LABELS_PATH)
+        try:
+            with zipfile.ZipFile(zip_path, "r") as zf:
+                zf.extractall(tmp)
+        except zipfile.BadZipFile:
+            _draw_error("Bad zip file", "Retry later")
+            time.sleep(3)
+            return False
+        tflite_src = os.path.join(tmp, MODEL_ZIP_TFLITE_NAME)
+        if os.path.isfile(tflite_src):
+            shutil.copy2(tflite_src, MODEL_PATH)
+        labels_src_dir = os.path.join(tmp, MODEL_ZIP_LABELS_DIR)
+        if os.path.isdir(labels_src_dir):
+            en_labels = os.path.join(labels_src_dir, "en_us.txt")
+            if not os.path.isfile(en_labels):
+                en_labels = os.path.join(labels_src_dir, "en.txt")
+            if os.path.isfile(en_labels):
+                shutil.copy2(en_labels, LABELS_PATH)
+            os.makedirs(L18N_DIR, exist_ok=True)
+            for lf in os.listdir(labels_src_dir):
+                if lf.endswith(".txt"):
+                    lang_code = lf.replace(".txt", "")
+                    dest = os.path.join(L18N_DIR, f"labels_{lang_code}.json")
+                    if not os.path.isfile(dest):
+                        _convert_labels_txt_to_json(
+                            os.path.join(labels_src_dir, lf), dest)
+    model_ok = os.path.isfile(MODEL_PATH) and os.path.getsize(MODEL_PATH) > 0
+    labels_ok = os.path.isfile(LABELS_PATH) and os.path.getsize(LABELS_PATH) > 0
+    if not model_ok or not labels_ok:
+        _draw_error("Extract failed", "Check disk space")
+        time.sleep(3)
+        return False
+    return True
+
+
+def _convert_labels_txt_to_json(txt_path, json_path):
+    mapping = {}
+    try:
+        with open(txt_path, "r", encoding="utf-8") as f:
+            for line in f:
+                parts = line.strip().split("_", 1)
+                if len(parts) == 2:
+                    mapping[parts[0]] = parts[1]
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(mapping, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
 
 
 def _ensure_lang_labels(lang):
     os.makedirs(L18N_DIR, exist_ok=True)
     path = os.path.join(L18N_DIR, f"labels_{lang}.json")
-    if os.path.isfile(path):
+    if os.path.isfile(path) and os.path.getsize(path) > 0:
         return True
-    txt_url = f"{L18N_BASE_URL}/BirdNET_GLOBAL_6K_V2.4_Labels_{lang}.txt"
-    tmp = path + ".tmp"
-    r = subprocess.run(
-        ["wget", "-q", "-O", tmp, txt_url],
-        capture_output=True, timeout=30)
-    if r.returncode != 0 or not os.path.isfile(tmp):
-        try:
-            os.remove(tmp)
-        except Exception:
-            pass
-        return False
-    try:
-        mapping = {}
-        with open(tmp, "r") as f:
-            for line in f:
-                parts = line.strip().split("_", 1)
-                if len(parts) == 2:
-                    mapping[parts[0]] = parts[1]
-        with open(path, "w") as f:
-            json.dump(mapping, f, ensure_ascii=False, indent=2)
-        os.remove(tmp)
-        return True
-    except Exception:
-        return False
+    # Labels are extracted from the model zip during _ensure_model().
+    # Check common naming variants from the zip (e.g. "fr.txt", "en_us.txt").
+    for variant in [lang, lang.replace("_", "-")]:
+        candidate = os.path.join(L18N_DIR, f"labels_{variant}.json")
+        if os.path.isfile(candidate) and os.path.getsize(candidate) > 0:
+            return True
+    return False
 
 
 def main():

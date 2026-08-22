@@ -51,7 +51,7 @@ def _find_lcd_fb():
     for i in range(4):
         try:
             with open(f"/sys/class/graphics/fb{i}/name") as f:
-                if "st7789v_m5st" in f.read():
+                if any(n in f.read() for n in ("st7789v_m5st", "panel-mipi-dbi")):
                     return f"/dev/fb{i}", 320, 170
         except Exception:
             pass

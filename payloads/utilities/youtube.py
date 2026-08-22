@@ -995,14 +995,16 @@ def _check_deps():
         subprocess.run(["apt-get", "install", "-y"] + missing_apt,
                        capture_output=True, timeout=120)
 
-    # Always try to upgrade yt-dlp (YouTube breaks old versions)
+    # Upgrade yt-dlp only if version is older than 90 days
     if yt_ok:
         try:
             r = subprocess.run(["yt-dlp", "--version"], capture_output=True, text=True, timeout=5)
             ver = r.stdout.strip()
-            # If older than 2026, upgrade
-            if ver < "2026":
-                _show_msg("Updating...", "yt-dlp", C["red"])
+            from datetime import datetime
+            ver_date = datetime.strptime(ver[:10], "%Y.%m.%d")
+            age_days = (datetime.now() - ver_date).days
+            if age_days > 90:
+                _show_msg("Updating...", f"yt-dlp ({ver})", C["red"])
                 subprocess.run(
                     ["pip3", "install", "--upgrade", "yt-dlp",
                      "--break-system-packages", "--ignore-installed", "yt-dlp"],

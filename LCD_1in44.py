@@ -61,7 +61,7 @@ if _DISPLAY_TYPE != "CARDPUTER_320":
     for _i in range(4):
         try:
             with open(f"/sys/class/graphics/fb{_i}/name", "r") as _fb:
-                if "st7789v_m5st" in _fb.read():
+                if any(n in _fb.read() for n in ("st7789v_m5st", "panel-mipi-dbi")):
                     _DISPLAY_TYPE = "CARDPUTER_320"
                     break
         except Exception:

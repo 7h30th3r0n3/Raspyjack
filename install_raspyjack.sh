@@ -25,7 +25,7 @@ IS_CARDPUTER=0
 CFG_TMP=/boot/firmware/config.txt; [[ -f $CFG_TMP ]] || CFG_TMP=/boot/config.txt
 if grep -q "cardputerzero-overlay" "$CFG_TMP" 2>/dev/null; then
   IS_CARDPUTER=1
-elif cat /sys/class/graphics/fb0/name 2>/dev/null | grep -q "st7789v_m5st"; then
+elif cat /sys/class/graphics/fb0/name 2>/dev/null | grep -qE "st7789v_m5st|panel-mipi-dbi"; then
   IS_CARDPUTER=1
 fi
 
@@ -153,12 +153,32 @@ for d in ad_recon auto_loot_exfil bt_audio cctv_scanner cctv_viewer dns_tunnel \
 done
 mkdir -p /root/Raspyjack/loot/wordlists
 
-# ───── 1‑d ▸ CardputerZero: disable M5Stack APPLaunch service ─
+# ───── 1‑d ▸ CardputerZero: replace APPLaunch with dummy for fb_load ─
+# fb_load (the DRM→framebuffer bridge) polls /proc/*/exe for the APPLaunch
+# binary path. Without a matching process it never refreshes the LCD.
+# We keep APPLaunch enabled but replace the binary with sleep so fb_load
+# is satisfied while only RaspyJack draws on the framebuffer.
+# The original binary is saved as .real for easy revert.
 if [[ "$DISPLAY_TYPE" == "CARDPUTER_320" ]]; then
-  step "Disabling M5Stack APPLaunch service …"
-  sudo systemctl stop APPLaunch.service 2>/dev/null || true
-  sudo systemctl disable APPLaunch.service 2>/dev/null || true
-  info "APPLaunch service disabled (replaced by RaspyJack)"
+  APPLAUNCH_BIN="/usr/share/APPLaunch/bin/M5CardputerZero-APPLaunch"
+  step "Replacing APPLaunch with dummy for fb_load …"
+  sudo -u pi XDG_RUNTIME_DIR=/run/user/1000 systemctl --user stop APPLaunch.service 2>/dev/null || true
+  if [ -f "$APPLAUNCH_BIN" ] && [ ! -L "$APPLAUNCH_BIN" ]; then
+    sudo mv "$APPLAUNCH_BIN" "${APPLAUNCH_BIN}.real"
+  fi
+  sudo ln -sf /usr/bin/sleep "$APPLAUNCH_BIN"
+  # Override the unit to pass "infinity" arg so sleep never exits
+  OVERRIDE_DIR="/home/pi/.config/systemd/user/APPLaunch.service.d"
+  mkdir -p "$OVERRIDE_DIR"
+  cat > "$OVERRIDE_DIR/override.conf" <<'OVRD'
+[Service]
+ExecStart=
+ExecStart=/usr/share/APPLaunch/bin/M5CardputerZero-APPLaunch infinity
+OVRD
+  sudo -u pi XDG_RUNTIME_DIR=/run/user/1000 systemctl --user daemon-reload 2>/dev/null || true
+  sudo -u pi XDG_RUNTIME_DIR=/run/user/1000 systemctl --user enable APPLaunch.service 2>/dev/null || true
+  sudo -u pi XDG_RUNTIME_DIR=/run/user/1000 systemctl --user start APPLaunch.service 2>/dev/null || true
+  info "APPLaunch replaced with sleep dummy (fb_load satisfied, original saved as .real)"
 
   step "Disabling desktop environment (saves RAM on CM0) …"
   sudo systemctl stop lightdm.service 2>/dev/null || true
