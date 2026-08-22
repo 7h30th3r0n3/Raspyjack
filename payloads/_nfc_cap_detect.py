@@ -12,7 +12,7 @@ Usage in a payload (change one import line):
     from payloads._nfc_cap_detect import auto_detect
 """
 
-from payloads._nfc_driver import auto_detect as _original_detect
+from payloads.nfc_rfid._nfc_driver import auto_detect as _original_detect
 
 
 def auto_detect():

@@ -36,6 +36,12 @@ except ImportError:
     gpiod = None
     GPIOD_OK = False
 
+
+def _busy_wait_us(us):
+    end = time.monotonic_ns() + int(us * 1000)
+    while time.monotonic_ns() < end:
+        pass
+
 # CC1101 SPI command strobes
 SRES = 0x30
 SRX = 0x34
@@ -180,9 +186,10 @@ _PA_TABLE_BY_BAND = {
 
 # RF switch GPIO14 values per band (from M5Stack binary)
 # GPIO14 = RF_SW0 controls antenna path
+# SW0=0→315MHz, SW0=1→433/868/915MHz (both RX and TX)
 _RF_SW_BY_BAND = {
     315: 0,
-    433: 0,
+    433: 1,
     868: 1,
     915: 1,
 }
@@ -448,12 +455,99 @@ class CC1101:
             time.sleep(0.005)
         return False
 
-    def set_raw_rx(self):
+    def set_raw_rx(self, for_capture=False):
         self._strobe(SIDLE)
-        self._write_reg(REG_IOCFG0, 0x0D)
-        self._write_reg(REG_PKTCTRL0, 0x32)
+        self._write_reg(REG_IOCFG0, 0x0D)  # GDO0 = serial data output
+        self._write_reg(REG_PKTCTRL0, 0x32)  # async serial, infinite length
+        self._write_reg(REG_MDMCFG2, self._read_reg(REG_MDMCFG2) & 0xF8)  # sync off
+        if for_capture:
+            # Use fixed OOK threshold to suppress noise on idle channel
+            # AGCCTRL2[6:5]=00 (reduce max DVGA gain)
+            # AGCCTRL2[2:0]=011 (MAGN_TARGET=33dB)
+            self._write_reg(0x1B, 0x03)  # AGCCTRL2: low max gain, MAGN=33dB
+            self._write_reg(0x1C, 0x00)  # AGCCTRL1: no carrier sense
+            self._write_reg(0x1D, 0xB2)  # AGCCTRL0: OOK fixed threshold, FILTER=16
         self._strobe(SFRX)
         self._strobe(SRX)
+
+    def send_raw_pulses(self, pulses, repeat=1, te_us=None):
+        if not pulses:
+            return False
+        if te_us is None:
+            durs = [abs(p) for p in pulses if abs(p) < 50000]
+            te_us = min(durs) if durs else 320
+            te_us = max(100, min(te_us, 2000))
+
+        te_slots = []
+        for pulse in pulses:
+            dur = abs(pulse)
+            slots = max(1, round(dur / te_us))
+            is_high = pulse > 0
+            te_slots.extend([1 if is_high else 0] * slots)
+
+        while len(te_slots) % 8 != 0:
+            te_slots.append(0)
+        tx_bytes = []
+        for i in range(0, len(te_slots), 8):
+            byte = 0
+            for j in range(8):
+                byte = (byte << 1) | te_slots[i + j]
+            tx_bytes.append(byte)
+
+        self._strobe(SIDLE)
+        saved_mdm4 = self._read_reg(REG_MDMCFG4)
+        saved_mdm3 = self._read_reg(REG_MDMCFG3)
+        saved_mdm2 = self._read_reg(REG_MDMCFG2)
+        saved_pktctrl = self._read_reg(REG_PKTCTRL0)
+        saved_frend0 = self._read_reg(0x22)
+
+        fosc = 26_000_000
+        target_rate = 1_000_000 / te_us
+        best_e, best_m, best_err = 0, 0, 1e9
+        for e in range(13):
+            m_f = (target_rate * (2**28) / (fosc * (2**e))) - 256
+            m = max(0, min(255, round(m_f)))
+            actual = (256 + m) * (2**e) * fosc / (2**28)
+            err = abs(actual - target_rate)
+            if err < best_err:
+                best_e, best_m, best_err = e, m, err
+
+        self._write_reg(REG_MDMCFG4, (saved_mdm4 & 0xF0) | (best_e & 0x0F))
+        self._write_reg(REG_MDMCFG3, best_m)
+        self._write_reg(REG_MDMCFG2, 0x30)  # OOK, no sync
+        self._write_reg(REG_PKTCTRL0, 0x00)  # fixed length, no CRC
+        self._write_reg(0x22, 0x11)  # FREND0: PA_POWER=1
+        self._write_burst(0x3E, [0x00, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+        self._write_reg(REG_IOCFG0, 0x06)
+
+        try:
+            for _ in range(repeat):
+                for chunk_start in range(0, len(tx_bytes), 61):
+                    chunk = tx_bytes[chunk_start:chunk_start + 61]
+                    self._strobe(SIDLE)
+                    self._strobe(SFTX)
+                    self._write_reg(0x06, len(chunk))
+                    self._write_burst(FIFO_ADDR, chunk)
+                    self._strobe(STX)
+                    deadline = time.time() + 2.0
+                    while time.time() < deadline:
+                        state = self.get_marcstate()
+                        if state == MARCSTATE_IDLE:
+                            break
+                        if state == MARCSTATE_TXFIFO_UNDERFLOW:
+                            self._strobe(SFTX)
+                            break
+                        time.sleep(0.001)
+            return True
+        except Exception:
+            return False
+        finally:
+            self._strobe(SIDLE)
+            self._write_reg(REG_MDMCFG4, saved_mdm4)
+            self._write_reg(REG_MDMCFG3, saved_mdm3)
+            self._write_reg(REG_MDMCFG2, saved_mdm2)
+            self._write_reg(REG_PKTCTRL0, saved_pktctrl)
+            self._write_reg(0x22, saved_frend0)
 
     def set_packet_rx(self):
         self._strobe(SIDLE)

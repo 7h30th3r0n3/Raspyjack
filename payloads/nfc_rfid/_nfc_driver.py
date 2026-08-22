@@ -1108,8 +1108,17 @@ def _usb_reset_ch340():
 
 def auto_detect() -> Tuple[Optional[_PN532Base], str]:
     """Auto-detect NFC reader. Returns (driver, description).
-    Priority: Chameleon Ultra > Proxmark3 > nfcpy USB > PN532 UART > PN532 I2C.
+    Priority: Cap HAT ST25R3916 > Chameleon Ultra > Proxmark3 > nfcpy USB > PN532 UART > PN532 I2C.
     """
+    # Cap HAT ST25R3916 (built-in SPI, no USB needed)
+    try:
+        from payloads._st25r_driver import ST25R3916Driver
+        drv = ST25R3916Driver()
+        if drv.open():
+            return drv, "Cap NFC (ST25R3916)"
+    except Exception:
+        pass
+
     # Chameleon Ultra (highest priority — unique VID:PID, no conflict)
     if SERIAL_OK:
         cu_result = ChameleonUltraDriver.detect_chameleon()

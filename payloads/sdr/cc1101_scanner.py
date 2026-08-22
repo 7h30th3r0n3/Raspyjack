@@ -1,27 +1,21 @@
 #!/usr/bin/env python3
 """
-RaspyJack Payload -- CC1101 Sub-GHz (Flipper-style)
-=====================================================
+RaspyJack Payload -- Sub-GHz (Flipper Zero-style)
+===================================================
 Author: 7h30th3r0n3
 
-Flipper Zero-style Sub-GHz transceiver using the CC1101 Cap HAT.
-Read, decode, record, save and replay sub-GHz signals.
-
-Modes:
-  Read            Auto-decode known OOK protocols (CAME, Princeton, NICE, ...)
-  Read RAW        Record raw OOK timing data, visualize waveform
-  Saved           Browse and replay saved .sub files
-  Freq Analyzer   Real-time RSSI sweep to find active frequencies
+CC1101 Cap HAT Sub-GHz interface cloned from Flipper Zero / Momentum.
+Read, Read RAW, Saved, Frequency Analyzer.
+Decodes 80+ protocols: Princeton, CAME, Nice FLO, KeeLoq, weather, etc.
+Flipper .sub file format for save/load/replay.
 
 Controls:
-  OK          Select / Start-Stop
-  UP/DOWN     Navigate menu / scroll
-  LEFT/RIGHT  Change frequency / navigate
-  KEY1        Action (save / replay)
-  KEY2        Back
-  KEY3        Exit
-
-Requires: CardputerZero Cap CC1101 HAT
+  OK          Action (start, save, send)
+  UP/DOWN     Scroll / navigate
+  LEFT/RIGHT  Change frequency / modulation
+  KEY1        Switch mode / extra action
+  KEY2        Settings / config
+  KEY3        Back / Exit
 """
 
 import os
@@ -29,8 +23,6 @@ import sys
 import time
 import signal
 import threading
-import json
-from datetime import datetime
 
 sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..", "..")))
 
@@ -40,11 +32,16 @@ import LCD_Config
 from PIL import Image, ImageDraw, ImageFont
 from payloads._display_helper import ScaledDraw, scaled_font, SX, SY
 from payloads._input_helper import get_button
-from payloads._cc1101_driver import CC1101
+
+try:
+    from payloads._cc1101_driver import CC1101
+    CC1101_OK = True
+except ImportError:
+    CC1101_OK = False
 
 try:
     from payloads._cc1101_protocols import (
-        decode_timings, save_sub_file, load_sub_file, DecodedSignal,
+        ALL_PROTOCOLS, DecodedSignal, save_sub_file, load_sub_file, decode_raw_pulses,
     )
     PROTO_OK = True
 except ImportError:
@@ -54,7 +51,6 @@ try:
     import gpiod
     GPIOD_OK = True
 except ImportError:
-    gpiod = None
     GPIOD_OK = False
 
 PINS = {
@@ -72,45 +68,53 @@ IS_WIDE = W > 200
 
 if IS_WIDE:
     try:
-        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 13)
-        font_sm = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 11)
-        font_lg = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 16)
-        font_xs = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 9)
+        FONT = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", 13)
+        FONT_SM = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", 10)
+        FONT_LG = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf", 16)
+        FONT_XL = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf", 20)
     except Exception:
-        font = scaled_font(9)
-        font_sm = scaled_font(7)
-        font_lg = scaled_font(12)
-        font_xs = scaled_font(6)
+        FONT = scaled_font(9)
+        FONT_SM = scaled_font(7)
+        FONT_LG = scaled_font(12)
+        FONT_XL = scaled_font(14)
 else:
-    font = scaled_font(9)
-    font_sm = scaled_font(7)
-    font_lg = scaled_font(12)
-    font_xs = scaled_font(6)
+    FONT = scaled_font(9)
+    FONT_SM = scaled_font(7)
+    FONT_LG = scaled_font(12)
+    FONT_XL = FONT_LG
+
+# Flipper-style colors
+C_BG = "#000000"
+C_ORANGE = "#FF8C00"
+C_WHITE = "#FFFFFF"
+C_GREEN = "#00FF41"
+C_RED = "#FF3333"
+C_DIM = "#555555"
+C_DARK = "#111111"
+C_BLUE = "#4488FF"
+C_SEL = "#1A1400"
+C_HEADER = "#0D0700"
 
 LOOT_DIR = "/root/Raspyjack/loot/CC1101"
 DEBOUNCE = 0.18
-GDO0_PIN = 15
 
-BANDS = [
-    (315.00, "315 MHz"),
-    (433.92, "433.92 MHz"),
-    (868.00, "868 MHz"),
-    (915.00, "915 MHz"),
+FREQUENCIES = [
+    300000000, 303875000, 304250000, 310000000, 315000000, 318000000,
+    390000000, 418000000, 433075000, 433420000, 433920000, 434420000,
+    434775000, 438900000, 868350000, 868950000, 915000000, 925000000,
 ]
+DEFAULT_FREQ_IDX = 10  # 433.920 MHz
 
-C_BG = (10, 10, 20)
-C_HEAD = (20, 30, 60)
-C_ORANGE = (255, 165, 0)
-C_GREEN = (0, 220, 80)
-C_RED = (255, 60, 60)
-C_WHITE = (255, 255, 255)
-C_DIM = (80, 90, 110)
-C_DARK = (15, 18, 30)
-C_SEL = (30, 45, 80)
-C_CYAN = (0, 200, 220)
+PRESETS = [
+    {"name": "AM270", "type": "OOK", "bw": 270},
+    {"name": "AM650", "type": "OOK", "bw": 650},
+    {"name": "FM238", "type": "FSK", "dev": 2.38},
+    {"name": "FM476", "type": "FSK", "dev": 47.6},
+]
+DEFAULT_PRESET_IDX = 1  # AM650
 
 _running = True
-_last_btn = 0
+_radio = None
 
 
 def _sig(s, f):
@@ -122,578 +126,635 @@ signal.signal(signal.SIGINT, _sig)
 signal.signal(signal.SIGTERM, _sig)
 
 
-def _btn():
-    global _last_btn
-    b = get_button(PINS, GPIO)
-    if b:
-        now = time.time()
-        if now - _last_btn < DEBOUNCE:
-            return None
-        _last_btn = now
-    return b
+def _freq_str(freq_hz):
+    return f"{freq_hz / 1_000_000:.3f}"
 
 
-def _draw_ctx(img):
-    if IS_WIDE:
-        return ImageDraw.Draw(img)
-    return ScaledDraw(img)
-
-
-def _show_msg(text, sub="", color=C_ORANGE):
-    img = Image.new("RGB", (W, H), C_BG)
-    d = _draw_ctx(img)
-    if IS_WIDE:
-        d.text((W // 2, H // 2 - 12), text, font=font_lg, fill=color, anchor="mm")
-        if sub:
-            d.text((W // 2, H // 2 + 12), sub, font=font_sm, fill=C_DIM, anchor="mm")
-    else:
-        d.text((64, 50), text, font=font, fill=color)
-        if sub:
-            d.text((64, 68), sub, font=font_sm, fill=C_DIM)
+def _show(img):
     LCD.LCD_ShowImage(img, 0, 0)
 
 
-def _header(d, title, right=""):
+def _draw_header(d, title, right_text=""):
     if IS_WIDE:
-        d.rectangle([0, 0, W, 24], fill=C_HEAD)
-        d.text((8, 4), title, font=font_lg, fill=C_ORANGE)
-        if right:
-            d.text((W - 8, 4), right, font=font_sm, fill=C_DIM, anchor="ra")
+        d.rectangle([0, 0, W, 22], fill=C_HEADER)
+        d.line([0, 22, W, 22], fill=C_ORANGE)
+        d.text((6, 3), title, font=FONT_LG, fill=C_ORANGE)
+        if right_text:
+            d.text((W - 6, 3), right_text, font=FONT_SM, fill=C_DIM, anchor="ra")
     else:
-        d.rectangle([0, 0, 128, 14], fill=C_HEAD)
-        d.text((2, 1), title, font=font, fill=C_ORANGE)
-        if right:
-            d.text((90, 2), right, font=font_xs, fill=C_DIM)
+        d.rectangle([0, 0, 128, 14], fill=C_HEADER)
+        d.text((2, 1), title, font=FONT, fill=C_ORANGE)
 
 
-def _footer(d, text):
+def _draw_footer(d, text):
     if IS_WIDE:
-        d.rectangle([0, H - 18, W, H], fill=C_DARK)
-        d.text((6, H - 16), text, font=font_xs, fill=C_DIM)
+        d.rectangle([0, H - 16, W, H], fill=C_DARK)
+        d.line([0, H - 16, W, H - 16], fill=C_DIM)
+        d.text((W // 2, H - 8), text, font=FONT_SM, fill=C_DIM, anchor="mm")
     else:
         d.rectangle([0, 117, 128, 128], fill=C_DARK)
-        d.text((2, 118), text, font=font_xs, fill=C_DIM)
+        d.text((2, 118), text, font=FONT_SM, fill=C_DIM)
 
 
-# ---------------------------------------------------------------------------
-# GDO0 raw timing capture via gpiod edge events
-# ---------------------------------------------------------------------------
-def _capture_raw_timings(radio, duration=5.0):
-    """Record GDO0 edge timings. Returns list of +/- microsecond durations."""
+def _draw_msg(text, sub="", color=C_ORANGE):
+    img = Image.new("RGB", (W, H), C_BG)
+    d = ImageDraw.Draw(img) if IS_WIDE else ScaledDraw(img)
+    if IS_WIDE:
+        d.text((W // 2, H // 2 - 10), text, font=FONT_LG, fill=color, anchor="mm")
+        if sub:
+            d.text((W // 2, H // 2 + 14), sub, font=FONT_SM, fill=C_DIM, anchor="mm")
+    else:
+        d.text((64, 50), text, font=FONT, fill=color)
+        if sub:
+            d.text((64, 68), sub, font=FONT_SM, fill=C_DIM)
+    _show(img)
+
+
+# ── CC1101 preset configuration ──────────────────────────────────────────
+
+# Register values from Momentum cc1101_configs.c
+_PRESET_REGS = {
+    "AM270": {
+        0x02: 0x0D, 0x03: 0x47, 0x08: 0x32, 0x0B: 0x06,
+        0x10: 0x67, 0x11: 0x32, 0x12: 0x30, 0x13: 0x00, 0x14: 0x00,
+        0x18: 0x18, 0x19: 0x18,
+        0x1B: 0x03, 0x1C: 0x00, 0x1D: 0x91,
+        0x20: 0xFB, 0x21: 0xB6, 0x22: 0x11,
+    },
+    "AM650": {
+        0x02: 0x0D, 0x03: 0x07, 0x08: 0x32, 0x0B: 0x06,
+        0x10: 0x17, 0x11: 0x32, 0x12: 0x30, 0x13: 0x00, 0x14: 0x00,
+        0x18: 0x18, 0x19: 0x18,
+        0x1B: 0x07, 0x1C: 0x00, 0x1D: 0x91,
+        0x20: 0xFB, 0x21: 0xB6, 0x22: 0x11,
+    },
+    "FM238": {
+        0x02: 0x0D, 0x07: 0x04, 0x08: 0x32, 0x0B: 0x06,
+        0x10: 0x67, 0x11: 0x83, 0x12: 0x04, 0x13: 0x02, 0x14: 0x00,
+        0x15: 0x04,
+        0x18: 0x18, 0x19: 0x16,
+        0x1B: 0x07, 0x1C: 0x40, 0x1D: 0x91,
+        0x20: 0xFB, 0x21: 0xB6, 0x22: 0x10,
+    },
+    "FM476": {
+        0x02: 0x0D, 0x07: 0x04, 0x08: 0x32, 0x0B: 0x06,
+        0x10: 0x67, 0x11: 0x83, 0x12: 0x04, 0x13: 0x02, 0x14: 0x00,
+        0x15: 0x47,
+        0x18: 0x18, 0x19: 0x16,
+        0x1B: 0x07, 0x1C: 0x40, 0x1D: 0x91,
+        0x20: 0xFB, 0x21: 0xB6, 0x22: 0x10,
+    },
+}
+
+_PA_OOK = [0x00, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+_PA_FSK = [0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+
+
+def _apply_preset(radio, preset_name):
+    """Apply Flipper-compatible CC1101 preset (async OOK/FSK)."""
+    radio.idle()
+    regs = _PRESET_REGS.get(preset_name, _PRESET_REGS["AM650"])
+    for reg, val in regs.items():
+        radio._write_reg(reg, val)
+    is_ook = preset_name.startswith("AM")
+    pa = _PA_OOK if is_ook else _PA_FSK
+    radio._write_burst(0x3E, pa)
+
+
+# ── Raw capture via GDO0 edge timing ─────────────────────────────────────
+
+def _capture_raw(radio, duration_s=5.0, gdo0_pin=15):
+    """Capture raw OOK edges — only when RSSI above threshold (signal present)."""
+    pulses = []
     if not GPIOD_OK:
-        return []
-    radio.set_raw_rx()
-    timings = []
+        return pulses
+
+    rssi_threshold = -50.0
+    deadline = time.time() + duration_s
+
+    # Poll RSSI until signal detected
+    while time.time() < deadline and _running:
+        rssi = radio.get_rssi()
+        if rssi > rssi_threshold:
+            break
+        time.sleep(0.005)
+    else:
+        return pulses
+
+    # Signal detected — capture edges
     try:
         chip = gpiod.Chip("/dev/gpiochip0")
-        config = gpiod.LineSettings(
+        cfg = gpiod.LineSettings(
             direction=gpiod.line.Direction.INPUT,
             edge_detection=gpiod.line.Edge.BOTH,
         )
-        req = chip.request_lines(config={GDO0_PIN: config}, consumer="cc1101-raw")
-        deadline = time.time() + duration
-        last_ts = None
+        req = chip.request_lines(config={gdo0_pin: cfg}, consumer="cc1101-raw")
+    except Exception:
+        return pulses
+
+    last_time = time.monotonic_ns()
+    last_level = False
+    last_edge = time.time()
+
+    try:
         while time.time() < deadline and _running:
-            if req.wait_edge_events(timeout=datetime.timedelta(milliseconds=100)):
-                for event in req.read_edge_events():
-                    ts = event.timestamp_ns / 1000
-                    if last_ts is not None:
-                        delta = int(ts - last_ts)
-                        if event.event_type == gpiod.line.Edge.RISING:
-                            timings.append(-delta)
+            if req.wait_edge_events(timeout=0.05):
+                for ev in req.read_edge_events():
+                    now_ns = ev.timestamp_ns
+                    dur_us = (now_ns - last_time) / 1000
+                    if 50 < dur_us < 200000:
+                        if last_level:
+                            pulses.append(int(dur_us))
                         else:
-                            timings.append(delta)
-                    last_ts = ts
-        req.release()
+                            pulses.append(-int(dur_us))
+                        last_edge = time.time()
+                    last_level = ev.event_type == gpiod.EdgeEvent.Type.RISING_EDGE
+                    last_time = now_ns
+            # Stop capturing after 500ms of silence
+            if time.time() - last_edge > 0.5:
+                break
     except Exception:
         pass
-    radio.set_packet_rx()
-    return timings
+    finally:
+        req.release()
+    return pulses
 
 
-# ---------------------------------------------------------------------------
-# Main menu
-# ---------------------------------------------------------------------------
+# ── Main menu ─────────────────────────────────────────────────────────────
+
 MENU_ITEMS = ["Read", "Read RAW", "Saved", "Freq Analyzer"]
 
 
-def _draw_menu(sel, radio):
+def _draw_menu(sel):
     img = Image.new("RGB", (W, H), C_BG)
-    d = _draw_ctx(img)
-    _header(d, "Sub-GHz", f"v{radio.get_version():02X}" if radio._opened else "")
-    y = 28 if IS_WIDE else 18
-    row_h = 28 if IS_WIDE else 22
-    for i, item in enumerate(MENU_ITEMS):
-        ry = y + i * row_h
-        is_sel = i == sel
-        if is_sel:
-            d.rectangle([4, ry, W - 4, ry + row_h - 2], fill=C_SEL)
-        color = C_ORANGE if is_sel else C_WHITE
-        if IS_WIDE:
-            d.text((20, ry + 5), item, font=font, fill=color)
-        else:
-            d.text((6, ry + 3), item, font=font_sm, fill=color)
-    _footer(d, "OK:Select  K3:Exit")
-    LCD.LCD_ShowImage(img, 0, 0)
+    d = ImageDraw.Draw(img) if IS_WIDE else ScaledDraw(img)
+    _draw_header(d, "Sub-GHz")
+
+    if IS_WIDE:
+        y = 30
+        for i, item in enumerate(MENU_ITEMS):
+            is_sel = i == sel
+            if is_sel:
+                d.rectangle([4, y, W - 4, y + 22], fill=C_SEL)
+                d.text((12, y + 3), f"> {item}", font=FONT, fill=C_ORANGE)
+            else:
+                d.text((18, y + 3), item, font=FONT, fill=C_WHITE)
+            y += 26
+    else:
+        y = 18
+        for i, item in enumerate(MENU_ITEMS):
+            is_sel = i == sel
+            color = C_ORANGE if is_sel else C_WHITE
+            prefix = ">" if is_sel else " "
+            d.text((4, y), f"{prefix}{item}", font=FONT_SM, fill=color)
+            y += 18
+
+    _draw_footer(d, "OK:Select  K3:Exit")
+    _show(img)
 
 
-# ---------------------------------------------------------------------------
-# Read mode — auto-decode OOK protocols
-# ---------------------------------------------------------------------------
+# ── Read mode ─────────────────────────────────────────────────────────────
+
 def _mode_read(radio):
-    band_idx = 1
-    freq = BANDS[band_idx][0]
-    radio.set_frequency(freq)
-    radio.set_profile("ook_4k8")
-    decoded_list = []
+    freq_idx = DEFAULT_FREQ_IDX
+    preset_idx = DEFAULT_PRESET_IDX
+    signals = []
+    cursor = 0
     scroll = 0
     capturing = False
-    cap_thread = None
-    cap_timings = []
+    capture_thread = None
+    last_btn = 0
 
     def _capture_loop():
-        nonlocal cap_timings
+        nonlocal signals
+        _apply_preset(radio, PRESETS[preset_idx]["name"])
+        radio.set_frequency(FREQUENCIES[freq_idx] / 1_000_000)
+        radio.set_raw_rx()
         while capturing and _running:
-            chunk = _capture_raw_timings(radio, duration=2.0)
-            if chunk:
-                cap_timings = chunk
-                if PROTO_OK:
-                    hits = decode_timings(chunk, frequency=freq)
-                    for h in hits:
-                        decoded_list.insert(0, h)
-                        if len(decoded_list) > 50:
-                            decoded_list.pop()
+            pulses = _capture_raw(radio, duration_s=1.0)
+            if pulses:
+                decoded = decode_raw_pulses(pulses)
+                for sig in decoded:
+                    sig.frequency = FREQUENCIES[freq_idx]
+                    sig.modulation = PRESETS[preset_idx]["name"]
+                    signals.insert(0, sig)
+                    if len(signals) > 50:
+                        signals = signals[:50]
+
+    capturing = True
+    capture_thread = threading.Thread(target=_capture_loop, daemon=True)
+    capture_thread.start()
 
     while _running:
-        img = Image.new("RGB", (W, H), C_BG)
-        d = _draw_ctx(img)
-        _header(d, "Read", BANDS[band_idx][1])
+        btn = get_button(PINS, GPIO)
+        now = time.time()
 
-        if capturing:
-            blink = int(time.time() * 3) % 2
-            if IS_WIDE:
-                if blink:
-                    d.ellipse([W - 20, 6, W - 10, 16], fill=C_RED)
-            else:
-                if blink:
-                    d.ellipse([120, 3, 126, 9], fill=C_RED)
-
-        y = 28 if IS_WIDE else 16
-        row_h = 30 if IS_WIDE else 18
-        visible = max(1, (H - 46 if IS_WIDE else H - 30) // row_h)
-
-        if not decoded_list:
-            if IS_WIDE:
-                d.text((W // 2, H // 2 - 5), "Waiting for signals..." if capturing else "OK to start",
-                       font=font, fill=C_DIM, anchor="mm")
-            else:
-                msg = "Waiting..." if capturing else "OK:Start"
-                d.text((64, 60), msg, font=font_sm, fill=C_DIM)
-        else:
-            for vi in range(visible):
-                idx = scroll + vi
-                if idx >= len(decoded_list):
-                    break
-                sig = decoded_list[idx]
-                ry = y + vi * row_h
-                if vi == 0 and scroll == 0:
-                    d.rectangle([2, ry, W - 2, ry + row_h - 2], fill=C_SEL)
-                if IS_WIDE:
-                    d.text((8, ry + 1), sig.protocol, font=font_sm, fill=C_CYAN)
-                    d.text((100, ry + 1), sig.code_hex(), font=font_sm, fill=C_WHITE)
-                    d.text((8, ry + 14), f"Btn:{sig.button} Ser:{sig.serial}", font=font_xs, fill=C_DIM)
-                    d.text((W - 8, ry + 14), f"{sig.bits}bit", font=font_xs, fill=C_DIM, anchor="ra")
-                else:
-                    d.text((2, ry), f"{sig.protocol} {sig.code_hex()}", font=font_xs, fill=C_WHITE)
-                    d.text((2, ry + 9), f"B:{sig.button} {sig.bits}b", font=font_xs, fill=C_DIM)
-
-        status = "OK:Stop" if capturing else "OK:Start"
-        _footer(d, f"{status} LR:Band K1:Save K3:Back")
-        LCD.LCD_ShowImage(img, 0, 0)
-
-        btn = _btn()
         if btn == "KEY3":
             capturing = False
-            if cap_thread:
-                cap_thread.join(timeout=3)
-            break
-        elif btn == "OK":
-            if capturing:
-                capturing = False
-                if cap_thread:
-                    cap_thread.join(timeout=3)
-            else:
-                capturing = True
-                cap_thread = threading.Thread(target=_capture_loop, daemon=True)
-                cap_thread.start()
-        elif btn == "LEFT":
-            band_idx = (band_idx - 1) % len(BANDS)
-            freq = BANDS[band_idx][0]
-            radio.set_frequency(freq)
-        elif btn == "RIGHT":
-            band_idx = (band_idx + 1) % len(BANDS)
-            freq = BANDS[band_idx][0]
-            radio.set_frequency(freq)
-        elif btn == "UP" and scroll > 0:
-            scroll -= 1
-        elif btn == "DOWN" and scroll < max(0, len(decoded_list) - visible):
-            scroll += 1
-        elif btn == "KEY1" and decoded_list:
-            sig = decoded_list[scroll]
-            os.makedirs(LOOT_DIR, exist_ok=True)
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            path = os.path.join(LOOT_DIR, f"{sig.protocol}_{ts}.sub")
-            if sig.raw_timings and PROTO_OK:
-                save_sub_file(path, sig.raw_timings, frequency=freq)
-                _show_msg("Saved!", os.path.basename(path), C_GREEN)
-            else:
-                info = {"protocol": sig.protocol, "code": sig.code_hex(),
-                        "bits": sig.bits, "button": sig.button,
-                        "serial": sig.serial, "frequency": freq}
-                with open(path.replace(".sub", ".json"), "w") as f:
-                    json.dump(info, f, indent=2)
-                _show_msg("Saved!", os.path.basename(path), C_GREEN)
-            time.sleep(1)
-        elif btn == "KEY2":
+            if capture_thread:
+                capture_thread.join(timeout=2)
+            radio.idle()
+            return
+
+        if btn == "LEFT" and now - last_btn > DEBOUNCE:
+            last_btn = now
             capturing = False
-            if cap_thread:
-                cap_thread.join(timeout=3)
-            break
-        time.sleep(0.05)
+            if capture_thread:
+                capture_thread.join(timeout=2)
+            preset_idx = (preset_idx - 1) % len(PRESETS)
+            capturing = True
+            capture_thread = threading.Thread(target=_capture_loop, daemon=True)
+            capture_thread.start()
+
+        if btn == "RIGHT" and now - last_btn > DEBOUNCE:
+            last_btn = now
+            capturing = False
+            if capture_thread:
+                capture_thread.join(timeout=2)
+            freq_idx = (freq_idx + 1) % len(FREQUENCIES)
+            capturing = True
+            capture_thread = threading.Thread(target=_capture_loop, daemon=True)
+            capture_thread.start()
+
+        if btn == "UP" and now - last_btn > DEBOUNCE:
+            last_btn = now
+            cursor = max(0, cursor - 1)
+
+        if btn == "DOWN" and now - last_btn > DEBOUNCE:
+            last_btn = now
+            cursor = min(max(0, len(signals) - 1), cursor + 1)
+
+        if btn == "OK" and now - last_btn > DEBOUNCE and signals and cursor < len(signals):
+            last_btn = now
+            sig = signals[cursor]
+            os.makedirs(LOOT_DIR, exist_ok=True)
+            ts = time.strftime("%Y%m%d_%H%M%S")
+            fname = f"{sig.protocol}_{ts}.sub"
+            save_sub_file(os.path.join(LOOT_DIR, fname), signal=sig,
+                         frequency=sig.frequency, preset=sig.modulation)
+            _draw_msg("Saved!", fname[:25], C_GREEN)
+            time.sleep(1)
+
+        # Draw
+        img = Image.new("RGB", (W, H), C_BG)
+        d = ImageDraw.Draw(img) if IS_WIDE else ScaledDraw(img)
+
+        freq_s = _freq_str(FREQUENCIES[freq_idx])
+        preset_s = PRESETS[preset_idx]["name"]
+        _draw_header(d, f"{freq_s} MHz {preset_s}", f"{len(signals)} signals")
+
+        if IS_WIDE:
+            if not signals:
+                blink = int(time.time() * 2) % 2
+                dots = "." * (blink + 1)
+                d.text((W // 2, H // 2), f"Waiting for signal{dots}", font=FONT,
+                       fill=C_DIM, anchor="mm")
+            else:
+                y = 26
+                item_h = 24
+                vis = (H - 26 - 16) // item_h
+                scroll = max(0, min(cursor - vis // 2, max(0, len(signals) - vis)))
+                for i in range(scroll, min(scroll + vis, len(signals))):
+                    sig = signals[i]
+                    is_sel = i == cursor
+                    ry = y + (i - scroll) * item_h
+                    if is_sel:
+                        d.rectangle([2, ry, W - 2, ry + item_h - 1], fill=C_SEL)
+                    proto_color = C_ORANGE if is_sel else C_WHITE
+                    d.text((6, ry + 2), sig.protocol, font=FONT_SM, fill=proto_color)
+                    d.text((120, ry + 2), sig.key_hex[:16], font=FONT_SM, fill=C_WHITE)
+                    d.text((W - 40, ry + 2), f"{sig.bit_count}b", font=FONT_SM, fill=C_DIM)
+                    if sig.extra:
+                        extra = " ".join(f"{v}" for v in list(sig.extra.values())[:2])
+                        d.text((6, ry + 12), extra, font=FONT_SM, fill=C_BLUE)
+        else:
+            if not signals:
+                d.text((64, 60), "Scanning...", font=FONT_SM, fill=C_DIM)
+            else:
+                y = 16
+                vis = 6
+                for i in range(scroll, min(scroll + vis, len(signals))):
+                    sig = signals[i]
+                    sel = i == cursor
+                    d.text((2, y), f"{sig.protocol[:8]} {sig.key_hex[:8]}",
+                           font=FONT_SM, fill=C_ORANGE if sel else C_DIM)
+                    y += 14
+
+        _draw_footer(d, "<>:Freq/Mod ^v:Scroll OK:Save K3:Back")
+        _show(img)
+        time.sleep(0.15)
 
 
-# ---------------------------------------------------------------------------
-# Read RAW mode — record raw OOK timing + waveform display
-# ---------------------------------------------------------------------------
+# ── Read RAW mode ─────────────────────────────────────────────────────────
+
 def _mode_read_raw(radio):
-    band_idx = 1
-    freq = BANDS[band_idx][0]
-    radio.set_frequency(freq)
-    radio.set_profile("ook_4k8")
-    timings = []
+    freq_idx = DEFAULT_FREQ_IDX
+    preset_idx = DEFAULT_PRESET_IDX
     recording = False
+    raw_pulses = []
+    waveform = []
+    last_btn = 0
 
     while _running:
-        img = Image.new("RGB", (W, H), C_BG)
-        d = _draw_ctx(img)
-        _header(d, "Read RAW", BANDS[band_idx][1])
+        btn = get_button(PINS, GPIO)
+        now = time.time()
+
+        if btn == "KEY3":
+            radio.idle()
+            return
+
+        if btn == "OK" and now - last_btn > 0.3:
+            last_btn = now
+            if not recording:
+                recording = True
+                raw_pulses = []
+                waveform = []
+                _apply_preset(radio, PRESETS[preset_idx]["name"])
+                radio.set_frequency(FREQUENCIES[freq_idx] / 1_000_000)
+                radio.set_raw_rx(for_capture=True)
+            else:
+                recording = False
+                radio.idle()
+                if raw_pulses:
+                    os.makedirs(LOOT_DIR, exist_ok=True)
+                    ts = time.strftime("%Y%m%d_%H%M%S")
+                    fname = f"RAW_{ts}.sub"
+                    save_sub_file(os.path.join(LOOT_DIR, fname), raw_pulses=raw_pulses,
+                                 frequency=FREQUENCIES[freq_idx],
+                                 preset=PRESETS[preset_idx]["name"])
+                    _draw_msg("Saved!", fname, C_GREEN)
+                    time.sleep(1)
+
+        if btn == "LEFT" and now - last_btn > DEBOUNCE and not recording:
+            last_btn = now
+            freq_idx = (freq_idx - 1) % len(FREQUENCIES)
+
+        if btn == "RIGHT" and now - last_btn > DEBOUNCE and not recording:
+            last_btn = now
+            freq_idx = (freq_idx + 1) % len(FREQUENCIES)
 
         if recording:
-            blink = int(time.time() * 3) % 2
-            if IS_WIDE and blink:
-                d.ellipse([W - 20, 6, W - 10, 16], fill=C_RED)
-                d.text((W - 55, 5), "REC", font=font_xs, fill=C_RED)
+            chunk = _capture_raw(radio, duration_s=0.3)
+            raw_pulses.extend(chunk)
+            for p in chunk[-100:]:
+                waveform.append(1 if p > 0 else 0)
+            if len(waveform) > 200:
+                waveform = waveform[-200:]
 
-        if timings:
-            _draw_waveform(d, timings)
-            if IS_WIDE:
-                d.text((8, H - 36), f"{len(timings)} edges", font=font_xs, fill=C_DIM)
-        elif not recording:
-            if IS_WIDE:
-                d.text((W // 2, H // 2), "OK to record raw signal", font=font, fill=C_DIM, anchor="mm")
-            else:
-                d.text((64, 60), "OK:Record", font=font_sm, fill=C_DIM)
+        img = Image.new("RGB", (W, H), C_BG)
+        d = ImageDraw.Draw(img) if IS_WIDE else ScaledDraw(img)
 
-        status = "OK:Stop" if recording else "OK:Rec"
-        _footer(d, f"{status} LR:Band K1:Save K3:Back")
-        LCD.LCD_ShowImage(img, 0, 0)
+        freq_s = _freq_str(FREQUENCIES[freq_idx])
+        status = "REC" if recording else "IDLE"
+        _draw_header(d, f"RAW {freq_s} MHz", status)
 
-        btn = _btn()
-        if btn == "KEY3" or btn == "KEY2":
-            break
-        elif btn == "OK":
+        if IS_WIDE:
+            # Waveform visualization
+            wave_y = 60
+            wave_h = 50
+            d.rectangle([4, wave_y, W - 4, wave_y + wave_h], outline=C_DIM)
+            if waveform:
+                wave_w = W - 8
+                step = max(1, len(waveform) * 1.0 / wave_w)
+                px = 4
+                for i in range(min(len(waveform), wave_w)):
+                    idx = min(int(i * step), len(waveform) - 1)
+                    val = waveform[idx]
+                    y1 = wave_y + (5 if val else wave_h - 5)
+                    d.line([(px + i, y1), (px + i, wave_y + wave_h // 2)],
+                           fill=C_GREEN if val else C_RED)
+
             if recording:
-                recording = False
+                d.text((W // 2, 38), f"Recording... {len(raw_pulses)} pulses",
+                       font=FONT_SM, fill=C_RED, anchor="mm")
             else:
-                recording = True
-                timings = []
-                _show_msg("Recording...", "5 seconds", C_RED)
-                timings = _capture_raw_timings(radio, duration=5.0)
-                recording = False
-                if timings and PROTO_OK:
-                    hits = decode_timings(timings, frequency=freq)
-                    if hits:
-                        _show_msg(f"Decoded: {hits[0].protocol}", hits[0].code_hex(), C_GREEN)
-                        time.sleep(1.5)
-        elif btn == "LEFT":
-            band_idx = (band_idx - 1) % len(BANDS)
-            freq = BANDS[band_idx][0]
-            radio.set_frequency(freq)
-        elif btn == "RIGHT":
-            band_idx = (band_idx + 1) % len(BANDS)
-            freq = BANDS[band_idx][0]
-            radio.set_frequency(freq)
-        elif btn == "KEY1" and timings and PROTO_OK:
-            os.makedirs(LOOT_DIR, exist_ok=True)
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            path = os.path.join(LOOT_DIR, f"RAW_{int(freq)}_{ts}.sub")
-            save_sub_file(path, timings, frequency=freq)
-            _show_msg("Saved!", os.path.basename(path), C_GREEN)
-            time.sleep(1)
-        time.sleep(0.05)
+                d.text((W // 2, 38), "Press OK to record",
+                       font=FONT_SM, fill=C_DIM, anchor="mm")
 
-
-def _draw_waveform(d, timings):
-    """Draw a mini waveform from timing data."""
-    wave_y = 60 if IS_WIDE else 30
-    wave_h = 40 if IS_WIDE else 25
-    wave_w = W - 16 if IS_WIDE else 120
-    x_start = 8 if IS_WIDE else 4
-
-    total_us = sum(abs(t) for t in timings[:200])
-    if total_us == 0:
-        return
-    scale = wave_w / total_us
-    x = x_start
-    hi_y = wave_y
-    lo_y = wave_y + wave_h
-    mid_y = wave_y + wave_h // 2
-    col = C_GREEN
-    for t in timings[:200]:
-        px = max(1, int(abs(t) * scale))
-        if x + px > x_start + wave_w:
-            break
-        if t > 0:
-            d.line([(x, hi_y), (x + px, hi_y)], fill=col, width=1)
-            if x > x_start:
-                d.line([(x, lo_y), (x, hi_y)], fill=col, width=1)
+            _draw_footer(d, f"OK:{'Stop+Save' if recording else 'Record'} <>:Freq K3:Back")
         else:
-            d.line([(x, lo_y), (x + px, lo_y)], fill=col, width=1)
-            if x > x_start:
-                d.line([(x, hi_y), (x, lo_y)], fill=col, width=1)
-        x += px
+            d.text((4, 20), "OK: " + ("Stop" if recording else "Rec"), font=FONT_SM, fill=C_DIM)
+            d.text((4, 35), f"{len(raw_pulses)} pulses", font=FONT_SM, fill=C_GREEN)
+
+        _show(img)
+        if not recording:
+            time.sleep(0.1)
 
 
-# ---------------------------------------------------------------------------
-# Saved mode — browse and replay .sub files
-# ---------------------------------------------------------------------------
+# ── Saved mode ────────────────────────────────────────────────────────────
+
 def _mode_saved(radio):
-    os.makedirs(LOOT_DIR, exist_ok=True)
-    files = sorted([f for f in os.listdir(LOOT_DIR) if f.endswith(".sub")], reverse=True)
-    sel = 0
-    scroll = 0
+    cursor = 0
+    last_btn = 0
 
     while _running:
-        files = sorted([f for f in os.listdir(LOOT_DIR) if f.endswith(".sub")], reverse=True)
-        img = Image.new("RGB", (W, H), C_BG)
-        d = _draw_ctx(img)
-        _header(d, "Saved", f"{len(files)}")
+        files = []
+        if os.path.isdir(LOOT_DIR):
+            files = sorted([f for f in os.listdir(LOOT_DIR) if f.endswith(".sub")], reverse=True)
 
-        y = 28 if IS_WIDE else 16
-        row_h = 22 if IS_WIDE else 14
-        visible = max(1, (H - 46 if IS_WIDE else H - 30) // row_h)
+        btn = get_button(PINS, GPIO)
+        now = time.time()
 
-        if not files:
-            if IS_WIDE:
-                d.text((W // 2, H // 2), "No saved signals", font=font, fill=C_DIM, anchor="mm")
-            else:
-                d.text((64, 60), "No signals", font=font_sm, fill=C_DIM)
-        else:
-            for vi in range(visible):
-                idx = scroll + vi
-                if idx >= len(files):
-                    break
-                ry = y + vi * row_h
-                is_sel = idx == sel
-                if is_sel:
-                    d.rectangle([2, ry, W - 2, ry + row_h - 2], fill=C_SEL)
-                name = files[idx].replace(".sub", "")
-                max_chars = 35 if IS_WIDE else 18
-                color = C_ORANGE if is_sel else C_WHITE
-                if IS_WIDE:
-                    d.text((8, ry + 3), name[:max_chars], font=font_sm, fill=color)
-                else:
-                    d.text((4, ry + 1), name[:max_chars], font=font_xs, fill=color)
+        if btn == "KEY3":
+            return
 
-        _footer(d, "OK:Replay K1:Delete K3:Back")
-        LCD.LCD_ShowImage(img, 0, 0)
+        if btn == "UP" and now - last_btn > DEBOUNCE:
+            last_btn = now
+            cursor = max(0, cursor - 1)
 
-        btn = _btn()
-        if btn == "KEY3" or btn == "KEY2":
-            break
-        elif btn == "UP":
-            sel = max(0, sel - 1)
-            if sel < scroll:
-                scroll = sel
-        elif btn == "DOWN":
-            sel = min(len(files) - 1, sel + 1) if files else 0
-            if sel >= scroll + visible:
-                scroll = sel - visible + 1
-        elif btn == "OK" and files and PROTO_OK:
-            path = os.path.join(LOOT_DIR, files[sel])
-            _show_msg("Replaying...", files[sel][:20], C_ORANGE)
-            timings, freq, _ = load_sub_file(path)
-            if timings:
-                radio.set_frequency(freq)
-                radio.set_profile("ook_4k8")
-                _replay_timings(radio, timings)
-                _show_msg("Sent!", f"{len(timings)} edges", C_GREEN)
-            else:
-                _show_msg("Empty file", "", C_RED)
-            time.sleep(1)
-        elif btn == "KEY1" and files:
-            path = os.path.join(LOOT_DIR, files[sel])
+        if btn == "DOWN" and now - last_btn > DEBOUNCE:
+            last_btn = now
+            cursor = min(max(0, len(files) - 1), cursor + 1)
+
+        if btn == "OK" and now - last_btn > 0.3 and files and cursor < len(files):
+            last_btn = now
+            fpath = os.path.join(LOOT_DIR, files[cursor])
+            sub = load_sub_file(fpath)
+            if sub.get("raw_data"):
+                _draw_msg("Sending...", files[cursor][:20], C_RED)
+                _apply_preset(radio, sub.get("preset", "AM650"))
+                radio.set_frequency(sub["frequency"] / 1_000_000)
+                ok = radio.send_raw_pulses(sub["raw_data"], repeat=3)
+                radio.start_rx()
+                _draw_msg("Sent!" if ok else "TX Failed", "", C_GREEN if ok else C_RED)
+                time.sleep(1)
+            elif sub.get("protocol"):
+                _draw_msg("Info", f"{sub['protocol']} {sub['bit_count']}b", C_ORANGE)
+                time.sleep(2)
+
+        if btn == "KEY1" and now - last_btn > 0.3 and files and cursor < len(files):
+            last_btn = now
+            fpath = os.path.join(LOOT_DIR, files[cursor])
             try:
-                os.remove(path)
+                os.remove(fpath)
+                _draw_msg("Deleted!", files[cursor][:20], C_RED)
+                cursor = max(0, cursor - 1)
             except Exception:
                 pass
-            _show_msg("Deleted", files[sel][:20], C_RED)
-            time.sleep(0.5)
-            files = sorted([f for f in os.listdir(LOOT_DIR) if f.endswith(".sub")], reverse=True)
-            sel = min(sel, max(0, len(files) - 1))
-        time.sleep(0.05)
+            time.sleep(1)
 
+        img = Image.new("RGB", (W, H), C_BG)
+        d = ImageDraw.Draw(img) if IS_WIDE else ScaledDraw(img)
+        _draw_header(d, "Saved", f"{len(files)}")
 
-def _replay_timings(radio, timings):
-    """Replay raw OOK timings via CC1101 TX + GDO0 bit-banging.
-    Simplified: use CC1101 in async serial TX mode and toggle GDO0 via SPI."""
-    if not GPIOD_OK:
-        return
-    radio.idle()
-    radio._write_reg(0x02, 0x0D)
-    radio._write_reg(0x08, 0x32)
-    try:
-        chip = gpiod.Chip("/dev/gpiochip0")
-        config = gpiod.LineSettings(
-            direction=gpiod.line.Direction.OUTPUT,
-            output_value=gpiod.line.Value.INACTIVE,
-        )
-        req = chip.request_lines(config={GDO0_PIN: config}, consumer="cc1101-tx")
-        radio._strobe(0x35)
-        time.sleep(0.001)
-        for t in timings:
-            if not _running:
-                break
-            if t > 0:
-                req.set_value(GDO0_PIN, gpiod.line.Value.ACTIVE)
-                _usleep(t)
+        if IS_WIDE:
+            if not files:
+                d.text((W // 2, H // 2), "No saved signals", font=FONT, fill=C_DIM, anchor="mm")
             else:
-                req.set_value(GDO0_PIN, gpiod.line.Value.INACTIVE)
-                _usleep(abs(t))
-        req.set_value(GDO0_PIN, gpiod.line.Value.INACTIVE)
-        req.release()
-    except Exception:
-        pass
-    radio.idle()
-    radio.set_packet_rx()
+                y = 26
+                item_h = 20
+                vis = (H - 26 - 16) // item_h
+                sc = max(0, min(cursor - vis // 2, max(0, len(files) - vis)))
+                for i in range(sc, min(sc + vis, len(files))):
+                    is_sel = i == cursor
+                    ry = y + (i - sc) * item_h
+                    if is_sel:
+                        d.rectangle([2, ry, W - 2, ry + item_h - 1], fill=C_SEL)
+                    name = files[i].replace(".sub", "")
+                    d.text((6, ry + 2), name[:35], font=FONT_SM,
+                           fill=C_ORANGE if is_sel else C_WHITE)
+            _draw_footer(d, "OK:Send K1:Delete K3:Back")
+        else:
+            if not files:
+                d.text((4, 50), "No files", font=FONT_SM, fill=C_DIM)
+            else:
+                y = 16
+                for i in range(min(6, len(files))):
+                    sel = i == cursor
+                    d.text((2, y), files[i][:18], font=FONT_SM,
+                           fill=C_ORANGE if sel else C_DIM)
+                    y += 14
+            _draw_footer(d, "OK:Send K1:Del K3:Back")
+
+        _show(img)
+        time.sleep(0.1)
 
 
-def _usleep(us):
-    end = time.monotonic_ns() + us * 1000
-    while time.monotonic_ns() < end:
-        pass
+# ── Frequency Analyzer ───────────────────────────────────────────────────
 
-
-# ---------------------------------------------------------------------------
-# Frequency Analyzer — RSSI sweep
-# ---------------------------------------------------------------------------
 def _mode_freq_analyzer(radio):
-    base_freqs = [300.0, 315.0, 390.0, 418.0, 433.92, 868.0, 915.0]
-    sweep_range = 2.0
-    step = 0.1
-    rssi_map = {}
+    scan_freqs = [
+        300000000, 315000000, 390000000, 433920000,
+        868350000, 868950000, 915000000,
+    ]
+    best_freq = 0
+    best_rssi = -130
+    rssi_values = [(-130, f) for f in scan_freqs]
+    last_btn = 0
+
+    _apply_preset(radio, "AM650")
 
     while _running:
-        img = Image.new("RGB", (W, H), C_BG)
-        d = _draw_ctx(img)
-        _header(d, "Freq Analyzer")
+        btn = get_button(PINS, GPIO)
+        if btn == "KEY3":
+            radio.idle()
+            return
 
-        bar_w = max(1, (W - 20) // len(base_freqs))
-        bar_max_h = H - 60 if IS_WIDE else H - 40
-        x = 10
-
-        peak_freq = 0
-        peak_rssi = -200
-
-        for bf in base_freqs:
-            radio.set_frequency(bf)
-            radio._strobe(0x34)
-            time.sleep(0.005)
+        new_best = -130
+        new_best_freq = 0
+        rssi_values = []
+        for freq in scan_freqs:
+            radio.set_frequency(freq / 1_000_000)
+            radio.start_rx()
+            time.sleep(0.02)
             rssi = radio.get_rssi()
-            rssi_map[bf] = rssi
-            if rssi > peak_rssi:
-                peak_rssi = rssi
-                peak_freq = bf
+            rssi_values.append((rssi, freq))
+            if rssi > new_best:
+                new_best = rssi
+                new_best_freq = freq
+        best_rssi = new_best
+        best_freq = new_best_freq
 
-            norm = max(0, min(1, (rssi + 110) / 60))
-            bh = int(norm * bar_max_h)
-            by = (H - 30 if IS_WIDE else H - 22) - bh
+        img = Image.new("RGB", (W, H), C_BG)
+        d = ImageDraw.Draw(img) if IS_WIDE else ScaledDraw(img)
+        _draw_header(d, "Freq Analyzer")
 
-            if rssi > -70:
-                col = C_RED
-            elif rssi > -90:
-                col = C_ORANGE
-            else:
-                col = C_GREEN
-            d.rectangle([x, by, x + bar_w - 2, H - 30 if IS_WIDE else H - 22], fill=col)
+        if IS_WIDE:
+            d.text((W // 2, 38), f"{_freq_str(best_freq)} MHz",
+                   font=FONT_XL, fill=C_ORANGE, anchor="mm")
+            d.text((W // 2, 58), f"RSSI: {best_rssi:.0f} dBm",
+                   font=FONT, fill=C_WHITE, anchor="mm")
 
-            label = f"{int(bf)}"
-            if IS_WIDE:
-                d.text((x + bar_w // 2, H - 26), label, font=font_xs, fill=C_DIM, anchor="mm")
-            else:
-                d.text((x, H - 20), label[:3], font=font_xs, fill=C_DIM)
-            x += bar_w
+            bar_y = 75
+            bar_h = 50
+            bar_w = max(4, (W - 20) // len(scan_freqs) - 2)
+            for i, (rssi, freq) in enumerate(rssi_values):
+                x = 10 + i * (bar_w + 2)
+                norm = max(0, min(1, (rssi + 120) / 70))
+                h = int(norm * bar_h)
+                color = C_GREEN if freq == best_freq else C_BLUE
+                if h > 2:
+                    d.rectangle([x, bar_y + bar_h - h, x + bar_w, bar_y + bar_h], fill=color)
+                d.text((x + bar_w // 2, bar_y + bar_h + 4),
+                       f"{freq // 1000000}", font=FONT_SM, fill=C_DIM, anchor="ma")
+        else:
+            d.text((4, 20), f"{_freq_str(best_freq)} MHz", font=FONT, fill=C_ORANGE)
+            d.text((4, 38), f"RSSI: {best_rssi:.0f} dBm", font=FONT_SM, fill=C_WHITE)
 
-        if peak_freq > 0:
-            if IS_WIDE:
-                d.text((W // 2, 28), f"Peak: {peak_freq:.2f} MHz  ({peak_rssi:.0f} dBm)",
-                       font=font_sm, fill=C_WHITE, anchor="mm")
-            else:
-                d.text((2, 16), f"{peak_freq:.1f}MHz {peak_rssi:.0f}dB", font=font_xs, fill=C_WHITE)
-
-        _footer(d, "Scanning...  K3:Back")
-        LCD.LCD_ShowImage(img, 0, 0)
-
-        btn = _btn()
-        if btn == "KEY3" or btn == "KEY2":
-            break
-        time.sleep(0.02)
-
-    radio.idle()
+        _draw_footer(d, "K3:Back")
+        _show(img)
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
+# ── Main ─────────────────────────────────────────────────────────────────
+
 def main():
-    radio = CC1101()
+    global _radio
 
-    _show_msg("Sub-GHz", "Initializing...", C_ORANGE)
-    if not radio.open():
-        _show_msg("CC1101 HAT not found", "Check Cap connection", C_RED)
+    if not CC1101_OK or not PROTO_OK:
+        _draw_msg("Missing module", "cc1101_driver/protocols", C_RED)
         time.sleep(3)
         GPIO.cleanup()
         return 1
 
-    ver = radio.get_version()
-    _show_msg("Sub-GHz", f"CC1101 v0x{ver:02X} OK", C_GREEN)
-    time.sleep(0.8)
+    _draw_msg("Sub-GHz", "Connecting CC1101...", C_ORANGE)
 
-    sel = 0
+    _radio = CC1101()
+    if not _radio.open():
+        _draw_msg("CC1101 HAT", "not found", C_RED)
+        time.sleep(3)
+        GPIO.cleanup()
+        return 1
+
+    menu_sel = 0
+    last_btn = 0
+
     try:
         while _running:
-            _draw_menu(sel, radio)
-            btn = _btn()
+            _draw_menu(menu_sel)
+            btn = get_button(PINS, GPIO)
+            now = time.time()
+
             if btn == "KEY3":
                 break
-            elif btn == "UP":
-                sel = (sel - 1) % len(MENU_ITEMS)
-            elif btn == "DOWN":
-                sel = (sel + 1) % len(MENU_ITEMS)
-            elif btn == "OK":
-                if sel == 0:
-                    _mode_read(radio)
-                elif sel == 1:
-                    _mode_read_raw(radio)
-                elif sel == 2:
-                    _mode_saved(radio)
-                elif sel == 3:
-                    _mode_freq_analyzer(radio)
-            time.sleep(0.05)
+
+            if btn == "UP" and now - last_btn > DEBOUNCE:
+                last_btn = now
+                menu_sel = (menu_sel - 1) % len(MENU_ITEMS)
+
+            if btn == "DOWN" and now - last_btn > DEBOUNCE:
+                last_btn = now
+                menu_sel = (menu_sel + 1) % len(MENU_ITEMS)
+
+            if btn == "OK" and now - last_btn > DEBOUNCE:
+                last_btn = now
+                if menu_sel == 0:
+                    _mode_read(_radio)
+                elif menu_sel == 1:
+                    _mode_read_raw(_radio)
+                elif menu_sel == 2:
+                    _mode_saved(_radio)
+                elif menu_sel == 3:
+                    _mode_freq_analyzer(_radio)
+
+            time.sleep(0.08)
+
     finally:
-        radio.close()
+        if _radio:
+            _radio.close()
+        LCD.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
         LCD.LCD_Clear()
         GPIO.cleanup()
+
     return 0
 
 
