@@ -506,13 +506,8 @@ def _check_internet():
 
 
 def _check_deps():
-    ok = os.path.isfile("/usr/bin/ffmpeg")
-    try:
-        ok = ok and subprocess.run(["yt-dlp", "--version"],
-                                   capture_output=True, timeout=5).returncode == 0
-    except Exception:
-        ok = False
-    return ok
+    import shutil
+    return os.path.isfile("/usr/bin/ffmpeg") and shutil.which("yt-dlp") is not None
 
 
 # ---------------------------------------------------------------------------
