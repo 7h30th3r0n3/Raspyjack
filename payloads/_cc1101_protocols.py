@@ -156,6 +156,19 @@ class CAMEDecoder:
             return None
         return None
 
+    def encode(self, data, bit_count=None):
+        if bit_count is None:
+            bit_count = 12
+        te = self._TE_SHORT
+        pulses = [-(te * 56), te]
+        for i in range(bit_count - 1, -1, -1):
+            if (data >> i) & 1:
+                pulses.extend([-(te * 2), te])
+            else:
+                pulses.extend([-te, te * 2])
+        pulses.append(-(te * 4))
+        return pulses
+
 
 # ===================================================================
 # Princeton decoder — ported from princeton.c
@@ -213,6 +226,15 @@ class PrincetonDecoder:
                 self._te_last = duration
                 self._te_sum += duration
                 self._step = self._CHECK_DUR
+            elif duration >= self._TE_LONG * 2:
+                # Long LOW in SAVE_DUR = frame boundary (footer/guard)
+                result = None
+                if self._bits == self._MIN_BITS:
+                    if self._last_data == self._data and self._last_data:
+                        result = self._emit()
+                    self._last_data = self._data
+                self._data = 0; self._bits = 0; self._te_sum = 0
+                return result
             return None
 
         if self._step == self._CHECK_DUR:
@@ -245,6 +267,19 @@ class PrincetonDecoder:
                 self._step = self._RESET
             return None
         return None
+
+    def encode(self, data, bit_count=None):
+        if bit_count is None:
+            bit_count = 24
+        te = self._TE_SHORT
+        pulses = []
+        for i in range(bit_count - 1, -1, -1):
+            if (data >> i) & 1:
+                pulses.extend([te * 3, -(te)])
+            else:
+                pulses.extend([te, -(te * 3)])
+        pulses.append(-(te * 36))  # guard
+        return pulses
 
 
 # ===================================================================
@@ -325,6 +360,19 @@ class NiceFloDecoder:
                 self._step = self._RESET
             return None
         return None
+
+    def encode(self, data, bit_count=None):
+        if bit_count is None:
+            bit_count = self._MIN_BITS
+        te = self._TE_SHORT
+        pulses = [-(te * 36), te]  # header + start bit
+        for i in range(bit_count - 1, -1, -1):
+            if (data >> i) & 1:
+                pulses.extend([-(te * 2), te])
+            else:
+                pulses.extend([-te, te * 2])
+        pulses.append(-(te * 4))
+        return pulses
 
 
 # ===================================================================
@@ -410,6 +458,20 @@ class GateTXDecoder:
             return None
         return None
 
+    def encode(self, data, bit_count=None):
+        if bit_count is None:
+            bit_count = self._MIN_BITS
+        te_s = self._TE_SHORT
+        te_l = self._TE_LONG
+        pulses = [-(te_s * 47), te_l]  # header + long start bit
+        for i in range(bit_count - 1, -1, -1):
+            if (data >> i) & 1:
+                pulses.extend([-(te_l), te_s])
+            else:
+                pulses.extend([-(te_s), te_l])
+        pulses.append(-(te_s * 10))
+        return pulses
+
 
 # ===================================================================
 # Linear decoder — ported from linear.c
@@ -487,6 +549,20 @@ class LinearDecoder:
                 self._step = self._RESET
             return None
         return None
+
+    def encode(self, data, bit_count=None):
+        if bit_count is None:
+            bit_count = self._MIN_BITS
+        te_s = self._TE_SHORT
+        te_l = self._TE_LONG
+        pulses = []
+        for i in range(bit_count - 1, -1, -1):
+            if (data >> i) & 1:
+                pulses.extend([te_l, -(te_s)])
+            else:
+                pulses.extend([te_s, -(te_l)])
+        pulses.append(-(te_s * 42))  # guard
+        return pulses
 
 
 # ===================================================================
@@ -586,6 +662,19 @@ class HoltekHT12XDecoder:
                 self._step = self._RESET
             return None
         return None
+
+    def encode(self, data, bit_count=None):
+        if bit_count is None:
+            bit_count = self._MIN_BITS
+        te = self._TE_SHORT
+        pulses = [-(te * 28), te]  # header + start bit
+        for i in range(bit_count - 1, -1, -1):
+            if (data >> i) & 1:
+                pulses.extend([-(te * 2), te])
+            else:
+                pulses.extend([-te, te * 2])
+        pulses.append(-(te * 10))
+        return pulses
 
 
 # ===================================================================
@@ -691,6 +780,1010 @@ class ChamberlainDecoder:
             return None
         return None
 
+    def encode(self, data, bit_count=None):
+        if bit_count is None:
+            bit_count = self._MIN_BITS
+        te = self._TE_SHORT
+        pulses = [-(te * 39), te]  # header + start (STOP nibble)
+        for i in range(bit_count - 1, -1, -1):
+            if (data >> i) & 1:
+                pulses.extend([-(te * 2), te * 2])  # BIT_1
+            else:
+                pulses.extend([-te, te * 3])  # BIT_0
+        pulses.append(-(te * 39))
+        return pulses
+
+
+# ===================================================================
+# Manchester decoder — ported from manchester_decoder.c
+# ===================================================================
+
+_MANCHESTER_TRANSITIONS = [0b00000001, 0b10010001, 0b10011011, 0b11111011]
+_MANCHESTER_RESET_STATE = 1  # ManchesterStateMid1
+
+def _manchester_advance(state, event):
+    if event == 8:  # Reset
+        return _MANCHESTER_RESET_STATE, None
+    new_state = (_MANCHESTER_TRANSITIONS[state] >> event) & 0x3
+    if new_state == state:
+        return _MANCHESTER_RESET_STATE, None
+    if new_state == 2:  # Mid0
+        return new_state, False
+    if new_state == 1:  # Mid1
+        return new_state, True
+    return new_state, None
+
+
+# ===================================================================
+# Helper: CAME-style decoder (LOW saves, HIGH checks)
+# Many protocols share this exact pattern: header LOW, start bit HIGH,
+# then alternating LOW(save)+HIGH(check) pairs for bits.
+# bit 0 = short_LOW + long_HIGH, bit 1 = long_LOW + short_HIGH
+# ===================================================================
+
+class _CAMEStyleDecoder:
+    """CAME-style: LOW+HIGH pairs. SaveDuration saves LOW, CheckDuration checks HIGH."""
+    name = "Unknown"
+    _TE_SHORT = 320
+    _TE_LONG = 640
+    _TE_DELTA = 150
+    _MIN_BITS = 12
+    _HEADER_LOW_MULT = 56
+    _HEADER_LOW_DELTA_MULT = 63
+    _HAS_START_BIT = True
+    _START_DUR = None
+    _START_DELTA = None
+    _FOOTER_MULT = 4
+    _VALID_BITS = None
+    _PROTO_TYPE = "Static"
+
+    _RESET = 0; _FOUND_START = 1; _SAVE_DUR = 2; _CHECK_DUR = 3
+
+    def __init__(self): self.reset()
+    def reset(self):
+        self._step = self._RESET; self._data = 0; self._bits = 0; self._te_last = 0
+
+    def feed(self, level, duration):
+        if self._step == self._RESET:
+            if (not level) and DURATION_DIFF(duration, self._TE_SHORT * self._HEADER_LOW_MULT) < self._TE_DELTA * self._HEADER_LOW_DELTA_MULT:
+                self._step = self._FOUND_START if self._HAS_START_BIT else self._SAVE_DUR
+                self._data = 0; self._bits = 0
+            return None
+        if self._step == self._FOUND_START:
+            if not level: return None
+            sd = self._START_DUR or self._TE_SHORT
+            sdd = self._START_DELTA or self._TE_DELTA
+            if DURATION_DIFF(duration, sd) < sdd:
+                self._step = self._SAVE_DUR; self._data = 0; self._bits = 0
+            else: self._step = self._RESET
+            return None
+        if self._step == self._SAVE_DUR:
+            if not level:
+                if duration >= self._TE_SHORT * self._FOOTER_MULT:
+                    self._step = self._FOUND_START if self._HAS_START_BIT else self._RESET
+                    if self._valid_count(): return self._emit()
+                    return None
+                self._te_last = duration; self._step = self._CHECK_DUR
+            else: self._step = self._RESET
+            return None
+        if self._step == self._CHECK_DUR:
+            if level:
+                if (DURATION_DIFF(self._te_last, self._TE_SHORT) < self._TE_DELTA and
+                        DURATION_DIFF(duration, self._TE_LONG) < self._TE_DELTA):
+                    self._data = (self._data << 1) | 0; self._bits += 1; self._step = self._SAVE_DUR
+                elif (DURATION_DIFF(self._te_last, self._TE_LONG) < self._TE_DELTA and
+                      DURATION_DIFF(duration, self._TE_SHORT) < self._TE_DELTA):
+                    self._data = (self._data << 1) | 1; self._bits += 1; self._step = self._SAVE_DUR
+                else: self._step = self._RESET
+            else: self._step = self._RESET
+            return None
+        return None
+
+    def _valid_count(self):
+        if self._VALID_BITS: return self._bits in self._VALID_BITS
+        return self._bits >= self._MIN_BITS
+
+    def _emit(self):
+        return DecodedSignal(protocol=self.name, data=self._data, bit_count=self._bits, proto_type=self._PROTO_TYPE)
+
+    def encode(self, data, bit_count=None):
+        if self._PROTO_TYPE != "Static":
+            return None
+        if bit_count is None:
+            bit_count = self._MIN_BITS
+        te_s = self._TE_SHORT
+        te_l = self._TE_LONG
+        pulses = [-(te_s * self._HEADER_LOW_MULT)]
+        if self._HAS_START_BIT:
+            sd = self._START_DUR or te_s
+            pulses.append(sd)
+        for i in range(bit_count - 1, -1, -1):
+            if (data >> i) & 1:
+                pulses.extend([-(te_l), te_s])
+            else:
+                pulses.extend([-(te_s), te_l])
+        pulses.append(-(te_s * self._FOOTER_MULT))
+        return pulses
+
+
+# ===================================================================
+# Helper: Princeton-style decoder (HIGH saves, LOW checks)
+# header LOW, then alternating HIGH(save)+LOW(check) pairs.
+# bit 0 = short_HIGH + long_LOW, bit 1 = long_HIGH + short_LOW
+# ===================================================================
+
+class _PrincetonStyleDecoder:
+    name = "Unknown"
+    _TE_SHORT = 400
+    _TE_LONG = 800
+    _TE_DELTA = 150
+    _TE_DELTA_CHECK = None  # defaults to _TE_DELTA for check
+    _MIN_BITS = 12
+    _HEADER_LOW_MULT = 36
+    _HEADER_LOW_DELTA_MULT = 20
+    _FOOTER_MULT = 4
+    _HAS_START_BIT = False
+    _START_LEVEL_HIGH = True
+    _START_DUR = None
+    _VALID_BITS = None
+    _NEED_TWO_FRAMES = False
+    _PROTO_TYPE = "Static"
+
+    _RESET = 0; _FOUND_START = 1; _SAVE_DUR = 2; _CHECK_DUR = 3
+
+    def __init__(self): self.reset()
+    def reset(self):
+        self._step = self._RESET; self._data = 0; self._bits = 0
+        self._te_last = 0; self._last_data = 0
+
+    def feed(self, level, duration):
+        td_c = self._TE_DELTA_CHECK or self._TE_DELTA
+        if self._step == self._RESET:
+            if (not level) and DURATION_DIFF(duration, self._TE_SHORT * self._HEADER_LOW_MULT) < self._TE_DELTA * self._HEADER_LOW_DELTA_MULT:
+                self._step = self._FOUND_START if self._HAS_START_BIT else self._SAVE_DUR
+                self._data = 0; self._bits = 0
+            return None
+        if self._step == self._FOUND_START:
+            ok = (self._START_LEVEL_HIGH and level) or (not self._START_LEVEL_HIGH and not level)
+            sd = self._START_DUR or self._TE_SHORT
+            if ok and DURATION_DIFF(duration, sd) < self._TE_DELTA:
+                self._step = self._SAVE_DUR; self._data = 0; self._bits = 0
+            else:
+                self._step = self._RESET
+            return None
+        if self._step == self._SAVE_DUR:
+            if level:
+                self._te_last = duration; self._step = self._CHECK_DUR
+            else:
+                self._step = self._RESET
+            return None
+        if self._step == self._CHECK_DUR:
+            if not level:
+                if duration >= self._TE_LONG * self._FOOTER_MULT:
+                    self._step = self._SAVE_DUR if not self._HAS_START_BIT else self._FOUND_START
+                    result = None
+                    if self._valid_count():
+                        if self._NEED_TWO_FRAMES:
+                            if self._last_data == self._data and self._last_data:
+                                result = self._emit()
+                            self._last_data = self._data
+                        else:
+                            result = self._emit()
+                    self._data = 0; self._bits = 0
+                    return result
+                if (DURATION_DIFF(self._te_last, self._TE_SHORT) < self._TE_DELTA and
+                        DURATION_DIFF(duration, self._TE_LONG) < td_c * 3):
+                    self._data = (self._data << 1) | 0; self._bits += 1; self._step = self._SAVE_DUR
+                elif (DURATION_DIFF(self._te_last, self._TE_LONG) < td_c * 3 and
+                      DURATION_DIFF(duration, self._TE_SHORT) < self._TE_DELTA):
+                    self._data = (self._data << 1) | 1; self._bits += 1; self._step = self._SAVE_DUR
+                else:
+                    self._step = self._RESET
+            else:
+                self._step = self._RESET
+            return None
+        return None
+
+    def _valid_count(self):
+        if self._VALID_BITS: return self._bits in self._VALID_BITS
+        return self._bits >= self._MIN_BITS
+
+    def _emit(self):
+        return DecodedSignal(protocol=self.name, data=self._data, bit_count=self._bits, proto_type=self._PROTO_TYPE)
+
+    def encode(self, data, bit_count=None):
+        if self._PROTO_TYPE != "Static":
+            return None
+        if bit_count is None:
+            bit_count = self._MIN_BITS
+        te_s = self._TE_SHORT
+        te_l = self._TE_LONG
+        pulses = []
+        if self._HAS_START_BIT:
+            pulses.append(-(te_s * self._HEADER_LOW_MULT))
+            sd = self._START_DUR or te_s
+            if self._START_LEVEL_HIGH:
+                pulses.append(sd)
+            else:
+                pulses.append(-sd)
+        for i in range(bit_count - 1, -1, -1):
+            if (data >> i) & 1:
+                pulses.extend([te_l, -(te_s)])
+            else:
+                pulses.extend([te_s, -(te_l)])
+        pulses.append(-(te_s * self._HEADER_LOW_MULT))
+        return pulses
+
+
+# ===================================================================
+# Static remotes — CAME-style (LOW+HIGH pairs)
+# ===================================================================
+
+class AnsonicDecoder(_CAMEStyleDecoder):
+    name = "Ansonic"; _TE_SHORT = 555; _TE_LONG = 1111; _TE_DELTA = 120; _MIN_BITS = 12
+    _HEADER_LOW_MULT = 35; _HEADER_LOW_DELTA_MULT = 35
+
+class DitecGol4Decoder(_CAMEStyleDecoder):
+    name = "Ditec GOL4"; _TE_SHORT = 400; _TE_LONG = 1100; _TE_DELTA = 200; _MIN_BITS = 54
+    _HEADER_LOW_MULT = 37; _HEADER_LOW_DELTA_MULT = 37
+    _PROTO_TYPE = "Rolling"
+
+class DoitrandDecoder(_CAMEStyleDecoder):
+    name = "Doitrand"; _TE_SHORT = 400; _TE_LONG = 1100; _TE_DELTA = 150; _MIN_BITS = 37
+    _HEADER_LOW_MULT = 14; _HEADER_LOW_DELTA_MULT = 14
+
+class HoltekDecoder(_CAMEStyleDecoder):
+    name = "Holtek"; _TE_SHORT = 430; _TE_LONG = 870; _TE_DELTA = 100; _MIN_BITS = 40
+    _HEADER_LOW_MULT = 36; _HEADER_LOW_DELTA_MULT = 36
+    _HAS_START_BIT = False
+
+class IntertechnoV3Decoder(_CAMEStyleDecoder):
+    name = "Intertechno V3"; _TE_SHORT = 275; _TE_LONG = 1375; _TE_DELTA = 150; _MIN_BITS = 32
+    _HEADER_LOW_MULT = 37; _HEADER_LOW_DELTA_MULT = 15
+
+class LegrandDecoder(_CAMEStyleDecoder):
+    name = "Legrand"; _TE_SHORT = 375; _TE_LONG = 1125; _TE_DELTA = 150; _MIN_BITS = 18
+    _HEADER_LOW_MULT = 30; _HEADER_LOW_DELTA_MULT = 30
+
+class MegaCodeDecoder(_CAMEStyleDecoder):
+    name = "MegaCode"; _TE_SHORT = 1000; _TE_LONG = 1000; _TE_DELTA = 200; _MIN_BITS = 24
+    _HEADER_LOW_MULT = 10; _HEADER_LOW_DELTA_MULT = 10
+
+class PhoenixV2Decoder(_CAMEStyleDecoder):
+    name = "Phoenix V2"; _TE_SHORT = 427; _TE_LONG = 853; _TE_DELTA = 100; _MIN_BITS = 52
+    _HEADER_LOW_MULT = 72; _HEADER_LOW_DELTA_MULT = 72
+    _PROTO_TYPE = "Rolling"
+
+class CameTweeDecoder(_CAMEStyleDecoder):
+    name = "CAME Twee"; _TE_SHORT = 500; _TE_LONG = 1000; _TE_DELTA = 250; _MIN_BITS = 54
+    _HEADER_LOW_MULT = 60; _HEADER_LOW_DELTA_MULT = 60
+    _PROTO_TYPE = "Rolling"
+
+
+# ===================================================================
+# Static remotes — Princeton-style (HIGH+LOW pairs)
+# ===================================================================
+
+class ClemsaDecoder(_PrincetonStyleDecoder):
+    name = "Clemsa"; _TE_SHORT = 385; _TE_LONG = 2695; _TE_DELTA = 150; _MIN_BITS = 18
+    _HEADER_LOW_MULT = 51; _HEADER_LOW_DELTA_MULT = 25
+
+class DooyaDecoder(_PrincetonStyleDecoder):
+    name = "Dooya"; _TE_SHORT = 366; _TE_LONG = 733; _TE_DELTA = 120; _MIN_BITS = 40
+    _HEADER_LOW_MULT = 24; _HEADER_LOW_DELTA_MULT = 20
+    _HAS_START_BIT = True; _START_LEVEL_HIGH = True
+
+class ElplastDecoder(_PrincetonStyleDecoder):
+    name = "Elplast"; _TE_SHORT = 230; _TE_LONG = 1550; _TE_DELTA = 160; _MIN_BITS = 18
+    _HEADER_LOW_MULT = 72; _HEADER_LOW_DELTA_MULT = 72
+
+class FeronDecoder(_PrincetonStyleDecoder):
+    name = "Feron"; _TE_SHORT = 350; _TE_LONG = 750; _TE_DELTA = 150; _MIN_BITS = 32
+    _HEADER_LOW_MULT = 36; _HEADER_LOW_DELTA_MULT = 36
+
+class GangQiDecoder(_PrincetonStyleDecoder):
+    name = "GangQi"; _TE_SHORT = 500; _TE_LONG = 1200; _TE_DELTA = 200; _MIN_BITS = 34
+    _HEADER_LOW_MULT = 10; _HEADER_LOW_DELTA_MULT = 10
+    _HAS_START_BIT = True
+
+class Hay21Decoder(_PrincetonStyleDecoder):
+    name = "Hay21"; _TE_SHORT = 300; _TE_LONG = 700; _TE_DELTA = 150; _MIN_BITS = 21
+    _HEADER_LOW_MULT = 35; _HEADER_LOW_DELTA_MULT = 35
+
+class HollarmDecoder(_PrincetonStyleDecoder):
+    name = "Hollarm"; _TE_SHORT = 200; _TE_LONG = 1000; _TE_DELTA = 200; _MIN_BITS = 42
+    _HEADER_LOW_MULT = 56; _HEADER_LOW_DELTA_MULT = 56
+
+class IDoDecoder(_PrincetonStyleDecoder):
+    name = "iDo"; _TE_SHORT = 450; _TE_LONG = 1450; _TE_DELTA = 150; _MIN_BITS = 48
+    _HEADER_LOW_MULT = 10; _HEADER_LOW_DELTA_MULT = 10
+
+class KeyfinderDecoder(_PrincetonStyleDecoder):
+    name = "Keyfinder"; _TE_SHORT = 400; _TE_LONG = 1200; _TE_DELTA = 150; _MIN_BITS = 24
+    _HEADER_LOW_MULT = 50; _HEADER_LOW_DELTA_MULT = 50
+
+class LinearDelta3Decoder(_PrincetonStyleDecoder):
+    name = "Linear Delta3"; _TE_SHORT = 500; _TE_LONG = 2000; _TE_DELTA = 150; _MIN_BITS = 8
+    _HEADER_LOW_MULT = 16; _HEADER_LOW_DELTA_MULT = 16
+
+class MagellanDecoder(_PrincetonStyleDecoder):
+    name = "Magellan"; _TE_SHORT = 200; _TE_LONG = 400; _TE_DELTA = 100; _MIN_BITS = 32
+    _HEADER_LOW_MULT = 150; _HEADER_LOW_DELTA_MULT = 150
+
+class Marantec24Decoder(_PrincetonStyleDecoder):
+    name = "Marantec 24"; _TE_SHORT = 800; _TE_LONG = 1600; _TE_DELTA = 200; _MIN_BITS = 24
+    _HEADER_LOW_MULT = 6; _HEADER_LOW_DELTA_MULT = 6
+
+class MastercodeDecoder(_PrincetonStyleDecoder):
+    name = "Mastercode"; _TE_SHORT = 1072; _TE_LONG = 2145; _TE_DELTA = 150; _MIN_BITS = 36
+    _HEADER_LOW_MULT = 15; _HEADER_LOW_DELTA_MULT = 15
+
+class NeroRadioDecoder(_PrincetonStyleDecoder):
+    name = "Nero Radio"; _TE_SHORT = 200; _TE_LONG = 400; _TE_DELTA = 80; _MIN_BITS = 56
+    _HEADER_LOW_MULT = 190; _HEADER_LOW_DELTA_MULT = 190
+    _HAS_START_BIT = True
+
+class NeroSketchDecoder(_PrincetonStyleDecoder):
+    name = "Nero Sketch"; _TE_SHORT = 330; _TE_LONG = 660; _TE_DELTA = 150; _MIN_BITS = 40
+    _HEADER_LOW_MULT = 115; _HEADER_LOW_DELTA_MULT = 115
+    _HAS_START_BIT = True
+
+class NordIceDecoder(_PrincetonStyleDecoder):
+    name = "Nord Ice"; _TE_SHORT = 300; _TE_LONG = 800; _TE_DELTA = 150; _MIN_BITS = 33
+    _HEADER_LOW_MULT = 30; _HEADER_LOW_DELTA_MULT = 30
+
+class RogerDecoder(_PrincetonStyleDecoder):
+    name = "Roger"; _TE_SHORT = 500; _TE_LONG = 1000; _TE_DELTA = 270; _MIN_BITS = 28
+    _HEADER_LOW_MULT = 36; _HEADER_LOW_DELTA_MULT = 36
+
+class SMC5326Decoder(_PrincetonStyleDecoder):
+    name = "SMC5326"; _TE_SHORT = 300; _TE_LONG = 900; _TE_DELTA = 200; _MIN_BITS = 25
+    _HEADER_LOW_MULT = 36; _HEADER_LOW_DELTA_MULT = 36
+
+class Treadmill37Decoder(_PrincetonStyleDecoder):
+    name = "Treadmill37"; _TE_SHORT = 300; _TE_LONG = 900; _TE_DELTA = 150; _MIN_BITS = 37
+    _HEADER_LOW_MULT = 29; _HEADER_LOW_DELTA_MULT = 29
+
+class AllstarFireflyDecoder(_PrincetonStyleDecoder):
+    name = "Allstar Firefly"; _TE_SHORT = 600; _TE_LONG = 4000; _TE_DELTA = 300; _MIN_BITS = 18
+    _HEADER_LOW_MULT = 8; _HEADER_LOW_DELTA_MULT = 8
+
+class DickertMAHSDecoder(_PrincetonStyleDecoder):
+    name = "Dickert MAHS"; _TE_SHORT = 400; _TE_LONG = 800; _TE_DELTA = 100; _MIN_BITS = 36
+    _HEADER_LOW_MULT = 50; _HEADER_LOW_DELTA_MULT = 50
+
+class VaunoEN8822CDecoder(_PrincetonStyleDecoder):
+    name = "Vauno EN8822C"; _TE_SHORT = 500; _TE_LONG = 1000; _TE_DELTA = 200; _MIN_BITS = 32
+    _HEADER_LOW_MULT = 30; _HEADER_LOW_DELTA_MULT = 30
+    _PROTO_TYPE = "Weather"
+
+class EmosE601xDecoder(_PrincetonStyleDecoder):
+    name = "Emos E601x"; _TE_SHORT = 500; _TE_LONG = 2000; _TE_DELTA = 200; _MIN_BITS = 36
+    _HEADER_LOW_MULT = 16; _HEADER_LOW_DELTA_MULT = 16
+    _PROTO_TYPE = "Weather"
+
+class X10Decoder(_PrincetonStyleDecoder):
+    name = "X10"; _TE_SHORT = 600; _TE_LONG = 1800; _TE_DELTA = 100; _MIN_BITS = 32
+    _HEADER_LOW_MULT = 16; _HEADER_LOW_DELTA_MULT = 16
+
+
+# ===================================================================
+# Hörmann — Princeton-style with HIGH header instead of LOW
+# te_short=500, te_long=1000, te_delta=200, min_bits=44
+# ===================================================================
+
+class HormannDecoder:
+    name = "Hormann"
+    _TE_SHORT = 500; _TE_LONG = 1000; _TE_DELTA = 200; _MIN_BITS = 44
+    _RESET = 0; _FOUND_START = 1; _SAVE_DUR = 2; _CHECK_DUR = 3
+
+    def __init__(self): self.reset()
+    def reset(self):
+        self._step = self._RESET; self._data = 0; self._bits = 0; self._te_last = 0
+
+    def feed(self, level, duration):
+        if self._step == self._RESET:
+            if level and DURATION_DIFF(duration, self._TE_SHORT * 24) < self._TE_DELTA * 24:
+                self._step = self._FOUND_START
+            return None
+        if self._step == self._FOUND_START:
+            if (not level) and DURATION_DIFF(duration, self._TE_SHORT) < self._TE_DELTA:
+                self._step = self._SAVE_DUR; self._data = 0; self._bits = 0
+            else:
+                self._step = self._RESET
+            return None
+        if self._step == self._SAVE_DUR:
+            if level:
+                if duration >= self._TE_SHORT * 5:
+                    self._step = self._FOUND_START
+                    if self._bits >= self._MIN_BITS:
+                        return DecodedSignal(protocol=self.name, data=self._data, bit_count=self._bits, proto_type="Static")
+                    return None
+                self._te_last = duration; self._step = self._CHECK_DUR
+            else:
+                self._step = self._RESET
+            return None
+        if self._step == self._CHECK_DUR:
+            if not level:
+                if (DURATION_DIFF(self._te_last, self._TE_SHORT) < self._TE_DELTA and
+                        DURATION_DIFF(duration, self._TE_LONG) < self._TE_DELTA):
+                    self._data = (self._data << 1) | 0; self._bits += 1; self._step = self._SAVE_DUR
+                elif (DURATION_DIFF(self._te_last, self._TE_LONG) < self._TE_DELTA and
+                      DURATION_DIFF(duration, self._TE_SHORT) < self._TE_DELTA):
+                    self._data = (self._data << 1) | 1; self._bits += 1; self._step = self._SAVE_DUR
+                else:
+                    self._step = self._RESET
+            else:
+                self._step = self._RESET
+            return None
+        return None
+
+    def encode(self, data, bit_count=None):
+        if bit_count is None:
+            bit_count = self._MIN_BITS
+        te_s = self._TE_SHORT
+        te_l = self._TE_LONG
+        pulses = [te_s * 24, -(te_s)]  # HIGH header + LOW start
+        for i in range(bit_count - 1, -1, -1):
+            if (data >> i) & 1:
+                pulses.extend([te_l, -(te_s)])
+            else:
+                pulses.extend([te_s, -(te_l)])
+        pulses.append(te_s * 5)  # footer HIGH
+        return pulses
+
+
+# ===================================================================
+# BETT — unique pattern: header LOW, then CheckDuration(HIGH) first,
+# SaveDuration(LOW) second. No start bit.
+# te_short=340, te_long=2000, te_delta=150, min_bits=18
+# ===================================================================
+
+class BETTDecoder:
+    name = "BETT"
+    _TE_SHORT = 340; _TE_LONG = 2000; _TE_DELTA = 150; _MIN_BITS = 18
+    _RESET = 0; _SAVE_DUR = 1; _CHECK_DUR = 2
+
+    def __init__(self): self.reset()
+    def reset(self):
+        self._step = self._RESET; self._data = 0; self._bits = 0
+
+    def feed(self, level, duration):
+        if self._step == self._RESET:
+            if (not level) and DURATION_DIFF(duration, self._TE_SHORT * 44) < self._TE_DELTA * 15:
+                self._data = 0; self._bits = 0; self._step = self._CHECK_DUR
+            return None
+        if self._step == self._SAVE_DUR:
+            if not level:
+                if DURATION_DIFF(duration, self._TE_SHORT * 44) < self._TE_DELTA * 15:
+                    if self._bits == self._MIN_BITS:
+                        sig = DecodedSignal(protocol=self.name, data=self._data, bit_count=self._bits)
+                        self._data = 0; self._bits = 0
+                        return sig
+                    self._step = self._RESET; self._data = 0; self._bits = 0
+                    return None
+                if (DURATION_DIFF(duration, self._TE_SHORT) < self._TE_DELTA or
+                        DURATION_DIFF(duration, self._TE_LONG) < self._TE_DELTA * 3):
+                    self._step = self._CHECK_DUR
+                else:
+                    self._step = self._RESET
+            return None
+        if self._step == self._CHECK_DUR:
+            if level:
+                if DURATION_DIFF(duration, self._TE_LONG) < self._TE_DELTA * 3:
+                    self._data = (self._data << 1) | 1; self._bits += 1; self._step = self._SAVE_DUR
+                elif DURATION_DIFF(duration, self._TE_SHORT) < self._TE_DELTA:
+                    self._data = (self._data << 1) | 0; self._bits += 1; self._step = self._SAVE_DUR
+                else:
+                    self._step = self._RESET
+            else:
+                self._step = self._RESET
+            return None
+        return None
+
+    def encode(self, data, bit_count=None):
+        if bit_count is None:
+            bit_count = self._MIN_BITS
+        te_s = self._TE_SHORT
+        te_l = self._TE_LONG
+        pulses = [-(te_s * 44)]  # header LOW
+        for i in range(bit_count - 1, -1, -1):
+            if (data >> i) & 1:
+                pulses.extend([te_l, -(te_s)])
+            else:
+                pulses.extend([te_s, -(te_s)])
+        pulses.append(-(te_s * 44))  # footer
+        return pulses
+
+
+# ===================================================================
+# KeeLoq — rolling code, Princeton-style with preamble counter
+# te_short=400, te_long=800, te_delta=180, min_bits=64
+# ===================================================================
+
+class KeeLoqDecoder:
+    name = "KeeLoq"
+    _TE_SHORT = 400; _TE_LONG = 800; _TE_DELTA = 180; _MIN_BITS = 64
+    _RESET = 0; _CHECK_PREAMBLE = 1; _SAVE_DUR = 2; _CHECK_DUR = 3
+
+    def __init__(self): self.reset()
+    def reset(self):
+        self._step = self._RESET; self._data = 0; self._bits = 0
+        self._te_last = 0; self._header_count = 0; self._last_data = 0
+
+    def feed(self, level, duration):
+        if self._step == self._RESET:
+            if level and DURATION_DIFF(duration, self._TE_SHORT) < self._TE_DELTA:
+                self._step = self._CHECK_PREAMBLE; self._header_count += 1
+            return None
+        if self._step == self._CHECK_PREAMBLE:
+            if (not level) and DURATION_DIFF(duration, self._TE_SHORT) < self._TE_DELTA:
+                self._step = self._RESET; return None
+            if self._header_count > 2 and DURATION_DIFF(duration, self._TE_SHORT * 10) < self._TE_DELTA * 10:
+                self._step = self._SAVE_DUR; self._data = 0; self._bits = 0
+            else:
+                self._step = self._RESET; self._header_count = 0
+            return None
+        if self._step == self._SAVE_DUR:
+            if level:
+                self._te_last = duration; self._step = self._CHECK_DUR
+            return None
+        if self._step == self._CHECK_DUR:
+            if not level:
+                if duration >= self._TE_SHORT * 2 + self._TE_DELTA:
+                    self._step = self._RESET
+                    if self._MIN_BITS <= self._bits <= self._MIN_BITS + 2:
+                        if self._last_data != self._data:
+                            self._last_data = self._data
+                            sig = DecodedSignal(protocol=self.name, data=self._data,
+                                                bit_count=self._MIN_BITS, proto_type="Rolling")
+                            sig.serial = int((self._data >> 0) & 0xFFFFFFFF)
+                            sig.cnt = int((self._data >> 32) & 0xFFFFFFFF)
+                            self._data = 0; self._bits = 0; self._header_count = 0
+                            return sig
+                    self._data = 0; self._bits = 0; self._header_count = 0
+                    return None
+                if (DURATION_DIFF(self._te_last, self._TE_SHORT) < self._TE_DELTA and
+                        DURATION_DIFF(duration, self._TE_LONG) < self._TE_DELTA * 2):
+                    self._data = (self._data << 1) | 1; self._bits += 1; self._step = self._SAVE_DUR
+                elif (DURATION_DIFF(self._te_last, self._TE_LONG) < self._TE_DELTA * 2 and
+                      DURATION_DIFF(duration, self._TE_SHORT) < self._TE_DELTA):
+                    self._data = (self._data << 1) | 0; self._bits += 1; self._step = self._SAVE_DUR
+                else:
+                    self._step = self._RESET; self._header_count = 0
+            else:
+                self._step = self._RESET; self._header_count = 0
+            return None
+        return None
+
+
+# ===================================================================
+# Nice Flor-S — rolling code with 3-part header
+# te_short=500, te_long=1000, te_delta=300, min_bits=52
+# ===================================================================
+
+class NiceFlorSDecoder:
+    name = "Nice Flor-S"
+    _TE_SHORT = 500; _TE_LONG = 1000; _TE_DELTA = 300; _MIN_BITS = 52
+    _RESET = 0; _CHECK_HEADER = 1; _FOUND_HEADER = 2; _SAVE_DUR = 3; _CHECK_DUR = 4
+
+    def __init__(self): self.reset()
+    def reset(self):
+        self._step = self._RESET; self._data = 0; self._bits = 0; self._te_last = 0
+
+    def feed(self, level, duration):
+        if self._step == self._RESET:
+            if (not level) and DURATION_DIFF(duration, self._TE_SHORT * 38) < self._TE_DELTA * 38:
+                self._step = self._CHECK_HEADER
+            return None
+        if self._step == self._CHECK_HEADER:
+            if level and DURATION_DIFF(duration, self._TE_SHORT * 3) < self._TE_DELTA * 3:
+                self._step = self._FOUND_HEADER
+            else:
+                self._step = self._RESET
+            return None
+        if self._step == self._FOUND_HEADER:
+            if (not level) and DURATION_DIFF(duration, self._TE_SHORT * 3) < self._TE_DELTA * 3:
+                self._step = self._SAVE_DUR; self._data = 0; self._bits = 0
+            else:
+                self._step = self._RESET
+            return None
+        if self._step == self._SAVE_DUR:
+            if level:
+                if DURATION_DIFF(duration, self._TE_SHORT * 3) < self._TE_DELTA:
+                    self._step = self._RESET
+                    if self._bits >= self._MIN_BITS:
+                        return DecodedSignal(protocol=self.name, data=self._data,
+                                            bit_count=self._bits, proto_type="Rolling")
+                    return None
+                self._te_last = duration; self._step = self._CHECK_DUR
+            return None
+        if self._step == self._CHECK_DUR:
+            if not level:
+                if (DURATION_DIFF(self._te_last, self._TE_SHORT) < self._TE_DELTA and
+                        DURATION_DIFF(duration, self._TE_LONG) < self._TE_DELTA):
+                    self._data = (self._data << 1) | 0; self._bits += 1; self._step = self._SAVE_DUR
+                elif (DURATION_DIFF(self._te_last, self._TE_LONG) < self._TE_DELTA and
+                      DURATION_DIFF(duration, self._TE_SHORT) < self._TE_DELTA):
+                    self._data = (self._data << 1) | 1; self._bits += 1; self._step = self._SAVE_DUR
+                else:
+                    self._step = self._RESET
+            else:
+                self._step = self._RESET
+            return None
+        return None
+
+
+# ===================================================================
+# CAME Atomo — Manchester encoding rolling code
+# te_short=600, te_long=1200, te_delta=250, min_bits=62
+# ===================================================================
+
+class CameAtomoDecoder:
+    name = "CAME Atomo"
+    _TE_SHORT = 600; _TE_LONG = 1200; _TE_DELTA = 250; _MIN_BITS = 62
+    _RESET = 0; _DATA = 1
+
+    def __init__(self): self.reset()
+    def reset(self):
+        self._step = self._RESET; self._data = 0; self._bits = 0; self._man_state = _MANCHESTER_RESET_STATE
+
+    def feed(self, level, duration):
+        if self._step == self._RESET:
+            if (not level) and (
+                DURATION_DIFF(duration, self._TE_LONG * 10) < self._TE_DELTA * 20 or
+                DURATION_DIFF(duration, self._TE_LONG * 16) < self._TE_DELTA * 10 or
+                DURATION_DIFF(duration, self._TE_LONG * 60) < self._TE_DELTA * 40):
+                self._step = self._DATA; self._data = 0; self._bits = 1
+                self._man_state, _ = _manchester_advance(self._man_state, 8)  # reset
+                self._man_state, _ = _manchester_advance(self._man_state, 0)  # ShortLow
+            return None
+        if self._step == self._DATA:
+            event = 8  # Reset
+            if not level:
+                if DURATION_DIFF(duration, self._TE_SHORT) < self._TE_DELTA:
+                    event = 0  # ShortLow
+                elif DURATION_DIFF(duration, self._TE_LONG) < self._TE_DELTA:
+                    event = 4  # LongLow
+                elif duration >= self._TE_LONG * 2 + self._TE_DELTA:
+                    if self._bits == self._MIN_BITS:
+                        sig = DecodedSignal(protocol=self.name, data=self._data,
+                                            bit_count=self._bits, proto_type="Rolling")
+                        self._step = self._RESET
+                        return sig
+                    self._data = 0; self._bits = 1
+                    self._man_state, _ = _manchester_advance(self._man_state, 8)
+                    self._man_state, _ = _manchester_advance(self._man_state, 0)
+                    return None
+                else:
+                    self._step = self._RESET; return None
+            else:
+                if DURATION_DIFF(duration, self._TE_SHORT) < self._TE_DELTA:
+                    event = 2  # ShortHigh
+                elif DURATION_DIFF(duration, self._TE_LONG) < self._TE_DELTA:
+                    event = 6  # LongHigh
+                else:
+                    self._step = self._RESET; return None
+            if event != 8:
+                self._man_state, bit_val = _manchester_advance(self._man_state, event)
+                if bit_val is not None:
+                    self._data = (self._data << 1) | (0 if bit_val else 1)
+                    self._bits += 1
+            return None
+        return None
+
+
+# ===================================================================
+# Honeywell — Manchester encoding
+# te_short=143, te_long=280, te_delta=51, min_bits=64
+# ===================================================================
+
+class HoneywellDecoder:
+    name = "Honeywell"
+    _TE_SHORT = 143; _TE_LONG = 280; _TE_DELTA = 51; _MIN_BITS = 62
+    def __init__(self): self.reset()
+    def reset(self):
+        self._data = 0; self._bits = 0; self._man_state = _MANCHESTER_RESET_STATE
+
+    def feed(self, level, duration):
+        event = 8
+        if not level:
+            if DURATION_DIFF(duration, self._TE_SHORT) < self._TE_DELTA:
+                event = 0
+            elif DURATION_DIFF(duration, self._TE_LONG) < self._TE_DELTA * 2:
+                event = 4
+        else:
+            if DURATION_DIFF(duration, self._TE_SHORT) < self._TE_DELTA:
+                event = 2
+            elif DURATION_DIFF(duration, self._TE_LONG) < self._TE_DELTA * 2:
+                event = 6
+        if event != 8:
+            self._man_state, bit_val = _manchester_advance(self._man_state, event)
+            if bit_val is not None:
+                self._data = (self._data << 1) | (1 if bit_val else 0)
+                self._bits += 1
+                if self._bits >= self._MIN_BITS:
+                    preamble = (self._data >> 48) & 0xFFFF
+                    if preamble in (0x3FFE, 0x7FFE, 0xFFFE):
+                        sig = DecodedSignal(protocol=self.name, data=self._data,
+                                            bit_count=self._bits, proto_type="Static")
+                        self._data = 0; self._bits = 0
+                        return sig
+        else:
+            self._data = 0; self._bits = 0
+        return None
+
+
+class HoneywellWDBDecoder:
+    name = "Honeywell WDB"
+    _TE_SHORT = 160; _TE_LONG = 320; _TE_DELTA = 60; _MIN_BITS = 48
+    def __init__(self): self.reset()
+    def reset(self):
+        self._data = 0; self._bits = 0; self._man_state = _MANCHESTER_RESET_STATE
+
+    def feed(self, level, duration):
+        event = 8
+        if not level:
+            if DURATION_DIFF(duration, self._TE_SHORT) < self._TE_DELTA: event = 0
+            elif DURATION_DIFF(duration, self._TE_LONG) < self._TE_DELTA * 2: event = 4
+        else:
+            if DURATION_DIFF(duration, self._TE_SHORT) < self._TE_DELTA: event = 2
+            elif DURATION_DIFF(duration, self._TE_LONG) < self._TE_DELTA * 2: event = 6
+        if event != 8:
+            self._man_state, bit_val = _manchester_advance(self._man_state, event)
+            if bit_val is not None:
+                self._data = (self._data << 1) | (1 if bit_val else 0)
+                self._bits += 1
+                if self._bits >= self._MIN_BITS:
+                    sig = DecodedSignal(protocol=self.name, data=self._data, bit_count=self._bits, proto_type="Static")
+                    self._data = 0; self._bits = 0
+                    return sig
+        else:
+            self._data = 0; self._bits = 0
+        return None
+
+
+# ===================================================================
+# FAAC SLH — rolling code, CAME-style
+# te_short=255, te_long=595, te_delta=100, min_bits=64
+# ===================================================================
+
+class FaacSLHDecoder(_CAMEStyleDecoder):
+    name = "Faac SLH"; _TE_SHORT = 255; _TE_LONG = 595; _TE_DELTA = 100; _MIN_BITS = 64
+    _HEADER_LOW_MULT = 36; _HEADER_LOW_DELTA_MULT = 36; _PROTO_TYPE = "Rolling"
+
+class AlutechAT4NDecoder(_PrincetonStyleDecoder):
+    name = "Alutech AT-4N"; _TE_SHORT = 400; _TE_LONG = 800; _TE_DELTA = 140; _MIN_BITS = 72
+    _HEADER_LOW_MULT = 70; _HEADER_LOW_DELTA_MULT = 70; _PROTO_TYPE = "Rolling"
+
+class JaroliftDecoder(_PrincetonStyleDecoder):
+    name = "Jarolift"; _TE_SHORT = 400; _TE_LONG = 800; _TE_DELTA = 167; _MIN_BITS = 72
+    _HEADER_LOW_MULT = 70; _HEADER_LOW_DELTA_MULT = 70; _PROTO_TYPE = "Rolling"
+
+class KingGatesStylo4KDecoder(_PrincetonStyleDecoder):
+    name = "KingGates Stylo4K"; _TE_SHORT = 400; _TE_LONG = 1100; _TE_DELTA = 140; _MIN_BITS = 89
+    _HEADER_LOW_MULT = 30; _HEADER_LOW_DELTA_MULT = 30; _PROTO_TYPE = "Rolling"
+
+class BenincaARCDecoder(_PrincetonStyleDecoder):
+    name = "Beninca ARC"; _TE_SHORT = 300; _TE_LONG = 600; _TE_DELTA = 155; _MIN_BITS = 128
+    _HEADER_LOW_MULT = 40; _HEADER_LOW_DELTA_MULT = 40; _PROTO_TYPE = "Rolling"
+
+
+# ===================================================================
+# Somfy Telis — Manchester with preamble counter
+# te_short=640, te_long=1280, te_delta=250, min_bits=56
+# ===================================================================
+
+class SomfyTelisDecoder:
+    name = "Somfy Telis"
+    _TE_SHORT = 640; _TE_LONG = 1280; _TE_DELTA = 250; _MIN_BITS = 56
+    _RESET = 0; _PREAMBLE = 1; _CHECK_PREAMBLE = 2; _DATA = 3
+
+    def __init__(self): self.reset()
+    def reset(self):
+        self._step = self._RESET; self._data = 0; self._bits = 0
+        self._header_count = 0; self._man_state = _MANCHESTER_RESET_STATE
+
+    def feed(self, level, duration):
+        if self._step == self._RESET:
+            if level and DURATION_DIFF(duration, self._TE_SHORT * 4) < self._TE_DELTA * 4:
+                self._step = self._PREAMBLE; self._header_count += 1
+            return None
+        if self._step == self._PREAMBLE:
+            if (not level) and DURATION_DIFF(duration, self._TE_SHORT * 4) < self._TE_DELTA * 4:
+                self._step = self._CHECK_PREAMBLE
+            else:
+                self._header_count = 0; self._step = self._RESET
+            return None
+        if self._step == self._CHECK_PREAMBLE:
+            if level:
+                if DURATION_DIFF(duration, self._TE_SHORT * 4) < self._TE_DELTA * 4:
+                    self._step = self._PREAMBLE; self._header_count += 1
+                elif self._header_count > 1 and DURATION_DIFF(duration, self._TE_SHORT * 7) < self._TE_DELTA * 4:
+                    self._step = self._DATA; self._data = 0; self._bits = 0; self._header_count = 0
+                    self._man_state, _ = _manchester_advance(_MANCHESTER_RESET_STATE, 8)
+                    self._man_state, _ = _manchester_advance(self._man_state, 6)
+                else:
+                    self._step = self._RESET; self._header_count = 0
+            return None
+        if self._step == self._DATA:
+            event = 8
+            if not level:
+                if DURATION_DIFF(duration, self._TE_SHORT) < self._TE_DELTA: event = 0
+                elif DURATION_DIFF(duration, self._TE_LONG) < self._TE_DELTA: event = 4
+                elif duration >= self._TE_LONG * 2 + self._TE_DELTA:
+                    self._step = self._RESET
+                    if self._bits >= self._MIN_BITS:
+                        return DecodedSignal(protocol=self.name, data=self._data,
+                                            bit_count=self._bits, proto_type="Rolling")
+                    return None
+                else:
+                    self._step = self._RESET; return None
+            else:
+                if DURATION_DIFF(duration, self._TE_SHORT) < self._TE_DELTA: event = 2
+                elif DURATION_DIFF(duration, self._TE_LONG) < self._TE_DELTA: event = 6
+                else:
+                    self._step = self._RESET; return None
+            if event != 8:
+                self._man_state, bit_val = _manchester_advance(self._man_state, event)
+                if bit_val is not None:
+                    self._data = (self._data << 1) | (1 if bit_val else 0)
+                    self._bits += 1
+            return None
+        return None
+
+
+class SomfyKeytisDecoder(SomfyTelisDecoder):
+    name = "Somfy Keytis"
+    _MIN_BITS = 80
+
+
+# ===================================================================
+# Weather: Nexus TH — HIGH+LOW pairs, te_short=490, te_long=1980
+# bit 0 = short_HIGH + 2x_short_LOW, bit 1 = short_HIGH + 4x_short_LOW
+# ===================================================================
+
+class NexusTHDecoder:
+    name = "Nexus-TH"
+    _TE_SHORT = 490; _TE_LONG = 1980; _TE_DELTA = 150; _MIN_BITS = 36
+    _RESET = 0; _SAVE_DUR = 1; _CHECK_DUR = 2
+
+    def __init__(self): self.reset()
+    def reset(self):
+        self._step = self._RESET; self._data = 0; self._bits = 0; self._te_last = 0
+
+    def feed(self, level, duration):
+        if self._step == self._RESET:
+            if (not level) and DURATION_DIFF(duration, self._TE_SHORT * 8) < self._TE_DELTA * 4:
+                self._step = self._SAVE_DUR; self._data = 0; self._bits = 0
+            return None
+        if self._step == self._SAVE_DUR:
+            if level:
+                self._te_last = duration; self._step = self._CHECK_DUR
+            else:
+                self._step = self._RESET
+            return None
+        if self._step == self._CHECK_DUR:
+            if not level:
+                if DURATION_DIFF(duration, self._TE_SHORT * 8) < self._TE_DELTA * 4:
+                    self._step = self._RESET
+                    if self._bits == self._MIN_BITS:
+                        sig = DecodedSignal(protocol=self.name, data=self._data,
+                                            bit_count=self._bits, proto_type="Weather")
+                        self._parse_weather(sig)
+                        return sig
+                    self._data = 0; self._bits = 0
+                    return None
+                if (DURATION_DIFF(self._te_last, self._TE_SHORT) < self._TE_DELTA and
+                        DURATION_DIFF(duration, self._TE_SHORT * 2) < self._TE_DELTA * 2):
+                    self._data = (self._data << 1) | 0; self._bits += 1; self._step = self._SAVE_DUR
+                elif (DURATION_DIFF(self._te_last, self._TE_SHORT) < self._TE_DELTA and
+                      DURATION_DIFF(duration, self._TE_SHORT * 4) < self._TE_DELTA * 4):
+                    self._data = (self._data << 1) | 1; self._bits += 1; self._step = self._SAVE_DUR
+                else:
+                    self._step = self._RESET
+            else:
+                self._step = self._RESET
+            return None
+        return None
+
+    def _parse_weather(self, sig):
+        d = sig.data
+        sig.extra["id"] = (d >> 28) & 0xFF
+        sig.extra["channel"] = ((d >> 24) & 0x03) + 1
+        sig.extra["battery"] = "OK" if not ((d >> 27) & 1) else "Low"
+        temp_raw = (d >> 12) & 0xFFF
+        if temp_raw & 0x800: temp_raw -= 0x1000
+        sig.extra["temp_c"] = temp_raw / 10.0
+        sig.extra["humidity"] = d & 0xFF
+
+
+# ===================================================================
+# Weather: Acurite 606TX
+# te_short=500, te_long=2000, te_delta=150, min_bits=32
+# ===================================================================
+
+class Acurite606TXDecoder(NexusTHDecoder):
+    name = "Acurite 606TX"
+    _TE_SHORT = 500; _TE_LONG = 2000; _TE_DELTA = 150; _MIN_BITS = 32
+
+    def _parse_weather(self, sig):
+        d = sig.data
+        sig.extra["id"] = (d >> 24) & 0xFF
+        sig.extra["battery"] = "OK" if not ((d >> 23) & 1) else "Low"
+        temp_raw = (d >> 12) & 0x7FF
+        if temp_raw & 0x400: temp_raw -= 0x800
+        sig.extra["temp_c"] = temp_raw / 10.0
+
+
+# ===================================================================
+# Weather: ThermoPro TX4
+# te_short=500, te_long=2000, te_delta=150, min_bits=37
+# ===================================================================
+
+class ThermoProTX4Decoder(NexusTHDecoder):
+    name = "ThermoPro TX4"
+    _TE_SHORT = 500; _TE_LONG = 2000; _TE_DELTA = 150; _MIN_BITS = 37
+
+    def _parse_weather(self, sig):
+        d = sig.data
+        sig.extra["id"] = (d >> 29) & 0xFF
+        sig.extra["channel"] = ((d >> 25) & 0x03) + 1
+        sig.extra["battery"] = "OK" if not ((d >> 24) & 1) else "Low"
+        temp_raw = (d >> 12) & 0xFFF
+        if temp_raw & 0x800: temp_raw -= 0x1000
+        sig.extra["temp_c"] = temp_raw / 10.0
+        sig.extra["humidity"] = d & 0xFF
+
+
+# ===================================================================
+# Weather: LaCrosse TX141THBv2 — Manchester encoding
+# te_short=208, te_long=417, te_delta=120, min_bits=40
+# ===================================================================
+
+class LaCrosseTX141Decoder:
+    name = "LaCrosse TX141"
+    _TE_SHORT = 208; _TE_LONG = 417; _TE_DELTA = 120; _MIN_BITS = 40
+    _RESET = 0; _DATA = 1
+
+    def __init__(self): self.reset()
+    def reset(self):
+        self._step = self._RESET; self._data = 0; self._bits = 0
+        self._te_last = 0; self._man_state = _MANCHESTER_RESET_STATE
+
+    def feed(self, level, duration):
+        if self._step == self._RESET:
+            if level and DURATION_DIFF(duration, self._TE_LONG * 4) < self._TE_DELTA * 4:
+                self._step = self._DATA; self._data = 0; self._bits = 0
+                self._man_state, _ = _manchester_advance(_MANCHESTER_RESET_STATE, 8)
+            return None
+        if self._step == self._DATA:
+            event = 8
+            if not level:
+                if DURATION_DIFF(duration, self._TE_SHORT) < self._TE_DELTA: event = 0
+                elif DURATION_DIFF(duration, self._TE_LONG) < self._TE_DELTA: event = 4
+                elif duration >= self._TE_LONG * 3:
+                    self._step = self._RESET
+                    if self._bits >= self._MIN_BITS:
+                        sig = DecodedSignal(protocol=self.name, data=self._data,
+                                            bit_count=self._bits, proto_type="Weather")
+                        return sig
+                    return None
+                else:
+                    self._step = self._RESET; return None
+            else:
+                if DURATION_DIFF(duration, self._TE_SHORT) < self._TE_DELTA: event = 2
+                elif DURATION_DIFF(duration, self._TE_LONG) < self._TE_DELTA: event = 6
+                else:
+                    self._step = self._RESET; return None
+            if event != 8:
+                self._man_state, bit_val = _manchester_advance(self._man_state, event)
+                if bit_val is not None:
+                    self._data = (self._data << 1) | (1 if bit_val else 0)
+                    self._bits += 1
+            return None
+        return None
+
 
 # ===================================================================
 # .sub file format
@@ -766,11 +1859,472 @@ def load_sub_file(path):
     return result
 
 
+# ===================================================================
+# Manchester helper (reusable state machine)
+# Events: 0=ShortLow, 1=ShortHigh, 2=LongLow, 3=LongHigh
+# Returns: (new_state, decoded_bit) or (None, None) on reset
+# ===================================================================
+
+_MANCHESTER_TABLE = [
+    [(1, None), (2, None), (None, None), (None, None)],
+    [(None, None), (0, 0), (None, None), (0, 1)],
+    [(0, 1), (None, None), (0, 0), (None, None)],
+]
+
+def _manchester_advance(state, event):
+    if state is None or state >= len(_MANCHESTER_TABLE) or event >= 4:
+        return None, None
+    return _MANCHESTER_TABLE[state][event]
+
+
+# ===================================================================
+# GT-WT-02 — te_short=500, te_long=2000, te_delta=150, min_bits=37
+# ===================================================================
+class GTWT02Decoder:
+    name = "GT-WT-02"
+    _TE_SHORT = 500; _TE_LONG = 2000; _TE_DELTA = 150; _MIN_BITS = 37
+    _RESET = 0; _SAVE = 1; _CHECK = 2
+    def __init__(self): self.reset()
+    def reset(self): self._step = self._RESET; self._data = 0; self._bits = 0; self._te_last = 0
+    def _add_bit(self, b): self._data = (self._data << 1) | b; self._bits += 1
+    def feed(self, level, duration):
+        if self._step == self._RESET:
+            if (not level) and DURATION_DIFF(duration, self._TE_SHORT * 18) < self._TE_DELTA * 8:
+                self._step = self._SAVE; self._data = 0; self._bits = 0
+            return None
+        if self._step == self._SAVE:
+            if level: self._te_last = duration; self._step = self._CHECK
+            else: self._step = self._RESET
+            return None
+        if self._step == self._CHECK:
+            if not level:
+                if DURATION_DIFF(self._te_last, self._TE_SHORT) < self._TE_DELTA:
+                    if DURATION_DIFF(duration, self._TE_SHORT * 18) < self._TE_DELTA * 8:
+                        self._step = self._RESET
+                        if self._bits == self._MIN_BITS:
+                            return DecodedSignal(protocol=self.name, data=self._data, bit_count=self._bits, proto_type="Weather")
+                        self._data = 0; self._bits = 0; return None
+                    elif DURATION_DIFF(duration, self._TE_LONG) < self._TE_DELTA * 2:
+                        self._add_bit(0); self._step = self._SAVE
+                    elif DURATION_DIFF(duration, self._TE_LONG * 2) < self._TE_DELTA * 4:
+                        self._add_bit(1); self._step = self._SAVE
+                    else: self._step = self._RESET
+                else: self._step = self._RESET
+            else: self._step = self._RESET
+            return None
+        return None
+
+class GTWT03Decoder:
+    name = "GT-WT-03"
+    _TE_SHORT = 285; _TE_LONG = 570; _TE_DELTA = 120; _MIN_BITS = 41
+    _RESET = 0; _PRE = 1; _SAVE = 2; _CHECK = 3
+    def __init__(self): self.reset()
+    def reset(self): self._step = self._RESET; self._data = 0; self._bits = 0; self._te_last = 0; self._hdr = 0
+    def _add_bit(self, b): self._data = (self._data << 1) | b; self._bits += 1
+    def feed(self, level, duration):
+        if self._step == self._RESET:
+            if level and DURATION_DIFF(duration, self._TE_SHORT * 3) < self._TE_DELTA * 2:
+                self._step = self._PRE; self._te_last = duration; self._hdr = 0
+            return None
+        if self._step == self._PRE:
+            if level: self._te_last = duration
+            else:
+                if (DURATION_DIFF(self._te_last, self._TE_SHORT * 3) < self._TE_DELTA * 2 and
+                    DURATION_DIFF(duration, self._TE_SHORT * 3) < self._TE_DELTA * 2): self._hdr += 1
+                elif self._hdr == 4:
+                    if (DURATION_DIFF(self._te_last, self._TE_SHORT) < self._TE_DELTA and
+                        DURATION_DIFF(duration, self._TE_LONG) < self._TE_DELTA):
+                        self._data = 0; self._bits = 0; self._add_bit(0); self._step = self._SAVE
+                    elif (DURATION_DIFF(self._te_last, self._TE_LONG) < self._TE_DELTA and
+                          DURATION_DIFF(duration, self._TE_SHORT) < self._TE_DELTA):
+                        self._data = 0; self._bits = 0; self._add_bit(1); self._step = self._SAVE
+                    else: self._step = self._RESET
+                else: self._step = self._RESET
+            return None
+        if self._step == self._SAVE:
+            if level: self._te_last = duration; self._step = self._CHECK
+            else: self._step = self._RESET
+            return None
+        if self._step == self._CHECK:
+            if not level:
+                if (DURATION_DIFF(self._te_last, self._TE_SHORT * 3) < self._TE_DELTA * 2 and
+                    DURATION_DIFF(duration, self._TE_SHORT * 3) < self._TE_DELTA * 2):
+                    if self._bits == self._MIN_BITS:
+                        sig = DecodedSignal(protocol=self.name, data=self._data, bit_count=self._bits, proto_type="Weather")
+                        self._data = 0; self._bits = 0; self._hdr = 1; self._step = self._PRE; return sig
+                    self._data = 0; self._bits = 0; self._hdr = 1; self._step = self._PRE
+                elif (DURATION_DIFF(self._te_last, self._TE_SHORT) < self._TE_DELTA and
+                      DURATION_DIFF(duration, self._TE_LONG) < self._TE_DELTA): self._add_bit(0); self._step = self._SAVE
+                elif (DURATION_DIFF(self._te_last, self._TE_LONG) < self._TE_DELTA and
+                      DURATION_DIFF(duration, self._TE_SHORT) < self._TE_DELTA): self._add_bit(1); self._step = self._SAVE
+                else: self._step = self._RESET
+            else: self._step = self._RESET
+            return None
+        return None
+
+class Acurite609TXCDecoder(GTWT02Decoder):
+    name = "Acurite 609TXC"
+    _TE_SHORT = 500; _TE_LONG = 1000; _TE_DELTA = 150; _MIN_BITS = 40
+
+class AuriolAHFLDecoder(GTWT02Decoder):
+    name = "Auriol AHFL"
+    _TE_SHORT = 500; _TE_LONG = 2000; _TE_DELTA = 150; _MIN_BITS = 42
+
+class AuriolHG0601ADecoder(GTWT02Decoder):
+    name = "Auriol HG0601A"
+    _TE_SHORT = 500; _TE_LONG = 2000; _TE_DELTA = 150; _MIN_BITS = 37
+
+class Acurite986Decoder:
+    name = "Acurite 986"
+    _TE_LONG = 1750; _TE_SHORT = 800; _TE_DELTA = 50; _MIN_BITS = 40
+    _RESET = 0; _S1 = 1; _S2 = 2; _S3 = 3; _SAVE = 4; _CHECK = 5
+    def __init__(self): self.reset()
+    def reset(self): self._step = self._RESET; self._data = 0; self._bits = 0; self._te_last = 0
+    def feed(self, level, duration):
+        if self._step == self._RESET:
+            if (not level) and DURATION_DIFF(duration, self._TE_LONG) < self._TE_DELTA * 15:
+                self._step = self._S1; self._data = 0; self._bits = 0
+            return None
+        if self._step in (self._S1, self._S2, self._S3):
+            if DURATION_DIFF(duration, self._TE_LONG) < self._TE_DELTA * 15:
+                if not level: self._step += 1
+            else: self._step = self._RESET
+            return None
+        if self._step == self._SAVE:
+            if level: self._te_last = duration; self._step = self._CHECK
+            else: self._step = self._RESET
+            return None
+        if self._step == self._CHECK:
+            if not level:
+                if DURATION_DIFF(duration, self._TE_SHORT) < self._TE_DELTA * 10:
+                    self._data = (self._data << 1) | (0 if duration < self._TE_SHORT else 1); self._bits += 1
+                    self._step = self._SAVE
+                else:
+                    self._step = self._RESET
+                    if self._bits == self._MIN_BITS:
+                        return DecodedSignal(protocol=self.name, data=self._data, bit_count=self._bits, proto_type="Weather")
+            else: self._step = self._RESET
+            return None
+        return None
+
+class Acurite592TXRDecoder(GTWT03Decoder):
+    name = "Acurite 592TXR"
+    _TE_SHORT = 200; _TE_LONG = 400; _TE_DELTA = 90; _MIN_BITS = 56
+
+class Acurite5n1Decoder(GTWT03Decoder):
+    name = "Acurite 5n1"
+    _TE_SHORT = 200; _TE_LONG = 400; _TE_DELTA = 90; _MIN_BITS = 64
+
+class SolightTE44Decoder:
+    name = "Solight TE44"
+    _TE_SHORT = 490; _TE_DELTA = 150; _MIN_BITS = 36
+    _RESET = 0; _SAVE = 1; _CHECK = 2
+    def __init__(self): self.reset()
+    def reset(self): self._step = self._RESET; self._data = 0; self._bits = 0; self._te_last = 0
+    def feed(self, level, duration):
+        if self._step == self._RESET:
+            if (not level) and duration >= 3000: self._step = self._SAVE; self._data = 0; self._bits = 0
+            return None
+        if self._step == self._SAVE:
+            if level: self._te_last = duration; self._step = self._CHECK
+            else: self._step = self._RESET
+            return None
+        if self._step == self._CHECK:
+            if not level:
+                if DURATION_DIFF(duration, self._TE_SHORT) < self._TE_DELTA:
+                    self._step = self._RESET
+                    if self._bits == self._MIN_BITS:
+                        return DecodedSignal(protocol=self.name, data=self._data, bit_count=self._bits, proto_type="Weather")
+                elif (DURATION_DIFF(self._te_last, self._TE_SHORT) < self._TE_DELTA and
+                      DURATION_DIFF(duration, self._TE_SHORT * 2) < self._TE_DELTA):
+                    self._data = (self._data << 1); self._bits += 1; self._step = self._SAVE
+                elif (DURATION_DIFF(self._te_last, self._TE_SHORT) < self._TE_DELTA and
+                      DURATION_DIFF(duration, self._TE_SHORT * 4) < self._TE_DELTA):
+                    self._data = (self._data << 1) | 1; self._bits += 1; self._step = self._SAVE
+                else: self._step = self._RESET
+            else: self._step = self._RESET
+            return None
+        return None
+
+class InfactoryDecoder(GTWT03Decoder):
+    name = "Infactory"
+    _TE_SHORT = 500; _TE_LONG = 2000; _TE_DELTA = 150; _MIN_BITS = 40
+
+class KedsumTHDecoder(GTWT03Decoder):
+    name = "Kedsum TH"
+    _TE_SHORT = 500; _TE_LONG = 2000; _TE_DELTA = 150; _MIN_BITS = 42
+
+class Bresser3chDecoder(SolightTE44Decoder):
+    name = "Bresser 3ch"
+    _TE_SHORT = 250; _TE_DELTA = 150; _MIN_BITS = 36
+
+class TX8300Decoder(GTWT02Decoder):
+    name = "TX 8300"
+    _TE_SHORT = 1940; _TE_LONG = 3880; _TE_DELTA = 250; _MIN_BITS = 72
+
+class WendoxW6726Decoder(GTWT03Decoder):
+    name = "Wendox W6726"
+    _TE_SHORT = 1955; _TE_LONG = 5865; _TE_DELTA = 300; _MIN_BITS = 29
+
+class PowerSmartDecoder:
+    name = "Power Smart"
+    _TE_SHORT = 225; _TE_LONG = 450; _TE_DELTA = 100; _MIN_BITS = 64
+    _HEADER = 0xFD000000C0000000; _HEADER_MASK = 0xFF000000FF000000
+    def __init__(self): self.reset()
+    def reset(self): self._data = 0; self._m_state = 0
+    def feed(self, level, duration):
+        event = -1
+        if not level:
+            if DURATION_DIFF(duration, self._TE_SHORT) < self._TE_DELTA: event = 0
+            elif DURATION_DIFF(duration, self._TE_LONG) < self._TE_DELTA * 2: event = 2
+        else:
+            if DURATION_DIFF(duration, self._TE_SHORT) < self._TE_DELTA: event = 1
+            elif DURATION_DIFF(duration, self._TE_LONG) < self._TE_DELTA * 2: event = 3
+        if event >= 0:
+            ns, bit = _manchester_advance(self._m_state, event)
+            if ns is not None:
+                self._m_state = ns
+                if bit is not None:
+                    self._data = ((self._data << 1) | (1 - bit)) & ((1 << 64) - 1)
+                    if (self._data & self._HEADER_MASK) == self._HEADER:
+                        sig = DecodedSignal(protocol=self.name, data=self._data, bit_count=self._MIN_BITS, proto_type="Static")
+                        self._data = 0; return sig
+        else: self._data = 0; self._m_state = 0
+        return None
+
+class ReversRB2Decoder:
+    name = "Revers RB2"
+    _TE_SHORT = 250; _TE_LONG = 500; _TE_DELTA = 160; _MIN_BITS = 64
+    _RESET = 0; _HDR = 1; _DATA = 2
+    def __init__(self): self.reset()
+    def reset(self): self._step = self._RESET; self._data = 0; self._bits = 0; self._m_state = 0; self._hdr = 0; self._last = 0
+    def feed(self, level, duration):
+        if self._step == self._RESET:
+            if (not level) and DURATION_DIFF(duration, 600) < self._TE_DELTA:
+                self._step = self._HDR; self._hdr = 0; self._m_state = 0
+            return None
+        if self._step == self._HDR:
+            ok = DURATION_DIFF(duration, self._TE_SHORT) < self._TE_DELTA
+            if ok:
+                if (not level and self._last == 1) or (level and self._last == 0): self._hdr += 1
+                self._last = 1 if level else 0
+            else: self._step = self._RESET
+            if self._hdr == 4:
+                self._data = 0xF; self._bits = 4; self._step = self._DATA
+            return None
+        if self._step == self._DATA:
+            event = -1
+            if not level:
+                if DURATION_DIFF(duration, self._TE_SHORT) < self._TE_DELTA: event = 0
+                elif DURATION_DIFF(duration, self._TE_LONG) < self._TE_DELTA * 2: event = 2
+            else:
+                if DURATION_DIFF(duration, self._TE_SHORT) < self._TE_DELTA: event = 1
+                elif DURATION_DIFF(duration, self._TE_LONG) < self._TE_DELTA * 2: event = 3
+            if event >= 0:
+                ns, bit = _manchester_advance(self._m_state, event)
+                if ns is not None:
+                    self._m_state = ns
+                    if bit is not None:
+                        self._data = ((self._data << 1) | bit) & ((1 << 64) - 1); self._bits += 1
+                        if self._bits == self._MIN_BITS:
+                            sig = DecodedSignal(protocol=self.name, data=self._data, bit_count=self._bits, proto_type="Static")
+                            self._step = self._RESET; return sig
+            else: self._step = self._RESET
+            return None
+        return None
+
+class MarantecDecoder:
+    name = "Marantec"
+    _TE_SHORT = 1000; _TE_LONG = 2000; _TE_DELTA = 200; _MIN_BITS = 49
+    _RESET = 0; _DATA = 1
+    def __init__(self): self.reset()
+    def reset(self): self._step = self._RESET; self._data = 0; self._bits = 0; self._m_state = 0
+    def feed(self, level, duration):
+        if self._step == self._RESET:
+            if (not level) and DURATION_DIFF(duration, self._TE_LONG * 5) < self._TE_DELTA * 8:
+                self._step = self._DATA; self._data = 1; self._bits = 1; self._m_state = 0
+            return None
+        event = -1
+        if not level:
+            if DURATION_DIFF(duration, self._TE_SHORT) < self._TE_DELTA: event = 0
+            elif DURATION_DIFF(duration, self._TE_LONG) < self._TE_DELTA: event = 2
+            elif duration >= self._TE_LONG * 2 + self._TE_DELTA:
+                if self._bits == self._MIN_BITS:
+                    sig = DecodedSignal(protocol=self.name, data=self._data, bit_count=self._bits, proto_type="Rolling")
+                    self._data = 1; self._bits = 1; self._m_state = 0; return sig
+                self._data = 1; self._bits = 1; self._m_state = 0; return None
+            else: self._step = self._RESET; return None
+        else:
+            if DURATION_DIFF(duration, self._TE_SHORT) < self._TE_DELTA: event = 1
+            elif DURATION_DIFF(duration, self._TE_LONG) < self._TE_DELTA: event = 3
+            else: self._step = self._RESET; return None
+        if event >= 0:
+            ns, bit = _manchester_advance(self._m_state, event)
+            if ns is not None:
+                self._m_state = ns
+                if bit is not None: self._data = (self._data << 1) | bit; self._bits += 1
+        return None
+
+class AmbientWeatherDecoder(PowerSmartDecoder):
+    name = "Ambient Weather"
+    _TE_SHORT = 500; _TE_LONG = 1000; _TE_DELTA = 120; _MIN_BITS = 48
+    _HEADER = 0x33; _HEADER_MASK = 0xFF
+
+class SchraderGG4Decoder:
+    name = "Schrader GG4"
+    _TE_SHORT = 120; _TE_LONG = 240; _TE_DELTA = 55; _MIN_BITS = 64; _PRE_BITS = 8
+    _RESET = 0; _PRE = 1; _DATA = 2
+    def __init__(self): self.reset()
+    def reset(self): self._step = self._RESET; self._data = 0; self._bits = 0; self._m_state = 3; self._hdr = 0
+    def feed(self, level, duration):
+        if self._step != self._RESET:
+            event = -1
+            if not level:
+                if DURATION_DIFF(duration, self._TE_SHORT) < self._TE_DELTA: event = 0
+                elif DURATION_DIFF(duration, self._TE_LONG) < self._TE_DELTA: event = 2
+            else:
+                if DURATION_DIFF(duration, self._TE_SHORT) < self._TE_DELTA: event = 1
+                elif DURATION_DIFF(duration, self._TE_LONG) < self._TE_DELTA: event = 3
+            if event < 0: self._step = self._RESET; return None
+            ns, bit = _manchester_advance(self._m_state, event)
+            if ns is None: self._step = self._RESET; return None
+            self._m_state = ns
+            if bit is None: return None
+            bit = 1 - bit
+        if self._step == self._RESET:
+            if level and DURATION_DIFF(duration, self._TE_LONG * 2) < self._TE_DELTA:
+                self._step = self._PRE; self._hdr = 0; self._data = 0; self._bits = 0; self._m_state = 3
+            return None
+        if self._step == self._PRE:
+            if bit != 0: self._step = self._RESET; return None
+            self._hdr += 1
+            if self._hdr == self._PRE_BITS: self._step = self._DATA
+            return None
+        if self._step == self._DATA:
+            self._data = (self._data << 1) | bit; self._bits += 1
+            if self._bits == self._MIN_BITS:
+                sig = DecodedSignal(protocol=self.name, data=self._data, bit_count=self._bits, proto_type="TPMS")
+                self._step = self._RESET; return sig
+        return None
+
+class SecPlusV2Decoder:
+    name = "Security+ V2"
+    _TE_SHORT = 250; _TE_LONG = 500; _TE_DELTA = 110; _MIN_BITS = 62
+    _RESET = 0; _DATA = 1
+    def __init__(self): self.reset()
+    def reset(self): self._step = self._RESET; self._data = 0; self._bits = 0; self._m_state = 0
+    def feed(self, level, duration):
+        if self._step == self._RESET:
+            if (not level) and DURATION_DIFF(duration, self._TE_LONG * 130) < self._TE_DELTA * 100:
+                self._step = self._DATA; self._data = 0; self._bits = 0; self._m_state = 0
+            return None
+        event = -1
+        if not level:
+            if DURATION_DIFF(duration, self._TE_SHORT) < self._TE_DELTA: event = 0
+            elif DURATION_DIFF(duration, self._TE_LONG) < self._TE_DELTA: event = 2
+            elif duration >= self._TE_LONG * 2 + self._TE_DELTA:
+                if self._bits == self._MIN_BITS:
+                    sig = DecodedSignal(protocol=self.name, data=self._data, bit_count=self._bits, proto_type="Rolling")
+                    self._data = 0; self._bits = 0; self._m_state = 0; return sig
+                self._data = 0; self._bits = 0; self._m_state = 0; return None
+            else: self._step = self._RESET; return None
+        else:
+            if DURATION_DIFF(duration, self._TE_SHORT) < self._TE_DELTA: event = 1
+            elif DURATION_DIFF(duration, self._TE_LONG) < self._TE_DELTA: event = 3
+            else: self._step = self._RESET; return None
+        if event >= 0:
+            ns, bit = _manchester_advance(self._m_state, event)
+            if ns is not None:
+                self._m_state = ns
+                if bit is not None: self._data = (self._data << 1) | bit; self._bits += 1
+        return None
+
+class HormannBiSecurDecoder:
+    name = "Hormann BiSecur"
+    _TE_SHORT = 208; _TE_LONG = 416; _TE_DELTA = 104; _MIN_BITS = 176
+    _RESET = 0; _ALT_S = 1; _HI_VL = 2; _ALT_L = 3; _DATA = 4
+    def __init__(self): self.reset()
+    def reset(self): self._step = self._RESET; self._data = 0; self._bits = 0; self._m_state = 0; self._sync = 0
+    def feed(self, level, duration):
+        if self._step == self._RESET:
+            if not level and DURATION_DIFF(duration, self._TE_SHORT + self._TE_SHORT // 2) < self._TE_DELTA:
+                self._step = self._ALT_S
+            return None
+        if self._step == self._ALT_S:
+            if DURATION_DIFF(duration, self._TE_SHORT) < self._TE_DELTA: return None
+            if level and DURATION_DIFF(duration, self._TE_LONG * 4) < self._TE_DELTA:
+                self._step = self._HI_VL; return None
+            self._step = self._RESET; return None
+        if self._step == self._HI_VL:
+            if not level and DURATION_DIFF(duration, self._TE_LONG) < self._TE_DELTA:
+                self._sync = 3; self._step = self._ALT_L; return None
+            self._step = self._RESET; return None
+        if self._step == self._ALT_L:
+            if level == bool(self._sync & 1) and DURATION_DIFF(duration, self._TE_LONG) < self._TE_DELTA:
+                self._sync -= 1
+                if self._sync == 0: self._step = self._DATA; self._data = 0; self._bits = 0; self._m_state = 0
+                return None
+            self._step = self._RESET; return None
+        if self._step == self._DATA:
+            event = -1
+            if DURATION_DIFF(duration, self._TE_SHORT) < self._TE_DELTA:
+                event = 1 if not level else 0
+            elif DURATION_DIFF(duration, self._TE_LONG) < self._TE_DELTA:
+                event = 3 if not level else 2
+            if event < 0: self._step = self._RESET; return None
+            ns, bit = _manchester_advance(self._m_state, event)
+            if ns is None: self._step = self._RESET; return None
+            self._m_state = ns
+            if bit is not None:
+                self._data = (self._data << 1) | bit; self._bits += 1
+                if self._bits == self._MIN_BITS:
+                    sig = DecodedSignal(protocol=self.name, data=self._data, bit_count=self._bits, proto_type="Rolling")
+                    self._step = self._RESET; return sig
+            return None
+        return None
+
+class SecPlusV1Decoder:
+    name = "Security+ V1"
+    _TE_SHORT = 500; _TE_LONG = 1500; _TE_DELTA = 100; _MIN_BITS = 21
+    _RESET = 0; _START = 1; _SAVE = 2; _CHECK = 3
+    def __init__(self): self.reset()
+    def reset(self): self._step = self._RESET; self._data = 0; self._bits = 0; self._te_last = 0
+    def feed(self, level, duration):
+        if self._step == self._RESET:
+            if (not level) and DURATION_DIFF(duration, self._TE_SHORT * 120) < self._TE_DELTA * 120:
+                self._step = self._START; self._data = 0; self._bits = 0
+            return None
+        if self._step == self._START:
+            if level:
+                if DURATION_DIFF(duration, self._TE_SHORT) < self._TE_DELTA: self._bits += 1; self._step = self._SAVE
+                elif DURATION_DIFF(duration, self._TE_LONG) < self._TE_DELTA: self._bits += 1; self._step = self._SAVE
+                else: self._step = self._RESET
+            else: self._step = self._RESET
+            return None
+        if self._step == self._SAVE:
+            if not level:
+                if DURATION_DIFF(duration, self._TE_SHORT * 120) < self._TE_DELTA * 120:
+                    if self._bits == self._MIN_BITS:
+                        sig = DecodedSignal(protocol=self.name, data=self._data, bit_count=self._bits, proto_type="Rolling")
+                        self._step = self._RESET; return sig
+                    self._bits = 0; self._step = self._START
+                else: self._te_last = duration; self._step = self._CHECK
+            else: self._step = self._RESET
+            return None
+        if self._step == self._CHECK:
+            if level:
+                self._data = (self._data << 1); self._bits += 1; self._step = self._SAVE
+            else: self._step = self._RESET
+            return None
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Protocol registry
 # ---------------------------------------------------------------------------
 
 ALL_PROTOCOLS = [
+    # Original 7 (tested & working)
     PrincetonDecoder(),
     CAMEDecoder(),
     NiceFloDecoder(),
@@ -778,6 +2332,88 @@ ALL_PROTOCOLS = [
     LinearDecoder(),
     HoltekHT12XDecoder(),
     ChamberlainDecoder(),
+    # Static remotes — CAME-style
+    AnsonicDecoder(),
+    DitecGol4Decoder(),
+    DoitrandDecoder(),
+    HoltekDecoder(),
+    IntertechnoV3Decoder(),
+    LegrandDecoder(),
+    MegaCodeDecoder(),
+    PhoenixV2Decoder(),
+    CameTweeDecoder(),
+    # Static remotes — Princeton-style
+    ClemsaDecoder(),
+    DooyaDecoder(),
+    ElplastDecoder(),
+    FeronDecoder(),
+    GangQiDecoder(),
+    Hay21Decoder(),
+    HollarmDecoder(),
+    IDoDecoder(),
+    KeyfinderDecoder(),
+    LinearDelta3Decoder(),
+    MagellanDecoder(),
+    Marantec24Decoder(),
+    MastercodeDecoder(),
+    NeroRadioDecoder(),
+    NeroSketchDecoder(),
+    NordIceDecoder(),
+    RogerDecoder(),
+    SMC5326Decoder(),
+    Treadmill37Decoder(),
+    AllstarFireflyDecoder(),
+    DickertMAHSDecoder(),
+    X10Decoder(),
+    # Static — unique patterns
+    HormannDecoder(),
+    BETTDecoder(),
+    # Rolling code
+    KeeLoqDecoder(),
+    NiceFlorSDecoder(),
+    CameAtomoDecoder(),
+    FaacSLHDecoder(),
+    AlutechAT4NDecoder(),
+    JaroliftDecoder(),
+    KingGatesStylo4KDecoder(),
+    BenincaARCDecoder(),
+    SomfyTelisDecoder(),
+    SomfyKeytisDecoder(),
+    # Manchester-based
+    HoneywellDecoder(),
+    HoneywellWDBDecoder(),
+    # Weather/sensors
+    NexusTHDecoder(),
+    Acurite606TXDecoder(),
+    ThermoProTX4Decoder(),
+    LaCrosseTX141Decoder(),
+    VaunoEN8822CDecoder(),
+    EmosE601xDecoder(),
+    GTWT02Decoder(),
+    GTWT03Decoder(),
+    Acurite609TXCDecoder(),
+    Acurite986Decoder(),
+    Acurite592TXRDecoder(),
+    Acurite5n1Decoder(),
+    AuriolAHFLDecoder(),
+    AuriolHG0601ADecoder(),
+    SolightTE44Decoder(),
+    InfactoryDecoder(),
+    KedsumTHDecoder(),
+    Bresser3chDecoder(),
+    TX8300Decoder(),
+    WendoxW6726Decoder(),
+    AmbientWeatherDecoder(),
+    # Manchester-based (static/rolling)
+    PowerSmartDecoder(),
+    ReversRB2Decoder(),
+    MarantecDecoder(),
+    # TPMS
+    SchraderGG4Decoder(),
+    # Rolling code (Manchester)
+    SecPlusV2Decoder(),
+    HormannBiSecurDecoder(),
+    SecPlusV1Decoder(),
 ]
 
 PROTOCOL_BY_NAME = {p.name: p for p in ALL_PROTOCOLS}

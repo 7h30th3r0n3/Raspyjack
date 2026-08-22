@@ -337,6 +337,7 @@ def _mode_read(radio):
                 for sig in decoded:
                     sig.frequency = FREQUENCIES[freq_idx]
                     sig.modulation = PRESETS[preset_idx]["name"]
+                    sig.extra["_raw_pulses"] = list(pulses)
                     signals.insert(0, sig)
                     if len(signals) > 50:
                         signals = signals[:50]
@@ -390,7 +391,9 @@ def _mode_read(radio):
             os.makedirs(LOOT_DIR, exist_ok=True)
             ts = time.strftime("%Y%m%d_%H%M%S")
             fname = f"{sig.protocol}_{ts}.sub"
+            raw = sig.extra.get("_raw_pulses", [])
             save_sub_file(os.path.join(LOOT_DIR, fname), signal=sig,
+                         raw_pulses=raw if raw else None,
                          frequency=sig.frequency, preset=sig.modulation)
             _draw_msg("Saved!", fname[:25], C_GREEN)
             time.sleep(1)
@@ -578,9 +581,24 @@ def _mode_saved(radio):
                 radio.start_rx()
                 _draw_msg("Sent!" if ok else "TX Failed", "", C_GREEN if ok else C_RED)
                 time.sleep(1)
-            elif sub.get("protocol"):
-                _draw_msg("Info", f"{sub['protocol']} {sub['bit_count']}b", C_ORANGE)
-                time.sleep(2)
+            elif sub.get("protocol") and (sub.get("key") is not None or sub.get("data") is not None):
+                _draw_msg("Sending...", f"{sub['protocol']} {sub['bit_count']}b", C_RED)
+                _apply_preset(radio, sub.get("preset", "AM650"))
+                freq = sub.get("frequency", 433920000)
+                radio.set_frequency(freq / 1_000_000)
+                key_data = sub.get("key", sub.get("data", 0))
+                for p in ALL_PROTOCOLS:
+                    if p.name == sub["protocol"] and hasattr(p, "encode"):
+                        raw = p.encode(key_data, sub.get("bit_count"))
+                        if raw:
+                            ok = radio.send_raw_pulses(raw, repeat=5)
+                            radio.start_rx()
+                            _draw_msg("Sent!" if ok else "TX Failed", "", C_GREEN if ok else C_RED)
+                            time.sleep(1)
+                            break
+                else:
+                    _draw_msg("No encoder", sub["protocol"], C_ORANGE)
+                    time.sleep(2)
 
         if btn == "KEY1" and now - last_btn > 0.3 and files and cursor < len(files):
             last_btn = now
