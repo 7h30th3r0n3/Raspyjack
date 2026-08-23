@@ -207,12 +207,12 @@ class ST25R3916Driver:
         return bytes(r[1:])
 
     def _fifo_len(self):
-        s = self._rr16(_FIFO_STA1)
-        return (s >> 8) | ((s & 0x00C0) << 2)
+        return self._rr(_FIFO_STA1)
 
     def _set_tx_len(self, nbytes, bits=0):
-        self._wr(_TX_BYTES1, nbytes & 0xFF)
-        self._wr(_TX_BYTES1 + 1, bits & 0x07)
+        val = (nbytes << 3) | (bits & 0x07)
+        self._wr(_TX_BYTES1, (val >> 8) & 0xFF)
+        self._wr(_TX_BYTES1 + 1, val & 0xFF)
 
     # ── Interrupts ────────────────────────────────────────────────────
 
@@ -407,7 +407,8 @@ class ST25R3916Driver:
         time.sleep(0.002)
 
         self._cmd(_CMD_SET_DEFAULT)
-        self._cmd_data(_CMD_TEST, [0x04, 0x10])
+        self._cmd(_CMD_TEST)
+        self._xfer([0x04, 0x10])
 
         self._wr(_IO_CFG1, 0x07)
         self._wr(_IO_CFG2, 0x3C)
@@ -451,7 +452,7 @@ class ST25R3916Driver:
         self._cmd(_CMD_STOP_ALL)
         self._mod(_OP_CTRL, 0, _OP_WU)
 
-        self._wr(_MODE_DEF, 0x08)
+        self._wr(_MODE_DEF, 0x09)  # ISO14443A + nfc_ar (auto-receive after TX)
         self._wr(_BIT_RATE, 0x00)
         self._wr(_ISO14443A, 0x00)
         self._mod(_AUX_DEF, 0, _AUX_DIS_CORR)
@@ -471,17 +472,13 @@ class ST25R3916Driver:
         self._enable_field()
 
     def _enable_field(self):
-        self._cmd(_CMD_STOP_ALL)
-        self._mod(_OP_CTRL, 0, _OP_TX | _OP_RX | _OP_WU | _OP_FD)
-        self._mod(_OP_CTRL, _OP_FDCA, _OP_FD)
-        self._wr_b(_B_GUARD, 33)
+        self._cmd(_CMD_CLEAR_FIFO)
+        self._wr(_OP_CTRL, _OP_EN | _OP_RX | _OP_TX)
+        time.sleep(0.02)
         self._clear_irqs()
         self._cmd(_CMD_FIELD_ON)
-
-        flags = self._wait_irq(_I_FGUARD | _I_FCOL, 15)
-        if flags & _I_FCOL:
-            return
-        self._mod(_OP_CTRL, _OP_RX, _OP_WU)
+        time.sleep(0.1)
+        self._wr(_OP_CTRL, self._rr(_OP_CTRL) | _OP_TX | _OP_RX)
 
     def _reset_field(self):
         self._cmd(_CMD_STOP_ALL)
@@ -501,23 +498,13 @@ class ST25R3916Driver:
 
     def _send_wupa(self):
         self._prepare()
-        self._set_nrt(4)
         self._wr(_ISO14443A, 0x00)
         self._mod(_AUX_DEF, _AUX_NO_CRC_RX, 0)
         self._clear_irqs()
         self._cmd(_CMD_CLEAR_FIFO)
         self._set_tx_len(0)
         self._cmd(_CMD_TX_WUPA)
-
-        flags = self._wait_irq(_I_RXE | _I_COL | _I_NRE | _I_RX_ERRS, 6)
-        if (flags & _I_RX_ERRS) or not (flags & (_I_RXE | _I_COL)):
-            return None
-
-        for _ in range(3):
-            if self._fifo_len() >= 2:
-                break
-            time.sleep(0.001)
-
+        time.sleep(0.01)
         n = self._fifo_len()
         if n < 2:
             return None
@@ -529,12 +516,11 @@ class ST25R3916Driver:
             return None
         sel_cmd = 0x91 + (level - 1) * 2
         self._wr(_ISO14443A, 0x01)
-        self._mod(_AUX_DEF, _AUX_NO_CRC_RX, 0)
+        self._mod(_AUX_DEF, 0, _AUX_NO_CRC_RX)
         self._clear_irqs()
         self._cmd(_CMD_CLEAR_FIFO)
         self._fifo_w([sel_cmd, 0x20])
-        self._wr(_TX_BYTES1, 2)
-        self._wr(_TX_BYTES1 + 1, 0)
+        self._set_tx_len(2, 0)
         self._cmd(_CMD_TX_NO_CRC)
         time.sleep(0.03)
         n = self._fifo_len()
@@ -551,13 +537,13 @@ class ST25R3916Driver:
         return None
 
     def _transceive(self, tx, timeout_ms=100, min_rx=1):
+        self._prepare()
         self._wr(_ISO14443A, 0x00)
         self._mod(_AUX_DEF, 0, _AUX_NO_CRC_RX)
         self._clear_irqs()
         self._cmd(_CMD_CLEAR_FIFO)
         self._fifo_w(tx)
-        self._wr(_TX_BYTES1, len(tx))
-        self._wr(_TX_BYTES1 + 1, 0)
+        self._set_tx_len(len(tx), 0)
         self._cmd(_CMD_TX_CRC)
         time.sleep(max(0.005, timeout_ms / 1000.0))
 
@@ -579,27 +565,89 @@ class ST25R3916Driver:
         time.sleep(0.001)
 
     def _activate_nfca(self):
-        atqa = self._send_wupa()
-        if atqa is None:
+        # Full re-init field + WUPA (identical to the manual test that works)
+        self._cmd(_CMD_STOP_ALL)
+        time.sleep(0.002)
+        self._cmd(_CMD_SET_DEFAULT)
+        time.sleep(0.02)
+        self._cmd(_CMD_TEST)
+        self._xfer([0x04, 0x10])
+        self._wr(0x00, 0x07)
+        self._wr(0x01, 0x3C)
+        self._wr(_TX_DRIVER, 0xD0)
+        self._wr(0x16, 0); self._wr(0x17, 0)
+        self._wr(0x18, 0); self._wr(0x19, 0)
+        self._clear_irqs()
+        self._wr(_OP_CTRL, _OP_EN)
+        time.sleep(0.05)
+        self._cmd(_CMD_ADJUST_REG)
+        time.sleep(0.005)
+        self._wr(_MODE_DEF, 0x09)
+        self._wr(_BIT_RATE, 0x00)
+        self._wr(_RX_CONF1, 0x08)
+        self._wr(_RX_CONF2, 0x2D)
+        self._wr(_RX_CONF3, 0xD8)
+        self._wr(_RX_CONF4, 0x22)
+        self._cmd(_CMD_RESET_GAIN)
+        self._cmd(_CMD_CLEAR_FIFO)
+        self._wr(_OP_CTRL, _OP_EN | _OP_RX | _OP_TX)
+        time.sleep(0.02)
+        self._clear_irqs()
+        self._cmd(_CMD_FIELD_ON)
+        time.sleep(0.1)
+        self._wr(_OP_CTRL, self._rr(_OP_CTRL) | _OP_TX | _OP_RX)
+        time.sleep(0.05)
+        # WUPA
+        self._cmd(_CMD_CLEAR_FIFO)
+        self._clear_irqs()
+        self._wr(_AUX_DEF, self._rr(_AUX_DEF) | _AUX_NO_CRC_RX)
+        self._wr(_TX_BYTES1, 0x00)
+        self._wr(_TX_BYTES1 + 1, 0x00)
+        self._cmd(_CMD_TX_WUPA)
+        time.sleep(0.02)
+        if self._fifo_len() < 2:
             return None
+        d = self._fifo_r(2)
+        atqa = d[0] | (d[1] << 8)
 
         uid = bytearray()
         sak = 0
         for level in range(1, 4):
-            resp = self._anticoll(level)
-            if resp is None or len(resp) < 5:
+            sel_cmd = 0x91 + (level - 1) * 2
+            # Anticoll
+            self._clear_irqs()
+            self._cmd(_CMD_CLEAR_FIFO)
+            self._wr(_ISO14443A, 0x01)
+            self._wr(_AUX_DEF, self._rr(_AUX_DEF) & ~_AUX_NO_CRC_RX)
+            self._fifo_w([sel_cmd, 0x20])
+            self._wr(_TX_BYTES1, 0x00)
+            self._wr(_TX_BYTES1 + 1, 0x10)
+            self._cmd(_CMD_TX_NO_CRC)
+            time.sleep(0.03)
+            if self._fifo_len() < 5:
                 return None
+            resp = bytes(self._fifo_r(5))
             bcc = 0
             for b in resp:
                 bcc ^= b
             if bcc != 0:
                 return None
 
+            # SELECT
             cascade = resp[0] == 0x88
-            sak_val = self._select(level, resp)
-            if sak_val is None:
+            self._clear_irqs()
+            self._cmd(_CMD_CLEAR_FIFO)
+            self._wr(_ISO14443A, 0x00)
+            frame = bytes([sel_cmd, 0x70]) + resp
+            self._fifo_w(frame)
+            val = len(frame) << 3
+            self._wr(_TX_BYTES1, (val >> 8) & 0xFF)
+            self._wr(_TX_BYTES1 + 1, val & 0xFF)
+            self._cmd(_CMD_TX_CRC)
+            time.sleep(0.02)
+            if self._fifo_len() < 1:
                 return None
-            sak = sak_val
+            sak = self._fifo_r(self._fifo_len())[0]
 
             if cascade:
                 uid.extend(resp[1:4])
