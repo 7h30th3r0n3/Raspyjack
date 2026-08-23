@@ -41,11 +41,31 @@ except ImportError:
 
 try:
     from payloads._cc1101_protocols import (
-        ALL_PROTOCOLS, DecodedSignal, save_sub_file, load_sub_file, decode_raw_pulses,
+        ALL_PROTOCOLS, PROTOCOL_BY_NAME, DecodedSignal, save_sub_file, load_sub_file, decode_raw_pulses,
     )
     PROTO_OK = True
 except ImportError:
     PROTO_OK = False
+
+try:
+    import evdev_keys
+    EVDEV_OK = True
+except ImportError:
+    EVDEV_OK = False
+
+_EVDEV_HEX = {
+    2: '1', 3: '2', 4: '3', 5: '4', 6: '5', 7: '6', 8: '7', 9: '8', 10: '9', 11: '0',
+    30: 'a', 48: 'b', 46: 'c', 32: 'd', 18: 'e', 33: 'f',
+    14: '\b', 28: '\n',
+}
+
+def _get_hex_char():
+    if not EVDEV_OK:
+        return None
+    for code, ch in _EVDEV_HEX.items():
+        if evdev_keys.is_key_pressed(code):
+            return ch
+    return None
 
 try:
     import gpiod
@@ -282,7 +302,7 @@ def _capture_raw(radio, duration_s=5.0, gdo0_pin=15):
 
 # ── Main menu ─────────────────────────────────────────────────────────────
 
-MENU_ITEMS = ["Read", "Read RAW", "Saved", "Freq Analyzer"]
+MENU_ITEMS = ["Read", "Read RAW", "Saved", "Freq Analyzer", "Add Manually", "Bruteforce", "Radio Settings"]
 
 
 def _draw_menu(sel):
@@ -325,22 +345,33 @@ def _mode_read(radio):
     capture_thread = None
     last_btn = 0
 
+    hopping = False
+    hop_pause_until = 0
+
     def _capture_loop():
-        nonlocal signals
+        nonlocal signals, freq_idx, hopping, hop_pause_until
         _apply_preset(radio, PRESETS[preset_idx]["name"])
         radio.set_frequency(FREQUENCIES[freq_idx] / 1_000_000)
         radio.set_raw_rx()
         while capturing and _running:
-            pulses = _capture_raw(radio, duration_s=1.0)
+            if hopping and time.time() > hop_pause_until:
+                freq_idx = (freq_idx + 1) % len(FREQUENCIES)
+                radio.set_frequency(FREQUENCIES[freq_idx] / 1_000_000)
+                radio.set_raw_rx()
+            rssi_before = radio.get_rssi()
+            pulses = _capture_raw(radio, duration_s=0.5 if hopping else 1.0)
             if pulses:
                 decoded = decode_raw_pulses(pulses)
                 for sig in decoded:
                     sig.frequency = FREQUENCIES[freq_idx]
                     sig.modulation = PRESETS[preset_idx]["name"]
                     sig.extra["_raw_pulses"] = list(pulses)
+                    sig.extra["rssi"] = "%.0f" % rssi_before
                     signals.insert(0, sig)
                     if len(signals) > 50:
                         signals = signals[:50]
+                if hopping and decoded:
+                    hop_pause_until = time.time() + 2.0
 
     capturing = True
     capture_thread = threading.Thread(target=_capture_loop, daemon=True)
@@ -377,6 +408,10 @@ def _mode_read(radio):
             capture_thread = threading.Thread(target=_capture_loop, daemon=True)
             capture_thread.start()
 
+        if btn == "KEY2" and now - last_btn > DEBOUNCE:
+            last_btn = now
+            hopping = not hopping
+
         if btn == "UP" and now - last_btn > DEBOUNCE:
             last_btn = now
             cursor = max(0, cursor - 1)
@@ -392,10 +427,14 @@ def _mode_read(radio):
             ts = time.strftime("%Y%m%d_%H%M%S")
             fname = f"{sig.protocol}_{ts}.sub"
             raw = sig.extra.get("_raw_pulses", [])
+            gps = _get_gps_coords()
+            if gps:
+                sig.extra["gps"] = gps
             save_sub_file(os.path.join(LOOT_DIR, fname), signal=sig,
                          raw_pulses=raw if raw else None,
                          frequency=sig.frequency, preset=sig.modulation)
-            _draw_msg("Saved!", fname[:25], C_GREEN)
+            gps_msg = f" GPS:{gps}" if gps else ""
+            _draw_msg("Saved!", fname[:25] + gps_msg, C_GREEN)
             time.sleep(1)
 
         # Draw
@@ -404,7 +443,8 @@ def _mode_read(radio):
 
         freq_s = _freq_str(FREQUENCIES[freq_idx])
         preset_s = PRESETS[preset_idx]["name"]
-        _draw_header(d, f"{freq_s} MHz {preset_s}", f"{len(signals)} signals")
+        hop_s = " HOP" if hopping else ""
+        _draw_header(d, f"{freq_s} MHz {preset_s}{hop_s}", f"{len(signals)} signals")
 
         if IS_WIDE:
             if not signals:
@@ -426,10 +466,11 @@ def _mode_read(radio):
                     proto_color = C_ORANGE if is_sel else C_WHITE
                     d.text((6, ry + 2), sig.protocol, font=FONT_SM, fill=proto_color)
                     d.text((120, ry + 2), sig.key_hex[:16], font=FONT_SM, fill=C_WHITE)
-                    d.text((W - 40, ry + 2), f"{sig.bit_count}b", font=FONT_SM, fill=C_DIM)
-                    if sig.extra:
-                        extra = " ".join(f"{v}" for v in list(sig.extra.values())[:2])
-                        d.text((6, ry + 12), extra, font=FONT_SM, fill=C_BLUE)
+                    rssi_s = sig.extra.get("rssi", "")
+                    info_s = f"{sig.bit_count}b"
+                    if rssi_s:
+                        info_s += f" {rssi_s}dB"
+                    d.text((W - 60, ry + 2), info_s, font=FONT_SM, fill=C_DIM)
         else:
             if not signals:
                 d.text((64, 60), "Scanning...", font=FONT_SM, fill=C_DIM)
@@ -443,7 +484,7 @@ def _mode_read(radio):
                            font=FONT_SM, fill=C_ORANGE if sel else C_DIM)
                     y += 14
 
-        _draw_footer(d, "<>:Freq/Mod ^v:Scroll OK:Save K3:Back")
+        _draw_footer(d, "<>:Freq/Mod ^v:Scroll OK:Save K2:Hop K3:Back")
         _show(img)
         time.sleep(0.15)
 
@@ -611,6 +652,19 @@ def _mode_saved(radio):
                 pass
             time.sleep(1)
 
+        if btn == "KEY2" and now - last_btn > 0.3 and files and cursor < len(files):
+            last_btn = now
+            new_name = _input_text("Rename", files[cursor].replace(".sub", ""))
+            if new_name and new_name != files[cursor].replace(".sub", ""):
+                old_path = os.path.join(LOOT_DIR, files[cursor])
+                new_path = os.path.join(LOOT_DIR, new_name + ".sub")
+                try:
+                    os.rename(old_path, new_path)
+                    _draw_msg("Renamed!", new_name[:20], C_GREEN)
+                except Exception:
+                    _draw_msg("Rename failed", "", C_RED)
+                time.sleep(1)
+
         img = Image.new("RGB", (W, H), C_BG)
         d = ImageDraw.Draw(img) if IS_WIDE else ScaledDraw(img)
         _draw_header(d, "Saved", f"{len(files)}")
@@ -631,7 +685,7 @@ def _mode_saved(radio):
                     name = files[i].replace(".sub", "")
                     d.text((6, ry + 2), name[:35], font=FONT_SM,
                            fill=C_ORANGE if is_sel else C_WHITE)
-            _draw_footer(d, "OK:Send K1:Delete K3:Back")
+            _draw_footer(d, "OK:Send K1:Del K2:Rename K3:Back")
         else:
             if not files:
                 d.text((4, 50), "No files", font=FONT_SM, fill=C_DIM)
@@ -703,6 +757,9 @@ def _mode_freq_analyzer(radio):
                 color = C_GREEN if freq == best_freq else C_BLUE
                 if h > 2:
                     d.rectangle([x, bar_y + bar_h - h, x + bar_w, bar_y + bar_h], fill=color)
+                if h > 2:
+                    d.text((x + bar_w // 2, bar_y + bar_h - h - 10),
+                           f"{rssi:.0f}", font=FONT_SM, fill=C_WHITE, anchor="ma")
                 d.text((x + bar_w // 2, bar_y + bar_h + 4),
                        f"{freq // 1000000}", font=FONT_SM, fill=C_DIM, anchor="ma")
         else:
@@ -711,6 +768,323 @@ def _mode_freq_analyzer(radio):
 
         _draw_footer(d, "K3:Back")
         _show(img)
+
+
+# ── Text input helper ────────────────────────────────────────────────────
+
+def _input_text(title, initial="", hex_only=False):
+    text = initial
+    last_btn = 0
+    last_char = 0
+
+    while _running:
+        btn = get_button(PINS, GPIO)
+        now = time.time()
+        typed = _get_hex_char() if EVDEV_OK and hex_only else None
+
+        if typed and now - last_char > 0.12:
+            last_char = now
+            if typed == '\b':
+                text = text[:-1]
+            elif typed == '\n':
+                return text
+            elif len(text) < 40:
+                text += typed
+
+        if btn == "KEY3":
+            return None
+        if btn == "OK" and now - last_btn > 0.2 and text:
+            last_btn = now
+            return text
+        if btn == "KEY2" and now - last_btn > 0.12:
+            last_btn = now
+            text = text[:-1]
+
+        img = Image.new("RGB", (W, H), C_BG)
+        d = ImageDraw.Draw(img) if IS_WIDE else ScaledDraw(img)
+        _draw_header(d, title)
+        blink = int(now * 2) % 2
+        cur = "|" if blink else ""
+        if IS_WIDE:
+            d.rectangle([10, 40, W - 10, 62], fill=C_DARK)
+            d.text((14, 43), f"{text}{cur}", font=FONT, fill=C_WHITE)
+            _draw_footer(d, "OK:Confirm K2:Del K3:Cancel")
+        else:
+            d.rectangle([2, 20, 126, 34], fill=C_DARK)
+            d.text((4, 22), f"{text}{cur}", font=FONT_SM, fill=C_WHITE)
+            _draw_footer(d, "OK K2:Del K3:Cancel")
+        _show(img)
+        time.sleep(0.05)
+    return None
+
+
+# ── Add Manually mode ────────────────────────────────────────────────────
+
+def _mode_add_manually(radio):
+    encodable = [p for p in ALL_PROTOCOLS if hasattr(p, "encode") and p.encode(0, 1) is not None]
+    if not encodable:
+        _draw_msg("No encoders", "available", C_RED)
+        time.sleep(2)
+        return
+
+    proto_sel = 0
+    last_btn = 0
+    state = "proto"
+
+    while _running:
+        btn = get_button(PINS, GPIO)
+        now = time.time()
+
+        if btn == "KEY3":
+            if state == "proto":
+                return
+            state = "proto"
+            continue
+
+        if state == "proto":
+            if btn == "UP" and now - last_btn > DEBOUNCE:
+                last_btn = now
+                proto_sel = (proto_sel - 1) % len(encodable)
+            if btn == "DOWN" and now - last_btn > DEBOUNCE:
+                last_btn = now
+                proto_sel = (proto_sel + 1) % len(encodable)
+            if btn == "OK" and now - last_btn > 0.2:
+                last_btn = now
+                state = "key"
+                continue
+
+            img = Image.new("RGB", (W, H), C_BG)
+            d = ImageDraw.Draw(img) if IS_WIDE else ScaledDraw(img)
+            _draw_header(d, "Add Manually")
+            if IS_WIDE:
+                y = 28
+                vis = (H - 28 - 16) // 22
+                sc = max(0, min(proto_sel - vis // 2, max(0, len(encodable) - vis)))
+                for i in range(sc, min(sc + vis, len(encodable))):
+                    is_sel = i == proto_sel
+                    ry = y + (i - sc) * 22
+                    if is_sel:
+                        d.rectangle([4, ry, W - 4, ry + 20], fill=C_SEL)
+                    d.text((10, ry + 2), encodable[i].name, font=FONT,
+                           fill=C_ORANGE if is_sel else C_WHITE)
+            _draw_footer(d, "OK:Select ^v:Scroll K3:Back")
+            _show(img)
+
+        elif state == "key":
+            key_hex = _input_text("Key (hex)", "", hex_only=True)
+            if key_hex is None:
+                state = "proto"
+                continue
+            try:
+                key_val = int(key_hex, 16)
+            except ValueError:
+                _draw_msg("Invalid hex", key_hex, C_RED)
+                time.sleep(1)
+                state = "proto"
+                continue
+
+            bits_str = _input_text("Bit count", "12")
+            if bits_str is None:
+                state = "proto"
+                continue
+            try:
+                bit_count = int(bits_str)
+            except ValueError:
+                bit_count = 12
+
+            freq_idx_local = DEFAULT_FREQ_IDX
+            _draw_msg("Freq", f"{_freq_str(FREQUENCIES[freq_idx_local])} MHz", C_ORANGE)
+            time.sleep(0.5)
+
+            proto = encodable[proto_sel]
+            raw = proto.encode(key_val, bit_count)
+            if raw:
+                _draw_msg("Sending...", f"{proto.name} {bit_count}b", C_RED)
+                _apply_preset(radio, "AM650")
+                radio.set_frequency(FREQUENCIES[freq_idx_local] / 1_000_000)
+                ok = radio.send_raw_pulses(raw, repeat=5)
+                radio.start_rx()
+                _draw_msg("Sent!" if ok else "TX Failed", "", C_GREEN if ok else C_RED)
+            else:
+                _draw_msg("Encode failed", "", C_RED)
+            time.sleep(1)
+            state = "proto"
+
+        time.sleep(0.08)
+
+
+# ── Bruteforce mode ──────────────────────────────────────────────────────
+
+def _mode_bruteforce(radio):
+    encodable = [p for p in ALL_PROTOCOLS if hasattr(p, "encode") and p.encode(0, 1) is not None]
+    if not encodable:
+        _draw_msg("No encoders", "", C_RED)
+        time.sleep(2)
+        return
+
+    proto_sel = 0
+    last_btn = 0
+    step = "proto"
+    bit_count = 12
+    freq_idx_local = DEFAULT_FREQ_IDX
+    delay_ms = 100
+
+    while _running:
+        btn = get_button(PINS, GPIO)
+        now = time.time()
+
+        if btn == "KEY3":
+            if step == "proto":
+                return
+            step = "proto"
+            continue
+
+        if step == "proto":
+            if btn == "UP" and now - last_btn > DEBOUNCE:
+                last_btn = now
+                proto_sel = (proto_sel - 1) % len(encodable)
+            if btn == "DOWN" and now - last_btn > DEBOUNCE:
+                last_btn = now
+                proto_sel = (proto_sel + 1) % len(encodable)
+            if btn == "OK" and now - last_btn > 0.2:
+                last_btn = now
+                step = "bits"
+                continue
+
+            img = Image.new("RGB", (W, H), C_BG)
+            d = ImageDraw.Draw(img) if IS_WIDE else ScaledDraw(img)
+            _draw_header(d, "Bruteforce")
+            if IS_WIDE:
+                y = 28
+                vis = (H - 28 - 16) // 22
+                sc = max(0, min(proto_sel - vis // 2, max(0, len(encodable) - vis)))
+                for i in range(sc, min(sc + vis, len(encodable))):
+                    is_sel = i == proto_sel
+                    ry = y + (i - sc) * 22
+                    if is_sel:
+                        d.rectangle([4, ry, W - 4, ry + 20], fill=C_SEL)
+                    d.text((10, ry + 2), encodable[i].name, font=FONT,
+                           fill=C_ORANGE if is_sel else C_WHITE)
+            _draw_footer(d, "OK:Select K3:Back")
+            _show(img)
+
+        elif step == "bits":
+            bits_str = _input_text("Bit count", str(bit_count))
+            if bits_str is None:
+                step = "proto"
+                continue
+            try:
+                bit_count = max(1, min(32, int(bits_str)))
+            except ValueError:
+                bit_count = 12
+            step = "run"
+
+        elif step == "run":
+            proto = encodable[proto_sel]
+            total = 1 << bit_count
+            _apply_preset(radio, "AM650")
+            radio.set_frequency(FREQUENCIES[freq_idx_local] / 1_000_000)
+
+            for key in range(total):
+                if not _running:
+                    break
+                b = get_button(PINS, GPIO)
+                if b == "KEY3":
+                    break
+
+                raw = proto.encode(key, bit_count)
+                if raw:
+                    radio.send_raw_pulses(raw, repeat=1)
+
+                if key % 10 == 0:
+                    pct = key * 100 // total
+                    img = Image.new("RGB", (W, H), C_BG)
+                    d = ImageDraw.Draw(img) if IS_WIDE else ScaledDraw(img)
+                    _draw_header(d, "Bruteforce")
+                    if IS_WIDE:
+                        d.text((W // 2, 40), f"{proto.name} {bit_count}b",
+                               font=FONT, fill=C_WHITE, anchor="mm")
+                        d.text((W // 2, 60), f"Key: 0x{key:0{(bit_count+3)//4}X}",
+                               font=FONT_LG, fill=C_ORANGE, anchor="mm")
+                        d.text((W // 2, 80), f"{key}/{total} ({pct}%)",
+                               font=FONT_SM, fill=C_DIM, anchor="mm")
+                        bar_w = W - 40
+                        d.rectangle([20, 100, 20 + bar_w, 112], fill=C_DARK)
+                        fill_w = int(bar_w * pct / 100)
+                        if fill_w > 0:
+                            d.rectangle([20, 100, 20 + fill_w, 112], fill=C_ORANGE)
+                    _draw_footer(d, "K3:Stop")
+                    _show(img)
+
+                time.sleep(delay_ms / 1000.0)
+
+            radio.start_rx()
+            _draw_msg("Bruteforce done", f"{proto.name} {bit_count}b", C_GREEN)
+            time.sleep(2)
+            step = "proto"
+
+        time.sleep(0.08)
+
+
+# ── Radio Settings mode ──────────────────────────────────────────────────
+
+def _mode_radio_settings(radio):
+    settings = [
+        ("TX Power", ["Low", "Medium", "High", "Max"], 3),
+        ("Default Preset", ["AM270", "AM650", "FM238", "FM476"], 1),
+        ("Default Freq", [_freq_str(f) for f in FREQUENCIES], DEFAULT_FREQ_IDX),
+    ]
+    sel = 0
+    last_btn = 0
+
+    while _running:
+        btn = get_button(PINS, GPIO)
+        now = time.time()
+
+        if btn == "KEY3":
+            return
+
+        if btn == "UP" and now - last_btn > DEBOUNCE:
+            last_btn = now
+            sel = (sel - 1) % len(settings)
+        if btn == "DOWN" and now - last_btn > DEBOUNCE:
+            last_btn = now
+            sel = (sel + 1) % len(settings)
+        if btn == "OK" and now - last_btn > 0.2:
+            last_btn = now
+            name, opts, cur = settings[sel]
+            cur = (cur + 1) % len(opts)
+            settings[sel] = (name, opts, cur)
+
+        img = Image.new("RGB", (W, H), C_BG)
+        d = ImageDraw.Draw(img) if IS_WIDE else ScaledDraw(img)
+        _draw_header(d, "Radio Settings")
+
+        if IS_WIDE:
+            y = 30
+            for i, (name, opts, cur) in enumerate(settings):
+                is_sel = i == sel
+                ry = y + i * 28
+                if is_sel:
+                    d.rectangle([4, ry, W - 4, ry + 24], fill=C_SEL)
+                d.text((10, ry + 3), name, font=FONT, fill=C_ORANGE if is_sel else C_WHITE)
+                d.text((W - 10, ry + 3), opts[cur], font=FONT_SM, fill=C_GREEN, anchor="ra")
+        _draw_footer(d, "OK:Toggle ^v:Select K3:Back")
+        _show(img)
+        time.sleep(0.08)
+
+
+# ── GPS helper for signal tagging ────────────────────────────────────────
+
+def _get_gps_coords():
+    try:
+        from payloads._gps_helper import get_gps_data
+        data = get_gps_data()
+        if data and data.get("lat") and data.get("lon"):
+            return "%.6f,%.6f" % (data["lat"], data["lon"])
+    except Exception:
+        pass
+    return None
 
 
 # ── Main ─────────────────────────────────────────────────────────────────
@@ -763,6 +1137,12 @@ def main():
                     _mode_saved(_radio)
                 elif menu_sel == 3:
                     _mode_freq_analyzer(_radio)
+                elif menu_sel == 4:
+                    _mode_add_manually(_radio)
+                elif menu_sel == 5:
+                    _mode_bruteforce(_radio)
+                elif menu_sel == 6:
+                    _mode_radio_settings(_radio)
 
             time.sleep(0.08)
 

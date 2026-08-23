@@ -655,10 +655,28 @@ def _ensure_lang_labels(lang):
     return False
 
 
+def _check_ram(min_mb=180):
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    kb = int(line.split()[1])
+                    return kb // 1024 >= min_mb
+    except Exception:
+        pass
+    return True
+
+
 def main():
     global _running, _listening
 
     _detect_alsa_dev()
+
+    if not _check_ram(180):
+        _draw_error("Not enough RAM", "Need 180MB free")
+        time.sleep(3)
+        GPIO.cleanup()
+        return 1
 
     if not _ensure_deps():
         GPIO.cleanup()

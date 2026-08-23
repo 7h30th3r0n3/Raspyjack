@@ -2416,6 +2416,453 @@ ALL_PROTOCOLS = [
     SecPlusV1Decoder(),
 ]
 
+# ===================================================================
+# Oregon V1 decoder — ported from oregon_v1.c (Manchester, weather)
+# te_short=1465, te_long=2930, te_delta=350, min_bits=32
+# ===================================================================
+
+class OregonV1Decoder:
+    name = "Oregon V1"
+    _TE_SHORT = 1465
+    _TE_LONG = 2930
+    _TE_DELTA = 350
+    _MIN_BITS = 32
+
+    _RESET = 0
+    _PREAMBLE = 1
+    _PARSE = 2
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self._step = self._RESET
+        self._data = 0
+        self._bits = 0
+        self._te_last = 0
+        self._header_count = 0
+        self._first_bit = 0
+        self._manchester_state = 0
+
+    def feed(self, level, duration):
+        if self._step == self._RESET:
+            if level and DURATION_DIFF(duration, self._TE_SHORT) < self._TE_DELTA:
+                self._step = self._PREAMBLE
+                self._te_last = duration
+                self._header_count = 0
+            return None
+
+        if self._step == self._PREAMBLE:
+            if level:
+                if (DURATION_DIFF(duration, self._TE_SHORT) < self._TE_DELTA or
+                    DURATION_DIFF(duration, self._TE_SHORT * 4) < self._TE_DELTA):
+                    self._te_last = duration
+                else:
+                    self._step = self._RESET
+            else:
+                if (DURATION_DIFF(duration, self._TE_SHORT) < self._TE_DELTA and
+                    DURATION_DIFF(self._te_last, self._TE_SHORT) < self._TE_DELTA):
+                    self._header_count += 1
+                elif (DURATION_DIFF(duration, self._TE_SHORT * 3) < self._TE_DELTA and
+                      DURATION_DIFF(self._te_last, self._TE_SHORT) < self._TE_DELTA):
+                    if self._header_count > 7:
+                        self._header_count = 0xFF
+                elif (self._header_count == 0xFF and
+                      DURATION_DIFF(self._te_last, self._TE_SHORT * 4) < self._TE_DELTA):
+                    self._data = 0
+                    self._bits = 1
+                    self._manchester_state = 0
+                    self._step = self._PARSE
+                    self._first_bit = 1 if duration < self._TE_SHORT * 4 else 0
+                else:
+                    self._step = self._RESET
+            return None
+
+        if self._step == self._PARSE:
+            event = -1
+            if level:
+                if DURATION_DIFF(duration, self._TE_SHORT) < self._TE_DELTA:
+                    event = 1
+                elif DURATION_DIFF(duration, self._TE_LONG) < self._TE_DELTA:
+                    event = 3
+                else:
+                    self._step = self._RESET
+                    return None
+            else:
+                if DURATION_DIFF(duration, self._TE_SHORT) < self._TE_DELTA:
+                    event = 0
+                elif DURATION_DIFF(duration, self._TE_LONG) < self._TE_DELTA:
+                    event = 2
+                elif duration >= self._TE_LONG * 2:
+                    if self._bits == self._MIN_BITS:
+                        if self._first_bit:
+                            self._data = ~self._data | (1 << 31)
+                        data_rev = _reverse_key(self._data & 0xFFFFFFFF, 32)
+                        crc = ((data_rev & 0xFF) + ((data_rev >> 8) & 0xFF) +
+                               ((data_rev >> 16) & 0xFF))
+                        crc = (crc & 0xFF) + ((crc >> 8) & 0xFF)
+                        if crc == ((data_rev >> 24) & 0xFF):
+                            sig = DecodedSignal(
+                                protocol=self.name, data=self._data & 0xFFFFFFFF,
+                                bit_count=self._bits, proto_type="Weather")
+                            sig.extra["temp"] = "%.1f" % self._decode_temp(data_rev)
+                            sig.extra["ch"] = ((data_rev >> 6) & 0x03) + 1
+                            self._step = self._RESET
+                            return sig
+                    self._data = 0
+                    self._bits = 0
+                    self._manchester_state = 0
+                    self._step = self._RESET
+                    return None
+                else:
+                    self._step = self._RESET
+                    return None
+
+            if event >= 0:
+                ns, bit = _manchester_advance(self._manchester_state, event)
+                if ns is None:
+                    self._step = self._RESET
+                    return None
+                self._manchester_state = ns
+                if bit is not None:
+                    self._data = (self._data << 1) | (0 if bit else 1)
+                    self._bits += 1
+        return None
+
+    def _decode_temp(self, data_rev):
+        raw = ((data_rev >> 8) & 0xF) * 0.1 + ((data_rev >> 12) & 0xF) + ((data_rev >> 16) & 0xF) * 10.0
+        if not ((data_rev >> 21) & 1):
+            return raw
+        return -raw
+
+
+# ===================================================================
+# Oregon V2 decoder — simplified (Manchester, weather, preamble-based)
+# te_short=500, te_long=1000, te_delta=200, min_bits=32
+# ===================================================================
+
+class OregonV2Decoder:
+    name = "Oregon V2"
+    _TE_SHORT = 500
+    _TE_LONG = 1000
+    _TE_DELTA = 200
+    _MIN_BITS = 32
+    _PREAMBLE_BITS = 16
+    _PREAMBLE = 0xFFFF
+
+    _RESET = 0
+    _FOUND_PREAMBLE = 1
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self._step = self._RESET
+        self._data = 0
+        self._bits = 0
+        self._manchester_state = 0
+        self._have_bit = False
+        self._prev_bit = False
+
+    def feed(self, level, duration):
+        inv_level = not level
+        if DURATION_DIFF(duration, self._TE_SHORT) < self._TE_DELTA:
+            event = 1 if inv_level else 0
+        elif DURATION_DIFF(duration, self._TE_LONG) < self._TE_DELTA:
+            event = 3 if inv_level else 2
+        else:
+            self._step = self._RESET
+            self._have_bit = False
+            self._data = 0
+            self._bits = 0
+            return None
+
+        ns, bit = _manchester_advance(self._manchester_state, event)
+        if ns is None:
+            self._step = self._RESET
+            self._manchester_state = 0
+            self._have_bit = False
+            self._data = 0
+            self._bits = 0
+            return None
+        self._manchester_state = ns
+
+        if bit is not None:
+            if self._have_bit:
+                if not self._prev_bit and bit:
+                    self._data = (self._data << 1) | 1
+                    self._bits += 1
+                elif self._prev_bit and not bit:
+                    self._data = (self._data << 1) | 0
+                    self._bits += 1
+                else:
+                    self.reset()
+                    return None
+                self._have_bit = False
+            else:
+                self._prev_bit = bit
+                self._have_bit = True
+
+        if self._step == self._RESET:
+            if (self._bits >= self._PREAMBLE_BITS and
+                (self._data & ((1 << self._PREAMBLE_BITS) - 1)) == self._PREAMBLE):
+                self._step = self._FOUND_PREAMBLE
+                self._data = 0
+                self._bits = 0
+        elif self._step == self._FOUND_PREAMBLE:
+            if self._bits == self._MIN_BITS:
+                sig = DecodedSignal(
+                    protocol=self.name, data=self._data & 0xFFFFFFFF,
+                    bit_count=self._bits, proto_type="Weather")
+                sensor_id = (self._data >> 16) & 0xFFFF
+                sig.extra["sensor_id"] = "0x%04X" % sensor_id
+                self.reset()
+                return sig
+        return None
+
+
+# ===================================================================
+# Oregon V3 decoder — simplified (Manchester, weather, preamble-based)
+# te_short=500, te_long=1100, te_delta=300, min_bits=32
+# ===================================================================
+
+class OregonV3Decoder:
+    name = "Oregon V3"
+    _TE_SHORT = 500
+    _TE_LONG = 1100
+    _TE_DELTA = 300
+    _MIN_BITS = 32
+    _PREAMBLE_BITS = 28
+    _PREAMBLE = 0xFFFFFFF5
+
+    _RESET = 0
+    _FOUND_PREAMBLE = 1
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self._step = self._RESET
+        self._data = 0
+        self._bits = 0
+        self._manchester_state = 0
+        self._prev_bit = False
+
+    def feed(self, level, duration):
+        inv_level = not level
+        if DURATION_DIFF(duration, self._TE_SHORT) < self._TE_DELTA:
+            event = 1 if inv_level else 0
+        elif DURATION_DIFF(duration, self._TE_LONG) < self._TE_DELTA:
+            event = 3 if inv_level else 2
+        else:
+            self.reset()
+            return None
+
+        ns, bit = _manchester_advance(self._manchester_state, event)
+        if ns is None:
+            self.reset()
+            return None
+        self._manchester_state = ns
+        if bit is not None:
+            self._data = (self._data << 1) | (1 if bit else 0)
+            self._bits += 1
+
+        if self._step == self._RESET:
+            if (self._bits >= self._PREAMBLE_BITS and
+                (self._data & ((1 << self._PREAMBLE_BITS) - 1)) == (self._PREAMBLE & ((1 << self._PREAMBLE_BITS) - 1))):
+                self._step = self._FOUND_PREAMBLE
+                self._data = 0
+                self._bits = 0
+        elif self._step == self._FOUND_PREAMBLE:
+            if self._bits == self._MIN_BITS:
+                sig = DecodedSignal(
+                    protocol=self.name, data=self._data & 0xFFFFFFFF,
+                    bit_count=self._bits, proto_type="Weather")
+                sensor_id = (self._data >> 16) & 0xFFFF
+                sig.extra["sensor_id"] = "0x%04X" % sensor_id
+                self.reset()
+                return sig
+        return None
+
+
+# ===================================================================
+# LaCrosse TX decoder — ported from lacrosse_tx.c
+# te_short=550, te_long=1300, te_delta=120, min_bits=44
+# ===================================================================
+
+class LaCrosseTXDecoder:
+    name = "LaCrosse TX"
+    _TE_SHORT = 550
+    _TE_LONG = 1300
+    _TE_DELTA = 120
+    _GAP = 1000
+    _MIN_BITS = 44
+    _SYNC_MASK = 0x0F000000000
+    _SYNC_PAT = 0x0A000000000
+
+    _RESET = 0
+    _PREAMBLE = 1
+    _SAVE_DUR = 2
+    _CHECK_DUR = 3
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self._step = self._RESET
+        self._data = 0
+        self._bits = 0
+        self._te_last = 0
+        self._header_count = 0
+
+    def _add_bit(self, bit):
+        self._data = (self._data << 1) | bit
+        self._bits += 1
+
+    def feed(self, level, duration):
+        if self._step == self._RESET:
+            if not level and DURATION_DIFF(duration, self._GAP) < self._TE_DELTA * 2:
+                self._step = self._PREAMBLE
+                self._header_count = 0
+            return None
+
+        if self._step == self._PREAMBLE:
+            if level:
+                if (DURATION_DIFF(duration, self._TE_SHORT) < self._TE_DELTA and
+                        self._header_count > 1):
+                    self._step = self._CHECK_DUR
+                    self._data = 0
+                    self._bits = 0
+                    self._te_last = duration
+                elif duration > self._TE_LONG * 2:
+                    self._step = self._RESET
+            else:
+                if DURATION_DIFF(duration, self._GAP) < self._TE_DELTA * 2:
+                    self._te_last = duration
+                    self._header_count += 1
+                else:
+                    self._step = self._RESET
+            return None
+
+        if self._step == self._SAVE_DUR:
+            if level:
+                self._te_last = duration
+                self._step = self._CHECK_DUR
+            else:
+                self._step = self._RESET
+            return None
+
+        if self._step == self._CHECK_DUR:
+            if not level:
+                if duration > self._GAP * 3:
+                    if DURATION_DIFF(self._te_last, self._TE_SHORT) < self._TE_DELTA:
+                        self._add_bit(1)
+                    elif DURATION_DIFF(self._te_last, self._TE_LONG) < self._TE_DELTA:
+                        self._add_bit(0)
+                    if (self._data & self._SYNC_MASK) == self._SYNC_PAT and self._bits >= self._MIN_BITS:
+                        sig = DecodedSignal(
+                            protocol=self.name, data=self._data,
+                            bit_count=self._bits, proto_type="Weather")
+                        self.reset()
+                        return sig
+                    self._data = 0
+                    self._bits = 0
+                    self._header_count = 0
+                    self._step = self._RESET
+                elif (DURATION_DIFF(self._te_last, self._TE_SHORT) < self._TE_DELTA and
+                      DURATION_DIFF(duration, self._TE_LONG) < self._TE_DELTA):
+                    self._add_bit(1)
+                    self._step = self._SAVE_DUR
+                elif (DURATION_DIFF(self._te_last, self._TE_LONG) < self._TE_DELTA and
+                      DURATION_DIFF(duration, self._TE_SHORT) < self._TE_DELTA):
+                    self._add_bit(0)
+                    self._step = self._SAVE_DUR
+                else:
+                    self._step = self._RESET
+            else:
+                self._step = self._RESET
+            return None
+        return None
+
+
+# ===================================================================
+# POCSAG decoder — simplified (pager protocol, FSK, 512/1200/2400 bps)
+# te_short=833 (1200bps), te_delta=100
+# ===================================================================
+
+class POCSAGDecoder:
+    name = "POCSAG"
+    _TE_SHORT = 833
+    _TE_DELTA = 100
+    _MIN_BITS = 32
+    _SYNC_WORD = 0x7CD215D8
+
+    _RESET = 0
+    _PREAMBLE = 1
+    _DATA = 2
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self._step = self._RESET
+        self._data = 0
+        self._bits = 0
+        self._te_last = 0
+        self._preamble_count = 0
+
+    def _add_bit(self, bit):
+        self._data = (self._data << 1) | bit
+        self._bits += 1
+
+    def feed(self, level, duration):
+        if self._step == self._RESET:
+            if DURATION_DIFF(duration, self._TE_SHORT) < self._TE_DELTA:
+                self._step = self._PREAMBLE
+                self._preamble_count = 1
+                self._te_last = duration
+            return None
+
+        if self._step == self._PREAMBLE:
+            if DURATION_DIFF(duration, self._TE_SHORT) < self._TE_DELTA:
+                self._preamble_count += 1
+                if self._preamble_count >= 18:
+                    self._step = self._DATA
+                    self._data = 0
+                    self._bits = 0
+            else:
+                self._step = self._RESET
+            return None
+
+        if self._step == self._DATA:
+            n_bits = max(1, round(duration / self._TE_SHORT))
+            bit_val = 1 if level else 0
+            for _ in range(min(n_bits, 4)):
+                self._add_bit(bit_val)
+
+            if self._bits >= self._MIN_BITS:
+                if (self._data & 0xFFFFFFFF) == self._SYNC_WORD:
+                    self._data = 0
+                    self._bits = 0
+                elif self._bits >= 64:
+                    sig = DecodedSignal(
+                        protocol=self.name, data=self._data & 0xFFFFFFFF,
+                        bit_count=min(self._bits, 32), proto_type="Other")
+                    self.reset()
+                    return sig
+            if self._bits > 128:
+                self._step = self._RESET
+        return None
+
+
+ALL_PROTOCOLS.extend([
+    OregonV1Decoder(),
+    OregonV2Decoder(),
+    OregonV3Decoder(),
+    LaCrosseTXDecoder(),
+    POCSAGDecoder(),
+])
+
 PROTOCOL_BY_NAME = {p.name: p for p in ALL_PROTOCOLS}
 
 
