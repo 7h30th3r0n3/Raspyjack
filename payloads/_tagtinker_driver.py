@@ -505,81 +505,52 @@ class TagTinker:
         self._page = 1
         self._stop_requested = False
 
-    def open(self):
-        try:
-            subprocess.run(["dtoverlay", "-r", "gpio-ir-tx"],
-                           capture_output=True, timeout=5)
-        except Exception:
-            pass
-        time.sleep(0.1)
+    IR_CARRIER_BIN = "/usr/local/bin/ir_carrier"
 
-        try:
-            if not os.path.exists(PWM_CHAN):
-                with open(os.path.join(PWM_CHIP, "export"), "w") as f:
-                    f.write("0")
-                time.sleep(0.1)
-            with open(os.path.join(PWM_CHAN, "period"), "w") as f:
-                f.write(str(PWM_PERIOD))
-            with open(os.path.join(PWM_CHAN, "duty_cycle"), "w") as f:
-                f.write(str(PWM_DUTY))
-            self._enable_fh = open(os.path.join(PWM_CHAN, "enable"), "w")
-            self._carrier_off()
-            return True
-        except Exception:
+    def open(self):
+        if not os.path.exists(self.IR_CARRIER_BIN):
             return False
+        return True
 
     def close(self):
-        self._carrier_off()
-        if self._enable_fh:
-            try:
-                self._enable_fh.close()
-            except Exception:
-                pass
-            self._enable_fh = None
+        pass
 
-    def _carrier_on(self):
-        if self._enable_fh and not self._pwm_enabled:
-            self._enable_fh.write("1")
-            self._enable_fh.flush()
-            self._pwm_enabled = True
-
-    def _carrier_off(self):
-        if self._enable_fh and self._pwm_enabled:
-            self._enable_fh.write("0")
-            self._enable_fh.flush()
-            self._pwm_enabled = False
-
-    def _burst(self, duration_ns):
-        self._carrier_on()
-        _busy_wait_ns(duration_ns)
-        self._carrier_off()
+    def _send_bursts(self, burst_gap_us):
+        if not burst_gap_us:
+            return
+        args = [self.IR_CARRIER_BIN] + [str(int(v)) for v in burst_gap_us]
+        subprocess.run(args, capture_output=True, timeout=10)
 
     def _send_frame_pp4(self, data):
+        burst_gap = []
         for byte in data:
             current = byte
             for _ in range(4):
                 symbol = current & 0x03
                 current >>= 2
-                self._burst(PP4_BURST_NS)
-                _busy_wait_ns(PP4_GAPS_NS[symbol])
-        self._burst(PP4_BURST_NS)
-        self._carrier_off()
+                burst_gap.append(PP4_BURST_NS // 1000)
+                burst_gap.append(PP4_GAPS_NS[symbol] // 1000)
+        burst_gap.append(PP4_BURST_NS // 1000)
+        burst_gap.append(1000)
+        self._send_bursts(burst_gap)
 
     def _send_frame_pp16(self, data):
+        burst_gap = []
         for byte in data:
             current = byte
             for _ in range(2):
                 symbol = current & 0x0F
                 current >>= 4
-                self._burst(PP16_BURST_NS)
-                _busy_wait_ns(PP16_GAPS_NS[symbol])
-        self._burst(PP16_BURST_NS)
-        self._carrier_off()
+                burst_gap.append(PP16_BURST_NS // 1000)
+                burst_gap.append(PP16_GAPS_NS[symbol] // 1000)
+        burst_gap.append(PP16_BURST_NS // 1000)
+        burst_gap.append(1000)
+        self._send_bursts(burst_gap)
 
     def transmit(self, data, repeats=1, gap_delay=2, pp16=None):
         if pp16 is None:
             pp16 = self._use_pp16
-        if not self._enable_fh or len(data) == 0:
+        if len(data) == 0:
             return False
         self._stop_requested = False
 
@@ -591,17 +562,13 @@ class TagTinker:
 
         for rep in range(repeats + 1):
             if self._stop_requested:
-                self._carrier_off()
                 return False
             if pp16:
                 self._send_frame_pp16(tx_data)
             else:
                 self._send_frame_pp4(tx_data)
             if rep < repeats:
-                gap_ns = gap_delay * 500_000
-                _busy_wait_ns(gap_ns)
-                if rep % 5 == 4:
-                    time.sleep(0.001)
+                time.sleep(gap_delay * 0.0005)
         return True
 
     def stop(self):
