@@ -311,23 +311,35 @@ def _draw_menu(sel):
     _draw_header(d, "Sub-GHz")
 
     if IS_WIDE:
-        y = 30
-        for i, item in enumerate(MENU_ITEMS):
+        y_start = 30
+        item_h = 22
+        max_vis = (H - y_start - 16) // item_h
+        scroll = max(0, min(sel - max_vis // 2, len(MENU_ITEMS) - max_vis))
+        y = y_start
+        for i in range(scroll, min(scroll + max_vis, len(MENU_ITEMS))):
             is_sel = i == sel
             if is_sel:
-                d.rectangle([4, y, W - 4, y + 22], fill=C_SEL)
-                d.text((12, y + 3), f"> {item}", font=FONT, fill=C_ORANGE)
+                d.rectangle([4, y, W - 4, y + item_h], fill=C_SEL)
+                d.text((12, y + 3), f"> {MENU_ITEMS[i]}", font=FONT, fill=C_ORANGE)
             else:
-                d.text((18, y + 3), item, font=FONT, fill=C_WHITE)
-            y += 26
+                d.text((18, y + 3), MENU_ITEMS[i], font=FONT, fill=C_WHITE)
+            y += item_h
+        if scroll > 0:
+            d.text((W - 12, y_start), "^", font=FONT_SM, fill=C_DIM)
+        if scroll + max_vis < len(MENU_ITEMS):
+            d.text((W - 12, y - 10), "v", font=FONT_SM, fill=C_DIM)
     else:
-        y = 18
-        for i, item in enumerate(MENU_ITEMS):
+        y_start = 18
+        item_h = 16
+        max_vis = (117 - y_start) // item_h
+        scroll = max(0, min(sel - max_vis // 2, len(MENU_ITEMS) - max_vis))
+        y = y_start
+        for i in range(scroll, min(scroll + max_vis, len(MENU_ITEMS))):
             is_sel = i == sel
             color = C_ORANGE if is_sel else C_WHITE
             prefix = ">" if is_sel else " "
-            d.text((4, y), f"{prefix}{item}", font=FONT_SM, fill=color)
-            y += 18
+            d.text((4, y), f"{prefix}{MENU_ITEMS[i]}", font=FONT_SM, fill=color)
+            y += item_h
 
     _draw_footer(d, "OK:Select  K3:Exit")
     _show(img)
@@ -994,9 +1006,9 @@ def _mode_bruteforce(radio):
 
                 raw = proto.encode(key, bit_count)
                 if raw:
-                    radio.send_raw_pulses(raw, repeat=1)
+                    radio.send_raw_pulses(raw, repeat=3)
 
-                if key % 10 == 0:
+                if key % 5 == 0:
                     pct = key * 100 // total
                     img = Image.new("RGB", (W, H), C_BG)
                     d = ImageDraw.Draw(img) if IS_WIDE else ScaledDraw(img)

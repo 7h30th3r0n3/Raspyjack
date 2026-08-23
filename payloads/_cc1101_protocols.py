@@ -272,13 +272,13 @@ class PrincetonDecoder:
         if bit_count is None:
             bit_count = 24
         te = self._TE_SHORT
-        pulses = []
+        pulses = [-(te * 36)]  # guard/header LOW
         for i in range(bit_count - 1, -1, -1):
             if (data >> i) & 1:
                 pulses.extend([te * 3, -(te)])
             else:
                 pulses.extend([te, -(te * 3)])
-        pulses.append(-(te * 36))  # guard
+        pulses.append(-(te * 36))  # guard/footer LOW
         return pulses
 
 
@@ -555,13 +555,13 @@ class LinearDecoder:
             bit_count = self._MIN_BITS
         te_s = self._TE_SHORT
         te_l = self._TE_LONG
-        pulses = []
+        pulses = [-(te_s * 42)]  # guard/header
         for i in range(bit_count - 1, -1, -1):
             if (data >> i) & 1:
                 pulses.extend([te_l, -(te_s)])
             else:
                 pulses.extend([te_s, -(te_l)])
-        pulses.append(-(te_s * 42))  # guard
+        pulses.append(-(te_s * 42))  # guard/footer
         return pulses
 
 
@@ -998,9 +998,8 @@ class _PrincetonStyleDecoder:
             bit_count = self._MIN_BITS
         te_s = self._TE_SHORT
         te_l = self._TE_LONG
-        pulses = []
+        pulses = [-(te_s * self._HEADER_LOW_MULT)]  # guard/header LOW always
         if self._HAS_START_BIT:
-            pulses.append(-(te_s * self._HEADER_LOW_MULT))
             sd = self._START_DUR or te_s
             if self._START_LEVEL_HIGH:
                 pulses.append(sd)
@@ -1011,7 +1010,7 @@ class _PrincetonStyleDecoder:
                 pulses.extend([te_l, -(te_s)])
             else:
                 pulses.extend([te_s, -(te_l)])
-        pulses.append(-(te_s * self._HEADER_LOW_MULT))
+        pulses.append(-(te_s * self._HEADER_LOW_MULT))  # guard/footer LOW
         return pulses
 
 
