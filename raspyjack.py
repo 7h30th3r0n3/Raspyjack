@@ -224,11 +224,24 @@ _show_clock = True
 def _check_battery():
     global _battery_pct, _battery_charging
     try:
-        with open("/sys/class/power_supply/bq27500-0/voltage_now") as f:
-            uv = int(f.read().strip())
-        _battery_pct = max(0, min(100, int((uv / 1_000_000 - 3.0) / 1.2 * 100)))
-        with open("/sys/class/power_supply/bq27500-0/status") as f:
-            _battery_charging = f.read().strip() == "Charging"
+        import glob
+        ps = glob.glob("/sys/class/power_supply/bq27*/")
+        if not ps:
+            _battery_pct = -1
+            return
+        base = ps[0]
+        cap_path = base + "capacity"
+        if os.path.exists(cap_path):
+            with open(cap_path) as f:
+                _battery_pct = max(0, min(100, int(f.read().strip())))
+        else:
+            with open(base + "voltage_now") as f:
+                uv = int(f.read().strip())
+            _battery_pct = max(0, min(100, int((uv / 1_000_000 - 3.0) / 1.2 * 100)))
+        status_path = base + "status"
+        if os.path.exists(status_path):
+            with open(status_path) as f:
+                _battery_charging = f.read().strip() == "Charging"
     except Exception:
         _battery_pct = -1
 
