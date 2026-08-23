@@ -66,16 +66,34 @@ static inline uint64_t now_ns(void) {
 }
 
 /* Generate 1.25 MHz carrier for duration_ns nanoseconds */
+/* Calibration: nop count auto-tuned at startup */
+static int nop_count = 30;
+
+static void calibrate_nops(void) {
+    /* Measure toggle speed with current nop_count, adjust to hit 1250 kHz */
+    uint64_t start = now_ns();
+    int cycles = 10000;
+    for (int c = 0; c < cycles; c++) {
+        gpio_set();
+        for (volatile int i = 0; i < nop_count; i++) __asm__("nop");
+        gpio_clr();
+        for (volatile int i = 0; i < nop_count; i++) __asm__("nop");
+    }
+    uint64_t elapsed = now_ns() - start;
+    double actual_freq = (double)cycles * 1000000000.0 / elapsed;
+    double ratio = actual_freq / 1250000.0;
+    nop_count = (int)(nop_count * ratio);
+    if (nop_count < 1) nop_count = 1;
+    if (nop_count > 200) nop_count = 200;
+}
+
 static void carrier_on(uint64_t duration_ns) {
-    /* 1.25 MHz = 800 ns period = ~400 ns HIGH + ~400 ns LOW */
-    /* At this speed we just toggle as fast as possible with nops */
     uint64_t end = now_ns() + duration_ns;
     while (now_ns() < end) {
         gpio_set();
-        /* ~400ns delay — tune with nops for CM0 */
-        for (volatile int i = 0; i < 15; i++) __asm__("nop");
+        for (volatile int i = 0; i < nop_count; i++) __asm__("nop");
         gpio_clr();
-        for (volatile int i = 0; i < 15; i++) __asm__("nop");
+        for (volatile int i = 0; i < nop_count; i++) __asm__("nop");
     }
 }
 
@@ -92,6 +110,7 @@ int main(int argc, char *argv[]) {
     }
 
     gpio_init();
+    calibrate_nops();
 
     if (argc == 2) {
         /* Simple carrier for N microseconds */
