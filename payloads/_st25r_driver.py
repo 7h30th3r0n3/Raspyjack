@@ -537,20 +537,32 @@ class ST25R3916Driver:
         return None
 
     def _transceive(self, tx, timeout_ms=100, min_rx=1):
-        self._prepare()
-        self._wr(_ISO14443A, 0x00)
-        self._mod(_AUX_DEF, 0, _AUX_NO_CRC_RX)
-        self._clear_irqs()
-        self._cmd(_CMD_CLEAR_FIFO)
-        self._fifo_w(tx)
-        self._set_tx_len(len(tx), 0)
-        self._cmd(_CMD_TX_CRC)
-        time.sleep(max(0.005, timeout_ms / 1000.0))
-
-        n = self._fifo_len()
-        if n < min_rx:
+        spi = self._spi
+        if spi is None:
             return None
-        return self._fifo_r(n)
+        # Clear IRQs
+        for r in (0x1A, 0x1B, 0x1C, 0x1D):
+            spi.xfer2([0x40 | r, 0x00])
+        spi.xfer2([0xDB])  # Clear FIFO
+        spi.xfer2([0x05, 0x00])  # ISO14443A no antcl
+        # Ensure no_crc_rx is cleared
+        aux = spi.xfer2([0x40 | 0x0A, 0x00])[1]
+        spi.xfer2([0x0A, aux & 0x7F])
+        # Write data to FIFO
+        spi.xfer2([0x80] + list(tx))
+        # Set TX length
+        val = len(tx) << 3
+        spi.xfer2([0x22, (val >> 8) & 0xFF])
+        spi.xfer2([0x23, val & 0xFF])
+        # Transmit with CRC
+        spi.xfer2([0xC4])
+        time.sleep(max(0.005, timeout_ms / 1000.0))
+        # Read response
+        fn = spi.xfer2([0x40 | 0x1E, 0x00])[1]
+        if fn < min_rx:
+            return None
+        rd = spi.xfer2([0x9F] + [0x00] * fn)
+        return bytes(rd[1:fn + 1])
 
     def _halt(self):
         self._prepare()
@@ -565,89 +577,93 @@ class ST25R3916Driver:
         time.sleep(0.001)
 
     def _activate_nfca(self):
-        # Full re-init field + WUPA (identical to the manual test that works)
-        self._cmd(_CMD_STOP_ALL)
-        time.sleep(0.002)
-        self._cmd(_CMD_SET_DEFAULT)
-        time.sleep(0.02)
-        self._cmd(_CMD_TEST)
-        self._xfer([0x04, 0x10])
-        self._wr(0x00, 0x07)
-        self._wr(0x01, 0x3C)
-        self._wr(_TX_DRIVER, 0xD0)
-        self._wr(0x16, 0); self._wr(0x17, 0)
-        self._wr(0x18, 0); self._wr(0x19, 0)
-        self._clear_irqs()
-        self._wr(_OP_CTRL, _OP_EN)
-        time.sleep(0.05)
-        self._cmd(_CMD_ADJUST_REG)
-        time.sleep(0.005)
-        self._wr(_MODE_DEF, 0x09)
-        self._wr(_BIT_RATE, 0x00)
-        self._wr(_RX_CONF1, 0x08)
-        self._wr(_RX_CONF2, 0x2D)
-        self._wr(_RX_CONF3, 0xD8)
-        self._wr(_RX_CONF4, 0x22)
-        self._cmd(_CMD_RESET_GAIN)
-        self._cmd(_CMD_CLEAR_FIFO)
-        self._wr(_OP_CTRL, _OP_EN | _OP_RX | _OP_TX)
-        time.sleep(0.02)
-        self._clear_irqs()
-        self._cmd(_CMD_FIELD_ON)
-        time.sleep(0.1)
-        self._wr(_OP_CTRL, self._rr(_OP_CTRL) | _OP_TX | _OP_RX)
-        time.sleep(0.05)
-        # WUPA
-        self._cmd(_CMD_CLEAR_FIFO)
-        self._clear_irqs()
-        self._wr(_AUX_DEF, self._rr(_AUX_DEF) | _AUX_NO_CRC_RX)
-        self._wr(_TX_BYTES1, 0x00)
-        self._wr(_TX_BYTES1 + 1, 0x00)
-        self._cmd(_CMD_TX_WUPA)
-        time.sleep(0.02)
-        if self._fifo_len() < 2:
+        # Raw SPI implementation — no helper methods, proven to work 100%.
+        spi = self._spi
+        if spi is None:
             return None
-        d = self._fifo_r(2)
-        atqa = d[0] | (d[1] << 8)
+
+        # -- Prepare --
+        spi.xfer2([0xC2])  # CMD_STOP_ALL
+        spi.xfer2([0xD5])  # CMD_RESET_GAIN
+
+        # -- Clear IRQs --
+        for r in (0x1A, 0x1B, 0x1C, 0x1D):
+            spi.xfer2([0x40 | r, 0x00])
+
+        # -- Clear FIFO --
+        spi.xfer2([0xDB])
+
+        # -- Set no_crc_rx --
+        aux = spi.xfer2([0x40 | 0x0A, 0x00])[1]
+        spi.xfer2([0x0A, aux | 0x80])
+
+        # -- TX length = 0 --
+        spi.xfer2([0x22, 0x00])
+        spi.xfer2([0x23, 0x00])
+
+        # -- WUPA --
+        spi.xfer2([0xC7])
+        time.sleep(0.01)
+
+        fn = spi.xfer2([0x40 | 0x1E, 0x00])[1]
+        if fn < 2:
+            return None
+        d = spi.xfer2([0x9F, 0x00, 0x00])
+        atqa = d[1] | (d[2] << 8)
 
         uid = bytearray()
         sak = 0
         for level in range(1, 4):
             sel_cmd = 0x91 + (level - 1) * 2
-            # Anticoll
-            self._clear_irqs()
-            self._cmd(_CMD_CLEAR_FIFO)
-            self._wr(_ISO14443A, 0x01)
-            self._wr(_AUX_DEF, self._rr(_AUX_DEF) & ~_AUX_NO_CRC_RX)
-            self._fifo_w([sel_cmd, 0x20])
-            self._wr(_TX_BYTES1, 0x00)
-            self._wr(_TX_BYTES1 + 1, 0x10)
-            self._cmd(_CMD_TX_NO_CRC)
+
+            # -- Anticollision --
+            for r in (0x1A, 0x1B, 0x1C, 0x1D):
+                spi.xfer2([0x40 | r, 0x00])
+            spi.xfer2([0xDB])
+
+            spi.xfer2([0x05, 0x01])  # ISO14443A = antcl
+            aux = spi.xfer2([0x40 | 0x0A, 0x00])[1]
+            spi.xfer2([0x0A, aux & 0x7F])  # clear no_crc_rx
+
+            spi.xfer2([0x80, sel_cmd, 0x20])  # FIFO: SEL + NVB
+            spi.xfer2([0x22, 0x00])  # TX len MSB
+            spi.xfer2([0x23, 0x10])  # TX len LSB = (2<<3)
+            spi.xfer2([0xC5])  # CMD_TX_NO_CRC
             time.sleep(0.03)
-            if self._fifo_len() < 5:
+
+            fn = spi.xfer2([0x40 | 0x1E, 0x00])[1]
+            if fn < 5:
                 return None
-            resp = bytes(self._fifo_r(5))
+            rd = spi.xfer2([0x9F] + [0x00] * 5)
+            resp = bytes(rd[1:6])
+
             bcc = 0
             for b in resp:
                 bcc ^= b
             if bcc != 0:
                 return None
 
-            # SELECT
+            # -- SELECT --
             cascade = resp[0] == 0x88
-            self._clear_irqs()
-            self._cmd(_CMD_CLEAR_FIFO)
-            self._wr(_ISO14443A, 0x00)
+            for r in (0x1A, 0x1B, 0x1C, 0x1D):
+                spi.xfer2([0x40 | r, 0x00])
+            spi.xfer2([0xDB])
+
+            spi.xfer2([0x05, 0x00])  # ISO14443A = no antcl
+
             frame = bytes([sel_cmd, 0x70]) + resp
-            self._fifo_w(frame)
+            spi.xfer2([0x80] + list(frame))  # FIFO
             val = len(frame) << 3
-            self._wr(_TX_BYTES1, (val >> 8) & 0xFF)
-            self._wr(_TX_BYTES1 + 1, val & 0xFF)
-            self._cmd(_CMD_TX_CRC)
+            spi.xfer2([0x22, (val >> 8) & 0xFF])
+            spi.xfer2([0x23, val & 0xFF])
+            spi.xfer2([0xC4])  # CMD_TX_CRC
             time.sleep(0.02)
-            if self._fifo_len() < 1:
+
+            fn = spi.xfer2([0x40 | 0x1E, 0x00])[1]
+            if fn < 1:
                 return None
-            sak = self._fifo_r(self._fifo_len())[0]
+            sr = spi.xfer2([0x9F] + [0x00] * fn)
+            sak = sr[1]
 
             if cascade:
                 uid.extend(resp[1:4])
@@ -659,7 +675,6 @@ class ST25R3916Driver:
         else:
             return None
 
-        self._halt()
         return CardInfo(uid=bytes(uid), atqa=atqa, sak=sak)
 
     # ── Public API (_PN532Base compatible) ────────────────────────────

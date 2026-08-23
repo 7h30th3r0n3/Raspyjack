@@ -1,25 +1,14 @@
 """
-TagTinker ESL (Electronic Shelf Label) IR protocol driver.
+TagTinker ESL — Pricer Electronic Shelf Label IR protocol driver.
+Faithful port of TagTinker from EvilCardputer by 7h30th3r0n3.
 
-Faithfully ported from EvilCardputer (7h30th3r0n3) Arduino implementation.
-Based on Pricer ESL protocol research by furrtek (PrecIR).
-
-Uses 1.25 MHz IR carrier via hardware PWM on GPIO 12 of CardputerZero.
-PP4 and PP16 pulse-position modulation for data encoding.
-
-Usage:
-    from payloads._tagtinker_driver import TagTinker, barcode_to_profile
-
-    tt = TagTinker()
-    tt.open()
-    tt.wake(barcode)
-    tt.push_text(barcode, "Hello")
-    tt.close()
+Uses 1.25 MHz IR carrier via compiled C binary (ir_carrier) on GPIO 12.
+Protocol based on Pricer ESL research by furrtek (PrecIR).
 """
 
 import os
-import time
 import subprocess
+import time
 import struct
 
 # ---------------------------------------------------------------------------
@@ -28,10 +17,14 @@ import struct
 
 PROTO_DM = 0x85
 PROTO_SEG = 0x84
-MAX_FRAME_SIZE = 96
+MAX_FRAME = 96
 BC_LEN = 17
 DATA_BYTES_PER_FRAME = 20
 DATA_BITS_PER_FRAME = DATA_BYTES_PER_FRAME * 8
+
+COMP_AUTO = 0
+COMP_RAW = 1
+COMP_RLE = 2
 
 KIND_UNKNOWN = 0
 KIND_DOTMATRIX = 1
@@ -41,52 +34,35 @@ COLOR_MONO = 0
 COLOR_RED = 1
 COLOR_YELLOW = 2
 
-COMP_AUTO = 0
-COMP_RAW = 1
-COMP_RLE = 2
+# Timing: base unit from Flipper 64MHz clock, converted to microseconds
+_BASE_US = 1.0 / 64.0  # 1 tick = 15.625 ns ≈ 0.015625 us
 
-# PP4/PP16 timing — base values from Flipper (64 MHz reference).
-# On RPi we use nanoseconds directly (no CPU-cycle scaling needed).
-# Base timing in CPU cycles at 64 MHz. Convert to nanoseconds: cycles / 64 * 1000
-_BASE_TO_NS = 1000.0 / 64.0
+PP4_BURST_US = int(2581 * _BASE_US + 0.5)
+PP16_BURST_US = int(1344 * _BASE_US + 0.5)
 
-PP4_BURST_NS = int(2581 * _BASE_TO_NS)
-PP16_BURST_NS = int(1344 * _BASE_TO_NS)
-
-PP4_GAPS_NS = [
-    int(3871 * _BASE_TO_NS),
-    int(15483 * _BASE_TO_NS),
-    int(7741 * _BASE_TO_NS),
-    int(11612 * _BASE_TO_NS),
+PP4_GAPS_US = [
+    int(3871 * _BASE_US + 0.5),
+    int(15483 * _BASE_US + 0.5),
+    int(7741 * _BASE_US + 0.5),
+    int(11612 * _BASE_US + 0.5),
 ]
 
-PP16_GAPS_NS = [
-    int(1728 * _BASE_TO_NS), int(3264 * _BASE_TO_NS),
-    int(2240 * _BASE_TO_NS), int(2752 * _BASE_TO_NS),
-    int(9408 * _BASE_TO_NS), int(7872 * _BASE_TO_NS),
-    int(8896 * _BASE_TO_NS), int(8384 * _BASE_TO_NS),
-    int(5312 * _BASE_TO_NS), int(3776 * _BASE_TO_NS),
-    int(4800 * _BASE_TO_NS), int(4288 * _BASE_TO_NS),
-    int(5824 * _BASE_TO_NS), int(7360 * _BASE_TO_NS),
-    int(6336 * _BASE_TO_NS), int(6848 * _BASE_TO_NS),
+PP16_GAPS_US = [
+    int(v * _BASE_US + 0.5) for v in [
+        1728, 3264, 2240, 2752, 9408, 7872, 8896, 8384,
+        5312, 3776, 4800, 4288, 5824, 7360, 6336, 6848,
+    ]
 ]
 
-# PWM paths
-PWM_CHIP = "/sys/class/pwm/pwmchip0"
-PWM_CHAN = os.path.join(PWM_CHIP, "pwm0")
-PWM_PERIOD = 800       # 1.25 MHz = 800 ns period
-PWM_DUTY = 400         # 50% duty cycle
-IR_GPIO = 12
-
-# Loot directory
+MAX_TARGETS = 50
+MAX_PRESETS = 16
+TARGETS_PATH = "/root/Raspyjack/loot/ESL/targets.txt"
+PRESETS_PATH = "/root/Raspyjack/loot/ESL/presets.txt"
 LOOT_DIR = "/root/Raspyjack/loot/ESL"
-TARGETS_FILE = os.path.join(LOOT_DIR, "targets.txt")
-PRESETS_FILE = os.path.join(LOOT_DIR, "presets.txt")
-
+IR_CARRIER_BIN = "/usr/local/bin/ir_carrier"
 
 # ---------------------------------------------------------------------------
-# Profile table — every known Pricer ESL tag model
-# (type_code, width, height, kind, color, model_name, pl_bit_def)
+# Profile table — ALL 44 known Pricer tag models
 # ---------------------------------------------------------------------------
 
 PROFILE_TABLE = [
@@ -129,15 +105,18 @@ PROFILE_TABLE = [
     (1628, 296, 128, KIND_DOTMATRIX, COLOR_RED, "SmartTag HD L Red", 0),
     (1639, 152, 152, KIND_DOTMATRIX, COLOR_RED, "SmartTag HD S Red", 0),
     (3145, 400, 300, KIND_DOTMATRIX, COLOR_MONO, "SmartTag HD110", 0),
-    (3547, 648, 480, KIND_DOTMATRIX, COLOR_RED, "SmartTag HD150 Red", 0),
-    (6275, 296, 128, KIND_DOTMATRIX, COLOR_MONO, "SmartTag HD L", 0),
     (3220, 152, 152, KIND_DOTMATRIX, COLOR_MONO, "SmartTag HD S", 0),
     (3227, 152, 152, KIND_DOTMATRIX, COLOR_MONO, "SmartTag HD S", 0),
     (3229, 152, 152, KIND_DOTMATRIX, COLOR_MONO, "SmartTag HD S", 0),
+    (3547, 648, 480, KIND_DOTMATRIX, COLOR_RED, "SmartTag HD150 Red", 0),
+    (6275, 296, 128, KIND_DOTMATRIX, COLOR_MONO, "SmartTag HD L", 0),
 ]
 
-# NFC URL decoder lookup table
-NFC_LUT = [
+# ---------------------------------------------------------------------------
+# NFC URL decoder LUT (from TagTinker)
+# ---------------------------------------------------------------------------
+
+_NFC_LUT = [
     -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
     -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
     -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,35,-1,-1,
@@ -148,42 +127,42 @@ NFC_LUT = [
     42,47,53,22,36,49,10,21,17,27,51,-1,-1,-1,-1,-1,
 ]
 
-
 # ---------------------------------------------------------------------------
-# CRC16 — exact polynomial 0x8408 (matching EvilCardputer)
+# CRC16
 # ---------------------------------------------------------------------------
 
 def crc16(data):
     crc = 0x8408
-    for byte in data:
-        crc ^= byte
+    for b in data:
+        crc ^= b
         for _ in range(8):
             crc = (crc >> 1) ^ 0x8408 if (crc & 1) else crc >> 1
     return crc & 0xFFFF
 
 
 # ---------------------------------------------------------------------------
-# Barcode helpers
+# Barcode parsing
 # ---------------------------------------------------------------------------
 
 def is_barcode_valid(barcode):
     if not barcode or len(barcode) != BC_LEN:
         return False
-    return all(c.isdigit() for c in barcode[2:])
+    for i in range(2, 17):
+        if barcode[i] < '0' or barcode[i] > '9':
+            return False
+    return True
 
 
 def barcode_to_plid(barcode):
     if not barcode or len(barcode) != BC_LEN:
         return None
-    a = 0
-    for c in barcode[2:7]:
-        a = a * 10 + (ord(c) - 0x30)
-    b = 0
-    for c in barcode[7:12]:
-        b = b * 10 + (ord(c) - 0x30)
-    ident = (a << 16) | b
-    return bytes([ident & 0xFF, (ident >> 8) & 0xFF,
-                  (ident >> 16) & 0xFF, (ident >> 24) & 0xFF])
+    try:
+        a = int(barcode[2:7])
+        b = int(barcode[7:12])
+    except ValueError:
+        return None
+    val = (a << 16) | b
+    return bytes([val & 0xFF, (val >> 8) & 0xFF, (val >> 16) & 0xFF, (val >> 24) & 0xFF])
 
 
 def barcode_to_type(barcode):
@@ -203,360 +182,479 @@ def barcode_to_profile(barcode):
         if entry[0] == tc:
             return {
                 "type_code": entry[0], "width": entry[1], "height": entry[2],
-                "kind": entry[3], "color": entry[4],
-                "model_name": entry[5], "pl_bit_def": entry[6], "known": True,
+                "kind": entry[3], "color": entry[4], "model_name": entry[5],
+                "pl_bit_def": entry[6], "known": True,
             }
     return {"type_code": tc, "width": 0, "height": 0, "kind": KIND_UNKNOWN,
             "color": COLOR_MONO, "model_name": None, "pl_bit_def": 0, "known": False}
+
+
+# ---------------------------------------------------------------------------
+# NFC URL decoder
+# ---------------------------------------------------------------------------
+
+def nfc_alpha_idx(c):
+    v = ord(c) if isinstance(c, str) else c
+    if v >= 128:
+        return -1
+    return _NFC_LUT[v]
+
+
+def nfc_decode_b64(s, length):
+    r = 0
+    for i in range(length):
+        idx = nfc_alpha_idx(s[(length - 1) - i])
+        if idx < 0:
+            return 0
+        r = r * 64 + idx
+    return r
 
 
 def nfc_to_barcode(nfc10):
     if len(nfc10) != 10:
         return None
     for c in nfc10:
-        if ord(c) >= 128 or NFC_LUT[ord(c)] < 0:
+        if nfc_alpha_idx(c) < 0:
             return None
-
-    def decode_b64(s, length):
-        r = 0
-        for i in range(length):
-            idx = NFC_LUT[ord(s[(length - 1) - i])]
-            if idx < 0:
-                return 0
-            r = r * 64 + idx
-        return r
-
-    val1 = decode_b64(nfc10[5:], 5)
-    val2 = decode_b64(nfc10[:5], 5)
+    val1 = nfc_decode_b64(nfc10[5:], 5)
+    val2 = nfc_decode_b64(nfc10[:5], 5)
     raw = "%09d%09d" % (val1, val2)
-    lc = int(raw[0:2])
+    lc = int(raw[0]) * 10 + int(raw[1])
     if lc > 25:
         return None
     out = chr(lc + 65) + raw[2:]
     if out[1] != '4':
         return None
-    cs = sum(ord(c.upper()) if c.isalpha() else ord(c) for c in out[:16])
+    cs = 0
+    for i in range(16):
+        c = out[i]
+        cs += (ord(c) - 32) if ('a' <= c <= 'z') else ord(c)
     if (cs % 10) != int(out[16]):
         return None
     return out
 
 
 # ---------------------------------------------------------------------------
-# Frame building — exact port from EvilCardputer
+# Frame building
 # ---------------------------------------------------------------------------
 
-def _append_word(buf, value):
-    buf.append((value >> 8) & 0xFF)
-    buf.append(value & 0xFF)
-
-
 def _terminate(buf):
-    crc = crc16(buf)
-    buf.append(crc & 0xFF)
-    buf.append((crc >> 8) & 0xFF)
-    return buf
+    c = crc16(buf)
+    return buf + bytes([c & 0xFF, (c >> 8) & 0xFF])
 
 
 def _raw_frame(proto, plid, cmd):
-    buf = bytearray([proto]) + bytearray(plid) + bytearray([cmd])
-    return buf
+    return bytes([proto]) + plid + bytes([cmd])
 
 
 def _mcu_frame(plid, cmd):
-    buf = _raw_frame(PROTO_DM, plid, 0x34)
-    buf.extend([0x00, 0x00, 0x00, cmd])
-    return buf
+    return _raw_frame(PROTO_DM, plid, 0x34) + bytes([0x00, 0x00, 0x00, cmd])
 
 
 def make_broadcast_page_frame(page, forever=False, duration=10):
     plid = bytes(4)
     buf = _raw_frame(PROTO_DM, plid, 0x06)
-    buf.append((((page + 1) & 7) << 3) | 0x01 | (0x80 if forever else 0x00))
-    buf.extend([0x00, 0x00])
-    buf.append((duration >> 8) & 0xFF)
-    buf.append(duration & 0xFF)
-    return bytes(_terminate(buf))
+    buf += bytes([(((page + 1) & 7) << 3) | 0x01 | (0x80 if forever else 0x00),
+                  0x00, 0x00, (duration >> 8) & 0xFF, duration & 0xFF])
+    return _terminate(buf)
 
 
 def make_broadcast_debug_frame():
     plid = bytes(4)
     buf = _raw_frame(PROTO_DM, plid, 0x06)
-    buf.extend([0xF1, 0x00, 0x00, 0x00, 0x0A])
-    return bytes(_terminate(buf))
+    buf += bytes([0xF1, 0x00, 0x00, 0x00, 0x0A])
+    return _terminate(buf)
 
 
 def make_ping_frame(plid):
     buf = _raw_frame(PROTO_DM, plid, 0x97)
-    buf.extend([0x01, 0x00, 0x00, 0x00])
-    buf.extend([0x01] * 20)
-    return bytes(_terminate(buf))
+    buf += bytes([0x01, 0x00, 0x00, 0x00])
+    buf += bytes([0x01] * 20)
+    return _terminate(buf)
 
 
 def make_refresh_frame(plid):
     buf = _mcu_frame(plid, 0x01)
-    buf.extend([0x00] * 18)
-    return bytes(_terminate(buf))
+    buf += bytes(18)
+    return _terminate(buf)
 
 
 def make_addressed_frame(plid, payload):
     buf = _raw_frame(PROTO_DM, plid, payload[0])
-    buf.extend(payload[1:])
-    return bytes(_terminate(buf))
+    buf += payload[1:]
+    return _terminate(buf)
 
 
-def make_image_param_frame(plid, byte_count, comp_type, page,
-                           width, height, pos_x=0, pos_y=0):
+def make_image_param_frame(plid, byte_count, comp_type, page, width, height, pos_x=0, pos_y=0):
     buf = _mcu_frame(plid, 0x05)
-    _append_word(buf, byte_count)
-    buf.append(0x00)
-    buf.append(comp_type)
-    buf.append(page)
-    _append_word(buf, width)
-    _append_word(buf, height)
-    _append_word(buf, pos_x)
-    _append_word(buf, pos_y)
-    _append_word(buf, 0x0000)
-    buf.append(0x88)
-    _append_word(buf, 0x0000)
-    buf.extend([0x00] * 4)
-    return bytes(_terminate(buf))
+    buf += struct.pack(">H", byte_count)
+    buf += bytes([0x00, comp_type, page])
+    buf += struct.pack(">HHHH", width, height, pos_x, pos_y)
+    buf += struct.pack(">H", 0x0000)
+    buf += bytes([0x88])
+    buf += struct.pack(">H", 0x0000)
+    buf += bytes(4)
+    return _terminate(buf)
 
 
 def make_image_data_frame(plid, frame_index, data_bytes):
     buf = _mcu_frame(plid, 0x20)
-    _append_word(buf, frame_index)
-    buf.extend(data_bytes[:DATA_BYTES_PER_FRAME])
-    if len(data_bytes) < DATA_BYTES_PER_FRAME:
-        buf.extend([0x00] * (DATA_BYTES_PER_FRAME - len(data_bytes)))
-    return bytes(_terminate(buf))
+    buf += struct.pack(">H", frame_index)
+    chunk = bytes(data_bytes[:DATA_BYTES_PER_FRAME])
+    if len(chunk) < DATA_BYTES_PER_FRAME:
+        chunk += bytes(DATA_BYTES_PER_FRAME - len(chunk))
+    buf += chunk
+    return _terminate(buf)
+
+
+def make_led_frame(plid, mode, duration):
+    payload = bytes([0x06, mode, 0x00, 0x00, (duration >> 8) & 0xFF, duration & 0xFF])
+    return make_addressed_frame(plid, payload)
 
 
 # ---------------------------------------------------------------------------
-# RLE compression — exact port
+# RLE compression (bit-level, exact port from EvilCardputer)
 # ---------------------------------------------------------------------------
 
-def _record_run(out, run_count):
-    bits = []
-    v = run_count
-    while v:
-        bits.append(v & 1)
-        v >>= 1
-    bits.reverse()
-    for i in range(1, len(bits)):
-        out.append(0)
-    out.extend(bits)
+class _BitWriter:
+    def __init__(self):
+        self.data = bytearray()
+        self.bit_pos = 0
+
+    def _ensure(self, n):
+        needed = (self.bit_pos + n + 7) // 8
+        while len(self.data) < needed:
+            self.data.append(0)
+
+    def append(self, bit):
+        self._ensure(1)
+        byte_idx = self.bit_pos // 8
+        bit_idx = 7 - (self.bit_pos % 8)
+        if bit:
+            self.data[byte_idx] |= (1 << bit_idx)
+        self.bit_pos += 1
+
+    def append_run(self, run_count):
+        bits = []
+        v = run_count
+        while v:
+            bits.append(v & 1)
+            v >>= 1
+        bits.reverse()
+        for i in range(1, len(bits)):
+            self.append(0)
+        for b in bits:
+            self.append(b)
+
+    @property
+    def bit_length(self):
+        return self.bit_pos
+
+    def to_bytes(self):
+        return bytes(self.data)
 
 
-def rle_compress_bits(pixels):
+def rle_bit_length(pixels):
     if not pixels:
-        return [], 0
-    out = [pixels[0]]
+        return 0
+    bl = 1
     run_pixel = pixels[0]
     run_count = 1
     for i in range(1, len(pixels)):
         if pixels[i] == run_pixel:
             run_count += 1
         else:
-            _record_run(out, run_count)
+            v = run_count
+            bc = 0
+            while v:
+                bc += 1
+                v >>= 1
+            bl += bc * 2 - 1
             run_pixel = pixels[i]
             run_count = 1
     if run_count > 1:
-        _record_run(out, run_count)
-    if len(out) < len(pixels):
-        return out, 2
-    return list(pixels), 0
+        v = run_count
+        bc = 0
+        while v:
+            bc += 1
+            v >>= 1
+        bl += bc * 2 - 1
+    return bl
 
 
-def _bits_to_bytes(bits):
-    result = bytearray((len(bits) + 7) // 8)
-    for i, b in enumerate(bits):
-        if b:
-            result[i // 8] |= (1 << (7 - (i % 8)))
-    return bytes(result)
-
-
-# ---------------------------------------------------------------------------
-# Image encoding
-# ---------------------------------------------------------------------------
-
-def encode_image_payload(pixels_1bpp, width, height, color_clear=False,
-                         comp_mode=COMP_AUTO):
-    pixel_count = width * height
-    primary = list(pixels_1bpp[:pixel_count])
-    if color_clear:
-        secondary = [1] * pixel_count
-        total_pixels = primary + secondary
-    else:
-        total_pixels = primary
-
+def encode_planes(primary, secondary=None, comp_mode=COMP_AUTO):
+    total = primary if secondary is None else primary + secondary
+    total_bits = len(total)
+    rle_bits = rle_bit_length(total)
+    use_rle = False
     if comp_mode == COMP_RLE:
-        encoded_bits, comp_type = rle_compress_bits(total_pixels)
+        use_rle = True
     elif comp_mode == COMP_AUTO:
-        encoded_bits, comp_type = rle_compress_bits(total_pixels)
-        if comp_type == 0:
-            encoded_bits = total_pixels
-    else:
-        encoded_bits = total_pixels
-        comp_type = 0
+        use_rle = 0 < rle_bits < total_bits
 
-    padding = (DATA_BITS_PER_FRAME - (len(encoded_bits) % DATA_BITS_PER_FRAME)) % DATA_BITS_PER_FRAME
-    encoded_bits.extend([0] * padding)
-    data_bytes = _bits_to_bytes(encoded_bits)
-    return data_bytes, comp_type
+    src_bits = rle_bits if use_rle else total_bits
+    padding = (DATA_BITS_PER_FRAME - (src_bits % DATA_BITS_PER_FRAME)) % DATA_BITS_PER_FRAME
+    padded_bits = src_bits + padding
+
+    w = _BitWriter()
+    if use_rle:
+        run_pixel = total[0]
+        run_count = 1
+        w.append(run_pixel)
+        for i in range(1, len(total)):
+            if total[i] == run_pixel:
+                run_count += 1
+            else:
+                w.append_run(run_count)
+                run_pixel = total[i]
+                run_count = 1
+        if run_count > 1:
+            w.append_run(run_count)
+    else:
+        for px in total:
+            w.append(px)
+
+    data = w.to_bytes()
+    padded_bytes = padded_bits // 8
+    if len(data) < padded_bytes:
+        data += bytes(padded_bytes - len(data))
+    return data[:padded_bytes], (2 if use_rle else 0)
+
+
+# ---------------------------------------------------------------------------
+# Text rendering via PIL
+# ---------------------------------------------------------------------------
+
+def render_text(text, width, height, text_size=2, invert=True, off_x=0, off_y=0):
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except ImportError:
+        return None
+    img = Image.new("1", (width, height), 0)
+    draw = ImageDraw.Draw(img)
+    try:
+        fsize = max(8, text_size * 8)
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", fsize)
+    except Exception:
+        font = ImageFont.load_default()
+    draw.text((off_x + 2, off_y + 2), text, fill=1, font=font)
+    pixels = []
+    for y in range(height):
+        for x in range(width):
+            px = img.getpixel((x, y))
+            if invert:
+                px = 0 if px else 1
+            pixels.append(1 if px else 0)
+    return pixels
+
+
+# ---------------------------------------------------------------------------
+# Image loading (BMP/PNG)
+# ---------------------------------------------------------------------------
+
+def load_image_1bpp(path, target_w, target_h):
+    try:
+        from PIL import Image
+    except ImportError:
+        return None
+    try:
+        img = Image.open(path).convert("L")
+    except Exception:
+        return None
+    img = img.resize((target_w, target_h), Image.LANCZOS)
+    pixels = []
+    for y in range(target_h):
+        for x in range(target_w):
+            pixels.append(1 if img.getpixel((x, y)) < 128 else 0)
+    return pixels
 
 
 # ---------------------------------------------------------------------------
 # Saved targets
 # ---------------------------------------------------------------------------
 
-def load_targets():
+def targets_load():
     targets = []
     try:
-        with open(TARGETS_FILE, "r") as f:
+        with open(TARGETS_PATH, "r") as f:
             for line in f:
                 line = line.strip()
                 sep = line.find("|")
                 if sep < BC_LEN:
                     continue
-                barcode = line[:BC_LEN]
+                bc = line[:BC_LEN]
                 name = line[sep + 1:].strip() if sep + 1 < len(line) else ""
-                targets.append({"barcode": barcode, "name": name})
-                if len(targets) >= 50:
+                targets.append({"barcode": bc, "name": name})
+                if len(targets) >= MAX_TARGETS:
                     break
-    except FileNotFoundError:
+    except Exception:
         pass
     return targets
 
 
-def save_targets(targets):
-    os.makedirs(LOOT_DIR, exist_ok=True)
-    with open(TARGETS_FILE, "w") as f:
-        for t in targets:
-            f.write("%s|%s\n" % (t["barcode"], t["name"]))
+def targets_save(targets):
+    os.makedirs(os.path.dirname(TARGETS_PATH), exist_ok=True)
+    try:
+        with open(TARGETS_PATH, "w") as f:
+            for t in targets:
+                f.write("%s|%s\n" % (t["barcode"], t["name"]))
+    except Exception:
+        pass
 
 
-def add_target(barcode, name=""):
-    targets = load_targets()
+def target_add(barcode, name=""):
+    targets = targets_load()
     for t in targets:
         if t["barcode"] == barcode:
             t["name"] = name
-            save_targets(targets)
+            targets_save(targets)
             return True
-    if len(targets) >= 50:
+    if len(targets) >= MAX_TARGETS:
         return False
     targets.append({"barcode": barcode, "name": name})
-    save_targets(targets)
+    targets_save(targets)
     return True
 
 
-def delete_target(idx):
-    targets = load_targets()
+def target_delete(idx):
+    targets = targets_load()
     if 0 <= idx < len(targets):
         targets.pop(idx)
-        save_targets(targets)
+        targets_save(targets)
 
 
 # ---------------------------------------------------------------------------
 # Text presets
 # ---------------------------------------------------------------------------
 
-def load_presets():
+def presets_load():
     presets = []
     try:
-        with open(PRESETS_FILE, "r") as f:
+        with open(PRESETS_PATH, "r") as f:
             for line in f:
                 line = line.strip()
                 sep = line.find("|")
                 if sep < 1:
                     continue
                 presets.append({"name": line[:sep], "text": line[sep + 1:]})
-                if len(presets) >= 16:
+                if len(presets) >= MAX_PRESETS:
                     break
-    except FileNotFoundError:
+    except Exception:
         pass
     return presets
 
 
-def save_presets(presets):
-    os.makedirs(LOOT_DIR, exist_ok=True)
-    with open(PRESETS_FILE, "w") as f:
-        for p in presets:
-            f.write("%s|%s\n" % (p["name"], p["text"]))
-
-
-# ---------------------------------------------------------------------------
-# IR driver — 1.25 MHz carrier via hardware PWM on GPIO 12
-# ---------------------------------------------------------------------------
-
-def _busy_wait_ns(ns):
-    end = time.monotonic_ns() + ns
-    while time.monotonic_ns() < end:
+def presets_save(presets):
+    os.makedirs(os.path.dirname(PRESETS_PATH), exist_ok=True)
+    try:
+        with open(PRESETS_PATH, "w") as f:
+            for p in presets:
+                f.write("%s|%s\n" % (p["name"], p["text"]))
+    except Exception:
         pass
 
 
+def preset_add(name, text):
+    presets = presets_load()
+    if len(presets) >= MAX_PRESETS:
+        return False
+    presets.append({"name": name, "text": text})
+    presets_save(presets)
+    return True
+
+
+def preset_delete(idx):
+    presets = presets_load()
+    if 0 <= idx < len(presets):
+        presets.pop(idx)
+        presets_save(presets)
+
+
+# ---------------------------------------------------------------------------
+# LED Explorer test table
+# ---------------------------------------------------------------------------
+
+LED_TESTS = [
+    (0x49, 0x00, 0x00, 0x00, 0x05, "Fast blink 5s"),
+    (0x41, 0x00, 0x00, 0x00, 0x05, "Slow blink 5s"),
+    (0xC9, 0x00, 0x00, 0x00, 0x05, "Fast HIGH 5s"),
+    (0xC1, 0x00, 0x00, 0x00, 0x05, "Slow HIGH 5s"),
+    (0xC9, 0x00, 0x00, 0x00, 0x00, "Fast FOREVER"),
+    (0xC1, 0x00, 0x00, 0x00, 0x00, "Slow FOREVER"),
+    (0x49, 0x00, 0x00, 0x00, 0x01, "LED OFF (1s)"),
+    (0xF1, 0x00, 0x00, 0x00, 0x0A, "Debug 0xF1"),
+]
+
+
+# ---------------------------------------------------------------------------
+# TagTinker class — IR transmission via ir_carrier binary
+# ---------------------------------------------------------------------------
+
 class TagTinker:
     def __init__(self):
-        self._pwm_enabled = False
-        self._enable_fh = None
-        self._use_pp16 = True
-        self._data_repeats = 3
-        self._wake_repeats = 250
-        self._comp_mode = COMP_AUTO
-        self._page = 1
+        self.use_pp16 = True
+        self.data_repeats = 3
+        self.wake_repeats = 250
+        self.comp_mode = COMP_AUTO
+        self.page = 1
+        self.store_key = 0x0000
+        self.text_size = 2
+        self.invert = True
+        self.last_barcode = ""
         self._stop_requested = False
 
-    IR_CARRIER_BIN = "/usr/local/bin/ir_carrier"
-
     def open(self):
-        if not os.path.exists(self.IR_CARRIER_BIN):
-            return False
-        return True
+        return os.path.exists(IR_CARRIER_BIN)
 
     def close(self):
         pass
 
+    def stop(self):
+        self._stop_requested = True
+
+    # -- Low-level IR --
+
     def _send_bursts(self, burst_gap_us):
         if not burst_gap_us:
             return
-        args = [self.IR_CARRIER_BIN] + [str(int(v)) for v in burst_gap_us]
-        subprocess.run(args, capture_output=True, timeout=10)
+        args = [IR_CARRIER_BIN] + [str(int(v)) for v in burst_gap_us]
+        subprocess.run(args, capture_output=True, timeout=30)
 
     def _send_frame_pp4(self, data):
-        burst_gap = []
+        bg = []
         for byte in data:
             current = byte
             for _ in range(4):
                 symbol = current & 0x03
                 current >>= 2
-                burst_gap.append(PP4_BURST_NS // 1000)
-                burst_gap.append(PP4_GAPS_NS[symbol] // 1000)
-        burst_gap.append(PP4_BURST_NS // 1000)
-        burst_gap.append(1000)
-        self._send_bursts(burst_gap)
+                bg.append(PP4_BURST_US)
+                bg.append(PP4_GAPS_US[symbol])
+        bg.append(PP4_BURST_US)
+        bg.append(1000)
+        self._send_bursts(bg)
 
     def _send_frame_pp16(self, data):
-        burst_gap = []
+        bg = []
         for byte in data:
             current = byte
             for _ in range(2):
                 symbol = current & 0x0F
                 current >>= 4
-                burst_gap.append(PP16_BURST_NS // 1000)
-                burst_gap.append(PP16_GAPS_NS[symbol] // 1000)
-        burst_gap.append(PP16_BURST_NS // 1000)
-        burst_gap.append(1000)
-        self._send_bursts(burst_gap)
+                bg.append(PP16_BURST_US)
+                bg.append(PP16_GAPS_US[symbol])
+        bg.append(PP16_BURST_US)
+        bg.append(1000)
+        self._send_bursts(bg)
 
-    def transmit(self, data, repeats=1, gap_delay=2, pp16=None):
+    def transmit(self, data, repeats=1, gap_delay=2, pp16=None, progress_cb=None):
         if pp16 is None:
-            pp16 = self._use_pp16
-        if len(data) == 0:
+            pp16 = self.use_pp16
+        if not data:
             return False
         self._stop_requested = False
 
         if pp16:
-            preamble = bytes([0x00, 0x00, 0x00, 0x40])
-            tx_data = preamble + bytes(data)
+            tx_data = bytes([0x00, 0x00, 0x00, 0x40]) + bytes(data)
         else:
             tx_data = bytes(data)
 
@@ -567,12 +665,11 @@ class TagTinker:
                 self._send_frame_pp16(tx_data)
             else:
                 self._send_frame_pp4(tx_data)
+            if progress_cb and rep % 5 == 0:
+                progress_cb(rep, repeats)
             if rep < repeats:
                 time.sleep(gap_delay * 0.0005)
         return True
-
-    def stop(self):
-        self._stop_requested = True
 
     # -- High-level commands --
 
@@ -581,87 +678,99 @@ class TagTinker:
         if not plid:
             return False
         frame = make_ping_frame(plid)
-        reps = repeats if repeats is not None else self._wake_repeats
-        return self.transmit(frame, reps, gap_delay=2, pp16=self._use_pp16)
+        if repeats is None:
+            repeats = self.wake_repeats
+        return self.transmit(frame, repeats=repeats)
 
-    def ping(self, barcode, repeats=None):
-        return self.wake(barcode, repeats or 250)
+    def ping(self, barcode):
+        plid = barcode_to_plid(barcode)
+        if not plid:
+            return False
+        frame = make_ping_frame(plid)
+        return self.transmit(frame, repeats=self.wake_repeats)
 
     def refresh(self, barcode):
         plid = barcode_to_plid(barcode)
         if not plid:
             return False
+        self.wake(barcode, repeats=80)
         frame = make_refresh_frame(plid)
-        return self.transmit(frame, 20, gap_delay=2, pp16=self._use_pp16)
-
-    def broadcast_page(self, page, duration=10, forever=False, repeats=100):
-        frame = make_broadcast_page_frame(page, forever, duration)
-        return self.transmit(frame, repeats, gap_delay=2, pp16=False)
-
-    def broadcast_debug(self, repeats=200):
-        frame = make_broadcast_debug_frame()
-        return self.transmit(frame, repeats, gap_delay=2, pp16=False)
+        return self.transmit(frame, repeats=20)
 
     def led_on(self, barcode, mode=0xC9, duration=5):
         plid = barcode_to_plid(barcode)
         if not plid:
             return False
         ping_frame = make_ping_frame(plid)
-        self.transmit(ping_frame, 160, gap_delay=2, pp16=self._use_pp16)
-        payload = bytes([0x06, mode, 0x00, 0x00,
-                         (duration >> 8) & 0xFF, duration & 0xFF])
-        led_frame = make_addressed_frame(plid, payload)
-        return self.transmit(led_frame, 80, gap_delay=2, pp16=self._use_pp16)
+        self.transmit(ping_frame, repeats=160)
+        led_frame = make_led_frame(plid, mode, duration)
+        return self.transmit(led_frame, repeats=80)
 
-    def send_image(self, barcode, pixels_1bpp, width, height,
-                   page=None, color_clear=False, callback=None):
+    def led_off(self, barcode):
+        return self.led_on(barcode, mode=0x49, duration=1)
+
+    def broadcast_page(self, page, duration=10, forever=False, repeats=100):
+        frame = make_broadcast_page_frame(page, forever, duration)
+        return self.transmit(frame, repeats=repeats)
+
+    def broadcast_debug(self, repeats=500):
+        frame = make_broadcast_debug_frame()
+        return self.transmit(frame, repeats=repeats)
+
+    def send_image(self, barcode, pixels, width, height, page=None,
+                   color_clear=False, progress_cb=None):
         plid = barcode_to_plid(barcode)
         if not plid:
             return False
         if page is None:
-            page = self._page
-        data_bytes, comp_type = encode_image_payload(
-            pixels_1bpp, width, height, color_clear, self._comp_mode)
+            page = self.page
 
-        frame_count = len(data_bytes) // DATA_BYTES_PER_FRAME
-        total_steps = 2 + frame_count + 1
+        secondary = None
+        if color_clear:
+            secondary = [1] * len(pixels)
 
-        # 1. Wake
-        if callback:
-            callback(0, total_steps, "Waking tag...")
-        ping_frame = make_ping_frame(plid)
-        self.transmit(ping_frame, self._wake_repeats, gap_delay=2)
+        data, comp_type = encode_planes(pixels, secondary, self.comp_mode)
+        frame_count = len(data) // DATA_BYTES_PER_FRAME
+        total = 2 + frame_count + 1
 
-        # 2. Image parameters
-        if callback:
-            callback(1, total_steps, "Sending params...")
-        param_frame = make_image_param_frame(
-            plid, len(data_bytes), comp_type, page, width, height)
-        self.transmit(param_frame, 15, gap_delay=1)
+        # 1: Wake (ping)
+        if progress_cb:
+            progress_cb(0, total, "Waking tag...")
+        ping = make_ping_frame(plid)
+        self.transmit(ping, repeats=self.wake_repeats, pp16=self.use_pp16)
+
+        # 2: Image parameters
+        if progress_cb:
+            progress_cb(1, total, "Image params...")
+        param = make_image_param_frame(plid, len(data), comp_type, page, width, height)
+        self.transmit(param, repeats=15, gap_delay=1, pp16=self.use_pp16)
         time.sleep(0.05)
 
-        # 3. Data frames
+        # 3: Data frames
         for fi in range(frame_count):
             if self._stop_requested:
                 return False
-            if callback:
-                callback(2 + fi, total_steps,
-                         "Frame %d/%d" % (fi + 1, frame_count))
-            chunk = data_bytes[fi * DATA_BYTES_PER_FRAME:
-                               (fi + 1) * DATA_BYTES_PER_FRAME]
-            data_frame = make_image_data_frame(plid, fi, chunk)
-            self.transmit(data_frame, self._data_repeats, gap_delay=1)
+            if progress_cb:
+                progress_cb(2 + fi, total, "Frame %d/%d" % (fi + 1, frame_count))
+            chunk = data[fi * DATA_BYTES_PER_FRAME:(fi + 1) * DATA_BYTES_PER_FRAME]
+            df = make_image_data_frame(plid, fi, chunk)
+            self.transmit(df, repeats=self.data_repeats, gap_delay=1, pp16=self.use_pp16)
 
-        # 4. Refresh
-        if callback:
-            callback(total_steps - 1, total_steps, "Refreshing...")
-        refresh_frame = make_refresh_frame(plid)
-        self.transmit(refresh_frame, 20, gap_delay=2)
-
+        # 4: Refresh
+        if progress_cb:
+            progress_cb(total - 1, total, "Refreshing...")
+        ref = make_refresh_frame(plid)
+        self.transmit(ref, repeats=20, pp16=self.use_pp16)
         return True
 
-    def push_text(self, barcode, text, text_size=2, invert=True,
-                  page=None, callback=None):
+    def push_text(self, barcode, text, page=None, text_size=None, invert=None):
+        if page is None:
+            page = self.page
+        if text_size is None:
+            text_size = self.text_size
+        if invert is None:
+            invert = self.invert
+
         profile = barcode_to_profile(barcode)
         if not profile:
             return False
@@ -670,31 +779,9 @@ class TagTinker:
         if w == 0 or h == 0:
             return False
 
-        try:
-            from PIL import Image, ImageDraw, ImageFont
-        except ImportError:
+        pixels = render_text(text, w, h, text_size, invert)
+        if not pixels:
             return False
 
-        img = Image.new("1", (w, h), 0)
-        draw = ImageDraw.Draw(img)
-        try:
-            font_size = text_size * 8
-            font = ImageFont.truetype(
-                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", font_size)
-        except Exception:
-            font = ImageFont.load_default()
-
-        draw.text((2, 2), text, fill=1, font=font)
-
-        pixels = []
-        for y in range(h):
-            for x in range(w):
-                px = img.getpixel((x, y))
-                if invert:
-                    pixels.append(0 if px else 1)
-                else:
-                    pixels.append(1 if px else 0)
-
-        color_clear = profile.get("color", COLOR_MONO) != COLOR_MONO
-        return self.send_image(barcode, pixels, w, h, page,
-                               color_clear, callback)
+        color_clear = profile["known"] and profile["color"] != COLOR_MONO
+        return self.send_image(barcode, pixels, w, h, page, color_clear)
