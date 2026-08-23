@@ -448,7 +448,14 @@
         " cu_autopwn": "",
         " cyber_swarm": "",
         " doodle_jump": "",
-        " honeypot_siem": ""
+        " honeypot_siem": "",
+        " cc1101_scanner": "",
+        " cc1101_chat": "",
+        " tagtinker_esl": "",
+        " sdr_scanner": "",
+        " sdr_aprs": "",
+        " sdr_meteor": "",
+        " gnss_skyplot": ""
     },
     "fallbacks": {
         "__scan__": "",
