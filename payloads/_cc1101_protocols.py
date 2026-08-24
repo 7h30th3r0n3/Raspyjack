@@ -615,6 +615,8 @@ class HoltekHT12XDecoder:
                 self._data = 0
                 self._bits = 0
                 self._te_sum = duration
+            elif (not level) and DURATION_DIFF(duration, self._TE_SHORT * 28) < self._TE_DELTA * 20:
+                pass  # stay in FOUND_START for next frame header
             else:
                 self._step = self._RESET
             return None
