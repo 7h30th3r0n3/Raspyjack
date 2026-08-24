@@ -1253,6 +1253,7 @@ class GangQiDecoder(_PrincetonStyleDecoder):
             else:
                 pulses.append(te_s)
                 pulses.append(-(te_s * 4 + self._TE_DELTA) if is_last else -(te_l))
+        # Decoder syncs on GAP of te_long*2 = 2400us — the last bit gap (2200) serves as sync
         return pulses
 
 class Hay21Decoder(_PrincetonStyleDecoder):
@@ -1278,17 +1279,20 @@ class HollarmDecoder(_PrincetonStyleDecoder):
     def encode(self, data, bit_count=None):
         if bit_count is None: bit_count = self._MIN_BITS
         te_s = self._TE_SHORT
-        te_l = self._TE_LONG
-        shifted = data << 2  # data is shifted left by 2 bits for encoding
+        # C source: data is stored >>2 in generic.data, encoder does (data<<2) to get raw bits
+        # The encoder sends 42 bits from (generic.data << 2) MSB first
+        # Bit 1: te_short HIGH + te_short*8 LOW, Bit 0: te_short HIGH + te_long LOW
+        # Last bit: te_short HIGH + te_short*12 LOW (gap for next frame)
+        raw_bits = data << 2
         pulses = []
         for i in range(bit_count - 1, -1, -1):
             is_last = (i == 0)
-            if (shifted >> i) & 1:
+            if (raw_bits >> i) & 1:
                 pulses.append(te_s)
                 pulses.append(-(te_s * 12) if is_last else -(te_s * 8))
             else:
                 pulses.append(te_s)
-                pulses.append(-(te_s * 12) if is_last else -(te_l))
+                pulses.append(-(te_s * 12) if is_last else -(1000))
         return pulses
 
 class IDoDecoder(_PrincetonStyleDecoder):
@@ -1591,15 +1595,17 @@ class HormannDecoder:
             bit_count = self._MIN_BITS
         te_s = self._TE_SHORT
         te_l = self._TE_LONG
+        # C source uses 20 internal repeats but that's 1801 pulses - too big for FIFO
+        # send_raw_pulses repeat=3 handles outer repeats, use 5 inner for density
         pulses = []
-        for _ in range(20):  # Hormann needs 20 internal repeats
-            pulses.extend([te_s * 24, -(te_s)])  # HIGH header + LOW
+        for _ in range(5):
+            pulses.extend([te_s * 24, -(te_s)])  # HIGH header + LOW start
             for i in range(bit_count - 1, -1, -1):
                 if (data >> i) & 1:
                     pulses.extend([te_l, -(te_s)])
                 else:
                     pulses.extend([te_s, -(te_l)])
-        pulses.append(te_s * 24)  # final HIGH
+        pulses.append(te_s * 24)  # final HIGH header
         return pulses
 
 
