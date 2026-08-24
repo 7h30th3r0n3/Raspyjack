@@ -679,8 +679,7 @@ class HoltekHT12XDecoder:
                 pulses.extend([-(te * 2), te])
             else:
                 pulses.extend([-te, te * 2])
-        pulses.append(-(te * 11))
-        return pulses
+        return pulses  # no trailing gap — FIFO repeats handle frame separation
 
 
 # ===================================================================
@@ -1199,7 +1198,24 @@ class IntertechnoV3Decoder(_CAMEStyleDecoder):
 
 class LegrandDecoder(_CAMEStyleDecoder):
     name = "Legrand"; _TE_SHORT = 375; _TE_LONG = 1125; _TE_DELTA = 150; _MIN_BITS = 18
-    _HEADER_LOW_MULT = 30; _HEADER_LOW_DELTA_MULT = 30
+    _HEADER_LOW_MULT = 16; _HEADER_LOW_DELTA_MULT = 8
+    def encode(self, data, bit_count=None):
+        if bit_count is None: bit_count = self._MIN_BITS
+        te_s, te_l = self._TE_SHORT, self._TE_LONG
+        raw = [-(te_s * 16)]
+        for i in range(bit_count - 1, -1, -1):
+            if (data >> i) & 1:
+                raw.extend([-(te_s), te_l])
+            else:
+                raw.extend([-(te_l), te_s])
+        # Merge consecutive same-polarity pulses
+        pulses = [raw[0]]
+        for p in raw[1:]:
+            if (pulses[-1] > 0 and p > 0) or (pulses[-1] < 0 and p < 0):
+                pulses[-1] += p
+            else:
+                pulses.append(p)
+        return pulses
 
 class MegaCodeDecoder(_CAMEStyleDecoder):
     name = "MegaCode"; _TE_SHORT = 1000; _TE_LONG = 1000; _TE_DELTA = 200; _MIN_BITS = 24
@@ -1700,6 +1716,7 @@ class MagellanDecoder(_PrincetonStyleDecoder):
 class Marantec24Decoder(_PrincetonStyleDecoder):
     name = "Marantec 24"; _TE_SHORT = 800; _TE_LONG = 1600; _TE_DELTA = 200; _MIN_BITS = 24
     _HEADER_LOW_MULT = 19; _HEADER_LOW_DELTA_MULT = 12
+    _FREQ_MHZ = 868.35  # Flipper: SubGhzProtocolFlag_868 only
     def feed(self, level, duration):
         te_s, te_l, td = self._TE_SHORT, self._TE_LONG, self._TE_DELTA
         if self._step == self._RESET:

@@ -471,96 +471,103 @@ class CC1101:
         self._strobe(SRX)
 
     def send_raw_pulses(self, pulses, repeat=1, te_us=None):
-        """Send raw OOK pulses via CC1101 async serial TX.
+        """Send raw OOK pulses via CC1101 FIFO with crystal-precise timing.
 
-        Uses a native C binary (cc1101_tx) for microsecond-precise GPIO
-        bitbang when available, falls back to Python gpiod.
-        CC1101 is put in async TX mode; GDO0 is driven externally.
+        Converts pulses to OOK bitstream, streams continuously through FIFO
+        without gaps between repeats. Timing accuracy = CC1101 crystal (26MHz).
+        Falls back to Python gpiod async TX if FIFO fails.
         Positive pulse = HIGH (carrier on), negative = LOW (carrier off).
         """
         if not pulses:
             return False
+        if te_us is None:
+            durs = [abs(p) for p in pulses if abs(p) < 50000]
+            te_us = min(durs) if durs else 320
+            te_us = max(100, min(te_us, 2000))
+
+        te_slots = []
+        for pulse in pulses:
+            dur = abs(pulse)
+            slots = max(1, round(dur / te_us))
+            is_high = pulse > 0
+            te_slots.extend([1 if is_high else 0] * slots)
+
+        all_slots = te_slots * repeat
+        while len(all_slots) % 8 != 0:
+            all_slots.append(0)
+        tx_bytes = []
+        for i in range(0, len(all_slots), 8):
+            byte = 0
+            for j in range(8):
+                byte = (byte << 1) | all_slots[i + j]
+            tx_bytes.append(byte)
 
         self._strobe(SIDLE)
-        saved_iocfg0 = self._read_reg(REG_IOCFG0)
+        saved_mdm4 = self._read_reg(REG_MDMCFG4)
+        saved_mdm3 = self._read_reg(REG_MDMCFG3)
         saved_mdm2 = self._read_reg(REG_MDMCFG2)
         saved_pktctrl = self._read_reg(REG_PKTCTRL0)
+        saved_pktlen = self._read_reg(0x06)
         saved_frend0 = self._read_reg(0x22)
+        saved_iocfg0 = self._read_reg(REG_IOCFG0)
 
-        self._write_reg(REG_IOCFG0, 0x2E)  # GDO0 = HiZ (driven externally)
-        self._write_reg(REG_MDMCFG2, 0x30)  # OOK, no sync, async serial
-        self._write_reg(REG_PKTCTRL0, 0x32)  # async serial, infinite length
+        fosc = 26_000_000
+        target_rate = 1_000_000 / te_us
+        best_e, best_m, best_err = 0, 0, 1e9
+        for e in range(13):
+            m_f = (target_rate * (2**28) / (fosc * (2**e))) - 256
+            m = max(0, min(255, round(m_f)))
+            actual = (256 + m) * (2**e) * fosc / (2**28)
+            err = abs(actual - target_rate)
+            if err < best_err:
+                best_e, best_m, best_err = e, m, err
+
+        self._write_reg(REG_MDMCFG4, (saved_mdm4 & 0xF0) | (best_e & 0x0F))
+        self._write_reg(REG_MDMCFG3, best_m)
+        self._write_reg(REG_MDMCFG2, 0x30)  # OOK, no sync
+        self._write_reg(REG_PKTCTRL0, 0x02)  # infinite packet length
         self._write_reg(0x22, 0x11)  # FREND0: PA_POWER=1
         self._write_burst(0x3E, [0x00, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+        self._write_reg(REG_IOCFG0, 0x02)  # GDO0 = TX FIFO below threshold
 
         try:
+            self._strobe(SFTX)
+            first_chunk = tx_bytes[:61]
+            self._write_burst(FIFO_ADDR, first_chunk)
             self._strobe(STX)
-            time.sleep(0.001)
-            ok = self._send_pulses_native(pulses, repeat)
-            if not ok:
-                ok = self._send_pulses_python(pulses, repeat)
-            return ok
-        except Exception:
-            return False
-        finally:
-            self._strobe(SIDLE)
-            self._write_reg(REG_IOCFG0, saved_iocfg0)
-            self._write_reg(REG_MDMCFG2, saved_mdm2)
-            self._write_reg(REG_PKTCTRL0, saved_pktctrl)
-            self._write_reg(0x22, saved_frend0)
+            pos = len(first_chunk)
 
-    def _send_pulses_native(self, pulses, repeat):
-        """Send via cc1101_tx C binary (µs-precise GPIO bitbang)."""
-        import shutil, subprocess
-        tx_bin = shutil.which("cc1101_tx")
-        if not tx_bin:
-            return False
-        pulse_str = "\n".join(str(p) for p in pulses) + "\n---\n"
-        try:
-            proc = subprocess.run(
-                [tx_bin, str(repeat)],
-                input=pulse_str, capture_output=True, text=True, timeout=30,
-            )
-            return proc.returncode == 0
-        except Exception:
-            return False
+            while pos < len(tx_bytes):
+                state = self.get_marcstate()
+                if state == MARCSTATE_TXFIFO_UNDERFLOW:
+                    self._strobe(SFTX)
+                    break
+                txbytes_free = 64 - (self._read_status(0xFA) & 0x7F)
+                if txbytes_free >= 32:
+                    chunk_size = min(32, len(tx_bytes) - pos)
+                    self._write_burst(FIFO_ADDR, tx_bytes[pos:pos + chunk_size])
+                    pos += chunk_size
+                else:
+                    time.sleep(0.0002)
 
-    def _send_pulses_python(self, pulses, repeat):
-        """Fallback: send via Python gpiod (less precise)."""
-        if not GPIOD_OK:
-            return False
-        gdo0_req = None
-        try:
-            chip = gpiod.Chip(self._gpio_chip_path)
-            cfg_lo = gpiod.LineSettings(
-                direction=gpiod.line.Direction.OUTPUT,
-                output_value=gpiod.line.Value.INACTIVE,
-            )
-            gdo0_req = chip.request_lines(
-                config={self._gdo0_line: cfg_lo},
-                consumer="cc1101-tx",
-            )
-            for _ in range(repeat):
-                for pulse in pulses:
-                    dur_us = abs(pulse)
-                    is_high = pulse > 0
-                    val = gpiod.line.Value.ACTIVE if is_high else gpiod.line.Value.INACTIVE
-                    gdo0_req.set_value(self._gdo0_line, val)
-                    if dur_us >= 1000:
-                        time.sleep(dur_us / 1_000_000)
-                    else:
-                        end = time.monotonic_ns() + dur_us * 1000
-                        while time.monotonic_ns() < end:
-                            pass
-                gdo0_req.set_value(self._gdo0_line, gpiod.line.Value.INACTIVE)
+            deadline = time.time() + 5.0
+            while time.time() < deadline:
+                state = self.get_marcstate()
+                if state == MARCSTATE_IDLE or state == MARCSTATE_TXFIFO_UNDERFLOW:
+                    break
                 time.sleep(0.001)
             return True
         except Exception:
             return False
         finally:
-            if gdo0_req:
-                gdo0_req.set_value(self._gdo0_line, gpiod.line.Value.INACTIVE)
-                gdo0_req.release()
+            self._strobe(SIDLE)
+            self._write_reg(REG_MDMCFG4, saved_mdm4)
+            self._write_reg(REG_MDMCFG3, saved_mdm3)
+            self._write_reg(REG_MDMCFG2, saved_mdm2)
+            self._write_reg(REG_PKTCTRL0, saved_pktctrl)
+            self._write_reg(0x06, saved_pktlen)
+            self._write_reg(0x22, saved_frend0)
+            self._write_reg(REG_IOCFG0, saved_iocfg0)
 
     def set_packet_rx(self):
         self._strobe(SIDLE)

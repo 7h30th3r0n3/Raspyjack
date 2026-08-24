@@ -1,93 +1,71 @@
 /*
  * cc1101_tx — precise GPIO bitbang OOK TX for CC1101 via GDO0
  *
- * Reads pulse durations from stdin (one per line, positive=HIGH, negative=LOW)
- * and toggles GDO0 (GPIO 15) with microsecond precision using mmap + busy-wait.
- *
- * The CC1101 must be pre-configured in async serial TX mode by the Python caller:
- *   IOCFG0=0x2E, MDMCFG2=0x30, PKTCTRL0=0x32, FREND0=0x11, STX strobe sent
+ * Uses /sys/class/gpio for maximum compatibility (no libgpiod needed).
+ * Reads pulse durations from stdin, toggles GDO0 with µs precision.
  *
  * Usage: echo "pulses..." | sudo cc1101_tx [repeat_count]
- *   Input: one pulse per line, integer microseconds (positive=HIGH, negative=LOW)
- *          Empty line or "---" = end of frame (separator for repeats)
- *   repeat_count: how many times to send (default 1)
+ *   Input: one pulse per line (positive=HIGH, negative=LOW), "---" = stop
  *
  * Compile: gcc -O2 -o cc1101_tx cc1101_tx.c -lrt
- * Install: sudo cp cc1101_tx /usr/local/bin/
  */
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
 #include <fcntl.h>
-#include <sys/mman.h>
 #include <unistd.h>
 #include <time.h>
 #include <sched.h>
+#include <sys/mman.h>
 
-#define BLOCK_SIZE         4096
+#define GDO0_PIN       15
+#define MAX_PULSES     65536
 
-static off_t detect_gpio_base(void) {
-    /* Parse /proc/iomem for actual GPIO base address.
-     * Works on BCM2835 (0x20200000), BCM2836/7 (0x3F200000),
-     * and BCM2711 (0xFE200000). */
-    FILE *f = fopen("/proc/iomem", "r");
-    if (f) {
-        char line[256];
-        while (fgets(line, sizeof(line), f)) {
-            if (strstr(line, "gpio")) {
-                unsigned long base = strtoul(line, NULL, 16);
-                fclose(f);
-                if (base) return (off_t)base;
-            }
-        }
-        fclose(f);
-    }
-    return 0x20200000; /* BCM2835 fallback */
+static int gpio_fd = -1;
+
+static int gpio_export(int pin) {
+    char buf[64];
+    int fd = open("/sys/class/gpio/export", O_WRONLY);
+    if (fd < 0) return -1;
+    int n = snprintf(buf, sizeof(buf), "%d", pin);
+    write(fd, buf, n);
+    close(fd);
+    usleep(100000); /* wait for sysfs to create files */
+    return 0;
 }
 
-#define GDO0_PIN           15
-
-#define GPFSEL1            1
-#define GPSET0             7
-#define GPCLR0             10
-
-#define MAX_PULSES         65536
-
-static volatile uint32_t *gpio_map;
-
-static void gpio_init(void) {
-    off_t base = detect_gpio_base();
-    int fd = open("/dev/mem", O_RDWR | O_SYNC);
-    if (fd < 0) {
-        fd = open("/dev/gpiomem", O_RDWR | O_SYNC);
-        if (fd < 0) { perror("open /dev/mem and /dev/gpiomem"); exit(1); }
-        gpio_map = (volatile uint32_t *)mmap(NULL, BLOCK_SIZE,
-            PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-        close(fd);
-    } else {
-        gpio_map = (volatile uint32_t *)mmap(NULL, BLOCK_SIZE,
-            PROT_READ | PROT_WRITE, MAP_SHARED, fd, base);
-        close(fd);
-    }
-    if (gpio_map == MAP_FAILED) { perror("mmap"); exit(1); }
-    fprintf(stderr, "GPIO base: 0x%lx\n", (unsigned long)base);
-
-    /* Set GDO0_PIN as output */
-    int reg = GDO0_PIN / 10;
-    int shift = (GDO0_PIN % 10) * 3;
-    uint32_t fsel = gpio_map[reg];
-    fsel &= ~(7 << shift);
-    fsel |=  (1 << shift);
-    gpio_map[reg] = fsel;
+static int gpio_set_direction(int pin, const char *dir) {
+    char path[128];
+    snprintf(path, sizeof(path), "/sys/class/gpio/gpio%d/direction", pin);
+    int fd = open(path, O_WRONLY);
+    if (fd < 0) return -1;
+    write(fd, dir, strlen(dir));
+    close(fd);
+    return 0;
 }
 
-static inline void gpio_high(void) {
-    gpio_map[GPSET0] = (1 << GDO0_PIN);
+static int gpio_open_value(int pin) {
+    char path[128];
+    snprintf(path, sizeof(path), "/sys/class/gpio/gpio%d/value", pin);
+    return open(path, O_WRONLY);
 }
 
-static inline void gpio_low(void) {
-    gpio_map[GPCLR0] = (1 << GDO0_PIN);
+static void gpio_unexport(int pin) {
+    char buf[64];
+    int fd = open("/sys/class/gpio/unexport", O_WRONLY);
+    if (fd < 0) return;
+    int n = snprintf(buf, sizeof(buf), "%d", pin);
+    write(fd, buf, n);
+    close(fd);
+}
+
+static inline void gpio_set(int val) {
+    if (val)
+        write(gpio_fd, "1", 1);
+    else
+        write(gpio_fd, "0", 1);
+    lseek(gpio_fd, 0, SEEK_SET);
 }
 
 static inline uint64_t now_ns(void) {
@@ -108,12 +86,12 @@ int main(int argc, char *argv[]) {
     if (repeat < 1) repeat = 1;
     if (repeat > 100) repeat = 100;
 
-    /* Read all pulses from stdin */
+    /* Read pulses from stdin */
     int32_t pulses[MAX_PULSES];
     int count = 0;
     char line[64];
     while (fgets(line, sizeof(line), stdin) && count < MAX_PULSES) {
-        if (line[0] == '-' && line[1] == '-') break;  /* --- = stop */
+        if (line[0] == '-' && line[1] == '-') break;
         int32_t val = atoi(line);
         if (val != 0)
             pulses[count++] = val;
@@ -124,13 +102,24 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    gpio_init();
-    gpio_low();
+    /* Setup GPIO */
+    gpio_export(GDO0_PIN);
+    if (gpio_set_direction(GDO0_PIN, "out") < 0) {
+        fprintf(stderr, "Cannot set GPIO %d as output\n", GDO0_PIN);
+        return 1;
+    }
+    gpio_fd = gpio_open_value(GDO0_PIN);
+    if (gpio_fd < 0) {
+        fprintf(stderr, "Cannot open GPIO %d value\n", GDO0_PIN);
+        return 1;
+    }
+    gpio_set(0);
 
-    /* Set real-time priority for minimal jitter */
+    /* Real-time priority + lock memory */
     struct sched_param sp;
     sp.sched_priority = 50;
     sched_setscheduler(0, SCHED_FIFO, &sp);
+    mlockall(MCL_CURRENT | MCL_FUTURE);
 
     /* Send pulses */
     for (int r = 0; r < repeat; r++) {
@@ -138,27 +127,19 @@ int main(int argc, char *argv[]) {
         for (int i = 0; i < count; i++) {
             int32_t p = pulses[i];
             uint64_t dur_ns = (uint64_t)(abs(p)) * 1000ULL;
-            if (p > 0)
-                gpio_high();
-            else
-                gpio_low();
+            gpio_set(p > 0 ? 1 : 0);
             t += dur_ns;
             busy_wait_ns(t);
         }
-        gpio_low();
-        /* Small gap between repeats */
-        t += 1000000ULL;  /* 1ms */
+        gpio_set(0);
+        t += 1000000ULL;
         busy_wait_ns(t);
     }
 
-    gpio_low();
-
-    /* Restore GPIO to input */
-    int reg = GDO0_PIN / 10;
-    int shift = (GDO0_PIN % 10) * 3;
-    uint32_t fsel = gpio_map[reg];
-    fsel &= ~(7 << shift);
-    gpio_map[reg] = fsel;
+    gpio_set(0);
+    close(gpio_fd);
+    gpio_set_direction(GDO0_PIN, "in");
+    gpio_unexport(GDO0_PIN);
 
     fprintf(stderr, "TX %d pulses x%d\n", count, repeat);
     return 0;
