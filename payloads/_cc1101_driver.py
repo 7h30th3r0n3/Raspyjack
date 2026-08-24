@@ -471,13 +471,14 @@ class CC1101:
         self._strobe(SRX)
 
     def send_raw_pulses(self, pulses, repeat=1, te_us=None):
-        """Send raw OOK pulses via async serial GPIO (Flipper-style).
+        """Send raw OOK pulses via CC1101 async serial TX.
 
-        Uses CC1101 async TX mode with GDO0 as serial data input,
-        toggled directly via GPIO for precise pulse timing.
+        Uses a native C binary (cc1101_tx) for microsecond-precise GPIO
+        bitbang when available, falls back to Python gpiod.
+        CC1101 is put in async TX mode; GDO0 is driven externally.
         Positive pulse = HIGH (carrier on), negative = LOW (carrier off).
         """
-        if not pulses or not GPIOD_OK:
+        if not pulses:
             return False
 
         self._strobe(SIDLE)
@@ -486,12 +487,48 @@ class CC1101:
         saved_pktctrl = self._read_reg(REG_PKTCTRL0)
         saved_frend0 = self._read_reg(0x22)
 
-        self._write_reg(REG_IOCFG0, 0x2E)  # GDO0 = HiZ (we drive it externally)
+        self._write_reg(REG_IOCFG0, 0x2E)  # GDO0 = HiZ (driven externally)
         self._write_reg(REG_MDMCFG2, 0x30)  # OOK, no sync, async serial
         self._write_reg(REG_PKTCTRL0, 0x32)  # async serial, infinite length
         self._write_reg(0x22, 0x11)  # FREND0: PA_POWER=1
         self._write_burst(0x3E, [0x00, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
 
+        try:
+            self._strobe(STX)
+            time.sleep(0.001)
+            ok = self._send_pulses_native(pulses, repeat)
+            if not ok:
+                ok = self._send_pulses_python(pulses, repeat)
+            return ok
+        except Exception:
+            return False
+        finally:
+            self._strobe(SIDLE)
+            self._write_reg(REG_IOCFG0, saved_iocfg0)
+            self._write_reg(REG_MDMCFG2, saved_mdm2)
+            self._write_reg(REG_PKTCTRL0, saved_pktctrl)
+            self._write_reg(0x22, saved_frend0)
+
+    def _send_pulses_native(self, pulses, repeat):
+        """Send via cc1101_tx C binary (µs-precise GPIO bitbang)."""
+        import shutil, subprocess
+        tx_bin = shutil.which("cc1101_tx")
+        if not tx_bin:
+            return False
+        pulse_str = "\n".join(str(p) for p in pulses) + "\n---\n"
+        try:
+            proc = subprocess.run(
+                [tx_bin, str(repeat)],
+                input=pulse_str, capture_output=True, text=True, timeout=30,
+            )
+            return proc.returncode == 0
+        except Exception:
+            return False
+
+    def _send_pulses_python(self, pulses, repeat):
+        """Fallback: send via Python gpiod (less precise)."""
+        if not GPIOD_OK:
+            return False
         gdo0_req = None
         try:
             chip = gpiod.Chip(self._gpio_chip_path)
@@ -503,26 +540,20 @@ class CC1101:
                 config={self._gdo0_line: cfg_lo},
                 consumer="cc1101-tx",
             )
-
-            self._strobe(STX)
-            time.sleep(0.001)
-
             for _ in range(repeat):
                 for pulse in pulses:
                     dur_us = abs(pulse)
                     is_high = pulse > 0
                     val = gpiod.line.Value.ACTIVE if is_high else gpiod.line.Value.INACTIVE
                     gdo0_req.set_value(self._gdo0_line, val)
-                    if dur_us > 0:
-                        if dur_us >= 1000:
-                            time.sleep(dur_us / 1_000_000)
-                        else:
-                            end = time.monotonic_ns() + dur_us * 1000
-                            while time.monotonic_ns() < end:
-                                pass
+                    if dur_us >= 1000:
+                        time.sleep(dur_us / 1_000_000)
+                    else:
+                        end = time.monotonic_ns() + dur_us * 1000
+                        while time.monotonic_ns() < end:
+                            pass
                 gdo0_req.set_value(self._gdo0_line, gpiod.line.Value.INACTIVE)
                 time.sleep(0.001)
-
             return True
         except Exception:
             return False
@@ -530,11 +561,6 @@ class CC1101:
             if gdo0_req:
                 gdo0_req.set_value(self._gdo0_line, gpiod.line.Value.INACTIVE)
                 gdo0_req.release()
-            self._strobe(SIDLE)
-            self._write_reg(REG_IOCFG0, saved_iocfg0)
-            self._write_reg(REG_MDMCFG2, saved_mdm2)
-            self._write_reg(REG_PKTCTRL0, saved_pktctrl)
-            self._write_reg(0x22, saved_frend0)
 
     def set_packet_rx(self):
         self._strobe(SIDLE)
