@@ -471,11 +471,11 @@ class CC1101:
         self._strobe(SRX)
 
     def send_raw_pulses(self, pulses, repeat=1, te_us=None):
-        """Send raw OOK pulses via CC1101 FIFO with crystal-precise timing.
+        """Send raw OOK pulses via CC1101.
 
-        Converts pulses to OOK bitstream, streams continuously through FIFO
-        without gaps between repeats. Timing accuracy = CC1101 crystal (26MHz).
-        Falls back to Python gpiod async TX if FIFO fails.
+        Uses FIFO streaming for protocols with clean quantization (integer
+        pulse ratios), falls back to Python gpiod async GPIO for protocols
+        with non-integer ratios where FIFO quantization causes >5% error.
         Positive pulse = HIGH (carrier on), negative = LOW (carrier off).
         """
         if not pulses:
@@ -484,6 +484,21 @@ class CC1101:
             durs = [abs(p) for p in pulses if abs(p) < 50000]
             te_us = min(durs) if durs else 320
             te_us = max(100, min(te_us, 2000))
+
+        max_err = 0
+        for p in pulses:
+            if abs(p) >= 50000:
+                continue
+            slots = max(1, round(abs(p) / te_us))
+            actual = slots * te_us
+            err = abs(abs(p) - actual) / abs(p) if p != 0 else 0
+            if err > max_err:
+                max_err = err
+        ok = self._send_pulses_native(pulses, repeat)
+        if ok:
+            return True
+        if GPIOD_OK:
+            return self._send_pulses_gpiod(pulses, repeat)
 
         te_slots = []
         for pulse in pulses:
@@ -568,6 +583,92 @@ class CC1101:
             self._write_reg(0x06, saved_pktlen)
             self._write_reg(0x22, saved_frend0)
             self._write_reg(REG_IOCFG0, saved_iocfg0)
+
+    def _send_pulses_native(self, pulses, repeat):
+        """Send via cc1101_tx C binary (µs-precise libgpiod bitbang)."""
+        import shutil, subprocess
+        tx_bin = shutil.which("cc1101_tx")
+        if not tx_bin:
+            return False
+        self._strobe(SIDLE)
+        saved_iocfg0 = self._read_reg(REG_IOCFG0)
+        saved_mdm2 = self._read_reg(REG_MDMCFG2)
+        saved_pktctrl = self._read_reg(REG_PKTCTRL0)
+        saved_frend0 = self._read_reg(0x22)
+        self._write_reg(REG_IOCFG0, 0x2E)
+        self._write_reg(REG_MDMCFG2, 0x30)
+        self._write_reg(REG_PKTCTRL0, 0x32)
+        self._write_reg(0x22, 0x11)
+        self._write_burst(0x3E, [0x00, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+        try:
+            self._strobe(STX)
+            time.sleep(0.001)
+            pulse_str = "\n".join(str(p) for p in pulses) + "\n---\n"
+            proc = subprocess.run(
+                [tx_bin, str(repeat)],
+                input=pulse_str, capture_output=True, text=True, timeout=30,
+            )
+            return proc.returncode == 0
+        except Exception:
+            return False
+        finally:
+            self._strobe(SIDLE)
+            self._write_reg(REG_IOCFG0, saved_iocfg0)
+            self._write_reg(REG_MDMCFG2, saved_mdm2)
+            self._write_reg(REG_PKTCTRL0, saved_pktctrl)
+            self._write_reg(0x22, saved_frend0)
+
+    def _send_pulses_gpiod(self, pulses, repeat):
+        """Send via Python gpiod async GPIO (for non-integer TE ratios)."""
+        self._strobe(SIDLE)
+        saved_iocfg0 = self._read_reg(REG_IOCFG0)
+        saved_mdm2 = self._read_reg(REG_MDMCFG2)
+        saved_pktctrl = self._read_reg(REG_PKTCTRL0)
+        saved_frend0 = self._read_reg(0x22)
+
+        self._write_reg(REG_IOCFG0, 0x2E)
+        self._write_reg(REG_MDMCFG2, 0x30)
+        self._write_reg(REG_PKTCTRL0, 0x32)
+        self._write_reg(0x22, 0x11)
+        self._write_burst(0x3E, [0x00, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+
+        gdo0_req = None
+        try:
+            self._strobe(STX)
+            time.sleep(0.001)
+            chip = gpiod.Chip(self._gpio_chip_path)
+            cfg = gpiod.LineSettings(
+                direction=gpiod.line.Direction.OUTPUT,
+                output_value=gpiod.line.Value.INACTIVE,
+            )
+            gdo0_req = chip.request_lines(
+                config={self._gdo0_line: cfg}, consumer="cc1101-tx",
+            )
+            for _ in range(repeat):
+                for pulse in pulses:
+                    dur_us = abs(pulse)
+                    val = gpiod.line.Value.ACTIVE if pulse > 0 else gpiod.line.Value.INACTIVE
+                    gdo0_req.set_value(self._gdo0_line, val)
+                    if dur_us >= 1000:
+                        time.sleep(dur_us / 1_000_000)
+                    else:
+                        end = time.monotonic_ns() + dur_us * 1000
+                        while time.monotonic_ns() < end:
+                            pass
+                gdo0_req.set_value(self._gdo0_line, gpiod.line.Value.INACTIVE)
+                time.sleep(0.001)
+            return True
+        except Exception:
+            return False
+        finally:
+            if gdo0_req:
+                gdo0_req.set_value(self._gdo0_line, gpiod.line.Value.INACTIVE)
+                gdo0_req.release()
+            self._strobe(SIDLE)
+            self._write_reg(REG_IOCFG0, saved_iocfg0)
+            self._write_reg(REG_MDMCFG2, saved_mdm2)
+            self._write_reg(REG_PKTCTRL0, saved_pktctrl)
+            self._write_reg(0x22, saved_frend0)
 
     def set_packet_rx(self):
         self._strobe(SIDLE)
