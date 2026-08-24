@@ -978,7 +978,17 @@ def _mode_add_manually(radio):
 # ── Bruteforce mode ──────────────────────────────────────────────────────
 
 def _mode_bruteforce(radio):
-    encodable = [p for p in ALL_PROTOCOLS if hasattr(p, "encode") and p.encode(0, 1) is not None]
+    encodable = []
+    for p in ALL_PROTOCOLS:
+        if not hasattr(p, "encode"):
+            continue
+        min_bits = getattr(p, "_MIN_BITS", 8)
+        try:
+            test = p.encode(0, max(min_bits, 8))
+            if test is not None:
+                encodable.append(p)
+        except Exception:
+            pass
     if not encodable:
         _draw_msg("No encoders", "", C_RED)
         time.sleep(2)
@@ -989,7 +999,11 @@ def _mode_bruteforce(radio):
     step = "proto"
     bit_count = 12
     freq_idx_local = DEFAULT_FREQ_IDX
-    delay_ms = 100
+    preset_idx_local = DEFAULT_PRESET_IDX
+    delay_ms = 20
+    repeat_count = 1
+    DELAYS = [10, 20, 50, 100, 200]
+    REPEATS = [1, 2, 3, 5]
 
     while _running:
         btn = get_button(PINS, GPIO)
@@ -1031,22 +1045,97 @@ def _mode_bruteforce(radio):
             _show(img)
 
         elif step == "bits":
-            bits_str = _input_text("Bit count", str(bit_count))
+            min_bits = getattr(encodable[proto_sel], "_MIN_BITS", 8)
+            bits_str = _input_text("Bit count", str(max(bit_count, min_bits)))
             if bits_str is None:
                 step = "proto"
                 continue
             try:
-                bit_count = max(1, min(32, int(bits_str)))
+                bit_count = max(1, min(64, int(bits_str)))
             except ValueError:
-                bit_count = 12
-            step = "run"
+                bit_count = min_bits
+            step = "config"
+
+        elif step == "config":
+            delay_sel = DELAYS.index(delay_ms) if delay_ms in DELAYS else 1
+            repeat_sel = REPEATS.index(repeat_count) if repeat_count in REPEATS else 0
+            cfg_cursor = 0
+            cfg_items = ["Frequency", "Delay", "Repeat", "START"]
+
+            while _running:
+                b2 = get_button(PINS, GPIO)
+                if b2 == "KEY3":
+                    step = "bits"
+                    break
+                if b2 == "UP" and now - last_btn > DEBOUNCE:
+                    last_btn = time.time()
+                    cfg_cursor = (cfg_cursor - 1) % len(cfg_items)
+                if b2 == "DOWN" and now - last_btn > DEBOUNCE:
+                    last_btn = time.time()
+                    cfg_cursor = (cfg_cursor + 1) % len(cfg_items)
+                if b2 == "KEY1" and now - last_btn > DEBOUNCE:
+                    last_btn = time.time()
+                    if cfg_cursor == 0:
+                        freq_idx_local = (freq_idx_local - 1) % len(FREQUENCIES)
+                    elif cfg_cursor == 1:
+                        delay_sel = (delay_sel - 1) % len(DELAYS)
+                        delay_ms = DELAYS[delay_sel]
+                    elif cfg_cursor == 2:
+                        repeat_sel = (repeat_sel - 1) % len(REPEATS)
+                        repeat_count = REPEATS[repeat_sel]
+                if b2 == "KEY2" and now - last_btn > DEBOUNCE:
+                    last_btn = time.time()
+                    if cfg_cursor == 0:
+                        freq_idx_local = (freq_idx_local + 1) % len(FREQUENCIES)
+                    elif cfg_cursor == 1:
+                        delay_sel = (delay_sel + 1) % len(DELAYS)
+                        delay_ms = DELAYS[delay_sel]
+                    elif cfg_cursor == 2:
+                        repeat_sel = (repeat_sel + 1) % len(REPEATS)
+                        repeat_count = REPEATS[repeat_sel]
+                if b2 == "OK" and time.time() - last_btn > 0.2:
+                    last_btn = time.time()
+                    if cfg_cursor == 3:
+                        step = "run"
+                        break
+
+                total = 1 << bit_count
+                est_s = total * (delay_ms / 1000.0 + 0.05 * repeat_count)
+                if est_s < 60:
+                    est_str = f"~{int(est_s)}s"
+                elif est_s < 3600:
+                    est_str = f"~{int(est_s/60)}m{int(est_s%60)}s"
+                else:
+                    est_str = f"~{est_s/3600:.1f}h"
+
+                freq_s = _freq_str(FREQUENCIES[freq_idx_local])
+                img = Image.new("RGB", (W, H), C_BG)
+                d = ImageDraw.Draw(img) if IS_WIDE else ScaledDraw(img)
+                _draw_header(d, f"BF {encodable[proto_sel].name} {bit_count}b")
+                if IS_WIDE:
+                    vals = [f"{freq_s} MHz", f"{delay_ms}ms", f"x{repeat_count}", ">>> GO >>>"]
+                    for ci, (label, val) in enumerate(zip(cfg_items, vals)):
+                        ry = 32 + ci * 22
+                        if ci == cfg_cursor:
+                            d.rectangle([4, ry, W - 4, ry + 20], fill=C_SEL)
+                        d.text((10, ry + 2), f"{label}: {val}", font=FONT,
+                               fill=C_ORANGE if ci == cfg_cursor else C_WHITE)
+                    d.text((W // 2, H - 30), f"{total} keys {est_str}",
+                           font=FONT_SM, fill=C_DIM, anchor="mm")
+                _draw_footer(d, "K1/K2:Adj OK:Go K3:Back")
+                _show(img)
+                time.sleep(0.08)
+
+            if step != "run":
+                continue
 
         elif step == "run":
             proto = encodable[proto_sel]
             total = 1 << bit_count
-            _apply_preset(radio, "AM650")
+            _apply_preset(radio, PRESETS[preset_idx_local]["name"])
             radio.set_frequency(FREQUENCIES[freq_idx_local] / 1_000_000)
 
+            t_start = time.time()
             for key in range(total):
                 if not _running:
                     break
@@ -1056,32 +1145,48 @@ def _mode_bruteforce(radio):
 
                 raw = proto.encode(key, bit_count)
                 if raw:
-                    radio.send_raw_pulses(raw, repeat=3)
+                    radio.send_raw_pulses(raw, repeat=repeat_count)
 
-                if key % 5 == 0:
+                if key % 10 == 0:
                     pct = key * 100 // total
+                    elapsed = time.time() - t_start
+                    if key > 0:
+                        rate = key / elapsed
+                        remaining = (total - key) / rate
+                        if remaining < 60:
+                            eta_str = f"{int(remaining)}s left"
+                        elif remaining < 3600:
+                            eta_str = f"{int(remaining/60)}m{int(remaining%60)}s left"
+                        else:
+                            eta_str = f"{remaining/3600:.1f}h left"
+                    else:
+                        eta_str = "calculating..."
                     img = Image.new("RGB", (W, H), C_BG)
                     d = ImageDraw.Draw(img) if IS_WIDE else ScaledDraw(img)
                     _draw_header(d, "Bruteforce")
                     if IS_WIDE:
-                        d.text((W // 2, 40), f"{proto.name} {bit_count}b",
+                        d.text((W // 2, 35), f"{proto.name} {bit_count}b",
                                font=FONT, fill=C_WHITE, anchor="mm")
-                        d.text((W // 2, 60), f"Key: 0x{key:0{(bit_count+3)//4}X}",
+                        d.text((W // 2, 55), f"Key: 0x{key:0{(bit_count+3)//4}X}",
                                font=FONT_LG, fill=C_ORANGE, anchor="mm")
-                        d.text((W // 2, 80), f"{key}/{total} ({pct}%)",
+                        d.text((W // 2, 75), f"{key}/{total} ({pct}%)",
+                               font=FONT_SM, fill=C_DIM, anchor="mm")
+                        d.text((W // 2, 90), eta_str,
                                font=FONT_SM, fill=C_DIM, anchor="mm")
                         bar_w = W - 40
-                        d.rectangle([20, 100, 20 + bar_w, 112], fill=C_DARK)
+                        d.rectangle([20, 104, 20 + bar_w, 114], fill=C_DARK)
                         fill_w = int(bar_w * pct / 100)
                         if fill_w > 0:
-                            d.rectangle([20, 100, 20 + fill_w, 112], fill=C_ORANGE)
+                            d.rectangle([20, 104, 20 + fill_w, 114], fill=C_ORANGE)
                     _draw_footer(d, "K3:Stop")
                     _show(img)
 
-                time.sleep(delay_ms / 1000.0)
+                if delay_ms > 0:
+                    time.sleep(delay_ms / 1000.0)
 
-            radio.start_rx()
-            _draw_msg("Bruteforce done", f"{proto.name} {bit_count}b", C_GREEN)
+            elapsed = time.time() - t_start
+            radio.idle()
+            _draw_msg("Bruteforce done", f"{proto.name} {bit_count}b {int(elapsed)}s", C_GREEN)
             time.sleep(2)
             step = "proto"
 
