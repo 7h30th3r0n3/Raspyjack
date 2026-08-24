@@ -272,13 +272,13 @@ class PrincetonDecoder:
         if bit_count is None:
             bit_count = 24
         te = self._TE_SHORT
-        pulses = [-(te * 36)]  # guard/header LOW
+        pulses = []
         for i in range(bit_count - 1, -1, -1):
             if (data >> i) & 1:
                 pulses.extend([te * 3, -(te)])
             else:
                 pulses.extend([te, -(te * 3)])
-        pulses.append(-(te * 36))  # guard/footer LOW
+        pulses.extend([te, -(te * 30)])  # stop bit + guard
         return pulses
 
 
@@ -788,13 +788,37 @@ class ChamberlainDecoder:
         if bit_count is None:
             bit_count = self._MIN_BITS
         te = self._TE_SHORT
-        pulses = [-(te * 39), te]  # header + start (STOP nibble)
+        # Chamberlain converts each data bit to a 4-bit nibble
+        # BIT_0 = 0b0111, BIT_1 = 0b0011, STOP = 0b0001
+        nibbles = []
         for i in range(bit_count - 1, -1, -1):
             if (data >> i) & 1:
-                pulses.extend([-(te * 2), te * 2])  # BIT_1
+                nibbles.extend([0, 0, 1, 1])  # BIT_1
             else:
-                pulses.extend([-te, te * 3])  # BIT_0
-        pulses.append(-(te * 39))
+                nibbles.extend([0, 1, 1, 1])  # BIT_0
+        # Add check nibble and guard
+        if bit_count == 9:
+            check_bits = [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]  # MASK_CHECK for 9-bit
+        else:
+            check_bits = [0, 0, 0, 1]  # STOP nibble
+        nibbles.extend(check_bits)
+        # Prepend 36 zeros as guard
+        bit_array = [0] * 36 + nibbles
+        # Convert bit array to OOK pulses (left-aligned)
+        pulses = []
+        i = 0
+        while i < len(bit_array):
+            # Count consecutive same-value bits
+            val = bit_array[i]
+            count = 0
+            while i < len(bit_array) and bit_array[i] == val:
+                count += 1
+                i += 1
+            dur = te * count
+            if val:
+                pulses.append(dur)
+            else:
+                pulses.append(-(dur))
         return pulses
 
 
@@ -1034,15 +1058,46 @@ class DitecGol4Decoder(_CAMEStyleDecoder):
 class DoitrandDecoder(_CAMEStyleDecoder):
     name = "Doitrand"; _TE_SHORT = 400; _TE_LONG = 1100; _TE_DELTA = 150; _MIN_BITS = 37
     _HEADER_LOW_MULT = 14; _HEADER_LOW_DELTA_MULT = 14
+    def encode(self, data, bit_count=None):
+        if bit_count is None: bit_count = self._MIN_BITS
+        te_s, te_l = self._TE_SHORT, self._TE_LONG
+        pulses = [-(te_s * 62), te_s * 2 - 100]  # header LOW + start HIGH
+        for i in range(bit_count - 1, -1, -1):
+            if (data >> i) & 1:
+                pulses.extend([-(te_l), te_s])
+            else:
+                pulses.extend([-(te_s), te_l])
+        return pulses
 
 class HoltekDecoder(_CAMEStyleDecoder):
     name = "Holtek"; _TE_SHORT = 430; _TE_LONG = 870; _TE_DELTA = 100; _MIN_BITS = 40
     _HEADER_LOW_MULT = 36; _HEADER_LOW_DELTA_MULT = 36
     _HAS_START_BIT = False
+    def encode(self, data, bit_count=None):
+        if bit_count is None: bit_count = self._MIN_BITS
+        te_s, te_l = self._TE_SHORT, self._TE_LONG
+        pulses = [-(te_s * 36), te_s]  # header LOW + start HIGH
+        for i in range(bit_count - 1, -1, -1):
+            if (data >> i) & 1:
+                pulses.extend([-(te_l), te_s])
+            else:
+                pulses.extend([-(te_s), te_l])
+        return pulses
 
 class IntertechnoV3Decoder(_CAMEStyleDecoder):
     name = "Intertechno V3"; _TE_SHORT = 275; _TE_LONG = 1375; _TE_DELTA = 150; _MIN_BITS = 32
     _HEADER_LOW_MULT = 37; _HEADER_LOW_DELTA_MULT = 15
+    def encode(self, data, bit_count=None):
+        if bit_count is None: bit_count = self._MIN_BITS
+        te_s, te_l = self._TE_SHORT, self._TE_LONG
+        pulses = [te_s, -(te_s * 38)]  # header
+        pulses.extend([te_s, -(te_s * 10)])  # sync
+        for i in range(bit_count - 1, -1, -1):
+            if (data >> i) & 1:
+                pulses.extend([te_s, -(te_l), te_s, -(te_s)])
+            else:
+                pulses.extend([te_s, -(te_s), te_s, -(te_l)])
+        return pulses
 
 class LegrandDecoder(_CAMEStyleDecoder):
     name = "Legrand"; _TE_SHORT = 375; _TE_LONG = 1125; _TE_DELTA = 150; _MIN_BITS = 18
@@ -1051,6 +1106,27 @@ class LegrandDecoder(_CAMEStyleDecoder):
 class MegaCodeDecoder(_CAMEStyleDecoder):
     name = "MegaCode"; _TE_SHORT = 1000; _TE_LONG = 1000; _TE_DELTA = 200; _MIN_BITS = 24
     _HEADER_LOW_MULT = 10; _HEADER_LOW_DELTA_MULT = 10
+    def encode(self, data, bit_count=None):
+        if bit_count is None: bit_count = self._MIN_BITS
+        te = self._TE_SHORT
+        # MegaCode builds upload backwards: bit 1 = gap*5, bit 0 = gap*8
+        # between same-value bits gap is shorter
+        pairs = []
+        last_bit = (data >> 0) & 1
+        for i in range(1, bit_count):
+            b = (data >> i) & 1
+            if b:
+                gap = te * 5 if last_bit else te * 2
+            else:
+                gap = te * 8 if last_bit else te * 5
+            pairs.append((gap, b))
+            last_bit = b
+        # Build pulses forward (pairs were built backwards)
+        pulses = []
+        for gap, _ in reversed(pairs):
+            pulses.extend([te, -(gap)])
+        pulses.append(te)  # final HIGH
+        return pulses
 
 class PhoenixV2Decoder(_CAMEStyleDecoder):
     name = "Phoenix V2"; _TE_SHORT = 427; _TE_LONG = 853; _TE_DELTA = 100; _MIN_BITS = 52
@@ -1094,8 +1170,14 @@ class DooyaDecoder(_PrincetonStyleDecoder):
         if bit_count is None: bit_count = self._MIN_BITS
         te_l = self._TE_LONG
         te_s = self._TE_SHORT
-        pulses = [te_l * 12 + te_l, -(te_l * 12 + te_s)]  # header
-        pulses.extend([te_s * 13, -(te_l * 2)])  # start bit
+        # Header LOW depends on first bit of data
+        if (data >> 0) & 1:
+            pulses = [-(te_l * 12 + te_l)]
+        else:
+            pulses = [-(te_l * 12 + te_s)]
+        # Start bit
+        pulses.extend([te_s * 13, -(te_l * 2)])
+        # Send key data
         for i in range(bit_count - 1, -1, -1):
             if (data >> i) & 1:
                 pulses.extend([te_l, -(te_s)])
@@ -1131,12 +1213,16 @@ class FeronDecoder(_PrincetonStyleDecoder):
             is_last = (i == 0)
             if (data >> i) & 1:
                 pulses.append(te_l)
-                pulses.extend([-(te_s + 150), te_s + 150])
-                pulses.append(-(te_l * 6) if is_last else -(te_s))
+                if is_last:
+                    pulses.extend([-(te_s + 150), te_s + 150, -(te_l * 6)])
+                else:
+                    pulses.append(-(te_s))
             else:
                 pulses.append(te_s)
-                pulses.extend([-(te_s + 150), te_s + 150])
-                pulses.append(-(te_l * 6) if is_last else -(te_l))
+                if is_last:
+                    pulses.extend([-(te_s + 150), te_s + 150, -(te_l * 6)])
+                else:
+                    pulses.append(-(te_l))
         return pulses
 
 class GangQiDecoder(_PrincetonStyleDecoder):
@@ -1151,10 +1237,10 @@ class GangQiDecoder(_PrincetonStyleDecoder):
             is_last = (i == 0)
             if (data >> i) & 1:
                 pulses.append(te_l)
-                pulses.append(-(te_s * 10) if is_last else -(te_s))
+                pulses.append(-(te_s * 4 + self._TE_DELTA) if is_last else -(te_s))
             else:
                 pulses.append(te_s)
-                pulses.append(-(te_s * 10) if is_last else -(te_l))
+                pulses.append(-(te_s * 4 + self._TE_DELTA) if is_last else -(te_l))
         return pulses
 
 class Hay21Decoder(_PrincetonStyleDecoder):
@@ -1168,10 +1254,10 @@ class Hay21Decoder(_PrincetonStyleDecoder):
             is_last = (i == 0)
             if (data >> i) & 1:
                 pulses.append(te_l)
-                pulses.append(-(te_s * 35) if is_last else -(te_s))
+                pulses.append(-(te_l * 6) if is_last else -(te_s))
             else:
                 pulses.append(te_s)
-                pulses.append(-(te_s * 35) if is_last else -(te_l))
+                pulses.append(-(te_l * 6) if is_last else -(te_l))
         return pulses
 
 class HollarmDecoder(_PrincetonStyleDecoder):
@@ -1180,15 +1266,17 @@ class HollarmDecoder(_PrincetonStyleDecoder):
     def encode(self, data, bit_count=None):
         if bit_count is None: bit_count = self._MIN_BITS
         te_s = self._TE_SHORT
+        te_l = self._TE_LONG
+        shifted = data << 2  # data is shifted left by 2 bits for encoding
         pulses = []
         for i in range(bit_count - 1, -1, -1):
             is_last = (i == 0)
-            if (data >> i) & 1:
+            if (shifted >> i) & 1:
                 pulses.append(te_s)
                 pulses.append(-(te_s * 12) if is_last else -(te_s * 8))
             else:
                 pulses.append(te_s)
-                pulses.append(-(te_s * 12) if is_last else -(self._TE_LONG))
+                pulses.append(-(te_s * 12) if is_last else -(te_l))
         return pulses
 
 class IDoDecoder(_PrincetonStyleDecoder):
@@ -1239,16 +1327,17 @@ class MagellanDecoder(_PrincetonStyleDecoder):
     def encode(self, data, bit_count=None):
         if bit_count is None: bit_count = self._MIN_BITS
         te_s, te_l = self._TE_SHORT, self._TE_LONG
-        pulses = [te_s * 4, -(te_s)]  # header
-        for _ in range(7):
+        pulses = [te_s * 4, -(te_s)]  # header HIGH + LOW
+        for _ in range(12):  # 12 toggle pairs (from C source)
             pulses.extend([te_s, -(te_s)])
-        pulses.extend([te_s, -(te_l)])  # start bit
+        pulses.extend([te_s, -(te_l)])  # last toggle + long LOW
         pulses.extend([te_l * 3, -(te_l)])  # start marker
         for i in range(bit_count - 1, -1, -1):
             if (data >> i) & 1:
-                pulses.extend([te_l, -(te_s)])
-            else:
                 pulses.extend([te_s, -(te_l)])
+            else:
+                pulses.extend([te_l, -(te_s)])
+        pulses.extend([te_s, -(te_l * 100)])  # stop bit + long gap
         return pulses
 
 class Marantec24Decoder(_PrincetonStyleDecoder):
@@ -1294,15 +1383,21 @@ class NeroRadioDecoder(_PrincetonStyleDecoder):
     def encode(self, data, bit_count=None):
         if bit_count is None: bit_count = self._MIN_BITS
         te_s = self._TE_SHORT
+        te_l = self._TE_LONG
         pulses = []
-        for _ in range(39):
+        for _ in range(49):  # 49 toggle pairs (from C source)
             pulses.extend([te_s, -(te_s)])
         pulses.extend([830, -(te_s)])  # start bit
-        for i in range(bit_count - 1, -1, -1):
+        for i in range(bit_count - 1, 0, -1):  # all bits except last
             if (data >> i) & 1:
-                pulses.extend([self._TE_LONG, -(te_s)])
+                pulses.extend([te_l, -(te_s)])
             else:
-                pulses.extend([te_s, -(self._TE_LONG)])
+                pulses.extend([te_s, -(te_l)])
+        # Last bit with special gap
+        if (data >> 0) & 1:
+            pulses.extend([te_l, -(te_s * 23)])
+        else:
+            pulses.extend([te_s, -(te_s * 23)])
         return pulses
 
 class NeroSketchDecoder(_PrincetonStyleDecoder):
@@ -1312,15 +1407,17 @@ class NeroSketchDecoder(_PrincetonStyleDecoder):
     def encode(self, data, bit_count=None):
         if bit_count is None: bit_count = self._MIN_BITS
         te_s = self._TE_SHORT
+        te_l = self._TE_LONG
         pulses = []
-        for _ in range(37):
+        for _ in range(47):  # 47 toggle pairs (from C source)
             pulses.extend([te_s, -(te_s)])
         pulses.extend([te_s * 4, -(te_s)])  # start bit
         for i in range(bit_count - 1, -1, -1):
             if (data >> i) & 1:
-                pulses.extend([self._TE_LONG, -(te_s)])
+                pulses.extend([te_l, -(te_s)])
             else:
-                pulses.extend([te_s, -(self._TE_LONG)])
+                pulses.extend([te_s, -(te_l)])
+        pulses.extend([te_s * 3, -(te_s)])  # stop bit
         return pulses
 
 class NordIceDecoder(_PrincetonStyleDecoder):
