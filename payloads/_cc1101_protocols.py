@@ -673,7 +673,7 @@ class HoltekHT12XDecoder:
         if bit_count is None:
             bit_count = self._MIN_BITS
         te = self._TE_SHORT
-        pulses = [-(te * 28), te]  # header + start bit
+        pulses = [-(te * 36), te]  # header (36*te) + start bit
         for i in range(bit_count - 1, -1, -1):
             if (data >> i) & 1:
                 pulses.extend([-(te * 2), te])
@@ -1059,7 +1059,18 @@ class _PrincetonStyleDecoder:
 
 class AnsonicDecoder(_CAMEStyleDecoder):
     name = "Ansonic"; _TE_SHORT = 555; _TE_LONG = 1111; _TE_DELTA = 120; _MIN_BITS = 12
-    _HEADER_LOW_MULT = 14; _HEADER_LOW_DELTA_MULT = 10
+    _HEADER_LOW_MULT = 35; _HEADER_LOW_DELTA_MULT = 10
+    def encode(self, data, bit_count=None):
+        if bit_count is None: bit_count = self._MIN_BITS
+        te_s, te_l = self._TE_SHORT, self._TE_LONG
+        pulses = [-(te_s * 35), te_s]  # header + start bit
+        for i in range(bit_count - 1, -1, -1):
+            if (data >> i) & 1:
+                pulses.extend([-(te_s), te_l])  # bit 1: SHORT LOW, LONG HIGH
+            else:
+                pulses.extend([-(te_l), te_s])  # bit 0: LONG LOW, SHORT HIGH
+        pulses.append(-(te_s * 4))
+        return pulses
 
 class DitecGol4Decoder(_CAMEStyleDecoder):
     name = "Ditec GOL4"; _TE_SHORT = 400; _TE_LONG = 1100; _TE_DELTA = 200; _MIN_BITS = 54
