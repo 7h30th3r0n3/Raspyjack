@@ -3261,3 +3261,502 @@ def decode_raw_pulses(pulses, protocols=None):
             seen.add(key)
             results.append(r)
     return results
+
+
+# ===================================================================
+# Vehicle protocols — ported from ProtoPirate
+# https://protopirate.net/ProtoPirate/ProtoPirate
+# ===================================================================
+
+def _manchester_encode_bits(data, bit_count, te):
+    """Manchester encode: bit 1 = te HIGH + te LOW, bit 0 = te LOW + te HIGH."""
+    pulses = []
+    for i in range(bit_count - 1, -1, -1):
+        if (data >> i) & 1:
+            pulses.extend([te, -(te)])
+        else:
+            pulses.extend([-(te), te])
+    return pulses
+
+
+def _manchester_encode_bits_inv(data, bit_count, te):
+    """Inverted Manchester: bit 1 = te LOW + te HIGH, bit 0 = te HIGH + te LOW."""
+    pulses = []
+    for i in range(bit_count - 1, -1, -1):
+        if (data >> i) & 1:
+            pulses.extend([-(te), te])
+        else:
+            pulses.extend([te, -(te)])
+    return pulses
+
+
+class _VehicleManchesterDecoder:
+    """Base Manchester decoder for vehicle keyfob protocols."""
+    name = "Unknown Vehicle"
+    _TE_SHORT = 250
+    _TE_LONG = 500
+    _TE_DELTA = 100
+    _MIN_BITS = 64
+    _PREAMBLE_MIN = 4
+    _GAP_US = 3500
+    _MODULATION = "AM650"
+    _HAS_ENCODER = False
+
+    _RESET = 0
+    _PREAMBLE = 1
+    _SYNC = 2
+    _DATA = 3
+    _CHECK = 4
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self._step = self._RESET
+        self._data = 0
+        self._bits = 0
+        self._te_last = 0
+        self._header_count = 0
+        self._manchester_prev = None
+
+    def _emit(self):
+        sig = DecodedSignal(
+            protocol=self.name, data=self._data, bit_count=self._bits,
+            modulation=self._MODULATION, proto_type="Vehicle",
+        )
+        self._parse_fields(sig)
+        return sig
+
+    def _parse_fields(self, sig):
+        pass
+
+    def _add_manchester_bit(self, bit):
+        self._data = (self._data << 1) | (1 if bit else 0)
+        self._bits += 1
+
+    def feed(self, level, duration):
+        te_s = self._TE_SHORT
+        te_l = self._TE_LONG
+        delta = self._TE_DELTA
+
+        if self._step == self._RESET:
+            if level and DURATION_DIFF(duration, te_s) < delta:
+                self._header_count = 1
+                self._step = self._PREAMBLE
+            return None
+
+        if self._step == self._PREAMBLE:
+            if DURATION_DIFF(duration, te_s) < delta:
+                self._header_count += 1
+                if self._header_count >= self._PREAMBLE_MIN * 2:
+                    self._step = self._SYNC
+            elif self._header_count >= self._PREAMBLE_MIN * 2 and not level:
+                if duration > te_s * 3:
+                    self._step = self._DATA
+                    self._data = 0
+                    self._bits = 0
+                    self._manchester_prev = None
+                else:
+                    self._step = self._RESET
+            else:
+                self._step = self._RESET
+            return None
+
+        if self._step == self._SYNC:
+            if not level and duration > te_s * 3:
+                self._step = self._DATA
+                self._data = 0
+                self._bits = 0
+                self._manchester_prev = None
+            elif DURATION_DIFF(duration, te_s) < delta:
+                self._header_count += 1
+            else:
+                self._step = self._RESET
+            return None
+
+        if self._step == self._DATA:
+            if DURATION_DIFF(duration, te_s) < delta:
+                self._te_last = duration
+                self._step = self._CHECK
+            elif DURATION_DIFF(duration, te_l) < delta * 2:
+                if self._manchester_prev is not None:
+                    self._add_manchester_bit(level)
+                self._manchester_prev = level
+                if self._bits >= self._MIN_BITS:
+                    result = self._emit()
+                    self._step = self._RESET
+                    return result
+            elif duration > te_l * 3:
+                if self._bits >= self._MIN_BITS:
+                    result = self._emit()
+                    self._step = self._RESET
+                    return result
+                self._step = self._RESET
+            else:
+                self._step = self._RESET
+            return None
+
+        if self._step == self._CHECK:
+            if DURATION_DIFF(duration, te_s) < delta:
+                self._add_manchester_bit(level)
+                self._manchester_prev = level
+                self._step = self._DATA
+                if self._bits >= self._MIN_BITS:
+                    result = self._emit()
+                    self._step = self._RESET
+                    return result
+            elif DURATION_DIFF(duration, te_l) < delta * 2:
+                self._add_manchester_bit(not level)
+                self._add_manchester_bit(level)
+                self._manchester_prev = level
+                self._step = self._DATA
+                if self._bits >= self._MIN_BITS:
+                    result = self._emit()
+                    self._step = self._RESET
+                    return result
+            else:
+                if self._bits >= self._MIN_BITS:
+                    result = self._emit()
+                    self._step = self._RESET
+                    return result
+                self._step = self._RESET
+            return None
+
+        return None
+
+    def encode(self, data, bit_count=None):
+        if not self._HAS_ENCODER:
+            return None
+        if bit_count is None:
+            bit_count = self._MIN_BITS
+        te = self._TE_SHORT
+        pulses = []
+        for _ in range(self._PREAMBLE_MIN):
+            pulses.extend([te, -(te)])
+        pulses.append(-(self._GAP_US))
+        pulses.extend(_manchester_encode_bits(data, bit_count, te))
+        pulses.append(-(self._GAP_US))
+        return pulses
+
+
+class _VehiclePWMDecoder:
+    """Base PWM decoder for vehicle keyfob protocols."""
+    name = "Unknown Vehicle PWM"
+    _TE_SHORT = 300
+    _TE_LONG = 3700
+    _TE_DELTA = 400
+    _MIN_BITS = 80
+    _PREAMBLE_PAIRS = 24
+    _GAP_US = 8000
+    _MODULATION = "AM650"
+    _HAS_ENCODER = False
+
+    _RESET = 0
+    _SEEK = 1
+    _SAVE = 2
+    _CHECK = 3
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self._step = self._RESET
+        self._data = 0
+        self._bits = 0
+        self._te_last = 0
+        self._header_count = 0
+
+    def _emit(self):
+        sig = DecodedSignal(
+            protocol=self.name, data=self._data, bit_count=self._bits,
+            modulation=self._MODULATION, proto_type="Vehicle",
+        )
+        self._parse_fields(sig)
+        return sig
+
+    def _parse_fields(self, sig):
+        pass
+
+    def feed(self, level, duration):
+        te_s = self._TE_SHORT
+        te_l = self._TE_LONG
+        delta = self._TE_DELTA
+
+        if self._step == self._RESET:
+            if level and DURATION_DIFF(duration, te_s) < delta:
+                self._header_count = 1
+                self._step = self._SEEK
+            return None
+
+        if self._step == self._SEEK:
+            if DURATION_DIFF(duration, te_s) < delta:
+                self._header_count += 1
+                if self._header_count >= self._PREAMBLE_PAIRS * 2:
+                    self._step = self._SAVE
+                    self._data = 0
+                    self._bits = 0
+            elif duration > self._GAP_US // 2:
+                if self._header_count >= self._PREAMBLE_PAIRS:
+                    self._step = self._SAVE
+                    self._data = 0
+                    self._bits = 0
+                else:
+                    self._step = self._RESET
+            else:
+                self._step = self._RESET
+            return None
+
+        if self._step == self._SAVE:
+            self._te_last = duration
+            self._step = self._CHECK
+            return None
+
+        if self._step == self._CHECK:
+            if DURATION_DIFF(self._te_last, te_s) < delta and DURATION_DIFF(duration, te_l) < delta:
+                self._data = (self._data << 1) | 0
+                self._bits += 1
+                self._step = self._SAVE
+            elif DURATION_DIFF(self._te_last, te_l) < delta and DURATION_DIFF(duration, te_s) < delta:
+                self._data = (self._data << 1) | 1
+                self._bits += 1
+                self._step = self._SAVE
+            elif DURATION_DIFF(self._te_last, te_s) < delta and DURATION_DIFF(duration, te_s) < delta:
+                self._data = (self._data << 1) | 0
+                self._bits += 1
+                self._step = self._SAVE
+            else:
+                if self._bits >= self._MIN_BITS:
+                    result = self._emit()
+                    self._step = self._RESET
+                    return result
+                self._step = self._RESET
+            if self._bits >= self._MIN_BITS:
+                result = self._emit()
+                self._step = self._RESET
+                return result
+            return None
+
+        return None
+
+    def encode(self, data, bit_count=None):
+        if not self._HAS_ENCODER:
+            return None
+        if bit_count is None:
+            bit_count = self._MIN_BITS
+        te_s = self._TE_SHORT
+        te_l = self._TE_LONG
+        pulses = []
+        for _ in range(self._PREAMBLE_PAIRS):
+            pulses.extend([te_s, -(te_s)])
+        pulses.append(-(self._GAP_US))
+        for i in range(bit_count - 1, -1, -1):
+            if (data >> i) & 1:
+                pulses.extend([te_l, -(te_s)])
+            else:
+                pulses.extend([te_s, -(te_l)])
+        pulses.append(-(self._GAP_US))
+        return pulses
+
+
+# --- Ford protocols ---
+
+class FordV0Decoder(_VehicleManchesterDecoder):
+    name = "Ford V0"
+    _TE_SHORT = 250; _TE_LONG = 500; _TE_DELTA = 100; _MIN_BITS = 64
+    _PREAMBLE_MIN = 4; _GAP_US = 3500; _HAS_ENCODER = True
+    def _parse_fields(self, sig):
+        sig.serial = (sig.data >> 28) & 0xFFFFFFF
+        sig.btn = (sig.data >> 60) & 0xF
+        sig.cnt = sig.data & 0xFFFFFFF
+
+class FordV1Decoder(_VehicleManchesterDecoder):
+    name = "Ford V1"
+    _TE_SHORT = 65; _TE_LONG = 130; _TE_DELTA = 39; _MIN_BITS = 136
+    _PREAMBLE_MIN = 50; _GAP_US = 1000; _MODULATION = "FM476"; _HAS_ENCODER = True
+
+class FordV2Decoder(_VehicleManchesterDecoder):
+    name = "Ford V2"
+    _TE_SHORT = 200; _TE_LONG = 400; _TE_DELTA = 260; _MIN_BITS = 104
+    _PREAMBLE_MIN = 64; _GAP_US = 15000; _MODULATION = "FM476"; _HAS_ENCODER = True
+
+class FordV3Decoder(_VehicleManchesterDecoder):
+    name = "Ford V3"
+    _TE_SHORT = 240; _TE_LONG = 480; _TE_DELTA = 60; _MIN_BITS = 104
+    _PREAMBLE_MIN = 30; _GAP_US = 5000; _MODULATION = "FM476"
+
+
+# --- Fiat protocols ---
+
+class FiatV0Decoder(_VehicleManchesterDecoder):
+    name = "Fiat V0"
+    _TE_SHORT = 200; _TE_LONG = 400; _TE_DELTA = 100; _MIN_BITS = 64
+    _PREAMBLE_MIN = 150; _GAP_US = 800; _HAS_ENCODER = True
+
+class FiatV1Decoder(_VehicleManchesterDecoder):
+    name = "Fiat V1"
+    _TE_SHORT = 250; _TE_LONG = 500; _TE_DELTA = 100; _MIN_BITS = 102
+    _PREAMBLE_MIN = 4; _GAP_US = 3252; _HAS_ENCODER = True
+
+class FiatV2Decoder(_VehicleManchesterDecoder):
+    name = "Fiat V2"
+    _TE_SHORT = 210; _TE_LONG = 420; _TE_DELTA = 100; _MIN_BITS = 112
+    _PREAMBLE_MIN = 4; _GAP_US = 3000
+
+
+# --- Honda protocols ---
+
+class HondaStaticDecoder(_VehiclePWMDecoder):
+    name = "Honda Static"
+    _TE_SHORT = 63; _TE_LONG = 700; _TE_DELTA = 120; _MIN_BITS = 64
+    _PREAMBLE_PAIRS = 80; _GAP_US = 700; _MODULATION = "FM476"; _HAS_ENCODER = True
+    def _parse_fields(self, sig):
+        sig.btn = (sig.data >> 60) & 0xF
+        sig.serial = (sig.data >> 32) & 0xFFFFFFF
+        sig.cnt = sig.data & 0xFFFFFF
+
+class HondaV1Decoder(_VehicleManchesterDecoder):
+    name = "Honda V1"
+    _TE_SHORT = 1000; _TE_LONG = 2000; _TE_DELTA = 400; _MIN_BITS = 64
+    _PREAMBLE_MIN = 90; _GAP_US = 5000; _HAS_ENCODER = True
+
+class HondaV2Decoder(_VehiclePWMDecoder):
+    name = "Honda V2"
+    _TE_SHORT = 250; _TE_LONG = 500; _TE_DELTA = 100; _MIN_BITS = 81
+    _PREAMBLE_PAIRS = 160; _GAP_US = 50000; _MODULATION = "FM476"; _HAS_ENCODER = True
+
+
+# --- Kia/Hyundai protocols ---
+
+class KiaV0Decoder(_VehiclePWMDecoder):
+    name = "Kia V0"
+    _TE_SHORT = 250; _TE_LONG = 500; _TE_DELTA = 100; _MIN_BITS = 61
+    _PREAMBLE_PAIRS = 160; _GAP_US = 1000; _MODULATION = "FM476"; _HAS_ENCODER = True
+    def _parse_fields(self, sig):
+        sig.serial = (sig.data >> 24) & 0xFFFFFFFF
+        sig.btn = (sig.data >> 56) & 0xF
+        sig.cnt = (sig.data >> 8) & 0xFFFF
+
+class KiaV1Decoder(_VehicleManchesterDecoder):
+    name = "Kia V1"
+    _TE_SHORT = 800; _TE_LONG = 1600; _TE_DELTA = 200; _MIN_BITS = 56
+    _PREAMBLE_MIN = 4; _GAP_US = 25000; _HAS_ENCODER = True
+
+class KiaV2Decoder(_VehicleManchesterDecoder):
+    name = "Kia V2"
+    _TE_SHORT = 500; _TE_LONG = 1000; _TE_DELTA = 150; _MIN_BITS = 51
+    _PREAMBLE_MIN = 4; _GAP_US = 3000; _MODULATION = "FM476"; _HAS_ENCODER = True
+
+class KiaV3V4Decoder(_VehiclePWMDecoder):
+    name = "Kia V3/V4"
+    _TE_SHORT = 400; _TE_LONG = 800; _TE_DELTA = 150; _MIN_BITS = 64
+    _PREAMBLE_PAIRS = 4; _GAP_US = 5000; _MODULATION = "FM476"; _HAS_ENCODER = True
+
+class KiaV5Decoder(_VehiclePWMDecoder):
+    name = "Kia V5"
+    _TE_SHORT = 400; _TE_LONG = 800; _TE_DELTA = 150; _MIN_BITS = 64
+    _PREAMBLE_PAIRS = 4; _GAP_US = 5000; _MODULATION = "FM476"; _HAS_ENCODER = True
+
+class KiaV6Decoder(_VehicleManchesterDecoder):
+    name = "Kia V6"
+    _TE_SHORT = 200; _TE_LONG = 400; _TE_DELTA = 100; _MIN_BITS = 144
+    _PREAMBLE_MIN = 4; _GAP_US = 3000; _MODULATION = "FM476"; _HAS_ENCODER = True
+
+class KiaV7Decoder(_VehicleManchesterDecoder):
+    name = "Kia V7"
+    _TE_SHORT = 250; _TE_LONG = 500; _TE_DELTA = 100; _MIN_BITS = 64
+    _PREAMBLE_MIN = 4; _GAP_US = 3000; _MODULATION = "FM476"; _HAS_ENCODER = True
+
+
+# --- Other vehicle protocols ---
+
+class ChryslerV0Decoder(_VehiclePWMDecoder):
+    name = "Chrysler V0"
+    _TE_SHORT = 0x12C; _TE_LONG = 0xD48; _TE_DELTA = 0x190; _MIN_BITS = 0x50
+    _PREAMBLE_PAIRS = 24; _GAP_US = 0x1F40; _HAS_ENCODER = True
+
+class MazdaV0Decoder(_VehicleManchesterDecoder):
+    name = "Mazda V0"
+    _TE_SHORT = 250; _TE_LONG = 500; _TE_DELTA = 100; _MIN_BITS = 64
+    _PREAMBLE_MIN = 4; _GAP_US = 3500; _HAS_ENCODER = True
+
+class MitsubishiV0Decoder(_VehiclePWMDecoder):
+    name = "Mitsubishi V0"
+    _TE_SHORT = 250; _TE_LONG = 500; _TE_DELTA = 100; _MIN_BITS = 64
+    _PREAMBLE_PAIRS = 4; _GAP_US = 5000; _MODULATION = "FM476"
+
+class PorscheTouaregDecoder(_VehiclePWMDecoder):
+    name = "Porsche Touareg"
+    _TE_SHORT = 1680; _TE_LONG = 3370; _TE_DELTA = 500; _MIN_BITS = 64
+    _PREAMBLE_PAIRS = 4; _GAP_US = 10000
+
+class PSADecoder(_VehicleManchesterDecoder):
+    name = "PSA"
+    _TE_SHORT = 250; _TE_LONG = 500; _TE_DELTA = 100; _MIN_BITS = 128
+    _PREAMBLE_MIN = 4; _GAP_US = 3000; _HAS_ENCODER = True
+    def _parse_fields(self, sig):
+        sig.extra["type"] = "Peugeot/Citroen"
+
+class RenaultV0Decoder(_VehicleManchesterDecoder):
+    name = "Renault V0"
+    _TE_SHORT = 125; _TE_LONG = 250; _TE_DELTA = 60; _MIN_BITS = 82
+    _PREAMBLE_MIN = 4; _GAP_US = 2000; _HAS_ENCODER = True
+
+class StarLineDecoder(_VehiclePWMDecoder):
+    name = "StarLine"
+    _TE_SHORT = 250; _TE_LONG = 500; _TE_DELTA = 120; _MIN_BITS = 64
+    _PREAMBLE_PAIRS = 6; _GAP_US = 5000; _HAS_ENCODER = True
+
+class SubaruDecoder(_VehiclePWMDecoder):
+    name = "Subaru"
+    _TE_SHORT = 800; _TE_LONG = 1600; _TE_DELTA = 200; _MIN_BITS = 64
+    _PREAMBLE_PAIRS = 75; _GAP_US = 2800; _HAS_ENCODER = True
+    def _parse_fields(self, sig):
+        sig.btn = (sig.data >> 60) & 0x3
+        sig.serial = (sig.data >> 32) & 0xFFFFFFF
+        sig.cnt = (sig.data >> 16) & 0xFFFF
+
+class VAGDecoder(_VehicleManchesterDecoder):
+    name = "VAG"
+    _TE_SHORT = 500; _TE_LONG = 1000; _TE_DELTA = 120; _MIN_BITS = 80
+    _PREAMBLE_MIN = 31; _GAP_US = 4001; _HAS_ENCODER = True
+    def _parse_fields(self, sig):
+        sig.extra["type"] = "VW/Audi/Seat/Skoda"
+
+class ScherKhanDecoder(_VehiclePWMDecoder):
+    name = "Scher-Khan"
+    _TE_SHORT = 750; _TE_LONG = 1100; _TE_DELTA = 180; _MIN_BITS = 35
+    _PREAMBLE_PAIRS = 4; _GAP_US = 5000; _MODULATION = "FM476"
+
+
+# Register all vehicle protocols
+ALL_PROTOCOLS.extend([
+    FordV0Decoder(),
+    FordV1Decoder(),
+    FordV2Decoder(),
+    FordV3Decoder(),
+    FiatV0Decoder(),
+    FiatV1Decoder(),
+    FiatV2Decoder(),
+    HondaStaticDecoder(),
+    HondaV1Decoder(),
+    HondaV2Decoder(),
+    KiaV0Decoder(),
+    KiaV1Decoder(),
+    KiaV2Decoder(),
+    KiaV3V4Decoder(),
+    KiaV5Decoder(),
+    KiaV6Decoder(),
+    KiaV7Decoder(),
+    ChryslerV0Decoder(),
+    MazdaV0Decoder(),
+    MitsubishiV0Decoder(),
+    PorscheTouaregDecoder(),
+    PSADecoder(),
+    RenaultV0Decoder(),
+    StarLineDecoder(),
+    SubaruDecoder(),
+    VAGDecoder(),
+    ScherKhanDecoder(),
+])
+
+PROTOCOL_BY_NAME = {p.name: p for p in ALL_PROTOCOLS}
