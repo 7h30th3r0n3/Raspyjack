@@ -555,13 +555,17 @@ class LinearDecoder:
             bit_count = self._MIN_BITS
         te_s = self._TE_SHORT
         te_l = self._TE_LONG
-        pulses = [-(te_s * 42)]  # guard/header
-        for i in range(bit_count - 1, -1, -1):
-            if (data >> i) & 1:
+        pulses = []
+        for i in range(bit_count - 1, 0, -1):
+            if (data >> (i - 1)) & 1:
                 pulses.extend([te_l, -(te_s)])
             else:
                 pulses.extend([te_s, -(te_l)])
-        pulses.append(-(te_s * 42))  # guard/footer
+        # Last bit with guard merged
+        if data & 1:
+            pulses.extend([te_l, -(te_s * 42)])
+        else:
+            pulses.extend([te_s, -(te_s * 44)])
         return pulses
 
 
@@ -1066,70 +1070,275 @@ class CameTweeDecoder(_CAMEStyleDecoder):
 class ClemsaDecoder(_PrincetonStyleDecoder):
     name = "Clemsa"; _TE_SHORT = 385; _TE_LONG = 2695; _TE_DELTA = 150; _MIN_BITS = 18
     _HEADER_LOW_MULT = 51; _HEADER_LOW_DELTA_MULT = 25
+    def encode(self, data, bit_count=None):
+        if bit_count is None: bit_count = self._MIN_BITS
+        te_s, te_l = self._TE_SHORT, self._TE_LONG
+        pulses = []
+        for i in range(bit_count - 1, 0, -1):
+            if (data >> (i-1)) & 1:
+                pulses.extend([te_l, -(te_s)])
+            else:
+                pulses.extend([te_s, -(te_l)])
+        if (data >> 0) & 1:
+            pulses.append(te_l)
+        else:
+            pulses.append(te_s)
+        pulses.append(-(te_s * 51))
+        return pulses
 
 class DooyaDecoder(_PrincetonStyleDecoder):
     name = "Dooya"; _TE_SHORT = 366; _TE_LONG = 733; _TE_DELTA = 120; _MIN_BITS = 40
     _HEADER_LOW_MULT = 24; _HEADER_LOW_DELTA_MULT = 20
     _HAS_START_BIT = True; _START_LEVEL_HIGH = True
+    def encode(self, data, bit_count=None):
+        if bit_count is None: bit_count = self._MIN_BITS
+        te_l = self._TE_LONG
+        te_s = self._TE_SHORT
+        pulses = [te_l * 12 + te_l, -(te_l * 12 + te_s)]  # header
+        pulses.extend([te_s * 13, -(te_l * 2)])  # start bit
+        for i in range(bit_count - 1, -1, -1):
+            if (data >> i) & 1:
+                pulses.extend([te_l, -(te_s)])
+            else:
+                pulses.extend([te_s, -(te_l)])
+        return pulses
 
 class ElplastDecoder(_PrincetonStyleDecoder):
     name = "Elplast"; _TE_SHORT = 230; _TE_LONG = 1550; _TE_DELTA = 160; _MIN_BITS = 18
     _HEADER_LOW_MULT = 72; _HEADER_LOW_DELTA_MULT = 72
+    def encode(self, data, bit_count=None):
+        if bit_count is None: bit_count = self._MIN_BITS
+        te_s, te_l = self._TE_SHORT, self._TE_LONG
+        pulses = []
+        for i in range(bit_count - 1, -1, -1):
+            is_last = (i == 0)
+            if (data >> i) & 1:
+                pulses.append(te_l)
+                pulses.append(-(te_l * 8) if is_last else -(te_s))
+            else:
+                pulses.append(te_s)
+                pulses.append(-(te_l * 8) if is_last else -(te_l))
+        return pulses
 
 class FeronDecoder(_PrincetonStyleDecoder):
     name = "Feron"; _TE_SHORT = 350; _TE_LONG = 750; _TE_DELTA = 150; _MIN_BITS = 32
     _HEADER_LOW_MULT = 36; _HEADER_LOW_DELTA_MULT = 36
+    def encode(self, data, bit_count=None):
+        if bit_count is None: bit_count = self._MIN_BITS
+        te_s, te_l = self._TE_SHORT, self._TE_LONG
+        pulses = []
+        for i in range(bit_count - 1, -1, -1):
+            is_last = (i == 0)
+            if (data >> i) & 1:
+                pulses.append(te_l)
+                pulses.extend([-(te_s + 150), te_s + 150])
+                pulses.append(-(te_l * 6) if is_last else -(te_s))
+            else:
+                pulses.append(te_s)
+                pulses.extend([-(te_s + 150), te_s + 150])
+                pulses.append(-(te_l * 6) if is_last else -(te_l))
+        return pulses
 
 class GangQiDecoder(_PrincetonStyleDecoder):
     name = "GangQi"; _TE_SHORT = 500; _TE_LONG = 1200; _TE_DELTA = 200; _MIN_BITS = 34
     _HEADER_LOW_MULT = 10; _HEADER_LOW_DELTA_MULT = 10
     _HAS_START_BIT = True
+    def encode(self, data, bit_count=None):
+        if bit_count is None: bit_count = self._MIN_BITS
+        te_s, te_l = self._TE_SHORT, self._TE_LONG
+        pulses = []
+        for i in range(bit_count - 1, -1, -1):
+            is_last = (i == 0)
+            if (data >> i) & 1:
+                pulses.append(te_l)
+                pulses.append(-(te_s * 10) if is_last else -(te_s))
+            else:
+                pulses.append(te_s)
+                pulses.append(-(te_s * 10) if is_last else -(te_l))
+        return pulses
 
 class Hay21Decoder(_PrincetonStyleDecoder):
     name = "Hay21"; _TE_SHORT = 300; _TE_LONG = 700; _TE_DELTA = 150; _MIN_BITS = 21
     _HEADER_LOW_MULT = 35; _HEADER_LOW_DELTA_MULT = 35
+    def encode(self, data, bit_count=None):
+        if bit_count is None: bit_count = self._MIN_BITS
+        te_s, te_l = self._TE_SHORT, self._TE_LONG
+        pulses = []
+        for i in range(bit_count - 1, -1, -1):
+            is_last = (i == 0)
+            if (data >> i) & 1:
+                pulses.append(te_l)
+                pulses.append(-(te_s * 35) if is_last else -(te_s))
+            else:
+                pulses.append(te_s)
+                pulses.append(-(te_s * 35) if is_last else -(te_l))
+        return pulses
 
 class HollarmDecoder(_PrincetonStyleDecoder):
     name = "Hollarm"; _TE_SHORT = 200; _TE_LONG = 1000; _TE_DELTA = 200; _MIN_BITS = 42
     _HEADER_LOW_MULT = 56; _HEADER_LOW_DELTA_MULT = 56
+    def encode(self, data, bit_count=None):
+        if bit_count is None: bit_count = self._MIN_BITS
+        te_s = self._TE_SHORT
+        pulses = []
+        for i in range(bit_count - 1, -1, -1):
+            is_last = (i == 0)
+            if (data >> i) & 1:
+                pulses.append(te_s)
+                pulses.append(-(te_s * 12) if is_last else -(te_s * 8))
+            else:
+                pulses.append(te_s)
+                pulses.append(-(te_s * 12) if is_last else -(self._TE_LONG))
+        return pulses
 
 class IDoDecoder(_PrincetonStyleDecoder):
     name = "iDo"; _TE_SHORT = 450; _TE_LONG = 1450; _TE_DELTA = 150; _MIN_BITS = 48
     _HEADER_LOW_MULT = 10; _HEADER_LOW_DELTA_MULT = 10
+    def encode(self, data, bit_count=None):
+        return None  # iDo has no Send flag in Momentum
 
 class KeyfinderDecoder(_PrincetonStyleDecoder):
     name = "Keyfinder"; _TE_SHORT = 400; _TE_LONG = 1200; _TE_DELTA = 150; _MIN_BITS = 24
     _HEADER_LOW_MULT = 50; _HEADER_LOW_DELTA_MULT = 50
+    def encode(self, data, bit_count=None):
+        if bit_count is None: bit_count = 24
+        te_s, te_l = self._TE_SHORT, self._TE_LONG
+        pulses = []
+        for i in range(bit_count - 1, -1, -1):
+            if (data >> i) & 1:
+                pulses.extend([te_s, -(te_l)])
+            else:
+                pulses.extend([te_l, -(te_s)])
+        for _ in range(3):
+            pulses.extend([te_s, -(te_s)])
+        pulses.append(te_s)
+        pulses.append(-(te_s * 10))  # gap
+        return pulses
 
 class LinearDelta3Decoder(_PrincetonStyleDecoder):
     name = "Linear Delta3"; _TE_SHORT = 500; _TE_LONG = 2000; _TE_DELTA = 150; _MIN_BITS = 8
     _HEADER_LOW_MULT = 16; _HEADER_LOW_DELTA_MULT = 16
+    def encode(self, data, bit_count=None):
+        if bit_count is None: bit_count = self._MIN_BITS
+        te_s, te_l = self._TE_SHORT, self._TE_LONG
+        pulses = []
+        for i in range(bit_count - 1, 0, -1):
+            if (data >> (i-1)) & 1:
+                pulses.extend([te_s, -(te_s * 7)])
+            else:
+                pulses.extend([te_l, -(te_l)])
+        if data & 1:
+            pulses.extend([te_s, -(te_s * 73)])
+        else:
+            pulses.extend([te_l, -(te_s * 70)])
+        return pulses
 
 class MagellanDecoder(_PrincetonStyleDecoder):
     name = "Magellan"; _TE_SHORT = 200; _TE_LONG = 400; _TE_DELTA = 100; _MIN_BITS = 32
     _HEADER_LOW_MULT = 150; _HEADER_LOW_DELTA_MULT = 150
+    def encode(self, data, bit_count=None):
+        if bit_count is None: bit_count = self._MIN_BITS
+        te_s, te_l = self._TE_SHORT, self._TE_LONG
+        pulses = [te_s * 4, -(te_s)]  # header
+        for _ in range(7):
+            pulses.extend([te_s, -(te_s)])
+        pulses.extend([te_s, -(te_l)])  # start bit
+        pulses.extend([te_l * 3, -(te_l)])  # start marker
+        for i in range(bit_count - 1, -1, -1):
+            if (data >> i) & 1:
+                pulses.extend([te_l, -(te_s)])
+            else:
+                pulses.extend([te_s, -(te_l)])
+        return pulses
 
 class Marantec24Decoder(_PrincetonStyleDecoder):
     name = "Marantec 24"; _TE_SHORT = 800; _TE_LONG = 1600; _TE_DELTA = 200; _MIN_BITS = 24
     _HEADER_LOW_MULT = 6; _HEADER_LOW_DELTA_MULT = 6
+    def encode(self, data, bit_count=None):
+        if bit_count is None: bit_count = self._MIN_BITS
+        te_s, te_l = self._TE_SHORT, self._TE_LONG
+        pulses = []
+        for i in range(bit_count - 1, -1, -1):
+            is_last = (i == 0)
+            if (data >> i) & 1:
+                pulses.append(te_s)
+                pulses.append(-(te_l * 9 + te_s) if is_last else -(te_l * 2))
+            else:
+                pulses.append(te_l)
+                pulses.append(-(te_l * 9 + te_s) if is_last else -(te_s * 3))
+        return pulses
 
 class MastercodeDecoder(_PrincetonStyleDecoder):
     name = "Mastercode"; _TE_SHORT = 1072; _TE_LONG = 2145; _TE_DELTA = 150; _MIN_BITS = 36
     _HEADER_LOW_MULT = 15; _HEADER_LOW_DELTA_MULT = 15
+    def encode(self, data, bit_count=None):
+        if bit_count is None: bit_count = self._MIN_BITS
+        te_s, te_l = self._TE_SHORT, self._TE_LONG
+        pulses = []
+        for i in range(bit_count - 1, 0, -1):
+            if (data >> (i-1)) & 1:
+                pulses.extend([te_l, -(te_s)])
+            else:
+                pulses.extend([te_s, -(te_l)])
+        if data & 1:
+            pulses.append(te_l)
+        else:
+            pulses.append(te_s)
+        pulses.append(-(te_s * 15))
+        return pulses
 
 class NeroRadioDecoder(_PrincetonStyleDecoder):
     name = "Nero Radio"; _TE_SHORT = 200; _TE_LONG = 400; _TE_DELTA = 80; _MIN_BITS = 56
     _HEADER_LOW_MULT = 190; _HEADER_LOW_DELTA_MULT = 190
     _HAS_START_BIT = True
+    def encode(self, data, bit_count=None):
+        if bit_count is None: bit_count = self._MIN_BITS
+        te_s = self._TE_SHORT
+        pulses = []
+        for _ in range(39):
+            pulses.extend([te_s, -(te_s)])
+        pulses.extend([830, -(te_s)])  # start bit
+        for i in range(bit_count - 1, -1, -1):
+            if (data >> i) & 1:
+                pulses.extend([self._TE_LONG, -(te_s)])
+            else:
+                pulses.extend([te_s, -(self._TE_LONG)])
+        return pulses
 
 class NeroSketchDecoder(_PrincetonStyleDecoder):
     name = "Nero Sketch"; _TE_SHORT = 330; _TE_LONG = 660; _TE_DELTA = 150; _MIN_BITS = 40
     _HEADER_LOW_MULT = 115; _HEADER_LOW_DELTA_MULT = 115
     _HAS_START_BIT = True
+    def encode(self, data, bit_count=None):
+        if bit_count is None: bit_count = self._MIN_BITS
+        te_s = self._TE_SHORT
+        pulses = []
+        for _ in range(37):
+            pulses.extend([te_s, -(te_s)])
+        pulses.extend([te_s * 4, -(te_s)])  # start bit
+        for i in range(bit_count - 1, -1, -1):
+            if (data >> i) & 1:
+                pulses.extend([self._TE_LONG, -(te_s)])
+            else:
+                pulses.extend([te_s, -(self._TE_LONG)])
+        return pulses
 
 class NordIceDecoder(_PrincetonStyleDecoder):
     name = "Nord Ice"; _TE_SHORT = 300; _TE_LONG = 800; _TE_DELTA = 150; _MIN_BITS = 33
     _HEADER_LOW_MULT = 30; _HEADER_LOW_DELTA_MULT = 30
+    def encode(self, data, bit_count=None):
+        if bit_count is None: bit_count = self._MIN_BITS
+        te_s, te_l = self._TE_SHORT, self._TE_LONG
+        pulses = []
+        for i in range(bit_count - 1, -1, -1):
+            is_last = (i == 0)
+            if (data >> i) & 1:
+                pulses.append(te_l)
+                pulses.append(-(te_s * 25) if is_last else -(te_s))
+            else:
+                pulses.append(te_s)
+                pulses.append(-(te_s * 25) if is_last else -(te_l))
+        return pulses
 
 class RogerDecoder(_PrincetonStyleDecoder):
     name = "Roger"; _TE_SHORT = 500; _TE_LONG = 1000; _TE_DELTA = 270; _MIN_BITS = 28
@@ -1138,18 +1347,67 @@ class RogerDecoder(_PrincetonStyleDecoder):
 class SMC5326Decoder(_PrincetonStyleDecoder):
     name = "SMC5326"; _TE_SHORT = 300; _TE_LONG = 900; _TE_DELTA = 200; _MIN_BITS = 25
     _HEADER_LOW_MULT = 36; _HEADER_LOW_DELTA_MULT = 36
+    def encode(self, data, bit_count=None):
+        if bit_count is None: bit_count = self._MIN_BITS
+        te = self._TE_SHORT  # SMC5326 uses dynamic TE
+        pulses = []
+        for i in range(bit_count - 1, -1, -1):
+            if (data >> i) & 1:
+                pulses.extend([te * 3, -(te)])
+            else:
+                pulses.extend([te, -(te * 3)])
+        pulses.extend([te, -(te * 25)])  # end + gap
+        return pulses
 
 class Treadmill37Decoder(_PrincetonStyleDecoder):
     name = "Treadmill37"; _TE_SHORT = 300; _TE_LONG = 900; _TE_DELTA = 150; _MIN_BITS = 37
     _HEADER_LOW_MULT = 29; _HEADER_LOW_DELTA_MULT = 29
+    def encode(self, data, bit_count=None):
+        if bit_count is None: bit_count = self._MIN_BITS
+        te_s, te_l = self._TE_SHORT, self._TE_LONG
+        pulses = []
+        for i in range(bit_count - 1, -1, -1):
+            is_last = (i == 0)
+            if (data >> i) & 1:
+                pulses.append(te_l)
+                pulses.append(-(te_s * 20) if is_last else -(te_s))
+            else:
+                pulses.append(te_s)
+                pulses.append(-(te_s * 20) if is_last else -(te_l))
+        return pulses
 
 class AllstarFireflyDecoder(_PrincetonStyleDecoder):
     name = "Allstar Firefly"; _TE_SHORT = 600; _TE_LONG = 4000; _TE_DELTA = 300; _MIN_BITS = 18
     _HEADER_LOW_MULT = 8; _HEADER_LOW_DELTA_MULT = 8
+    def encode(self, data, bit_count=None):
+        if bit_count is None: bit_count = self._MIN_BITS
+        te_s, te_l = self._TE_SHORT, self._TE_LONG
+        pulses = []
+        for i in range(bit_count - 1, -1, -1):
+            is_last = (i == 0)
+            if (data >> i) & 1:
+                pulses.append(te_l)
+                pulses.append(-(te_s * 50 + 400) if is_last else -(te_s))
+            else:
+                pulses.append(te_s)
+                pulses.append(-(te_s * 50 + 400) if is_last else -(te_l))
+        return pulses
 
 class DickertMAHSDecoder(_PrincetonStyleDecoder):
     name = "Dickert MAHS"; _TE_SHORT = 400; _TE_LONG = 800; _TE_DELTA = 100; _MIN_BITS = 36
     _HEADER_LOW_MULT = 50; _HEADER_LOW_DELTA_MULT = 50
+    def encode(self, data, bit_count=None):
+        # Dickert MAHS is CAME-style: LOW header, HIGH start, LOW+HIGH data
+        if bit_count is None: bit_count = self._MIN_BITS
+        te_s, te_l = self._TE_SHORT, self._TE_LONG
+        pulses = [-(te_s * 112)]  # header LOW
+        pulses.append(te_s)  # start bit HIGH
+        for i in range(bit_count - 1, -1, -1):
+            if (data >> i) & 1:
+                pulses.extend([-(te_l), te_s])
+            else:
+                pulses.extend([-(te_s), te_l])
+        return pulses
 
 class VaunoEN8822CDecoder(_PrincetonStyleDecoder):
     name = "Vauno EN8822C"; _TE_SHORT = 500; _TE_LONG = 1000; _TE_DELTA = 200; _MIN_BITS = 32
@@ -1164,6 +1422,8 @@ class EmosE601xDecoder(_PrincetonStyleDecoder):
 class X10Decoder(_PrincetonStyleDecoder):
     name = "X10"; _TE_SHORT = 600; _TE_LONG = 1800; _TE_DELTA = 100; _MIN_BITS = 32
     _HEADER_LOW_MULT = 16; _HEADER_LOW_DELTA_MULT = 16
+    def encode(self, data, bit_count=None):
+        return None  # X10 has no Send flag in Momentum
 
 
 # ===================================================================
@@ -1222,13 +1482,15 @@ class HormannDecoder:
             bit_count = self._MIN_BITS
         te_s = self._TE_SHORT
         te_l = self._TE_LONG
-        pulses = [te_s * 24, -(te_s)]  # HIGH header + LOW start
-        for i in range(bit_count - 1, -1, -1):
-            if (data >> i) & 1:
-                pulses.extend([te_l, -(te_s)])
-            else:
-                pulses.extend([te_s, -(te_l)])
-        pulses.append(te_s * 5)  # footer HIGH
+        pulses = []
+        for _ in range(20):  # Hormann needs 20 internal repeats
+            pulses.extend([te_s * 24, -(te_s)])  # HIGH header + LOW
+            for i in range(bit_count - 1, -1, -1):
+                if (data >> i) & 1:
+                    pulses.extend([te_l, -(te_s)])
+                else:
+                    pulses.extend([te_s, -(te_l)])
+        pulses.append(te_s * 24)  # final HIGH
         return pulses
 
 
@@ -1285,13 +1547,17 @@ class BETTDecoder:
             bit_count = self._MIN_BITS
         te_s = self._TE_SHORT
         te_l = self._TE_LONG
-        pulses = [-(te_s * 44)]  # header LOW
-        for i in range(bit_count - 1, -1, -1):
-            if (data >> i) & 1:
+        pulses = []
+        for i in range(bit_count - 1, 0, -1):
+            if (data >> (i - 1)) & 1:
                 pulses.extend([te_l, -(te_s)])
             else:
-                pulses.extend([te_s, -(te_s)])
-        pulses.append(-(te_s * 44))  # footer
+                pulses.extend([te_s, -(te_l)])
+        # Last bit with guard merged
+        if data & 1:
+            pulses.extend([te_l, -(te_s + te_l * 7)])
+        else:
+            pulses.extend([te_s, -(te_l + te_l * 7)])
         return pulses
 
 
