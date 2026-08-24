@@ -2211,32 +2211,79 @@ def save_sub_file(path, signal=None, raw_pulses=None, frequency=433920000, prese
 
 def load_sub_file(path):
     result = {"type": None, "frequency": 0, "preset": "AM650", "protocol": "",
-              "bit_count": 0, "key": 0, "te": 0, "raw_data": []}
+              "bit_count": 0, "key": 0, "te": 0, "raw_data": [],
+              "repeat": 1, "version": 1, "key_bytes": b""}
     with open(path, "r") as f:
         for line in f:
             line = line.strip()
             if not line or ":" not in line:
                 continue
-            key, val = line.split(":", 1)
-            key = key.strip()
+            k, val = line.split(":", 1)
+            k = k.strip()
             val = val.strip()
-            if key == "Filetype":
+            if k == "Filetype":
                 result["type"] = val
-            elif key == "Frequency":
-                result["frequency"] = int(val)
-            elif key == "Preset":
+            elif k == "Version":
+                try:
+                    result["version"] = int(val)
+                except ValueError:
+                    pass
+            elif k == "Frequency":
+                try:
+                    result["frequency"] = int(val)
+                except ValueError:
+                    pass
+            elif k == "Preset":
                 result["preset"] = _PRESET_REVERSE.get(val, val)
-            elif key == "Protocol":
+            elif k == "Protocol":
                 result["protocol"] = val
-            elif key == "Bit":
-                result["bit_count"] = int(val)
-            elif key == "Key":
-                result["key"] = int(val.replace(" ", ""), 16)
-            elif key == "TE":
-                result["te"] = int(val)
-            elif key == "RAW_Data":
+            elif k == "Bit":
+                try:
+                    result["bit_count"] = int(val)
+                except ValueError:
+                    pass
+            elif k == "Key":
+                hex_str = val.replace(" ", "")
+                if hex_str:
+                    result["key"] = int(hex_str, 16)
+                    result["key_bytes"] = bytes.fromhex(hex_str)
+            elif k == "TE":
+                try:
+                    result["te"] = int(val)
+                except ValueError:
+                    pass
+            elif k == "Repeat":
+                try:
+                    result["repeat"] = int(val)
+                except ValueError:
+                    pass
+            elif k == "RAW_Data":
                 result["raw_data"].extend(int(v) for v in val.split())
+    result["is_raw"] = bool(result["raw_data"])
+    result["is_key"] = bool(result["protocol"] and result["protocol"] != "RAW" and result["bit_count"] > 0)
     return result
+
+
+def decode_sub_file(path):
+    """Load a .sub file and decode its contents. Returns (sub_dict, list_of_DecodedSignal)."""
+    sub = load_sub_file(path)
+    decoded = []
+    if sub["is_raw"] and sub["raw_data"]:
+        decoded = decode_raw_pulses(sub["raw_data"])
+        for sig in decoded:
+            sig.frequency = sub["frequency"]
+            sig.modulation = sub["preset"]
+    elif sub["is_key"]:
+        sig = DecodedSignal(
+            protocol=sub["protocol"],
+            data=sub["key"],
+            bit_count=sub["bit_count"],
+            te=sub["te"],
+            frequency=sub["frequency"],
+            modulation=sub["preset"],
+        )
+        decoded = [sig]
+    return sub, decoded
 
 
 # ===================================================================
