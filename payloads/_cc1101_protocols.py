@@ -788,37 +788,41 @@ class ChamberlainDecoder:
         if bit_count is None:
             bit_count = self._MIN_BITS
         te = self._TE_SHORT
-        # Chamberlain converts each data bit to a 4-bit nibble
-        # BIT_0 = 0b0111, BIT_1 = 0b0011, STOP = 0b0001
-        nibbles = []
-        for i in range(bit_count - 1, -1, -1):
-            if (data >> i) & 1:
-                nibbles.extend([0, 0, 1, 1])  # BIT_1
+        # Step 1: convert each data bit to 4-bit nibble (from C chamb_bit_to_code)
+        coded = 0
+        for i in range(bit_count):
+            bit = (data >> (bit_count - 1 - i)) & 1
+            if bit:
+                coded = (coded << 4) | self._BIT_1
             else:
-                nibbles.extend([0, 1, 1, 1])  # BIT_0
-        # Add check nibble and guard
+                coded = (coded << 4) | self._BIT_0
+        # Step 2: add check mask (from C get_upload)
         if bit_count == 9:
-            check_bits = [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]  # MASK_CHECK for 9-bit
+            coded = (coded << 4) | 0x10000000001
+            total_bits = 44
+        elif bit_count == 8:
+            coded = ((coded >> 12) << 16) | (coded & 0xFF) << 4 | 0x1000001001
+            total_bits = 40
+        elif bit_count == 7:
+            coded = ((coded >> 4) << 16) | (coded & 0xF) << 4 | 0x10000001101
+            total_bits = 44
         else:
-            check_bits = [0, 0, 0, 1]  # STOP nibble
-        nibbles.extend(check_bits)
-        # Prepend 36 zeros as guard
-        bit_array = [0] * 36 + nibbles
-        # Convert bit array to OOK pulses (left-aligned)
+            return None
+        # Step 3: build bit array with 36-bit guard
+        bit_array = [0] * 36
+        for i in range(total_bits - 1, -1, -1):
+            bit_array.append((coded >> i) & 1)
+        # Step 4: convert to pulses (group consecutive same-value bits)
         pulses = []
         i = 0
         while i < len(bit_array):
-            # Count consecutive same-value bits
             val = bit_array[i]
             count = 0
             while i < len(bit_array) and bit_array[i] == val:
                 count += 1
                 i += 1
             dur = te * count
-            if val:
-                pulses.append(dur)
-            else:
-                pulses.append(-(dur))
+            pulses.append(dur if val else -dur)
         return pulses
 
 
@@ -1076,12 +1080,14 @@ class HoltekDecoder(_CAMEStyleDecoder):
     def encode(self, data, bit_count=None):
         if bit_count is None: bit_count = self._MIN_BITS
         te_s, te_l = self._TE_SHORT, self._TE_LONG
-        pulses = [-(te_s * 36), te_s]  # header LOW + start HIGH
+        # From C source: header LOW + start HIGH, then bit1=longLOW+shortHIGH, bit0=shortLOW+longHIGH
+        pulses = [-(te_s * 36), te_s]
         for i in range(bit_count - 1, -1, -1):
             if (data >> i) & 1:
                 pulses.extend([-(te_l), te_s])
             else:
                 pulses.extend([-(te_s), te_l])
+        # No footer in C source - the frame ends and repeats
         return pulses
 
 class IntertechnoV3Decoder(_CAMEStyleDecoder):
@@ -1109,9 +1115,13 @@ class MegaCodeDecoder(_CAMEStyleDecoder):
     def encode(self, data, bit_count=None):
         if bit_count is None: bit_count = self._MIN_BITS
         te = self._TE_SHORT
-        # MegaCode builds upload backwards: bit 1 = gap*5, bit 0 = gap*8
-        # between same-value bits gap is shorter
-        pairs = []
+        # MegaCode: built backwards per C source
+        # Bit 1 = _____|-|  (long LOW then short HIGH)
+        # Bit 0 = __|-|___  (short LOW, short HIGH, long LOW)
+        upload = [None] * (bit_count * 2)
+        idx = bit_count * 2 - 1
+        # End level: te HIGH
+        upload[idx] = te; idx -= 1
         last_bit = (data >> 0) & 1
         for i in range(1, bit_count):
             b = (data >> i) & 1
@@ -1119,13 +1129,15 @@ class MegaCodeDecoder(_CAMEStyleDecoder):
                 gap = te * 5 if last_bit else te * 2
             else:
                 gap = te * 8 if last_bit else te * 5
-            pairs.append((gap, b))
+            upload[idx] = -(gap); idx -= 1
+            upload[idx] = te; idx -= 1
             last_bit = b
-        # Build pulses forward (pairs were built backwards)
-        pulses = []
-        for gap, _ in reversed(pairs):
-            pulses.extend([te, -(gap)])
-        pulses.append(te)  # final HIGH
+        # Guard at start depends on bit 0
+        if (data >> 0) & 1:
+            upload[idx] = -(te * 11)
+        else:
+            upload[idx] = -(te * 14)
+        pulses = [p for p in upload if p is not None]
         return pulses
 
 class PhoenixV2Decoder(_CAMEStyleDecoder):
