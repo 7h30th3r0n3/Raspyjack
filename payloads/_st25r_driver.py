@@ -207,7 +207,8 @@ class ST25R3916Driver:
         return bytes(r[1:])
 
     def _fifo_len(self):
-        return self._rr(_FIFO_STA1)
+        s = self._rr16(_FIFO_STA1)
+        return (s >> 8) | ((s & 0x00C0) << 2)
 
     def _set_tx_len(self, nbytes, bits=0):
         val = (nbytes << 3) | (bits & 0x07)
@@ -452,7 +453,7 @@ class ST25R3916Driver:
         self._cmd(_CMD_STOP_ALL)
         self._mod(_OP_CTRL, 0, _OP_WU)
 
-        self._wr(_MODE_DEF, 0x09)  # ISO14443A + nfc_ar (auto-receive after TX)
+        self._wr(_MODE_DEF, 0x08)  # ISO14443A, no nfc_ar (matches official)
         self._wr(_BIT_RATE, 0x00)
         self._wr(_ISO14443A, 0x00)
         self._mod(_AUX_DEF, 0, _AUX_DIS_CORR)
@@ -472,13 +473,19 @@ class ST25R3916Driver:
         self._enable_field()
 
     def _enable_field(self):
-        self._cmd(_CMD_CLEAR_FIFO)
-        self._wr(_OP_CTRL, _OP_EN | _OP_RX | _OP_TX)
-        time.sleep(0.02)
+        self._cmd(_CMD_STOP_ALL)
+        self._mod(_OP_CTRL, 0, _OP_TX | _OP_RX | _OP_WU | _OP_FD)
+        self._mod(_OP_CTRL, _OP_FDCA, 0)  # field detector collision avoidance
+        self._wr_b(_B_GUARD, 33)  # NFC guard timer
         self._clear_irqs()
         self._cmd(_CMD_FIELD_ON)
-        time.sleep(0.1)
-        self._wr(_OP_CTRL, self._rr(_OP_CTRL) | _OP_TX | _OP_RX)
+        flags = self._wait_irq(_I_FGUARD | _I_FCOL, 15)
+        if flags & _I_FCOL:
+            return
+        if flags & _I_FGUARD:
+            self._mod(_OP_CTRL, _OP_RX, _OP_WU)
+        if not (self._rr(_AUX_DISP) & _AUX_TX_ON):
+            self._mod(_OP_CTRL, _OP_TX, 0)
 
     def _reset_field(self):
         self._cmd(_CMD_STOP_ALL)
@@ -498,13 +505,16 @@ class ST25R3916Driver:
 
     def _send_wupa(self):
         self._prepare()
+        self._set_nrt(4)
         self._wr(_ISO14443A, 0x00)
         self._mod(_AUX_DEF, _AUX_NO_CRC_RX, 0)
         self._clear_irqs()
         self._cmd(_CMD_CLEAR_FIFO)
         self._set_tx_len(0)
         self._cmd(_CMD_TX_WUPA)
-        time.sleep(0.01)
+        flags = self._wait_irq(_I_RXE | _I_COL | _I_NRE | _I_RX_ERRS, 6)
+        if not (flags & _I_RXE):
+            return None
         n = self._fifo_len()
         if n < 2:
             return None
@@ -515,6 +525,7 @@ class ST25R3916Driver:
         if level < 1 or level > 3:
             return None
         sel_cmd = 0x91 + (level - 1) * 2
+        self._set_nrt(4)
         self._wr(_ISO14443A, 0x01)
         self._mod(_AUX_DEF, 0, _AUX_NO_CRC_RX)
         self._clear_irqs()
@@ -522,7 +533,14 @@ class ST25R3916Driver:
         self._fifo_w([sel_cmd, 0x20])
         self._set_tx_len(2, 0)
         self._cmd(_CMD_TX_NO_CRC)
-        time.sleep(0.03)
+        flags = self._wait_irq(_I_RXE | _I_COL | _I_NRE | _I_RX_ERRS, 6)
+        if flags & _I_COL:
+            n = self._fifo_len()
+            if n >= 5:
+                return bytes(self._fifo_r(5))
+            return None
+        if not (flags & _I_RXE):
+            return None
         n = self._fifo_len()
         if n >= 5:
             return bytes(self._fifo_r(5))
@@ -537,32 +555,24 @@ class ST25R3916Driver:
         return None
 
     def _transceive(self, tx, timeout_ms=100, min_rx=1):
-        spi = self._spi
-        if spi is None:
+        if self._spi is None:
             return None
-        # Clear IRQs
-        for r in (0x1A, 0x1B, 0x1C, 0x1D):
-            spi.xfer2([0x40 | r, 0x00])
-        spi.xfer2([0xDB])  # Clear FIFO
-        spi.xfer2([0x05, 0x00])  # ISO14443A no antcl
-        # Ensure no_crc_rx is cleared
-        aux = spi.xfer2([0x40 | 0x0A, 0x00])[1]
-        spi.xfer2([0x0A, aux & 0x7F])
-        # Write data to FIFO
-        spi.xfer2([0x80] + list(tx))
-        # Set TX length
-        val = len(tx) << 3
-        spi.xfer2([0x22, (val >> 8) & 0xFF])
-        spi.xfer2([0x23, val & 0xFF])
-        # Transmit with CRC
-        spi.xfer2([0xC4])
-        time.sleep(max(0.005, timeout_ms / 1000.0))
-        # Read response
-        fn = spi.xfer2([0x40 | 0x1E, 0x00])[1]
-        if fn < min_rx:
+        self._prepare()
+        self._set_nrt(timeout_ms)
+        self._wr(_ISO14443A, 0x00)
+        self._mod(_AUX_DEF, 0, _AUX_NO_CRC_RX)
+        self._clear_irqs()
+        self._cmd(_CMD_CLEAR_FIFO)
+        self._fifo_w(tx)
+        self._set_tx_len(len(tx))
+        self._cmd(_CMD_TX_CRC)
+        flags = self._wait_irq(_I_RXE | _I_NRE | _I_RX_ERRS, timeout_ms + 5)
+        if not (flags & _I_RXE):
             return None
-        rd = spi.xfer2([0x9F] + [0x00] * fn)
-        return bytes(rd[1:fn + 1])
+        n = self._fifo_len()
+        if n < min_rx:
+            return None
+        return self._fifo_r(n)
 
     def _halt(self):
         self._prepare()
@@ -700,23 +710,164 @@ class ST25R3916Driver:
         return None
 
     def mifare_auth(self, block, key, uid, key_type=MIFARE_AUTH_A):
-        tx = bytes([key_type, block]) + key[:6] + uid[:4]
-        resp = self._transceive(tx, timeout_ms=200, min_rx=1)
-        return resp is not None
+        """MIFARE Classic 3-pass Crypto1 authentication."""
+        from payloads._crypto1 import Crypto1, encrypt_reader_nonce, append_crc
+        if self._spi is None:
+            return False
+
+        key_int = int.from_bytes(key[:6], 'big')
+        uid_bytes = uid[:4]
+        cuid = int.from_bytes(uid_bytes, 'big')
+
+        # Step 1: send AUTH command → receive 4-byte NT (no CRC check)
+        self._prepare()
+        self._set_nrt(20)
+        self._wr(_ISO14443A, 0x00)
+        self._mod(_AUX_DEF, 0, _AUX_NO_CRC_RX)
+        self._clear_irqs()
+        self._cmd(_CMD_CLEAR_FIFO)
+        auth_cmd = bytes([key_type, block])
+        self._fifo_w(auth_cmd)
+        self._set_tx_len(len(auth_cmd))
+        self._cmd(_CMD_TX_CRC)
+        flags = self._wait_irq(_I_RXE | _I_NRE | _I_RX_ERRS, 25)
+        if not (flags & _I_RXE):
+            return False
+        n = self._fifo_len()
+        if n < 4:
+            return False
+        nt_bytes = self._fifo_r(4)
+
+        # Step 2: encrypt NR + AR with Crypto1
+        nr_bytes = bytearray(os.urandom(4))
+        crypto, packed_data, raw_data, parity = encrypt_reader_nonce(
+            key_int, cuid, nt_bytes, nr_bytes)
+
+        # Step 3: send {NR}{AR} with custom parity (no_tx_par, no_rx_par)
+        self._prepare()
+        self._set_nrt(20)
+        self._mod(_ISO14443A, 0x06, 0)  # set no_tx_par + no_rx_par
+        self._clear_irqs()
+        self._cmd(_CMD_CLEAR_FIFO)
+        fifo_bytes, total_bits = packed_data
+        self._fifo_w(fifo_bytes)
+        self._set_tx_len(total_bits >> 3, total_bits & 7)
+        self._cmd(_CMD_TX_NO_CRC)
+        flags = self._wait_irq(_I_RXE | _I_NRE | _I_RX_ERRS, 25)
+
+        # Restore normal parity
+        self._mod(_ISO14443A, 0, 0x06)
+
+        if not (flags & _I_RXE):
+            return False
+        n = self._fifo_len()
+        if n < 4:
+            return False
+        at_enc = self._fifo_r(4)
+
+        # Step 4: advance crypto state (consume AT keystream)
+        crypto.word(0, 0)
+        self._crypto = crypto
+        self._auth_active = True
+        return True
 
     def mifare_read(self, block):
-        resp = self._transceive(bytes([0x30, block]), timeout_ms=100, min_rx=16)
-        if resp and len(resp) >= 16:
-            return bytes(resp[:16])
-        return None
+        """MIFARE Classic read — encrypted if auth active."""
+        if not getattr(self, '_auth_active', False):
+            resp = self._transceive(bytes([0x30, block]), timeout_ms=100, min_rx=16)
+            if resp and len(resp) >= 16:
+                return bytes(resp[:16])
+            return None
+
+        from payloads._crypto1 import append_crc, check_crc
+        crypto = self._crypto
+        plain_cmd = append_crc(bytes([0x30, block]))
+        enc_cmd, par = crypto.encrypt_bytes(plain_cmd)
+        packed, total_bits = self._pack_parity(enc_cmd, par)
+
+        self._prepare()
+        self._set_nrt(20)
+        self._mod(_ISO14443A, 0x06, 0)  # no_tx_par + no_rx_par
+        self._clear_irqs()
+        self._cmd(_CMD_CLEAR_FIFO)
+        self._fifo_w(packed)
+        self._set_tx_len(total_bits >> 3, total_bits & 7)
+        self._cmd(_CMD_TX_NO_CRC)
+        flags = self._wait_irq(_I_RXE | _I_NRE | _I_RX_ERRS, 25)
+        self._mod(_ISO14443A, 0, 0x06)
+
+        if not (flags & _I_RXE):
+            return None
+        n = self._fifo_len()
+        if n < 18:
+            return None
+        enc_resp = self._fifo_r(n)
+        plain = crypto.decrypt_bytes(enc_resp)
+        if not check_crc(plain):
+            return None
+        return bytes(plain[:16])
 
     def mifare_write(self, block, data):
-        resp = self._transceive(bytes([0xA0, block]), timeout_ms=100, min_rx=1)
-        if resp is None or len(resp) < 1 or resp[0] != 0x0A:
+        """MIFARE Classic write — encrypted if auth active."""
+        if not getattr(self, '_auth_active', False):
+            resp = self._transceive(bytes([0xA0, block]), timeout_ms=100, min_rx=1)
+            if resp is None or len(resp) < 1 or resp[0] != 0x0A:
+                return False
+            time.sleep(0.001)
+            resp2 = self._transceive(bytes(data[:16]), timeout_ms=100, min_rx=1)
+            return resp2 is not None and len(resp2) >= 1 and resp2[0] == 0x0A
+
+        from payloads._crypto1 import append_crc, check_crc
+        crypto = self._crypto
+
+        # Phase 1: send WRITE command
+        plain_cmd = append_crc(bytes([0xA0, block]))
+        enc_cmd, par = crypto.encrypt_bytes(plain_cmd)
+        packed, total_bits = self._pack_parity(enc_cmd, par)
+
+        self._prepare()
+        self._set_nrt(20)
+        self._mod(_ISO14443A, 0x06, 0)
+        self._clear_irqs()
+        self._cmd(_CMD_CLEAR_FIFO)
+        self._fifo_w(packed)
+        self._set_tx_len(total_bits >> 3, total_bits & 7)
+        self._cmd(_CMD_TX_NO_CRC)
+        flags = self._wait_irq(_I_RXE | _I_NRE | _I_RX_ERRS, 25)
+
+        if not (flags & _I_RXE):
+            self._mod(_ISO14443A, 0, 0x06)
             return False
-        time.sleep(0.001)
-        resp2 = self._transceive(bytes(data[:16]), timeout_ms=100, min_rx=1)
-        return resp2 is not None and len(resp2) >= 1 and resp2[0] == 0x0A
+        ack_enc = self._fifo_r(1)
+        ack = crypto.decrypt_4bit(ack_enc[0]) if ack_enc else 0
+        if ack != 0x0A:
+            self._mod(_ISO14443A, 0, 0x06)
+            return False
+
+        # Phase 2: send 16 bytes of data
+        plain_data = append_crc(bytes(data[:16]))
+        enc_data, par2 = crypto.encrypt_bytes(plain_data)
+        packed2, total_bits2 = self._pack_parity(enc_data, par2)
+
+        self._clear_irqs()
+        self._cmd(_CMD_CLEAR_FIFO)
+        self._fifo_w(packed2)
+        self._set_tx_len(total_bits2 >> 3, total_bits2 & 7)
+        self._cmd(_CMD_TX_NO_CRC)
+        flags2 = self._wait_irq(_I_RXE | _I_NRE | _I_RX_ERRS, 25)
+        self._mod(_ISO14443A, 0, 0x06)
+
+        if not (flags2 & _I_RXE):
+            return False
+        ack2_enc = self._fifo_r(1)
+        ack2 = crypto.decrypt_4bit(ack2_enc[0]) if ack2_enc else 0
+        return ack2 == 0x0A
+
+    @staticmethod
+    def _pack_parity(data, parity):
+        """Pack data bytes + parity bits into raw bitstream for no_tx_par mode."""
+        from payloads._crypto1 import pack_with_parity
+        return pack_with_parity(data, parity)
 
     def mifare_ul_read(self, page):
         resp = self._transceive(bytes([0x30, page]), timeout_ms=100, min_rx=4)
