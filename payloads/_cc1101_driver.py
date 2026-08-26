@@ -507,7 +507,15 @@ class CC1101:
             is_high = pulse > 0
             te_slots.extend([1 if is_high else 0] * slots)
 
-        all_slots = te_slots * repeat
+        if repeat > 1 and te_slots and te_slots[0] == 0 and te_slots[-1] == 0:
+            sep = [1] + [0] * max(1, round(100 / te_us))
+            all_slots = []
+            for r in range(repeat):
+                all_slots.extend(te_slots)
+                if r < repeat - 1:
+                    all_slots.extend(sep)
+        else:
+            all_slots = te_slots * repeat
         while len(all_slots) % 8 != 0:
             all_slots.append(0)
         tx_bytes = []

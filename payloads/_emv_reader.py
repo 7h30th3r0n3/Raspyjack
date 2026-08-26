@@ -40,6 +40,17 @@ KNOWN_AIDS = {
     bytes.fromhex("D276000085010100"): "Transport",
     bytes.fromhex("A00000000401"): "Mastercard (short)",
     bytes.fromhex("A00000000301"): "Visa (short)",
+    bytes.fromhex("A000000042"): "CB (Cartes Bancaires)",
+    bytes.fromhex("A0000000421010"): "CB (Cartes Bancaires)",
+    bytes.fromhex("A0000000422010"): "CB (Cartes Bancaires Debit)",
+    bytes.fromhex("A0000000423010"): "CB (Cartes Bancaires)",
+    bytes.fromhex("A0000000424010"): "CB (Cartes Bancaires)",
+    bytes.fromhex("A0000001141010"): "Bancontact",
+    bytes.fromhex("A0000003591010"): "Euro Alliance (EAPS)",
+    bytes.fromhex("A0000000043010"): "Mastercard (Debit)",
+    bytes.fromhex("A0000000046000"): "Mastercard (Cirrus)",
+    bytes.fromhex("A0000001211010"): "Dankort",
+    bytes.fromhex("A0000000040010"): "Mastercard (Specific)",
     bytes.fromhex("315041592E5359532E4444463031"): "PPSE (2PAY.SYS.DDF01)",
 }
 
@@ -74,6 +85,36 @@ TAG_LOG_COUNTRY = 0x9F1A
 TAG_LOG_CURRENCY = 0x5F2A
 TAG_LOG_DATE = 0x9A
 TAG_LOG_TIME = 0x9F21
+TAG_LANG_PREF = 0x5F2D
+
+COUNTRY_NAMES = {
+    0x0036: "Australia", 0x0056: "Belgium", 0x0076: "Brazil", 0x0124: "Canada",
+    0x0156: "China", 0x0203: "Czech Rep.", 0x0208: "Denmark", 0x0246: "Finland",
+    0x0250: "France", 0x0276: "Germany", 0x0300: "Greece", 0x0344: "Hong Kong",
+    0x0348: "Hungary", 0x0356: "India", 0x0372: "Ireland", 0x0376: "Israel",
+    0x0380: "Italy", 0x0392: "Japan", 0x0410: "South Korea", 0x0442: "Luxembourg",
+    0x0458: "Malaysia", 0x0484: "Mexico", 0x0528: "Netherlands", 0x0554: "New Zealand",
+    0x0578: "Norway", 0x0616: "Poland", 0x0620: "Portugal", 0x0642: "Romania",
+    0x0643: "Russia", 0x0702: "Singapore", 0x0710: "South Africa", 0x0724: "Spain",
+    0x0752: "Sweden", 0x0756: "Switzerland", 0x0764: "Thailand", 0x0792: "Turkey",
+    0x0804: "Ukraine", 0x0826: "UK", 0x0840: "USA", 0x0978: "EU",
+}
+
+CURRENCY_NAMES = {
+    0x0036: "AUD", 0x0124: "CAD", 0x0156: "CNY", 0x0203: "CZK",
+    0x0208: "DKK", 0x0348: "HUF", 0x0356: "INR", 0x0376: "ILS",
+    0x0392: "JPY", 0x0410: "KRW", 0x0458: "MYR", 0x0484: "MXN",
+    0x0554: "NZD", 0x0578: "NOK", 0x0616: "PLN", 0x0643: "RUB",
+    0x0702: "SGD", 0x0710: "ZAR", 0x0752: "SEK", 0x0756: "CHF",
+    0x0764: "THB", 0x0792: "TRY", 0x0826: "GBP", 0x0840: "USD",
+    0x0978: "EUR", 0x0985: "PLN", 0x0986: "BRL",
+}
+
+def country_name(code):
+    return COUNTRY_NAMES.get(code, "%04X" % code)
+
+def currency_name(code):
+    return CURRENCY_NAMES.get(code, "%04X" % code)
 
 
 # ── PDOL terminal values ─────────────────────────────────────────────────
@@ -179,6 +220,9 @@ class EMVData:
         self.cardholder_name = ""
         self.country_code = 0
         self.currency_code = 0
+        self.effective_month = 0
+        self.effective_year = 0
+        self.language = ""
         self.pin_try_counter = -1
         self.atc = 0
         self.last_online_atc = 0
@@ -238,6 +282,11 @@ class EMVData:
         if holder:
             self.cardholder_name = holder.decode("ascii", errors="replace").split("/")[0].strip()
 
+        effective = find_tag(tlv, TAG_EFFECTIVE)
+        if effective and len(effective) >= 2:
+            self.effective_year = effective[0]
+            self.effective_month = effective[1]
+
         country = find_tag(tlv, TAG_COUNTRY_CODE)
         if country and len(country) >= 2:
             self.country_code = (country[0] << 8) | country[1]
@@ -245,6 +294,10 @@ class EMVData:
         currency = find_tag(tlv, TAG_CURRENCY_CODE)
         if currency and len(currency) >= 2:
             self.currency_code = (currency[0] << 8) | currency[1]
+
+        lang = find_tag(tlv, 0x5F2D)
+        if lang:
+            self.language = lang.decode("ascii", errors="replace").strip()
 
         pdol = find_tag(tlv, TAG_PDOL)
         if pdol:
@@ -412,8 +465,6 @@ class EMVReader:
                 resp = self._read_record(sfi, rec)
                 if resp:
                     self.data.parse_response(resp)
-                if self.data.pan:
-                    return True
         return bool(self.data.pan)
 
     def _read_record(self, sfi: int, record: int) -> Optional[bytes]:
@@ -424,6 +475,8 @@ class EMVReader:
         resp = self._apdu(0x80, 0xCA, 0x9F, 0x17)
         if resp:
             self.data.parse_response(resp)
+            if self.data.pin_try_counter < 0 and len(resp) >= 1:
+                self.data.pin_try_counter = resp[-1]
         return self.data.pin_try_counter
 
     def get_last_online_atc(self) -> int:

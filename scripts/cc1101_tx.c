@@ -71,6 +71,10 @@ int main(int argc, char *argv[]) {
     sched_setscheduler(0, SCHED_FIFO, &sp);
     mlockall(MCL_CURRENT | MCL_FUTURE);
 
+    /* Detect if inter-frame gap needed: if last pulse and first pulse
+     * are same polarity, insert a brief opposite pulse to separate frames */
+    int needs_sep = (count >= 2) && ((pulses[count-1] < 0) == (pulses[0] < 0));
+
     for (int r = 0; r < repeat; r++) {
         uint64_t t = now_ns();
         for (int i = 0; i < count; i++) {
@@ -81,6 +85,15 @@ int main(int argc, char *argv[]) {
             busy_wait_ns(t);
         }
         gpiod_line_request_set_value(request, GDO0_PIN, GPIOD_LINE_VALUE_INACTIVE);
+        if (r < repeat - 1 && needs_sep) {
+            /* Brief HIGH separator then back to LOW */
+            gpiod_line_request_set_value(request, GDO0_PIN, GPIOD_LINE_VALUE_ACTIVE);
+            t += 100000ULL; /* 100us HIGH */
+            busy_wait_ns(t);
+            gpiod_line_request_set_value(request, GDO0_PIN, GPIOD_LINE_VALUE_INACTIVE);
+            t += 100000ULL; /* 100us LOW */
+            busy_wait_ns(t);
+        }
     }
 
     gpiod_line_request_set_value(request, GDO0_PIN, GPIOD_LINE_VALUE_INACTIVE);

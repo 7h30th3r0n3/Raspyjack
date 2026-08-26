@@ -21,7 +21,8 @@
         " Change Sequence": "",
         " Auto-lock": "",
         " Screensaver GIF": "",
-        " Favorites": ""
+        " Favorites": "",
+        " cap_flipper_nfc": ""
     },
     "submenus": {
         " Quick Scan": "",
@@ -449,7 +450,7 @@
         " cyber_swarm": "",
         " doodle_jump": "",
         " honeypot_siem": "",
-        " cc1101_scanner": "",
+        " cap_flipper_subghz": "",
         " cc1101_chat": "",
         " tagtinker_esl": "",
         " sdr_scanner": "",
