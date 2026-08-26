@@ -155,7 +155,7 @@ class Crypto1:
 def prng_successor(x, n):
     x = _swapendian32(x)
     for _ in range(n):
-        x = ((x >> 1) | (((x >> 16) ^ (x >> 18) ^ (x >> 19) ^ (x >> 21)) << 31)) & 0xFFFFFFFF
+        x = ((x >> 1) | (((x >> 16) ^ (x >> 18) ^ (x >> 19) ^ (x >> 21)) & 1) << 31) & 0xFFFFFFFF
     return _swapendian32(x)
 
 

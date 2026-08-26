@@ -1,0 +1,214 @@
+<html><head><title>RaspyJack OS — Custom Lightweight Linux Spec</title>
+<style>
+body{font-family:monospace;background:#0a0a0a;color:#e0e0e0;padding:20px;max-width:1100px;margin:auto;line-height:1.5}
+h1{color:#ff8c00}h2{color:#ff6600;border-bottom:1px solid #333;padding-bottom:5px}h3{color:#ffaa00}
+table{border-collapse:collapse;width:100%;margin:10px 0}td,th{border:1px solid #333;padding:6px 10px;text-align:left}
+th{background:#1a1400;color:#ff8c00}
+pre{background:#111;padding:12px;border:1px solid #333;overflow-x:auto;font-size:13px}
+code{background:#1a1a1a;padding:1px 4px}
+.ok{color:#00ff41}.fail{color:#ff3333}.warn{color:#ffaa00}
+.section{background:#0d0700;padding:15px;margin:15px 0;border:1px solid #333;border-radius:5px}
+</style></head><body>
+
+<h1>RaspyJack OS — Custom Lightweight Linux for CardputerZero</h1>
+
+<div class="section">
+<h2>1. Problem Statement</h2>
+<p>The CardputerZero CM0 has <b>227 MB RAM</b>. Stock M5Stack APPLauncher OS leaves ~43 MB free at idle (swap 172/226 MB used). Python + web server consume most memory. Goal: purpose-built OS with <b>&lt; 80 MB RAM at idle</b> and <b>&lt; 5 s boot to UI</b>.</p>
+</div>
+
+<div class="section">
+<h2>2. Base Image Comparison</h2>
+<table>
+<tr><th>Option</th><th>Idle RAM</th><th>Python</th><th>Build effort</th><th>Pkg mgr</th><th>CM0</th></tr>
+<tr><td><b>Buildroot</b></td><td class="ok">~18 MB</td><td>Manual cross-compile</td><td>High</td><td>None</td><td>Full</td></tr>
+<tr><td><b>Yocto</b></td><td>~22 MB</td><td>meta-python</td><td>Very high</td><td>opkg</td><td>Full</td></tr>
+<tr><td><b class="ok">Alpine Linux</b></td><td class="ok">~25 MB</td><td>apk (musl)</td><td>Low</td><td>apk</td><td>Community</td></tr>
+<tr><td>DietPi</td><td>~45 MB</td><td>apt</td><td>Very low</td><td>apt</td><td>Official</td></tr>
+<tr><td>RPi OS Lite (stripped)</td><td>~55 MB</td><td>apt</td><td>Low</td><td>apt</td><td>Official</td></tr>
+</table>
+
+<h3>Recommendation: Alpine Linux</h3>
+<ul>
+<li><b>25 MB idle</b> — busybox init + musl libc</li>
+<li><b>apk packages</b> — python3, py3-pillow, py3-numpy, py3-cryptography available</li>
+<li><b>OpenRC init</b> — lighter than systemd, fast boot</li>
+<li><b>Read-only root</b> — built-in via <code>lbu</code></li>
+<li>Familiar Linux — SSH, packages, standard tools</li>
+</ul>
+</div>
+
+<div class="section">
+<h2>3. Package List</h2>
+<h3>Core</h3>
+<pre>alpine-base linux-rpi2 raspberrypi-bootloader
+dropbear                            # SSH (110 KB vs 5 MB openssh)
+wpa_supplicant iw wireless-tools    # WiFi
+chrony                              # NTP</pre>
+
+<h3>Python</h3>
+<pre>python3 py3-pip py3-pillow py3-numpy
+py3-cryptography py3-requests py3-websockets py3-serial
+py3-evdev py3-qrcode py3-spidev py3-gpiod py3-smbus2</pre>
+
+<h3>Hardware</h3>
+<pre>i2c-tools spi-tools alsa-utils alsa-lib
+libgpiod libgpiod-dev               # cc1101_tx C binary</pre>
+
+<h3>Security tools</h3>
+<pre>nmap ncat tcpdump scapy aircrack-ng reaver
+arp-scan dsniff sshpass autossh bluez</pre>
+
+<h3>Media &amp; fonts</h3>
+<pre>ttf-dejavu ffmpeg</pre>
+
+<p><b>Estimated installed size: ~180 MB</b> (vs ~2 GB current)</p>
+</div>
+
+<div class="section">
+<h2>4. Kernel Config</h2>
+<h3>Enable</h3>
+<pre>CONFIG_SPI_BCM2835=y    CONFIG_SPI_SPIDEV=y
+CONFIG_I2C_BCM2835=y    CONFIG_GPIOLIB=y    CONFIG_GPIO_CDEV=y
+CONFIG_BRCMFMAC=m       CONFIG_BT_HCIUART=m
+CONFIG_FB=y             CONFIG_DRM_PANEL_MIPI_DBI_SPI=m
+CONFIG_BATTERY_BQ27XXX=m CONFIG_IR_GPIO_CIR=m
+CONFIG_ZRAM=y           CONFIG_CRYPTO_LZO=y</pre>
+
+<h3>Disable (save RAM)</h3>
+<pre># CONFIG_DRM_VC4         (no HDMI)
+# CONFIG_MEDIA_SUPPORT   (no camera)
+# CONFIG_DEBUG_FS        # CONFIG_FTRACE
+# CONFIG_USB_VIDEO_CLASS # CONFIG_DVB_CORE</pre>
+<p>Kernel + modules: ~8 MB (vs ~30 MB stock)</p>
+</div>
+
+<div class="section">
+<h2>5. Device Tree Overlays</h2>
+<pre>dtparam=i2c_arm=on
+dtparam=spi=on
+dtoverlay=spi0-2cs
+dtoverlay=spi0-spidev2-gpio22-overlay    # NFC ST25R3916
+dtoverlay=gpio-ir,gpio_pin=13,gpio_pull=up
+dtoverlay=pwm,pin=12,func=4             # IR TX
+dtoverlay=cardputerzero-overlay          # LCD, buttons, LEDs
+enable_uart=0                            # free GPIO 14/15</pre>
+</div>
+
+<div class="section">
+<h2>6. Init System (OpenRC)</h2>
+<pre># /etc/runlevels/default/
+dropbear          # SSH
+wpa_supplicant    # WiFi
+chronyd           # NTP
+raspyjack         # main app
+raspyjack-web     # web UI</pre>
+
+<h3>RaspyJack service</h3>
+<pre>#!/sbin/openrc-run
+description="RaspyJack"
+command="/usr/bin/python3"
+command_args="/opt/raspyjack/raspyjack.py"
+command_background="yes"
+pidfile="/run/raspyjack.pid"
+depend() { need net; after dropbear; }</pre>
+</div>
+
+<div class="section">
+<h2>7. Memory Budget</h2>
+<table>
+<tr><th>Component</th><th>RAM</th></tr>
+<tr><td>Kernel + modules</td><td>12 MB</td></tr>
+<tr><td>OpenRC + core</td><td>3 MB</td></tr>
+<tr><td>dropbear SSH</td><td>1 MB</td></tr>
+<tr><td>wpa_supplicant</td><td>3 MB</td></tr>
+<tr><td>Python3 (idle)</td><td>8 MB</td></tr>
+<tr><td>raspyjack.py</td><td>15 MB</td></tr>
+<tr><td>web_server.py</td><td>8 MB</td></tr>
+<tr><td>Buffers/cache</td><td>10 MB</td></tr>
+<tr><td><b>Total</b></td><td class="ok"><b>~60 MB</b></td></tr>
+</table>
+
+<h3>zram swap (no SD card)</h3>
+<pre>modprobe zram num_devices=1
+echo lzo > /sys/block/zram0/comp_algorithm
+echo 64M > /sys/block/zram0/disksize
+mkswap /dev/zram0 && swapon -p 100 /dev/zram0</pre>
+<p>64 MB zram = ~128 MB effective swap. No SD wear.</p>
+</div>
+
+<div class="section">
+<h2>8. SPI Bus Contention Fix</h2>
+<pre>import threading
+_spi_lock = threading.Lock()
+
+# Every SPI transaction:
+with _spi_lock:
+    spi.xfer2(data)</pre>
+<p>Global lock in _display_helper.py, _cc1101_driver.py, _st25r_driver.py.</p>
+</div>
+
+<div class="section">
+<h2>9. Boot Optimization (&lt; 5 s)</h2>
+<table>
+<tr><th>Phase</th><th>Time</th></tr>
+<tr><td>Bootloader</td><td>0.5 s</td></tr>
+<tr><td>Kernel</td><td>1.0 s</td></tr>
+<tr><td>OpenRC</td><td>1.5 s</td></tr>
+<tr><td>Python + RaspyJack</td><td>2.0 s</td></tr>
+<tr><td><b>Total</b></td><td class="ok"><b>5.0 s</b></td></tr>
+</table>
+<pre># config.txt
+boot_delay=0
+# cmdline.txt
+quiet loglevel=3 logo.nologo</pre>
+</div>
+
+<div class="section">
+<h2>10. Partition Layout &amp; OTA</h2>
+<pre>/dev/mmcblk0p1  256MB  vfat   /boot       (kernel, DTBs)
+/dev/mmcblk0p2  512MB  ext4   /           (rootfs, read-only)
+/dev/mmcblk0p3  rest   ext4   /data       (RaspyJack, loot, config)</pre>
+<p><code>/opt/raspyjack</code> → symlink to <code>/data/raspyjack</code>. Rootfs reflashable without losing data.</p>
+</div>
+
+<div class="section">
+<h2>11. Migration Plan</h2>
+<h3>Phase 1: Strip current OS (1 day)</h3>
+<ol>
+<li>Disable lightdm, bluetooth, avahi, cups, ModemManager</li>
+<li>Replace SD swap with zram</li>
+<li><code>apt autoremove --purge</code></li>
+<li>Target: ~100 MB used at idle</li>
+</ol>
+<h3>Phase 2: Alpine image (1-2 days)</h3>
+<ol>
+<li>Build Alpine SD with all packages</li>
+<li>Copy RaspyJack + DT overlays</li>
+<li>Test all hardware</li>
+</ol>
+<h3>Phase 3: Hardening (1 day)</h3>
+<ol>
+<li>Read-only rootfs + data partition</li>
+<li>Watchdog (bcm2835_wdt)</li>
+<li>OTA update mechanism</li>
+<li>Factory reset (hold KEY3 during boot)</li>
+</ol>
+</div>
+
+<div class="section">
+<h2>12. Before vs After</h2>
+<table>
+<tr><th>Metric</th><th>Current</th><th>Target</th></tr>
+<tr><td>RAM at idle</td><td class="fail">184 / 227 MB (81%)</td><td class="ok">60 / 227 MB (26%)</td></tr>
+<tr><td>Swap</td><td class="fail">172 MB (SD wear)</td><td class="ok">0 MB SD (64 MB zram)</td></tr>
+<tr><td>Boot time</td><td>~25 s</td><td class="ok">&lt; 5 s</td></tr>
+<tr><td>Rootfs size</td><td>2+ GB</td><td class="ok">~200 MB</td></tr>
+<tr><td>SD image</td><td>4+ GB</td><td class="ok">~400 MB</td></tr>
+<tr><td>Services</td><td>30+</td><td class="ok">6</td></tr>
+<tr><td>NFC freeze</td><td class="fail">Yes</td><td class="ok">No (SPI mutex)</td></tr>
+<tr><td>Power fail</td><td class="fail">Frequent</td><td class="ok">Rare</td></tr>
+</table>
+</div>
+
+</body></html>

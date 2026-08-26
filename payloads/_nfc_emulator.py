@@ -214,13 +214,13 @@ class NFCEmulator:
         d = self._drv
         d._cmd(_CMD_CLEAR_FIFO)
         # Set no_tx_par + no_rx_par for custom parity (encrypted stream)
-        d._wr(_ISO14443A, d._rr(_ISO14443A) | 0x03)
+        d._wr(_ISO14443A, d._rr(_ISO14443A) | 0xC0)
         d._fifo_w(encrypted)
         d._set_tx_len(len(encrypted))
         d._cmd(_CMD_TX_NO_CRC)
         d._wait_irq(_I_TXE, 10)
         # Restore parity
-        d._wr(_ISO14443A, d._rr(_ISO14443A) & ~0x03)
+        d._wr(_ISO14443A, d._rr(_ISO14443A) & ~0xC0)
 
     def _listener_rx(self, timeout_ms=50):
         """Wait for and receive data from reader."""

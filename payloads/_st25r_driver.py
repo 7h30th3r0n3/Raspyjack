@@ -315,6 +315,11 @@ class ST25R3916Driver:
                            capture_output=True, timeout=3)
         except Exception:
             pass
+        try:
+            with open("/sys/class/leds/ext_5v_out/brightness", "w") as f:
+                f.write("0")
+        except OSError:
+            pass
 
     # ── Lifecycle ─────────────────────────────────────────────────────
 
@@ -381,10 +386,10 @@ class ST25R3916Driver:
         return True
 
     def close(self):
-        if self._opened and self._spi:
+        if self._spi:
             try:
-                self._cmd(_CMD_STOP_ALL)
-                self._mod(_OP_CTRL, 0, _OP_TX | _OP_RX)
+                self._xfer([_CMD_STOP_ALL])
+                self._xfer([_OP_CTRL & 0x3F, _OP_EN])
             except Exception:
                 pass
         if self._irq:
@@ -401,6 +406,14 @@ class ST25R3916Driver:
             self._spi = None
         self._power_off()
         self._opened = False
+        self._auth_active = False
+        self._crypto = None
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
 
     def _init_hw(self):
         self._cmd(_CMD_STOP_ALL)
@@ -453,7 +466,7 @@ class ST25R3916Driver:
         self._cmd(_CMD_STOP_ALL)
         self._mod(_OP_CTRL, 0, _OP_WU)
 
-        self._wr(_MODE_DEF, 0x08)  # ISO14443A, no nfc_ar (matches official)
+        self._wr(_MODE_DEF, 0x09)  # ISO14443A + nfc_ar (auto-receive after TX)
         self._wr(_BIT_RATE, 0x00)
         self._wr(_ISO14443A, 0x00)
         self._mod(_AUX_DEF, 0, _AUX_DIS_CORR)
@@ -473,19 +486,13 @@ class ST25R3916Driver:
         self._enable_field()
 
     def _enable_field(self):
-        self._cmd(_CMD_STOP_ALL)
-        self._mod(_OP_CTRL, 0, _OP_TX | _OP_RX | _OP_WU | _OP_FD)
-        self._mod(_OP_CTRL, _OP_FDCA, 0)  # field detector collision avoidance
-        self._wr_b(_B_GUARD, 33)  # NFC guard timer
+        self._cmd(_CMD_CLEAR_FIFO)
+        self._wr(_OP_CTRL, _OP_EN | _OP_RX | _OP_TX)
+        time.sleep(0.02)
         self._clear_irqs()
         self._cmd(_CMD_FIELD_ON)
-        flags = self._wait_irq(_I_FGUARD | _I_FCOL, 15)
-        if flags & _I_FCOL:
-            return
-        if flags & _I_FGUARD:
-            self._mod(_OP_CTRL, _OP_RX, _OP_WU)
-        if not (self._rr(_AUX_DISP) & _AUX_TX_ON):
-            self._mod(_OP_CTRL, _OP_TX, 0)
+        time.sleep(0.1)
+        self._wr(_OP_CTRL, self._rr(_OP_CTRL) | _OP_TX | _OP_RX)
 
     def _reset_field(self):
         self._cmd(_CMD_STOP_ALL)
@@ -512,8 +519,14 @@ class ST25R3916Driver:
         self._cmd(_CMD_CLEAR_FIFO)
         self._set_tx_len(0)
         self._cmd(_CMD_TX_WUPA)
-        flags = self._wait_irq(_I_RXE | _I_COL | _I_NRE | _I_RX_ERRS, 6)
+        flags = self._wait_irq(_I_RXE | _I_COL | _I_NRE | _I_RX_ERRS | _I_TXE, 6)
+        if flags & _I_TXE and not (flags & _I_RXE):
+            flags |= self._wait_irq(_I_RXE | _I_NRE | _I_RX_ERRS, 4)
         if not (flags & _I_RXE):
+            n = self._fifo_len()
+            if n >= 2:
+                d = self._fifo_r(2)
+                return d[0] | (d[1] << 8)
             return None
         n = self._fifo_len()
         if n < 2:
@@ -524,8 +537,8 @@ class ST25R3916Driver:
     def _anticoll(self, level):
         if level < 1 or level > 3:
             return None
-        sel_cmd = 0x91 + (level - 1) * 2
-        self._set_nrt(4)
+        sel_cmd = 0x93 + (level - 1) * 2
+        self._set_nrt(8)
         self._wr(_ISO14443A, 0x01)
         self._mod(_AUX_DEF, 0, _AUX_NO_CRC_RX)
         self._clear_irqs()
@@ -533,13 +546,13 @@ class ST25R3916Driver:
         self._fifo_w([sel_cmd, 0x20])
         self._set_tx_len(2, 0)
         self._cmd(_CMD_TX_NO_CRC)
-        flags = self._wait_irq(_I_RXE | _I_COL | _I_NRE | _I_RX_ERRS, 6)
-        if flags & _I_COL:
+        flags = self._wait_irq(_I_RXE | _I_COL | _I_NRE | _I_RX_ERRS | _I_TXE, 10)
+        if flags & _I_TXE and not (flags & (_I_RXE | _I_COL)):
+            flags |= self._wait_irq(_I_RXE | _I_COL | _I_NRE | _I_RX_ERRS, 6)
+        if not (flags & (_I_RXE | _I_COL)):
             n = self._fifo_len()
             if n >= 5:
                 return bytes(self._fifo_r(5))
-            return None
-        if not (flags & _I_RXE):
             return None
         n = self._fifo_len()
         if n >= 5:
@@ -547,7 +560,7 @@ class ST25R3916Driver:
         return None
 
     def _select(self, level, anticoll_resp):
-        sel_cmd = 0x91 + (level - 1) * 2
+        sel_cmd = 0x93 + (level - 1) * 2
         frame = bytearray([sel_cmd, 0x70]) + bytearray(anticoll_resp[:5])
         resp = self._transceive(frame, timeout_ms=8, min_rx=3)
         if resp and len(resp) >= 1:
@@ -566,8 +579,13 @@ class ST25R3916Driver:
         self._fifo_w(tx)
         self._set_tx_len(len(tx))
         self._cmd(_CMD_TX_CRC)
-        flags = self._wait_irq(_I_RXE | _I_NRE | _I_RX_ERRS, timeout_ms + 5)
+        flags = self._wait_irq(_I_RXE | _I_NRE | _I_RX_ERRS | _I_TXE, timeout_ms + 5)
+        if flags & _I_TXE and not (flags & _I_RXE):
+            flags |= self._wait_irq(_I_RXE | _I_NRE | _I_RX_ERRS, timeout_ms)
         if not (flags & _I_RXE):
+            n = self._fifo_len()
+            if n >= min_rx:
+                return self._fifo_r(n)
             return None
         n = self._fifo_len()
         if n < min_rx:
@@ -624,7 +642,7 @@ class ST25R3916Driver:
         uid = bytearray()
         sak = 0
         for level in range(1, 4):
-            sel_cmd = 0x91 + (level - 1) * 2
+            sel_cmd = 0x93 + (level - 1) * 2
 
             # -- Anticollision --
             for r in (0x1A, 0x1B, 0x1C, 0x1D):
@@ -711,61 +729,58 @@ class ST25R3916Driver:
 
     def mifare_auth(self, block, key, uid, key_type=MIFARE_AUTH_A):
         """MIFARE Classic 3-pass Crypto1 authentication."""
-        from payloads._crypto1 import Crypto1, encrypt_reader_nonce, append_crc
+        import os as _os
+        from payloads._crypto1 import encrypt_reader_nonce
         if self._spi is None:
             return False
 
+        self._auth_active = False
+        self._crypto = None
         key_int = int.from_bytes(key[:6], 'big')
-        uid_bytes = uid[:4]
-        cuid = int.from_bytes(uid_bytes, 'big')
+        cuid = int.from_bytes(uid[:4], 'big')
 
-        # Step 1: send AUTH command → receive 4-byte NT (no CRC check)
-        self._prepare()
-        self._set_nrt(20)
-        self._wr(_ISO14443A, 0x00)
-        self._mod(_AUX_DEF, 0, _AUX_NO_CRC_RX)
+        # Step 1: AUTH command → 4-byte NT
         self._clear_irqs()
         self._cmd(_CMD_CLEAR_FIFO)
-        auth_cmd = bytes([key_type, block])
-        self._fifo_w(auth_cmd)
-        self._set_tx_len(len(auth_cmd))
+        self._wr(_ISO14443A, 0x00)
+        self._mod(_AUX_DEF, _AUX_NO_CRC_RX, 0)
+        self._set_nrt(20)
+        self._fifo_w([key_type, block])
+        self._set_tx_len(2)
         self._cmd(_CMD_TX_CRC)
-        flags = self._wait_irq(_I_RXE | _I_NRE | _I_RX_ERRS, 25)
-        if not (flags & _I_RXE):
-            return False
+        flags = self._wait_irq(_I_RXE | _I_NRE | _I_TXE, 25)
+        if flags & _I_TXE and not (flags & _I_RXE):
+            flags |= self._wait_irq(_I_RXE | _I_NRE, 20)
         n = self._fifo_len()
         if n < 4:
             return False
         nt_bytes = self._fifo_r(4)
 
-        # Step 2: encrypt NR + AR with Crypto1
-        nr_bytes = bytearray(os.urandom(4))
-        crypto, packed_data, raw_data, parity = encrypt_reader_nonce(
+        # Step 2: encrypt NR+AR
+        nr_bytes = bytearray(_os.urandom(4))
+        crypto, packed_tuple, raw_data, parity = encrypt_reader_nonce(
             key_int, cuid, nt_bytes, nr_bytes)
+        packed_bytes, total_bits = packed_tuple
 
-        # Step 3: send {NR}{AR} with custom parity (no_tx_par, no_rx_par)
-        self._prepare()
-        self._set_nrt(20)
-        self._mod(_ISO14443A, 0x06, 0)  # set no_tx_par + no_rx_par
+        # Step 3: send {NR}{AR} with crypto parity (no_tx_par=bit7, no_rx_par=bit6)
+        self._set_nrt(10)
+        self._mod(0x12, 0, 0x01)  # clear nrt_emv
         self._clear_irqs()
         self._cmd(_CMD_CLEAR_FIFO)
-        fifo_bytes, total_bits = packed_data
-        self._fifo_w(fifo_bytes)
+        self._mod(_ISO14443A, 0xC0, 0)
+        self._fifo_w(packed_bytes)
         self._set_tx_len(total_bits >> 3, total_bits & 7)
         self._cmd(_CMD_TX_NO_CRC)
-        flags = self._wait_irq(_I_RXE | _I_NRE | _I_RX_ERRS, 25)
-
-        # Restore normal parity
-        self._mod(_ISO14443A, 0, 0x06)
-
-        if not (flags & _I_RXE):
-            return False
+        flags = self._wait_irq(_I_TXE, 10)
+        if flags & _I_TXE:
+            flags |= self._wait_irq(_I_RXE | _I_NRE | _I_RX_ERRS, 10)
         n = self._fifo_len()
         if n < 4:
+            self._mod(_ISO14443A, 0, 0xC0)
             return False
-        at_enc = self._fifo_r(4)
+        self._fifo_r(n)  # consume AT
 
-        # Step 4: advance crypto state (consume AT keystream)
+        # Step 4: advance crypto state
         crypto.word(0, 0)
         self._crypto = crypto
         self._auth_active = True
@@ -779,33 +794,42 @@ class ST25R3916Driver:
                 return bytes(resp[:16])
             return None
 
-        from payloads._crypto1 import append_crc, check_crc
+        from payloads._crypto1 import iso14443a_crc, odd_parity8, _filter, pack_with_parity
         crypto = self._crypto
-        plain_cmd = append_crc(bytes([0x30, block]))
-        enc_cmd, par = crypto.encrypt_bytes(plain_cmd)
-        packed, total_bits = self._pack_parity(enc_cmd, par)
+        plain = bytes([0x30, block])
+        crc = iso14443a_crc(plain)
+        full = plain + crc
+        enc = bytearray(len(full))
+        par = bytearray(len(full))
+        for i in range(len(full)):
+            ks = crypto.byte(0, 0)
+            enc[i] = ks ^ full[i]
+            par[i] = (_filter(crypto.odd) ^ odd_parity8(full[i])) & 1
+        packed, total_bits = pack_with_parity(enc, par)
 
-        self._prepare()
         self._set_nrt(20)
-        self._mod(_ISO14443A, 0x06, 0)  # no_tx_par + no_rx_par
         self._clear_irqs()
         self._cmd(_CMD_CLEAR_FIFO)
         self._fifo_w(packed)
         self._set_tx_len(total_bits >> 3, total_bits & 7)
         self._cmd(_CMD_TX_NO_CRC)
-        flags = self._wait_irq(_I_RXE | _I_NRE | _I_RX_ERRS, 25)
-        self._mod(_ISO14443A, 0, 0x06)
-
-        if not (flags & _I_RXE):
-            return None
+        flags = self._wait_irq(_I_TXE, 10)
+        if flags & _I_TXE:
+            flags |= self._wait_irq(_I_RXE | _I_NRE | _I_RX_ERRS, 20)
         n = self._fifo_len()
-        if n < 18:
+        if n == 0:
             return None
-        enc_resp = self._fifo_r(n)
-        plain = crypto.decrypt_bytes(enc_resp)
-        if not check_crc(plain):
-            return None
-        return bytes(plain[:16])
+        raw = self._fifo_r(n)
+        data = bytearray()
+        bv = int.from_bytes(raw, 'little')
+        bp = 0
+        while bp + 8 <= n * 8 and len(data) < 18:
+            data.append((bv >> bp) & 0xFF)
+            bp += 9
+        dec = bytearray(len(data))
+        for i in range(len(data)):
+            dec[i] = crypto.byte(0, 0) ^ data[i]
+        return bytes(dec[:16]) if len(dec) >= 16 else None
 
     def mifare_write(self, block, data):
         """MIFARE Classic write — encrypted if auth active."""
@@ -827,7 +851,7 @@ class ST25R3916Driver:
 
         self._prepare()
         self._set_nrt(20)
-        self._mod(_ISO14443A, 0x06, 0)
+        self._mod(_ISO14443A, 0xC0, 0)
         self._clear_irqs()
         self._cmd(_CMD_CLEAR_FIFO)
         self._fifo_w(packed)
@@ -836,12 +860,12 @@ class ST25R3916Driver:
         flags = self._wait_irq(_I_RXE | _I_NRE | _I_RX_ERRS, 25)
 
         if not (flags & _I_RXE):
-            self._mod(_ISO14443A, 0, 0x06)
+            self._mod(_ISO14443A, 0, 0xC0)
             return False
         ack_enc = self._fifo_r(1)
         ack = crypto.decrypt_4bit(ack_enc[0]) if ack_enc else 0
         if ack != 0x0A:
-            self._mod(_ISO14443A, 0, 0x06)
+            self._mod(_ISO14443A, 0, 0xC0)
             return False
 
         # Phase 2: send 16 bytes of data
@@ -855,7 +879,7 @@ class ST25R3916Driver:
         self._set_tx_len(total_bits2 >> 3, total_bits2 & 7)
         self._cmd(_CMD_TX_NO_CRC)
         flags2 = self._wait_irq(_I_RXE | _I_NRE | _I_RX_ERRS, 25)
-        self._mod(_ISO14443A, 0, 0x06)
+        self._mod(_ISO14443A, 0, 0xC0)
 
         if not (flags2 & _I_RXE):
             return False
