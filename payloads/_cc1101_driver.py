@@ -481,18 +481,19 @@ class CC1101:
         if not pulses:
             return False
 
+        pulses = list(pulses)
+        if pulses[-1] > 0:
+            pulses.append(-10000)
+        elif abs(pulses[-1]) < 5000:
+            pulses[-1] = -10000
+
         if repeat > 1:
-            expanded = list(pulses)
+            frame = list(pulses)
             for _ in range(repeat - 1):
-                if expanded[-1] > 0:
-                    expanded.append(-10000)
-                elif abs(expanded[-1]) < 5000:
-                    expanded[-1] = -10000
-                if pulses[0] < 0:
-                    expanded.append(100)
-                    expanded.append(-100)
-                expanded.extend(pulses)
-            pulses = expanded
+                if frame[0] < 0:
+                    pulses.append(100)
+                    pulses.append(-100)
+                pulses.extend(frame)
             repeat = 1
 
         if te_us is None:

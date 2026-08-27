@@ -842,7 +842,7 @@ def _input_text(title, initial="", hex_only=False):
     while _running:
         btn = get_button(PINS, GPIO)
         now = time.time()
-        typed = _get_hex_char() if EVDEV_OK and hex_only else None
+        typed = _get_hex_char() if EVDEV_OK else None
 
         if typed and now - last_char > 0.12:
             last_char = now
@@ -1075,7 +1075,7 @@ def _mode_bruteforce(radio):
                 if b2 == "DOWN" and t2 - cfg_last_btn > DEBOUNCE:
                     cfg_last_btn = t2
                     cfg_cursor = (cfg_cursor + 1) % len(cfg_items)
-                if b2 == "KEY1" and t2 - cfg_last_btn > DEBOUNCE:
+                if b2 == "LEFT" and t2 - cfg_last_btn > DEBOUNCE:
                     cfg_last_btn = t2
                     if cfg_cursor == 0:
                         freq_idx_local = (freq_idx_local - 1) % len(FREQUENCIES)
@@ -1085,7 +1085,7 @@ def _mode_bruteforce(radio):
                     elif cfg_cursor == 2:
                         repeat_sel = (repeat_sel - 1) % len(REPEATS)
                         repeat_count = REPEATS[repeat_sel]
-                if b2 == "KEY2" and t2 - cfg_last_btn > DEBOUNCE:
+                if b2 == "RIGHT" and t2 - cfg_last_btn > DEBOUNCE:
                     cfg_last_btn = t2
                     if cfg_cursor == 0:
                         freq_idx_local = (freq_idx_local + 1) % len(FREQUENCIES)
@@ -1124,7 +1124,7 @@ def _mode_bruteforce(radio):
                                fill=C_ORANGE if ci == cfg_cursor else C_WHITE)
                     d.text((W // 2, H - 30), f"{total} keys {est_str}",
                            font=FONT_SM, fill=C_DIM, anchor="mm")
-                _draw_footer(d, "K1/K2:Adj OK:Go K3:Back")
+                _draw_footer(d, "</>:Adj OK:Go K3:Back")
                 _show(img)
                 time.sleep(0.08)
 
