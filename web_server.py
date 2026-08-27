@@ -47,6 +47,8 @@ from http import HTTPStatus
 from http.cookies import SimpleCookie
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+import urllib.request
+import urllib.error
 from urllib.parse import parse_qs, urlparse, unquote
 
 from nmap_parser import parse_nmap_xml_file
@@ -2137,6 +2139,71 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(WEB_DIR), **kwargs)
 
+    @staticmethod
+    def _ensure_transmission_daemon() -> bool:
+        try:
+            subprocess.run(["pgrep", "-x", "transmission-da"], capture_output=True, check=True)
+            return True
+        except subprocess.CalledProcessError:
+            pass
+        dl_dir = "/root/Raspyjack/loot/torrents"
+        watch_dir = "/root/Raspyjack/loot/torrents/watch"
+        os.makedirs(dl_dir, exist_ok=True)
+        os.makedirs(watch_dir, exist_ok=True)
+        try:
+            subprocess.Popen([
+                "transmission-daemon", "--no-auth",
+                "--download-dir", dl_dir, "--watch-dir", watch_dir,
+                "--allowed", "127.0.0.1",
+                "--port", "9091", "--no-portmap", "--foreground",
+            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            time.sleep(2)
+            return True
+        except FileNotFoundError:
+            return False
+
+    def _proxy_transmission(self, method: str) -> None:
+        self._ensure_transmission_daemon()
+        target_path = self.path
+        if target_path.startswith("/torrent"):
+            rest = target_path[len("/torrent"):]
+            if rest.startswith("/rpc"):
+                target_path = "/transmission" + rest
+            elif rest == "" or rest == "/":
+                target_path = "/transmission/web/"
+            else:
+                target_path = "/transmission/web" + rest
+        target_url = f"http://127.0.0.1:9091{target_path}"
+        body = None
+        if method == "POST":
+            length = int(self.headers.get("Content-Length", 0))
+            if length > 0:
+                body = self.rfile.read(length)
+        headers = {}
+        for h in ("Content-Type", "X-Transmission-Session-Id", "Accept"):
+            v = self.headers.get(h)
+            if v:
+                headers[h] = v
+        try:
+            req = urllib.request.Request(target_url, data=body, headers=headers, method=method)
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                resp_body = resp.read()
+                self.send_response(resp.status)
+                for key, val in resp.getheaders():
+                    if key.lower() not in ("transfer-encoding", "connection"):
+                        self.send_header(key, val)
+                self.end_headers()
+                self.wfile.write(resp_body)
+        except urllib.error.HTTPError as e:
+            self.send_response(e.code)
+            for key, val in e.headers.items():
+                if key.lower() not in ("transfer-encoding", "connection"):
+                    self.send_header(key, val)
+            self.end_headers()
+            self.wfile.write(e.read())
+        except Exception:
+            _json_response(self, {"error": "transmission daemon unreachable"}, status=HTTPStatus.BAD_GATEWAY)
+
     def do_GET(self):
         parsed = urlparse(self.path)
         if parsed.path == "/ide":
@@ -2301,10 +2368,27 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
             _json_response(self, {"error": "not found"}, status=HTTPStatus.NOT_FOUND)
             return
 
+        if parsed.path.startswith("/torrent"):
+            query = parse_qs(parsed.query or "")
+            if not _auth_ok(self, query):
+                _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
+                return
+            self._proxy_transmission("GET")
+            return
+
         super().do_GET()
 
     def do_POST(self):
         parsed = urlparse(self.path)
+        if parsed.path.startswith("/torrent") or parsed.path == "/rpc":
+            query = parse_qs(parsed.query or "")
+            if not _auth_ok(self, query):
+                _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
+                return
+            if parsed.path == "/rpc":
+                self.path = "/torrent/rpc"
+            self._proxy_transmission("POST")
+            return
         if parsed.path == "/api/auth/bootstrap":
             self._handle_auth_bootstrap()
             return

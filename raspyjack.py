@@ -673,6 +673,31 @@ def getButton():
         if pressed is None:
             if _last_button is not None:
                 _set_last_button(None, time.time())
+            if _HAS_EVDEV:
+                for code, char in _KEY_CHARS.items():
+                    if _evdev.is_key_pressed(code):
+                        now_p = _prev_key_state.get(code, False)
+                        if not now_p:
+                            _prev_key_state[code] = True
+                            _mark_user_activity()
+                            return f"_KB_{char}"
+                        continue
+                    else:
+                        _prev_key_state[code] = False
+                if _evdev.is_key_pressed(14):
+                    if not _prev_key_state.get(14, False):
+                        _prev_key_state[14] = True
+                        _mark_user_activity()
+                        return "_KB_BACKSPACE"
+                else:
+                    _prev_key_state[14] = False
+                if _evdev.is_key_pressed(28):
+                    if not _prev_key_state.get(28, False):
+                        _prev_key_state[28] = True
+                        _mark_user_activity()
+                        return "_KB_ENTER"
+                else:
+                    _prev_key_state[28] = False
             time.sleep(0.01)
             continue
 
@@ -2520,17 +2545,39 @@ def GetMenuString(inlist, duplicates=False):
         time.sleep(0.12)
 
         # -- 4/ Lecture des boutons -----------------------------------------
-        search_result = _handle_search_input(inlist_original, use_global=True)
-        if search_result is not None:
-            changed, new_list, new_total, new_idx = search_result
-            if new_list is not None:
-                inlist = new_list
-                total = new_total
-                index = min(new_idx, max(0, new_total - 1))
+        btn = getButton()
+
+        if isinstance(btn, str) and btn.startswith("_KB_"):
+            kb_val = btn[4:]
+            if kb_val == "BACKSPACE":
+                if _menu_filter_active:
+                    _menu_filter_backspace()
+                    if _menu_filter:
+                        search_source = _get_flat_payload_list()
+                        inlist, total = _apply_search_filter(search_source)
+                        index = 0
+                        offset = 0
+                    else:
+                        inlist = list(inlist_original)
+                        total = len(inlist)
+                        index = 0
+                        offset = 0
+            elif kb_val == "ENTER":
+                if _menu_filter_active and inlist:
+                    pass
+                else:
+                    continue
+            elif not _menu_filter_active and kb_val == "s":
+                _menu_filter_activate()
+            else:
+                if not _menu_filter_active:
+                    _menu_filter_activate()
+                _menu_filter_add(kb_val)
+                search_source = _get_flat_payload_list()
+                inlist, total = _apply_search_filter(search_source)
+                index = 0
                 offset = 0
             continue
-
-        btn = getButton()
 
         if m.which == "a":
             if _cv(btn):
@@ -4700,18 +4747,35 @@ def GetMenuCarousel(inlist, duplicates=False):
 
         time.sleep(0.08)
 
-        # Search input (edge-triggered)
-        search_result = _handle_search_input(inlist_original, use_global=True)
-        if search_result is not None:
-            changed, new_list, new_total, new_idx = search_result
-            if new_list is not None:
-                inlist = new_list
-                total = new_total
-                index = min(new_idx, max(0, new_total - 1))
-            continue
-
         # Handle button input
         btn = getButton()
+
+        if isinstance(btn, str) and btn.startswith("_KB_"):
+            kb_val = btn[4:]
+            if kb_val == "BACKSPACE":
+                if _menu_filter_active:
+                    _menu_filter_backspace()
+                    if _menu_filter:
+                        search_source = _get_flat_payload_list()
+                        inlist, total = _apply_search_filter(search_source)
+                        index = 0
+                    else:
+                        inlist = list(inlist_original)
+                        total = len(inlist)
+                        index = 0
+            elif kb_val == "ENTER":
+                pass
+            elif not _menu_filter_active and kb_val == "s":
+                _menu_filter_activate()
+            else:
+                if not _menu_filter_active:
+                    _menu_filter_activate()
+                _menu_filter_add(kb_val)
+                search_source = _get_flat_payload_list()
+                inlist, total = _apply_search_filter(search_source)
+                index = 0
+            continue
+
         if btn == "KEY_LEFT_PIN":
             index = (index - 1) % total
         elif btn == "KEY_RIGHT_PIN":
@@ -4826,18 +4890,35 @@ def GetMenuGrid(inlist, duplicates=False):
 
         time.sleep(0.08)
 
-        # Search input (edge-triggered)
-        search_result = _handle_search_input(inlist_original, use_global=True)
-        if search_result is not None:
-            changed, new_list, new_total, new_idx = search_result
-            if new_list is not None:
-                inlist = new_list
-                total = new_total
-                index = min(new_idx, max(0, new_total - 1))
-            continue
-
         # Handle button input
         btn = getButton()
+
+        if isinstance(btn, str) and btn.startswith("_KB_"):
+            kb_val = btn[4:]
+            if kb_val == "BACKSPACE":
+                if _menu_filter_active:
+                    _menu_filter_backspace()
+                    if _menu_filter:
+                        search_source = _get_flat_payload_list()
+                        inlist, total = _apply_search_filter(search_source)
+                        index = 0
+                    else:
+                        inlist = list(inlist_original)
+                        total = len(inlist)
+                        index = 0
+            elif kb_val == "ENTER":
+                pass
+            elif not _menu_filter_active and kb_val == "s":
+                _menu_filter_activate()
+            else:
+                if not _menu_filter_active:
+                    _menu_filter_activate()
+                _menu_filter_add(kb_val)
+                search_source = _get_flat_payload_list()
+                inlist, total = _apply_search_filter(search_source)
+                index = 0
+            continue
+
         if btn == "KEY_UP_PIN":
             if index >= GRID_COLS:
                 index -= GRID_COLS
