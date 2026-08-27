@@ -145,6 +145,30 @@ def lcd_keyboard(lcd, font, pins, gpio, title="Input", default="",
     if Image is None or ScaledDraw is None:
         return default or ""
 
+    # TCA8418 physical keyboard support
+    try:
+        import evdev_keys as _hw_kbd
+        _hw_ok = True
+    except ImportError:
+        _hw_ok = False
+    _HW_KEYS = {
+        16:'q',17:'w',18:'e',19:'r',20:'t',21:'y',22:'u',23:'i',24:'o',25:'p',
+        30:'a',31:'s',32:'d',33:'f',34:'g',35:'h',36:'j',37:'k',38:'l',
+        44:'z',45:'x',46:'c',47:'v',48:'b',49:'n',50:'m',
+        2:'1',3:'2',4:'3',5:'4',6:'5',7:'6',8:'7',9:'8',10:'9',11:'0',
+        57:' ',
+        26:'!',27:'@',39:'#',40:'$',41:'%',43:'^',
+        51:'&',52:'*',53:'(',94:')',
+        55:'~',69:'`',70:'_',71:'-',72:'+',73:'=',
+        74:'[',75:']',76:'{',77:'}',
+        79:';',80:':',81:"'",82:'"',83:'<',85:'>',
+        86:'\\',89:'|',90:',',91:'.',92:'/',93:'?',
+    }
+    _hw_prev = {}
+    if _hw_ok:
+        for c in list(_HW_KEYS.keys()) + [14, 28]:
+            _hw_prev[c] = _hw_kbd.is_key_pressed(c)
+
     pages = _CHARSET_MAP.get(charset, _PAGES_FULL)
     page_idx = 0
     cursor_r = 0
@@ -207,6 +231,23 @@ def lcd_keyboard(lcd, font, pins, gpio, title="Input", default="",
                     key_value = str(remote_event.get("key") or "")
                     if key_value and len("".join(text)) + len(key_value) <= max_len:
                         text.extend(list(key_value))
+
+            # Physical keyboard (TCA8418) input
+            if _hw_ok:
+                for code, char in _HW_KEYS.items():
+                    now = _hw_kbd.is_key_pressed(code)
+                    was = _hw_prev.get(code, False)
+                    _hw_prev[code] = now
+                    if now and not was and len(text) < max_len:
+                        text.append(char)
+                bk = _hw_kbd.is_key_pressed(14)
+                if bk and not _hw_prev.get(14, False) and text:
+                    text.pop()
+                _hw_prev[14] = bk
+                en = _hw_kbd.is_key_pressed(28)
+                if en and not _hw_prev.get(28, False):
+                    return "".join(text)
+                _hw_prev[28] = en
 
             btn = get_button(pins, gpio)
 

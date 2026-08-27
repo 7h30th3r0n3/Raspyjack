@@ -480,6 +480,21 @@ class CC1101:
         """
         if not pulses:
             return False
+
+        if repeat > 1:
+            expanded = list(pulses)
+            for _ in range(repeat - 1):
+                if expanded[-1] > 0:
+                    expanded.append(-10000)
+                elif abs(expanded[-1]) < 5000:
+                    expanded[-1] = -10000
+                if pulses[0] < 0:
+                    expanded.append(100)
+                    expanded.append(-100)
+                expanded.extend(pulses)
+            pulses = expanded
+            repeat = 1
+
         if te_us is None:
             durs = [abs(p) for p in pulses if abs(p) < 50000]
             te_us = min(durs) if durs else 320

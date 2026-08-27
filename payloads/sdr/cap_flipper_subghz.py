@@ -1003,7 +1003,7 @@ def _mode_bruteforce(radio):
     delay_ms = 20
     repeat_count = 1
     DELAYS = [10, 20, 50, 100, 200]
-    REPEATS = [1, 2, 3, 5]
+    REPEATS = [1, 2, 3, 5, 10]
 
     while _running:
         btn = get_button(PINS, GPIO)
@@ -1062,19 +1062,21 @@ def _mode_bruteforce(radio):
             cfg_cursor = 0
             cfg_items = ["Frequency", "Delay", "Repeat", "START"]
 
+            cfg_last_btn = 0
             while _running:
                 b2 = get_button(PINS, GPIO)
+                t2 = time.time()
                 if b2 == "KEY3":
                     step = "bits"
                     break
-                if b2 == "UP" and now - last_btn > DEBOUNCE:
-                    last_btn = time.time()
+                if b2 == "UP" and t2 - cfg_last_btn > DEBOUNCE:
+                    cfg_last_btn = t2
                     cfg_cursor = (cfg_cursor - 1) % len(cfg_items)
-                if b2 == "DOWN" and now - last_btn > DEBOUNCE:
-                    last_btn = time.time()
+                if b2 == "DOWN" and t2 - cfg_last_btn > DEBOUNCE:
+                    cfg_last_btn = t2
                     cfg_cursor = (cfg_cursor + 1) % len(cfg_items)
-                if b2 == "KEY1" and now - last_btn > DEBOUNCE:
-                    last_btn = time.time()
+                if b2 == "KEY1" and t2 - cfg_last_btn > DEBOUNCE:
+                    cfg_last_btn = t2
                     if cfg_cursor == 0:
                         freq_idx_local = (freq_idx_local - 1) % len(FREQUENCIES)
                     elif cfg_cursor == 1:
@@ -1083,8 +1085,8 @@ def _mode_bruteforce(radio):
                     elif cfg_cursor == 2:
                         repeat_sel = (repeat_sel - 1) % len(REPEATS)
                         repeat_count = REPEATS[repeat_sel]
-                if b2 == "KEY2" and now - last_btn > DEBOUNCE:
-                    last_btn = time.time()
+                if b2 == "KEY2" and t2 - cfg_last_btn > DEBOUNCE:
+                    cfg_last_btn = t2
                     if cfg_cursor == 0:
                         freq_idx_local = (freq_idx_local + 1) % len(FREQUENCIES)
                     elif cfg_cursor == 1:
@@ -1093,8 +1095,8 @@ def _mode_bruteforce(radio):
                     elif cfg_cursor == 2:
                         repeat_sel = (repeat_sel + 1) % len(REPEATS)
                         repeat_count = REPEATS[repeat_sel]
-                if b2 == "OK" and time.time() - last_btn > 0.2:
-                    last_btn = time.time()
+                if b2 == "OK" and t2 - cfg_last_btn > 0.2:
+                    cfg_last_btn = t2
                     if cfg_cursor == 3:
                         step = "run"
                         break

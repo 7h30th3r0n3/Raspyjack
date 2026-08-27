@@ -896,13 +896,65 @@ class ST25R3916Driver:
     def mifare_ul_read(self, page):
         resp = self._transceive(bytes([0x30, page]), timeout_ms=100, min_rx=4)
         if resp and len(resp) >= 4:
-            return bytes(resp[:4])
+            return bytes(resp[:16])
         return None
 
     def mifare_ul_write(self, page, data):
         resp = self._transceive(bytes([0xA2, page]) + bytes(data[:4]),
                                 timeout_ms=100, min_rx=1)
         return resp is not None
+
+    def ntag_get_version(self):
+        resp = self._transceive(bytes([0x60]), timeout_ms=100, min_rx=8)
+        if resp and len(resp) >= 8:
+            return {
+                "vendor": resp[1],
+                "type": resp[2],
+                "subtype": resp[3],
+                "major": resp[4],
+                "minor": resp[5],
+                "storage": resp[6],
+                "protocol": resp[7],
+            }
+        return None
+
+    def ntag_read_sig(self):
+        resp = self._transceive(bytes([0x3C, 0x00]), timeout_ms=100, min_rx=32)
+        if resp and len(resp) >= 32:
+            return bytes(resp[:32])
+        return None
+
+    def ntag_read_cnt(self, counter=2):
+        resp = self._transceive(bytes([0x39, counter]), timeout_ms=100, min_rx=3)
+        if resp and len(resp) >= 3:
+            return resp[0] | (resp[1] << 8) | (resp[2] << 16)
+        return None
+
+    def ul_read_all(self):
+        ver = self.ntag_get_version()
+        if ver:
+            storage = ver.get("storage", 0) & 0x0F
+            page_map = {0x03: 15, 0x06: 45, 0x09: 45, 0x0F: 135, 0x11: 231, 0x13: 231}
+            total_pages = page_map.get(storage, 45)
+            tag_type = "NTAG"
+            if ver["type"] == 0x03:
+                sizes = {0x06: "NTAG213", 0x0F: "NTAG215", 0x11: "NTAG216"}
+                tag_type = sizes.get(storage, "NTAG21x")
+            elif ver["type"] == 0x04:
+                tag_type = "MIFARE Ultralight EV1"
+        else:
+            total_pages = 16
+            tag_type = "MIFARE Ultralight"
+
+        pages = {}
+        for p in range(0, total_pages, 4):
+            data = self.mifare_ul_read(p)
+            if not data:
+                break
+            for i in range(min(4, total_pages - p)):
+                if i * 4 + 4 <= len(data):
+                    pages[p + i] = bytes(data[i * 4:(i + 1) * 4])
+        return {"type": tag_type, "version": ver, "pages": pages, "total_pages": total_pages}
 
     def communicate_thru(self, data):
         return self._transceive(bytes(data), timeout_ms=100, min_rx=1)

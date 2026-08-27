@@ -77,6 +77,7 @@ MENU_ITEMS = [
     ("Emulate", _ICON_EMULATE),
     ("EMV",     _ICON_EMV),
     ("Write",   _ICON_WRITE),
+    ("NDEF",    _ICON_NFC),
 ]
 
 _lcd = None
@@ -189,7 +190,9 @@ def _safe_close(drv):
     gc.collect()
 
 
-def _card_type_str(sak):
+def _card_type_str(sak, card_data=None):
+    if sak == 0x00 and card_data and card_data.get("tag_type"):
+        return card_data["tag_type"]
     types = {0x08: "MIFARE Classic 1K", 0x18: "MIFARE Classic 4K",
              0x09: "MIFARE Mini", 0x00: "MIFARE Ultralight",
              0x20: "ISO14443-4 (EMV)"}
@@ -235,6 +238,8 @@ def _mode_read():
                 card_type = _card_type_str(card.sak)
                 if _is_classic(card.sak):
                     card_data = _read_classic(drv, card)
+                elif card.sak == 0x00:
+                    card_data = _read_ultralight(drv, card)
                 else:
                     card_data = {"blocks": {}}
                 scroll = 0
@@ -254,6 +259,117 @@ def _mode_read():
             time.sleep(0.05)
     finally:
         _safe_close(drv)
+
+
+def _read_ultralight(drv, card):
+    _draw_progress("Reading UL", 0, "GET_VERSION...")
+    ul_data = drv.ul_read_all()
+    tag_type = ul_data.get("type", "Ultralight")
+    pages = ul_data.get("pages", {})
+    total = ul_data.get("total_pages", 0)
+
+    result = {"blocks": {}, "tag_type": tag_type, "total_pages": total}
+    for p, data in pages.items():
+        result["blocks"][str(p)] = data.hex().upper()
+        pct = min(100, (p + 1) * 100 // max(total, 1))
+        _draw_progress("Reading UL", pct, f"{tag_type} page {p}/{total}")
+
+    ver = ul_data.get("version")
+    if ver:
+        result["version"] = ver
+
+    sig = drv.ntag_read_sig()
+    if sig:
+        result["signature"] = sig.hex().upper()
+
+    cnt = drv.ntag_read_cnt()
+    if cnt is not None:
+        result["counter"] = cnt
+
+    result["sectors_ok"] = len(pages)
+
+    # Decode NDEF content
+    raw = b""
+    for p in sorted(pages.keys()):
+        if p >= 4:
+            raw += pages[p]
+    ndef = _decode_ndef(raw)
+    if ndef:
+        result["ndef"] = ndef
+    return result
+
+
+def _decode_ndef(raw):
+    """Decode NDEF TLV from Ultralight/NTAG page data (starting at page 4)."""
+    records = []
+    i = 0
+    while i < len(raw):
+        tlv_type = raw[i]; i += 1
+        if tlv_type == 0x00:
+            continue
+        if tlv_type == 0xFE:
+            break
+        if i >= len(raw):
+            break
+        length = raw[i]; i += 1
+        if length == 0xFF and i + 1 < len(raw):
+            length = (raw[i] << 8) | raw[i + 1]; i += 2
+        if i + length > len(raw):
+            break
+        if tlv_type == 0x03:
+            rec = _parse_ndef_record(raw[i:i + length])
+            if rec:
+                records.extend(rec)
+        i += length
+    return records if records else None
+
+
+def _parse_ndef_record(data):
+    records = []
+    i = 0
+    while i < len(data):
+        if i >= len(data):
+            break
+        flags = data[i]; i += 1
+        tnf = flags & 0x07
+        sr = bool(flags & 0x10)
+        il = bool(flags & 0x08)
+        if i >= len(data): break
+        type_len = data[i]; i += 1
+        if sr:
+            if i >= len(data): break
+            pay_len = data[i]; i += 1
+        else:
+            if i + 3 >= len(data): break
+            pay_len = (data[i] << 24) | (data[i+1] << 16) | (data[i+2] << 8) | data[i+3]; i += 4
+        id_len = 0
+        if il:
+            if i >= len(data): break
+            id_len = data[i]; i += 1
+        rec_type = data[i:i + type_len]; i += type_len
+        rec_id = data[i:i + id_len]; i += id_len
+        payload = data[i:i + pay_len]; i += pay_len
+
+        if tnf == 0x01 and rec_type == b'U':
+            prefixes = ["", "http://www.", "https://www.", "http://", "https://",
+                        "tel:", "mailto:", "ftp://anonymous:anonymous@ftp.", "ftp://ftp.",
+                        "ftps://", "sftp://"]
+            prefix = prefixes[payload[0]] if payload[0] < len(prefixes) else ""
+            url = prefix + payload[1:].decode("utf-8", errors="replace")
+            records.append({"type": "URL", "value": url})
+        elif tnf == 0x01 and rec_type == b'T':
+            lang_len = payload[0] & 0x3F
+            lang = payload[1:1 + lang_len].decode("ascii", errors="replace")
+            text = payload[1 + lang_len:].decode("utf-8", errors="replace")
+            records.append({"type": "Text", "value": text, "lang": lang})
+        elif tnf == 0x02:
+            records.append({"type": rec_type.decode("ascii", errors="replace"), "value": payload.hex()})
+        else:
+            records.append({"type": f"TNF{tnf}", "value": payload.hex()[:40]})
+
+        if flags & 0x40:
+            break
+    return records
 
 
 def _read_classic(drv, card):
@@ -341,6 +457,22 @@ def _draw_card_info(card, card_data, scroll):
            font=FONT_SM, fill=C_ORANGE)
     y += 20 if IS_WIDE else 14
 
+    # Show NDEF content if present
+    ndef = card_data.get("ndef") if card_data else None
+    if ndef:
+        for rec in ndef[:3]:
+            rtype = rec.get("type", "?")
+            rval = rec.get("value", "")
+            d.text((PAD, y), f"{rtype}:", font=FONT_XS, fill=C_CYAN)
+            lw = 40 if IS_WIDE else 24
+            max_w = 42 if IS_WIDE else 20
+            d.text((PAD + lw, y), rval[:max_w], font=FONT_SM, fill=C_GREEN)
+            y += LINE_H
+            if len(rval) > max_w:
+                d.text((PAD + lw, y), rval[max_w:max_w * 2], font=FONT_SM, fill=C_GREEN)
+                y += LINE_H
+        y += 4
+
     sorted_blocks = sorted(blocks.keys(), key=int)
     vis = (H - FTR_H - y) // LINE_H
     for i in range(scroll, min(len(sorted_blocks), scroll + vis)):
@@ -382,6 +514,27 @@ def _save_dump(card, card_data):
             spaced = ' '.join(bdata[j:j+2] for j in range(0, len(bdata), 2)) if bdata \
                      else ' '.join(['??'] * 16)
             lines.append(f"Block {i}: {spaced}")
+    elif card.sak == 0x00:
+        tag_type = card_data.get("tag_type", "MIFARE Ultralight")
+        lines[3] = f"Device type: {tag_type}"
+        total_pages = card_data.get("total_pages", len(blocks))
+        lines.append(f"Data format version: 2")
+        sig = card_data.get("signature", "")
+        if sig:
+            lines.append(f"Signature: {' '.join(sig[i:i+2] for i in range(0, len(sig), 2))}")
+        cnt = card_data.get("counter")
+        if cnt is not None:
+            lines.append(f"Counter 2: {cnt}")
+        ver = card_data.get("version")
+        if ver:
+            lines.append(f"Tearing 0: 00")
+            lines.append(f"Tearing 1: 00")
+            lines.append(f"Tearing 2: 00")
+        for i in range(total_pages):
+            bdata = blocks.get(str(i))
+            spaced = ' '.join(bdata[j:j+2] for j in range(0, len(bdata), 2)) if bdata \
+                     else '?? ?? ?? ??'
+            lines.append(f"Page {i}: {spaced}")
     with open(os.path.join(LOOT_DIR, fname_nfc), "w") as f:
         f.write('\n'.join(lines) + '\n')
     return fname_nfc
@@ -458,6 +611,27 @@ def _mode_saved():
         if btn == "KEY1" and selected:
             _emulate_dump(selected)
             selected = None
+        if btn == "KEY2" and not selected and files:
+            fname = files[cursor]
+            _draw_msg("Delete?", fname[:22], C_RED, _ICON_TIMES)
+            time.sleep(0.3)
+            while True:
+                b2 = _btn()
+                if b2 == "OK":
+                    try:
+                        os.remove(os.path.join(LOOT_DIR, fname))
+                        _draw_msg("Deleted", fname[:22], C_GREEN, _ICON_CHECK)
+                    except Exception:
+                        _draw_msg("Error", "Cannot delete", C_RED, _ICON_TIMES)
+                    time.sleep(0.8)
+                    files = _list_dumps()
+                    cursor = min(cursor, max(0, len(files) - 1))
+                    if not files:
+                        return
+                    break
+                elif b2 == "KEY3":
+                    break
+                time.sleep(0.05)
 
         img = _new_img()
         d = _draw(img)
@@ -496,7 +670,7 @@ def _mode_saved():
                            fill=C_CYAN if is_sel else C_VDIM)
                 d.text((PAD + 24, ry + 4), fname_display, font=FONT_SM,
                        fill=C_WHITE if is_sel else C_DIM)
-            _draw_footer(d, "OK:Open  K3:Back")
+            _draw_footer(d, "OK:Open K2:Del K3:Back")
 
         _show(img)
         time.sleep(0.05)
@@ -688,9 +862,12 @@ def _mode_emv():
             vis = (H - FTR_H - y) // emv_lh
             for i in range(scroll, min(len(lines), scroll + vis)):
                 label, val, col = lines[i]
-                d.text((PAD, y), f"{label}:", font=FONT_XS, fill=C_CYAN)
-                lw = 90 if IS_WIDE else 40
-                d.text((lw, y), str(val), font=FONT_SM, fill=col)
+                if label:
+                    d.text((PAD, y), f"{label}:", font=FONT_XS, fill=C_CYAN)
+                    lw = 90 if IS_WIDE else 40
+                    d.text((lw, y), str(val), font=FONT_SM, fill=col)
+                else:
+                    d.text((PAD, y), str(val), font=FONT_SM, fill=col)
                 y += emv_lh
 
             _draw_footer(d, "K1:Save  K3:Back")
@@ -729,8 +906,28 @@ def _build_emv_lines(emv_data):
         lines.append(("Language", emv_data.language, C_WHITE))
     if emv_data.atc:
         lines.append(("ATC", str(emv_data.atc), C_ORANGE))
+    if emv_data.last_online_atc:
+        lines.append(("Last online", str(emv_data.last_online_atc), C_DIM))
     if emv_data.pin_try_counter >= 0:
         lines.append(("PIN tries", str(emv_data.pin_try_counter), C_RED))
+    if emv_data.aip_features:
+        lines.append(("Caps", " ".join(emv_data.aip_features), C_DIM))
+    if emv_data.transactions:
+        lines.append(("", "--- Transactions ---", C_CYAN))
+        from payloads._emv_reader import country_name, currency_name
+        for tx in emv_data.transactions[:10]:
+            amt = tx.get("amount", 0)
+            cur = currency_name(tx.get("currency", 0))
+            ctry = country_name(tx.get("country", 0))
+            date = tx.get("date", "")
+            if date and len(date) == 6:
+                date = "%s/%s/%s" % (date[4:6], date[2:4], date[0:2])
+            tm = tx.get("time", "")
+            if tm and len(tm) >= 4:
+                tm = "%s:%s" % (tm[0:2], tm[2:4])
+            lines.append(("", "%.2f %s  %s" % (amt, cur, ctry), C_GREEN))
+            if date:
+                lines.append(("", "  %s %s" % (date, tm), C_DIM))
     if not lines:
         lines.append(("Info", "No EMV data found", C_DIM))
     return lines
@@ -865,6 +1062,185 @@ def _write_dump(dump):
         _safe_close(drv)
 
 
+# ── NDEF Write Mode ─────────────────────────────────────────────────
+
+_NDEF_URL_PREFIXES = [
+    ("https://www.", 0x02), ("http://www.", 0x01),
+    ("https://", 0x04), ("http://", 0x03),
+]
+
+def _ndef_encode_url(url):
+    prefix_byte = 0x00
+    for pfx, code in _NDEF_URL_PREFIXES:
+        if url.startswith(pfx):
+            url = url[len(pfx):]
+            prefix_byte = code
+            break
+    payload = bytes([prefix_byte]) + url.encode("utf-8")
+    return bytes([0xD1, 0x01, len(payload), 0x55]) + payload
+
+def _ndef_encode_text(text, lang="en"):
+    lang_b = lang.encode("ascii")
+    payload = bytes([len(lang_b)]) + lang_b + text.encode("utf-8")
+    return bytes([0xD1, 0x01, len(payload), 0x54]) + payload
+
+def _ndef_encode_wifi(ssid, password, auth=0x0020, enc=0x0008):
+    cred = b""
+    cred += b"\x10\x45" + len(ssid).to_bytes(2, "big") + ssid.encode("utf-8")
+    cred += b"\x10\x03" + (2).to_bytes(2, "big") + auth.to_bytes(2, "big")
+    cred += b"\x10\x0F" + (2).to_bytes(2, "big") + enc.to_bytes(2, "big")
+    cred += b"\x10\x27" + len(password).to_bytes(2, "big") + password.encode("utf-8")
+    wsc_type = b"application/vnd.wfa.wsc"
+    payload = b"\x10\x0E" + len(cred).to_bytes(2, "big") + cred
+    flags = 0xD2
+    return bytes([flags, len(wsc_type), len(payload)]) + wsc_type + payload
+
+def _ndef_wrap_tlv(ndef_record, total_pages):
+    data = bytearray()
+    data.append(0x03)
+    if len(ndef_record) < 0xFF:
+        data.append(len(ndef_record))
+    else:
+        data += bytes([0xFF, (len(ndef_record) >> 8) & 0xFF, len(ndef_record) & 0xFF])
+    data += ndef_record
+    data.append(0xFE)
+    while len(data) % 4 != 0:
+        data.append(0x00)
+    return bytes(data)
+
+try:
+    import evdev_keys as _evdev_keys
+    _HAS_EVDEV = True
+except ImportError:
+    _HAS_EVDEV = False
+
+_KEY_CHARS = {
+    # Letters
+    16:'q',17:'w',18:'e',19:'r',20:'t',21:'y',22:'u',23:'i',24:'o',25:'p',
+    30:'a',31:'s',32:'d',33:'f',34:'g',35:'h',36:'j',37:'k',38:'l',
+    44:'z',45:'x',46:'c',47:'v',48:'b',49:'n',50:'m',
+    # Digits
+    2:'1',3:'2',4:'3',5:'4',6:'5',7:'6',8:'7',9:'8',10:'9',11:'0',
+    # Space + control
+    57:' ', 14:'\b', 28:'\n',
+    # Sym layer (when Sym/Alt key is held on CZ keyboard)
+    26:'!', 27:'@', 39:'#', 40:'$', 41:'%', 43:'^',
+    51:'&', 52:'*', 53:'(', 94:')',
+    55:'~', 69:'`', 70:'_', 71:'-', 72:'+', 73:'=',
+    74:'[', 75:']', 76:'{', 77:'}',
+    79:';', 80:':', 81:"'", 82:'"', 83:'<', 85:'>',
+    86:'\\', 89:'|', 90:',', 91:'.', 92:'/', 93:'?',
+}
+
+def _nfc_input_text(title, initial=""):
+    from payloads._keyboard_helper import lcd_keyboard
+    return lcd_keyboard(_lcd, FONT, PINS, GPIO, title=title, default=initial)
+
+
+def _mode_ndef():
+    NDEF_TYPES = ["URL", "Text", "WiFi"]
+    cursor = 0
+    while _running:
+        btn = _btn()
+        if btn == "KEY3":
+            return
+        if btn == "UP":
+            cursor = (cursor - 1) % len(NDEF_TYPES)
+        if btn == "DOWN":
+            cursor = (cursor + 1) % len(NDEF_TYPES)
+        if btn == "OK":
+            ndef_type = NDEF_TYPES[cursor]
+            record = None
+
+            if ndef_type == "URL":
+                url = _nfc_input_text("Enter URL", "https://")
+                if url is None:
+                    continue
+                record = _ndef_encode_url(url)
+            elif ndef_type == "Text":
+                txt = _nfc_input_text("Enter Text")
+                if txt is None:
+                    continue
+                record = _ndef_encode_text(txt)
+            elif ndef_type == "WiFi":
+                ssid = _nfc_input_text("SSID")
+                if ssid is None:
+                    continue
+                pwd = _nfc_input_text("Password")
+                if pwd is None:
+                    continue
+                record = _ndef_encode_wifi(ssid, pwd)
+
+            if record:
+                _write_ndef_to_tag(record)
+            continue
+
+        img = _new_img()
+        d = _draw(img)
+        _draw_header(d, "NDEF Write", icon=_ICON_NFC)
+        y = HDR_H + 8
+        for i, t in enumerate(NDEF_TYPES):
+            sel = i == cursor
+            if sel:
+                d.rectangle((PAD, y, W - PAD, y + ITEM_H - 4), fill=C_SEL, outline=C_SEL_BRD)
+            icons = {"URL": "", "Text": "", "WiFi": ""}
+            if FONT_ICON:
+                d.text((PAD + 4, y + 2), icons.get(t, ""), font=FONT_ICON, fill=C_CYAN if sel else C_VDIM)
+            d.text((PAD + 28, y + 3), t, font=FONT_SM, fill=C_WHITE if sel else C_DIM)
+            y += ITEM_H
+        _draw_footer(d, "OK:Select K3:Back")
+        _show(img)
+        time.sleep(0.05)
+
+
+def _write_ndef_to_tag(ndef_record):
+    _draw_msg("NDEF Write", "Place tag on reader...", C_CYAN, _ICON_NFC)
+    drv = _open_driver()
+    if not drv:
+        _draw_msg("Error", "ST25R3916 not found", C_RED, _ICON_TIMES)
+        time.sleep(2)
+        return
+    try:
+        card = drv.read_passive_target(timeout=5.0)
+        if not card or card.sak != 0x00:
+            _draw_msg("Error", "Need Ultralight/NTAG", C_RED, _ICON_TIMES)
+            time.sleep(2)
+            return
+
+        ul_data = drv.ul_read_all()
+        total_pages = ul_data.get("total_pages", 45)
+        usable = (total_pages - 4) * 4
+
+        tlv_data = _ndef_wrap_tlv(ndef_record, total_pages)
+        if len(tlv_data) > usable:
+            _draw_msg("Error", f"Too large ({len(tlv_data)}/{usable}B)", C_RED, _ICON_TIMES)
+            time.sleep(2)
+            return
+
+        cc_size = ((len(ndef_record) + 8) // 8) & 0xFF
+        cc = bytes([0xE1, 0x10, cc_size, 0x00])
+        drv.mifare_ul_write(3, cc)
+
+        pages_to_write = [tlv_data[i:i + 4] for i in range(0, len(tlv_data), 4)]
+        for i, page_data in enumerate(pages_to_write):
+            page_num = 4 + i
+            if page_num >= total_pages - 5:
+                break
+            while len(page_data) < 4:
+                page_data += b"\x00"
+            pct = (i + 1) * 100 // len(pages_to_write)
+            _draw_progress("Writing NDEF", pct, f"Page {page_num}")
+            if not drv.mifare_ul_write(page_num, page_data):
+                _draw_msg("Error", f"Write fail page {page_num}", C_RED, _ICON_TIMES)
+                time.sleep(2)
+                return
+
+        _draw_msg("NDEF Written!", f"{len(ndef_record)}B on {len(pages_to_write)} pages", C_GREEN, _ICON_CHECK)
+        time.sleep(2)
+    finally:
+        _safe_close(drv)
+
+
 # ── Main Menu ────────────────────────────────────────────────────────
 
 def main():
@@ -922,15 +1298,20 @@ def main():
                 label = MENU_ITEMS[cursor][0]
                 {"Read": _mode_read, "Saved": _mode_saved,
                  "Emulate": _mode_emulate, "EMV": _mode_emv,
-                 "Write": _mode_write}.get(label, lambda: None)()
+                 "Write": _mode_write, "NDEF": _mode_ndef,
+                 }.get(label, lambda: None)()
 
             img = _new_img()
             d = _draw(img)
             _draw_header(d, "NFC Cap HAT", icon=_ICON_NFC)
 
-            y = HDR_H + 6
-            for i, (label, icon) in enumerate(MENU_ITEMS):
-                is_sel = i == cursor
+            y = HDR_H + 4
+            vis = (H - FTR_H - y) // ITEM_H
+            start = max(0, min(cursor - vis // 2, len(MENU_ITEMS) - vis))
+            for idx in range(start, min(len(MENU_ITEMS), start + vis)):
+                i = idx - start
+                label, icon = MENU_ITEMS[idx]
+                is_sel = idx == cursor
                 ry = y + i * ITEM_H
                 if is_sel:
                     d.rectangle((PAD, ry, W - PAD, ry + ITEM_H - 4), fill=C_SEL)

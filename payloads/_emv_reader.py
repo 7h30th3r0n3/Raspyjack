@@ -226,6 +226,12 @@ class EMVData:
         self.pin_try_counter = -1
         self.atc = 0
         self.last_online_atc = 0
+        self.aip_raw = b""
+        self.aip_features = []
+        self.log_sfi = 0
+        self.log_count = 0
+        self.log_format = b""
+        self.transactions = []
         self.pdol_raw = b""
         self.afl_raw = b""
         self.transactions = []
@@ -310,6 +316,27 @@ class EMVData:
         gpo_fmt1 = find_tag(tlv, TAG_GPO_FMT1)
         if gpo_fmt1 and len(gpo_fmt1) > 2 and not self.afl_raw:
             self.afl_raw = bytes(gpo_fmt1[2:])
+
+        aip = find_tag(tlv, TAG_AIP)
+        if aip and len(aip) >= 2:
+            self.aip_raw = bytes(aip)
+            feats = []
+            if aip[0] & 0x40: feats.append("SDA")
+            if aip[0] & 0x20: feats.append("DDA")
+            if aip[0] & 0x10: feats.append("CVM")
+            if aip[0] & 0x08: feats.append("TRM")
+            if aip[0] & 0x04: feats.append("ISS")
+            if aip[0] & 0x01: feats.append("CDA")
+            self.aip_features = feats
+
+        log_entry = find_tag(tlv, 0x9F4D)
+        if log_entry and len(log_entry) >= 2:
+            self.log_sfi = log_entry[0]
+            self.log_count = log_entry[1]
+
+        log_fmt = find_tag(tlv, 0x9F4F)
+        if log_fmt:
+            self.log_format = bytes(log_fmt)
 
         pin = find_tag(tlv, TAG_PIN_TRY)
         if pin:
@@ -491,8 +518,79 @@ class EMVReader:
             self.data.parse_response(resp)
         return self.data.atc
 
+    def get_log_entry(self):
+        resp = self._apdu(0x80, 0xCA, 0x9F, 0x4D)
+        if resp:
+            self.data.parse_response(resp)
+            if self.data.log_sfi == 0 and len(resp) >= 2:
+                self.data.log_sfi = resp[0]
+                self.data.log_count = resp[1]
+
+    def get_log_format(self):
+        resp = self._apdu(0x80, 0xCA, 0x9F, 0x4F)
+        if resp:
+            self.data.parse_response(resp)
+            if not self.data.log_format and len(resp) >= 2:
+                self.data.log_format = resp
+
+    def read_transaction_logs(self):
+        if self.data.log_sfi == 0 or self.data.log_count == 0:
+            return
+        fmt = self._parse_log_format(self.data.log_format)
+        if not fmt:
+            return
+        record_len = sum(f[1] for f in fmt)
+        for rec in range(1, self.data.log_count + 1):
+            resp = self._read_record(self.data.log_sfi, rec)
+            if not resp or len(resp) < record_len:
+                continue
+            tx = self._parse_log_record(resp, fmt)
+            if tx:
+                self.data.transactions.append(tx)
+
+    def _parse_log_format(self, fmt_data):
+        if not fmt_data:
+            return None
+        fields = []
+        i = 0
+        while i < len(fmt_data):
+            tag = fmt_data[i]
+            i += 1
+            if (tag & 0x1F) == 0x1F and i < len(fmt_data):
+                tag = (tag << 8) | fmt_data[i]
+                i += 1
+            if i >= len(fmt_data):
+                break
+            length = fmt_data[i]
+            i += 1
+            fields.append((tag, length))
+        return fields
+
+    def _parse_log_record(self, data, fmt):
+        tx = {}
+        pos = 0
+        for tag, length in fmt:
+            if pos + length > len(data):
+                break
+            val = data[pos:pos + length]
+            pos += length
+            if tag == 0x9F02:
+                amount = int(val.hex()) / 100.0
+                tx["amount"] = amount
+            elif tag == 0x9F1A:
+                tx["country"] = int(val.hex(), 16)
+            elif tag == 0x5F2A:
+                tx["currency"] = int(val.hex(), 16)
+            elif tag == 0x9A:
+                tx["date"] = val.hex()
+            elif tag == 0x9F21:
+                tx["time"] = val.hex()
+            elif tag == 0x9F36:
+                tx["atc"] = (val[0] << 8 | val[1]) if len(val) >= 2 else val[0]
+        return tx if tx else None
+
     def read_card(self) -> Optional[EMVData]:
-        """Full card read sequence: PPSE → SELECT → GPO → READ RECORDS.
+        """Full card read sequence: PPSE → SELECT → GPO → READ RECORDS → logs.
 
         Returns EMVData with all extracted fields, or None on failure.
         """
@@ -505,4 +603,7 @@ class EMVReader:
         self.get_pin_try_counter()
         self.get_atc()
         self.get_last_online_atc()
+        self.get_log_entry()
+        self.get_log_format()
+        self.read_transaction_logs()
         return self.data
