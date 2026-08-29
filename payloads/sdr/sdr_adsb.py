@@ -37,7 +37,7 @@ import LCD_Config
 from PIL import Image, ImageDraw
 from payloads._display_helper import ScaledDraw, scaled_font, S
 from payloads._input_helper import get_button
-from payloads.sdr._sdr_core import detect_sdr
+from payloads.sdr._sdr_core import detect_sdr, is_v4, recommended_gain
 
 PINS = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
@@ -484,28 +484,69 @@ def _map_project(lat, lon, bbox, width, height):
 # RTL-SDR ADS-B receiver thread
 # ---------------------------------------------------------------------------
 
-def _adsb_receiver():
-    """Capture 1090 MHz using rtl_adsb and decode Mode-S messages."""
+def _has_dump1090():
+    import shutil
+    return shutil.which("dump1090") is not None
+
+
+_DUMP1090_JSON = "/tmp/dump1090_rj/aircraft.json"
+
+
+def _adsb_receiver_dump1090():
+    """Capture ADS-B using dump1090 --net + JSON polling."""
+    json_dir = os.path.dirname(_DUMP1090_JSON)
+    os.makedirs(json_dir, exist_ok=True)
     while not _shutdown.is_set():
         try:
-            subprocess.run(["pkill", "-9", "rtl_adsb"], capture_output=True)
+            subprocess.run(["pkill", "-9", "dump1090"], capture_output=True)
             time.sleep(0.3)
             proc = subprocess.Popen(
-                ["rtl_adsb", "-g", "50"],
-                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                text=True, bufsize=1,
+                ["dump1090", "--net", "--gain", "-10",
+                 "--write-json", json_dir, "--write-json-every", "1", "--quiet"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
-
-            for line in proc.stdout:
-                if _shutdown.is_set():
-                    break
-                line = line.strip()
-                if not line or not line.startswith("*"):
-                    continue
-                msg_hex = line.strip("*;").strip()
-                if len(msg_hex) >= 28:
-                    _process_message(msg_hex)
-
+            while not _shutdown.is_set() and proc.poll() is None:
+                try:
+                    with open(_DUMP1090_JSON) as f:
+                        data = json.load(f)
+                    for ac in data.get("aircraft", []):
+                        icao = ac.get("hex", "").upper()
+                        if not icao:
+                            continue
+                        with lock:
+                            if icao not in aircraft:
+                                aircraft[icao] = {
+                                    "icao": icao, "callsign": "", "alt": 0,
+                                    "lat": 0, "lon": 0, "speed": 0, "heading": 0,
+                                    "seen": time.time(), "cpr_even": None,
+                                    "cpr_odd": None, "messages": 0,
+                                }
+                                db_info = _lookup_aircraft(icao)
+                                aircraft[icao].update(db_info)
+                                aircraft[icao].update({"airline": "", "airline_country": "", "departure": "", "arrival": ""})
+                            a = aircraft[icao]
+                            a["seen"] = time.time()
+                            a["messages"] = ac.get("messages", a["messages"])
+                            if ac.get("flight", "").strip():
+                                cs = ac["flight"].strip()
+                                if cs != a["callsign"]:
+                                    a["callsign"] = cs
+                                    al = _lookup_airline(cs)
+                                    a["airline"] = al["airline"]
+                                    a["airline_country"] = al["airline_country"]
+                                    _lookup_route(cs)
+                            if ac.get("alt_baro"):
+                                a["alt"] = ac["alt_baro"]
+                            if ac.get("lat"):
+                                a["lat"] = round(ac["lat"], 5)
+                                a["lon"] = round(ac["lon"], 5)
+                            if ac.get("gs"):
+                                a["speed"] = round(ac["gs"])
+                            if ac.get("track"):
+                                a["heading"] = round(ac["track"])
+                except (json.JSONDecodeError, FileNotFoundError):
+                    pass
+                _shutdown.wait(1.5)
             proc.terminate()
             try:
                 proc.wait(timeout=3)
@@ -515,6 +556,45 @@ def _adsb_receiver():
             pass
         if not _shutdown.is_set():
             time.sleep(1)
+
+
+def _adsb_receiver_rtl():
+    """Capture ADS-B using rtl_adsb (fallback)."""
+    gain = str(recommended_gain(1_090_000_000))
+    while not _shutdown.is_set():
+        try:
+            subprocess.run(["pkill", "-9", "rtl_adsb"], capture_output=True)
+            time.sleep(0.3)
+            proc = subprocess.Popen(
+                ["rtl_adsb", "-g", gain],
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                text=True, bufsize=1,
+            )
+            for line in proc.stdout:
+                if _shutdown.is_set():
+                    break
+                line = line.strip()
+                if not line or not line.startswith("*"):
+                    continue
+                msg_hex = line.strip("*;").strip()
+                if len(msg_hex) >= 28:
+                    _process_message(msg_hex)
+            proc.terminate()
+            try:
+                proc.wait(timeout=3)
+            except Exception:
+                proc.kill()
+        except Exception:
+            pass
+        if not _shutdown.is_set():
+            time.sleep(1)
+
+
+def _adsb_receiver():
+    if _has_dump1090():
+        _adsb_receiver_dump1090()
+    else:
+        _adsb_receiver_rtl()
 
 
 # ---------------------------------------------------------------------------

@@ -607,17 +607,19 @@ def _select_filter():
 def main():
     auto_mode = "--auto" in sys.argv
 
-    # Check rtl_433
-    r = subprocess.run(["which", "rtl_433"], capture_output=True)
-    if r.returncode != 0:
+    import shutil
+    if not shutil.which("rtl_433"):
+        from payloads._dep_helper import ensure_bin
         img = Image.new("RGB", (W, H), "black")
         d = ScaledDraw(img)
-        d.text((64, 40), "rtl_433 not found!", font=font, fill=(255, 60, 60), anchor="mm")
-        d.text((64, 60), "apt install rtl-433", font=font_sm, fill=(150, 150, 150), anchor="mm")
+        d.text((64, 40), "Installing rtl_433...", font=font, fill=(255, 200, 0), anchor="mm")
         LCD.LCD_ShowImage(img, 0, 0)
-        time.sleep(3)
-        GPIO.cleanup()
-        return 1
+        if not ensure_bin("rtl_433"):
+            d.text((64, 60), "Install failed!", font=font_sm, fill=(255, 60, 60), anchor="mm")
+            LCD.LCD_ShowImage(img, 0, 0)
+            time.sleep(3)
+            GPIO.cleanup()
+            return 1
 
     if auto_mode:
         filt_idx, band_idx = 0, 0

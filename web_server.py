@@ -4263,7 +4263,38 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
 
 
 
+def _gnss_writer_thread() -> None:
+    """Background thread: read gpsd and write /dev/shm/rj_gnss_live.json."""
+    gnss_path = Path("/dev/shm/rj_gnss_live.json")
+    while True:
+        try:
+            import gps
+            session = gps.gps(mode=gps.WATCH_ENABLE)
+            fix_data: dict = {}
+            while True:
+                report = session.next()
+                if report["class"] == "TPV":
+                    lat = getattr(report, "lat", 0.0)
+                    lon = getattr(report, "lon", 0.0)
+                    if lat and lon:
+                        fix_data["lat"] = round(lat, 6)
+                        fix_data["lon"] = round(lon, 6)
+                        fix_data["alt"] = round(getattr(report, "alt", 0.0), 1)
+                        fix_data["speed"] = round(getattr(report, "speed", 0.0) * 3.6, 1)
+                        fix_data["mode"] = getattr(report, "mode", 0)
+                        fix_data["time"] = getattr(report, "time", "")
+                        payload = {"ts": time.time(), "fix": fix_data, "satellites": [], "total": 0}
+                        tmp = str(gnss_path) + ".tmp"
+                        with open(tmp, "w") as f:
+                            json.dump(payload, f)
+                        os.replace(tmp, str(gnss_path))
+        except Exception:
+            time.sleep(5)
+
+
 def main() -> None:
+    threading.Thread(target=_gnss_writer_thread, daemon=True).start()
+
     if TOKEN:
         print("[WebUI] Token auth enabled")
     else:

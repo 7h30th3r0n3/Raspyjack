@@ -38,6 +38,7 @@ import LCD_Config
 from PIL import Image, ImageDraw
 from payloads._display_helper import ScaledDraw, scaled_font, S, SX, SY
 from payloads._input_helper import get_button
+from payloads.sdr._sdr_core import recommended_gain
 
 PINS = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
@@ -174,7 +175,12 @@ def _load_tle():
 
 
 def _predict_passes(tle_sats, obs_lat, obs_lon, obs_alt, hours=24):
-    from sgp4.api import jday
+    try:
+        from sgp4.api import jday
+    except ImportError:
+        from payloads._dep_helper import ensure_pip
+        ensure_pip("sgp4")
+        from sgp4.api import jday
     passes = []
     now = datetime.now(timezone.utc)
 
@@ -372,7 +378,7 @@ def _capture_thread(freq_hz, duration, raw_path, output_dir, state):
         "--source", "rtlsdr",
         "--frequency", str(freq_hz),
         "--samplerate", "1024000",
-        "--gain", "40",
+        "--gain", str(recommended_gain(freq_hz)),
         "--dc_block",
         "--timeout", str(duration),
     ]

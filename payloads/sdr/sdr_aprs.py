@@ -23,6 +23,7 @@ import time
 import json
 import signal
 import re
+import shutil
 import subprocess
 import threading
 from datetime import datetime
@@ -610,16 +611,18 @@ def _draw_stats():
 def main():
     auto_mode = "--auto" in sys.argv
 
-    r = subprocess.run(["which", "direwolf"], capture_output=True)
-    if r.returncode != 0:
+    from payloads._dep_helper import ensure_bin
+    if not shutil.which("direwolf"):
         img = Image.new("RGB", (W, H), "black")
         d = ScaledDraw(img)
-        d.text((W // 2, 40), "direwolf not found!", font=font, fill=(255, 60, 60), anchor="mm")
-        d.text((W // 2, 60), "apt install direwolf", font=font_sm, fill=(150, 150, 150), anchor="mm")
+        d.text((W // 2, 40), "Installing direwolf...", font=font, fill=(255, 200, 0), anchor="mm")
         LCD.LCD_ShowImage(img, 0, 0)
-        time.sleep(3)
-        GPIO.cleanup()
-        return 1
+        if not ensure_bin("direwolf"):
+            d.text((W // 2, 60), "Install failed!", font=font_sm, fill=(255, 60, 60), anchor="mm")
+            LCD.LCD_ShowImage(img, 0, 0)
+            time.sleep(3)
+            GPIO.cleanup()
+            return 1
 
     threading.Thread(target=_write_live, daemon=True).start()
 

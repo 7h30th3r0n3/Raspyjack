@@ -35,6 +35,7 @@ import LCD_1in44
 from PIL import Image, ImageDraw
 from payloads._display_helper import scaled_font, S, SX, SY
 from payloads._input_helper import get_button
+from payloads.sdr._sdr_core import recommended_gain
 
 PINS = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
@@ -128,7 +129,7 @@ def _start_rtl_fm():
     cmd = [
         "rtl_fm", "-M", mod_flag,
         "-f", str(_freq), "-s", str(sdr_rate),
-        "-r", str(out_rate), "-l", "0", "-g", "40",
+        "-r", str(out_rate), "-l", "0", "-g", str(recommended_gain(_freq)),
     ]
 
     try:
@@ -489,18 +490,21 @@ def main():
 
     auto_mode = "--auto" in sys.argv
 
-    r = subprocess.run(["which", "rtl_fm"], capture_output=True)
-    if r.returncode != 0:
+    import shutil
+    if not shutil.which("rtl_fm"):
+        from payloads._dep_helper import ensure_bin
         img = Image.new("RGB", (W, H), "black")
         draw = ImageDraw.Draw(img)
-        draw.text((W // 2, H // 2 - SY(5)), "rtl_fm not found!",
-                  font=font, fill=(255, 60, 60), anchor="mm")
-        draw.text((W // 2, H // 2 + SY(10)), "apt install rtl-sdr",
-                  font=font_sm, fill=(150, 150, 150), anchor="mm")
+        draw.text((W // 2, H // 2), "Installing rtl-sdr...",
+                  font=font, fill=(255, 200, 0), anchor="mm")
         LCD.LCD_ShowImage(img, 0, 0)
-        time.sleep(3)
-        GPIO.cleanup()
-        return 1
+        if not ensure_bin("rtl_fm", "rtl-sdr"):
+            draw.text((W // 2, H // 2 + SY(15)), "Install failed!",
+                      font=font_sm, fill=(255, 60, 60), anchor="mm")
+            LCD.LCD_ShowImage(img, 0, 0)
+            time.sleep(3)
+            GPIO.cleanup()
+            return 1
 
     _kill_sdr()
     time.sleep(0.3)

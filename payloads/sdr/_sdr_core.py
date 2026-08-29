@@ -16,7 +16,15 @@ def _kill_stale():
     time.sleep(0.3)
 
 
+_sdr_is_v4 = False
+
+
+def is_v4():
+    return _sdr_is_v4
+
+
 def detect_sdr():
+    global _sdr_is_v4
     try:
         import SoapySDR
         results = SoapySDR.Device.enumerate()
@@ -32,16 +40,17 @@ def detect_sdr():
         combined = r.stdout + r.stderr
         if "Found" in combined or "RTL28" in combined or "RTL-SDR" in combined or "R82" in combined or "R828" in combined:
             label = "RTL-SDR"
-            if "R828D" in combined or "Blog V4" in combined:
+            if "V4" in combined or "Blog V4" in combined or "R828D" in combined:
                 label = "RTL-SDR V4"
+                _sdr_is_v4 = True
             elif "R820T" in combined:
                 label = "RTL-SDR"
+                _sdr_is_v4 = False
             return True, label, "rtlsdr"
     except FileNotFoundError:
         pass
     except Exception:
         pass
-    # Try rtl_433 detection (works with V4 when rtl_test doesn't)
     try:
         r = subprocess.run(
             ["rtl_433", "-F", "null", "-T", "0"], capture_output=True, text=True, timeout=5,
@@ -52,7 +61,6 @@ def detect_sdr():
             return True, label, "rtlsdr"
     except Exception:
         pass
-    # Fallback: check if USB device is present even without drivers
     try:
         r = subprocess.run(["lsusb"], capture_output=True, text=True, timeout=3)
         if "0bda:2838" in r.stdout or "0bda:2832" in r.stdout:
@@ -60,6 +68,16 @@ def detect_sdr():
     except Exception:
         pass
     return False, "No SDR found", "none"
+
+
+def recommended_gain(freq_hz=100_000_000):
+    if not _sdr_is_v4:
+        if freq_hz > 800_000_000:
+            return 49
+        return 40
+    if freq_hz > 800_000_000:
+        return 20
+    return 30
 
 
 def compute_fft(iq, fft_size=256):

@@ -539,7 +539,7 @@ function initMap(){
   leafletMap=L.map('mapEl',{zoomControl:true,attributionControl:false,worldCopyJump:true,minZoom:2}).setView([48.85,2.35],3);
   _rjAddMapStyleControl(leafletMap);
   L.tileLayer('/tiles/{z}/{x}/{y}.png',{maxZoom:19}).addTo(leafletMap);
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{maxZoom:19,subdomains:'abcd'}).addTo(leafletMap);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,subdomains:'abcd'}).addTo(leafletMap);
   lMarker=L.circleMarker([0,0],{radius:6,fillColor:'#00ccff',fillOpacity:1,color:'#fff',weight:2}).addTo(leafletMap);
   lAccCircle=L.circle([0,0],{radius:50,color:'#00ccff',weight:1,opacity:.2,fillOpacity:.04,dashArray:'4,4'}).addTo(leafletMap);
   lTrail=L.polyline([],{color:'#00ccff',weight:2,opacity:.5}).addTo(leafletMap);

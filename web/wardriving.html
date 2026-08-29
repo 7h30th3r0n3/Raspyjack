@@ -244,8 +244,8 @@ const THEMES = {
     bg:'#0a0a0a', attr:'©CartoDB ©OSM',
   },
   midnight: {
-    layers: [{url:'https://tiles.stadiamaps.com/tiles/alidade_smooth_dark/{z}/{x}/{y}{r}.png', opts:{maxZoom:20, opacity:1}}],
-    bg:'#0d1117', attr:'©Stadia ©OSM',
+    layers: [{url:'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', opts:{maxZoom:20, opacity:1}}],
+    bg:'#0d1117', attr:'©CartoDB ©OSM',
   },
   satellite: {
     layers: [{url:'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', opts:{maxZoom:18, opacity:1}}],
@@ -256,7 +256,7 @@ const THEMES = {
     bg:'#1a1a2e', attr:'©OpenTopoMap ©OSM',
   },
   light: {
-    layers: [{url:'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', opts:{subdomains:'abcd', maxZoom:19, opacity:1}}],
+    layers: [{url:'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', opts:{subdomains:'abcd', maxZoom:19, opacity:1}}],
     bg:'#e0e0e0', attr:'©CartoDB ©OSM',
   },
   street: {

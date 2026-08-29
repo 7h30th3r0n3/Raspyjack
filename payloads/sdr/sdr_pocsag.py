@@ -40,6 +40,7 @@ import LCD_Config
 from PIL import Image, ImageDraw
 from payloads._display_helper import ScaledDraw, scaled_font, S, SX, SY
 from payloads._input_helper import get_button
+from payloads.sdr._sdr_core import recommended_gain
 
 PINS = {
     "UP": 6, "DOWN": 19, "LEFT": 5, "RIGHT": 26,
@@ -210,7 +211,7 @@ def _decode_thread(freq):
     global _rtl_proc, _mng_proc
 
     rtl_cmd = [
-        "rtl_fm", "-f", str(freq), "-s", "22050", "-g", "49.6", "-",
+        "rtl_fm", "-f", str(freq), "-s", "22050", "-g", str(recommended_gain(freq)), "-",
     ]
     mng_cmd = [
         "multimon-ng", "-t", "raw",
@@ -560,32 +561,35 @@ def _draw_stats(freq_idx):
 # Dependency check screen
 # ---------------------------------------------------------------------------
 def _check_deps():
-    """Check for rtl_fm and multimon-ng. Return True if both found."""
-    missing = []
-    for tool in ("rtl_fm", "multimon-ng"):
-        r = subprocess.run(["which", tool], capture_output=True)
-        if r.returncode != 0:
-            missing.append(tool)
+    """Check for rtl_fm and multimon-ng. Auto-install if missing."""
+    import shutil
+    from payloads._dep_helper import ensure_bin
+    missing = [t for t in ("rtl_fm", "multimon-ng") if not shutil.which(t)]
     if not missing:
         return True
 
     img = Image.new("RGB", (W, H), COL_BG)
     draw = ImageDraw.Draw(img)
     draw.rectangle([(0, 0), (W, SY(14))], fill=COL_HEADER)
-    draw.text((SX(2), SY(2)), "MISSING TOOLS", font=font_sm, fill=COL_ERROR)
+    draw.text((SX(2), SY(2)), "Installing deps...", font=font_sm, fill="#FFD700")
+    LCD.LCD_ShowImage(img, 0, 0)
 
-    y = SY(22)
+    pkg_map = {"rtl_fm": "rtl-sdr", "multimon-ng": "multimon-ng"}
     for tool in missing:
-        draw.text((SX(4), y), f"  {tool} not found", font=font_sm, fill=COL_ERROR)
+        ensure_bin(tool, pkg_map.get(tool, tool))
+
+    still_missing = [t for t in ("rtl_fm", "multimon-ng") if not shutil.which(t)]
+    if not still_missing:
+        return True
+
+    img = Image.new("RGB", (W, H), COL_BG)
+    draw = ImageDraw.Draw(img)
+    draw.rectangle([(0, 0), (W, SY(14))], fill=COL_HEADER)
+    draw.text((SX(2), SY(2)), "INSTALL FAILED", font=font_sm, fill=COL_ERROR)
+    y = SY(22)
+    for tool in still_missing:
+        draw.text((SX(4), y), f"  {tool}", font=font_sm, fill=COL_ERROR)
         y += SY(14)
-
-    y += SY(6)
-    draw.text((SX(4), y), "Install with:", font=font_sm, fill=COL_MUTED)
-    y += SY(12)
-    draw.text((SX(4), y), "apt install rtl-sdr", font=font_xs, fill=COL_DIM)
-    y += SY(10)
-    draw.text((SX(4), y), "apt install multimon-ng", font=font_xs, fill=COL_DIM)
-
     LCD.LCD_ShowImage(img, 0, 0)
     time.sleep(4)
     return False
