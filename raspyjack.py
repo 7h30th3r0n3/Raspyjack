@@ -665,6 +665,22 @@ def getButton():
             _log_virtual_consume("getButton", v)
             _mark_user_activity()
             return v
+        if _menu_filter_active and _HAS_EVDEV:
+            for code, char in _KEY_CHARS.items():
+                if _evdev.is_key_pressed(code):
+                    if not _prev_key_state.get(code, False):
+                        _prev_key_state[code] = True
+                        _mark_user_activity()
+                        return f"_KB_{char}"
+                else:
+                    _prev_key_state[code] = False
+            if _evdev.is_key_pressed(14):
+                if not _prev_key_state.get(14, False):
+                    _prev_key_state[14] = True
+                    _mark_user_activity()
+                    return "_KB_BACKSPACE"
+            else:
+                _prev_key_state[14] = False
         pressed = None
         for item in PINS:
             if GPIO.input(PINS[item]) == 0:
@@ -1173,9 +1189,7 @@ def _draw_toolbar():
     try:
         draw.line([(0, S(4)), (_SCR_W, S(4))], fill="#222", width=S(10))
         draw.text((0, S(-2)), f"{_temp_c:.0f} °C ", fill="WHITE", font=font)
-        if _menu_filter_active and _menu_filter:
-            draw.text((S(30), S(-2)), f"🔍 {_menu_filter}", fill="#FFAA00", font=font)
-        elif _status_text:
+        if _status_text:
             draw.text((S(30), S(-2)), _status_text, fill="WHITE", font=font)
         right_x = _SCR_W
         try:
@@ -2539,6 +2553,8 @@ def GetMenuString(inlist, duplicates=False):
                     )
             if _menu_filter_active:
                 _draw_search_bar()
+            else:
+                color.DrawBorder()
         finally:
             draw_lock.release()
 
@@ -2564,21 +2580,33 @@ def GetMenuString(inlist, duplicates=False):
                         offset = 0
             elif kb_val == "ENTER":
                 if _menu_filter_active:
-                    _menu_filter_active = False
+                    _menu_filter_reset()
             elif kb_val == "s" and _menu_filter_active and not _menu_filter:
                 _menu_filter_reset()
                 inlist = list(inlist_original)
                 total = len(inlist)
                 index = 0
                 offset = 0
-            elif not _menu_filter_active and kb_val == "s":
-                _menu_filter_activate()
             else:
                 if not _menu_filter_active:
                     _menu_filter_activate()
                 _menu_filter_add(kb_val)
                 search_source = _get_flat_payload_list()
                 inlist, total = _apply_search_filter(search_source)
+                index = 0
+                offset = 0
+            continue
+
+        if _menu_filter_active and btn == "KEY2_PIN":
+            _menu_filter_backspace()
+            if _menu_filter:
+                search_source = _get_flat_payload_list()
+                inlist, total = _apply_search_filter(search_source)
+                index = 0
+                offset = 0
+            else:
+                inlist = list(inlist_original)
+                total = len(inlist)
                 index = 0
                 offset = 0
             continue
@@ -4769,14 +4797,12 @@ def GetMenuCarousel(inlist, duplicates=False):
                         index = 0
             elif kb_val == "ENTER":
                 if _menu_filter_active:
-                    _menu_filter_active = False
+                    _menu_filter_reset()
             elif kb_val == "s" and _menu_filter_active and not _menu_filter:
                 _menu_filter_reset()
                 inlist = list(inlist_original)
                 total = len(inlist)
                 index = 0
-            elif not _menu_filter_active and kb_val == "s":
-                _menu_filter_activate()
             else:
                 if not _menu_filter_active:
                     _menu_filter_activate()
@@ -4918,14 +4944,12 @@ def GetMenuGrid(inlist, duplicates=False):
                         index = 0
             elif kb_val == "ENTER":
                 if _menu_filter_active:
-                    _menu_filter_active = False
+                    _menu_filter_reset()
             elif kb_val == "s" and _menu_filter_active and not _menu_filter:
                 _menu_filter_reset()
                 inlist = list(inlist_original)
                 total = len(inlist)
                 index = 0
-            elif not _menu_filter_active and kb_val == "s":
-                _menu_filter_activate()
             else:
                 if not _menu_filter_active:
                     _menu_filter_activate()
