@@ -707,7 +707,7 @@ def _read_upload_credentials() -> Tuple[str, str]:
 def _find_csv_files() -> List[Path]:
     """Find .csv files in the wardriving loot directory."""
     csv_files: List[Path] = []
-    for search_dir in [WARDRIVING_LOOT_DIR, Path("/root/Raspyjack/loot/WiGLE")]:
+    for search_dir in [WARDRIVING_LOOT_DIR, WARDRIVING_LOOT_DIR / "sessions", Path("/root/Raspyjack/loot/WiGLE")]:
         if search_dir.is_dir():
             csv_files.extend(sorted(search_dir.glob("*.csv")))
     return csv_files
