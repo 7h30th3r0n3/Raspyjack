@@ -237,6 +237,10 @@ if [[ "$DISPLAY_TYPE" == "CARDPUTER_320" ]]; then
   PACKAGES+=( mpv rtl-433 bluez-alsa-utils chocolate-doom freedoom xvfb xdotool )
 fi
 
+# SDR/radio tools
+PACKAGES+=( direwolf multimon-ng transmission-daemon transmission-cli )
+
+
 # Fix missing GPG keys before apt update
 step "Checking APT repository keys …"
 if ! sudo apt-get update -qq 2>&1 | grep -q "^E:"; then
@@ -266,6 +270,48 @@ if ((${#to_install[@]})); then
 else
   info "All packages already installed & up‑to‑date."
 fi
+
+# ───── 2‑a1b ▸ Kismet (from official repo) ───────────────────────
+if ! cmd kismet; then
+  step "Installing Kismet from official repo …"
+  wget -O - https://www.kismetwireless.net/repos/kismet-release.gpg.key --quiet \
+    | gpg --dearmor | sudo tee /usr/share/keyrings/kismet-archive-keyring.gpg >/dev/null
+  echo "deb [signed-by=/usr/share/keyrings/kismet-archive-keyring.gpg] https://www.kismetwireless.net/repos/apt/release/trixie trixie main" \
+    | sudo tee /etc/apt/sources.list.d/kismet.list >/dev/null
+  sudo apt-get update -qq
+  sudo apt-get install -y kismet || warn "Kismet install failed (non-critical)"
+  sudo systemctl disable kismet 2>/dev/null
+else
+  info "Kismet already installed."
+fi
+
+# ───── 2‑a1c ▸ Kismet config ────────────────────────────────────
+if ! [ -f /etc/kismet/kismet_raspyjack.conf ]; then
+  sudo mkdir -p /etc/kismet
+  cat <<KCONF | sudo tee /etc/kismet/kismet_raspyjack.conf >/dev/null
+httpd_bind_address=127.0.0.1
+httpd_port=2501
+log_prefix=/root/Raspyjack/loot/kismet/logs
+KCONF
+  info "Kismet RaspyJack config created."
+fi
+
+# ───── 2‑a1d ▸ dump1090 (compile if missing) ────────────────────
+if ! cmd dump1090; then
+  step "Building dump1090 from source …"
+  sudo apt-get install -y --no-install-recommends librtlsdr-dev libncurses-dev pkg-config 2>/dev/null
+  cd /tmp && rm -rf dump1090-build
+  git clone --depth 1 https://github.com/flightaware/dump1090 dump1090-build 2>/dev/null
+  cd dump1090-build && make BLADERF=no HACKRF=no LIMESDR=no -j$(nproc) 2>/dev/null
+  sudo cp dump1090 /usr/local/bin/ && info "dump1090 built and installed." \
+    || warn "dump1090 build failed (non-critical)"
+  cd /tmp && rm -rf dump1090-build
+else
+  info "dump1090 already installed."
+fi
+
+# ───── 2‑a1e ▸ pip packages (sgp4 for meteor) ───────────────────
+sudo pip3 install --break-system-packages sgp4 2>/dev/null || true
 
 # ───── 2‑a2 ▸ pip packages not available via APT ─────────────────
 step "Installing Python packages via pip …"

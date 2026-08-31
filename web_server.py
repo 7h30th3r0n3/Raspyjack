@@ -1404,6 +1404,7 @@ TEXT_EXTS = {
 }
 
 _CPU_SNAPSHOT = None
+_CPU_CORE_SNAPSHOTS: dict[int, tuple[int, int]] = {}
 _LOGIN_FAILS: dict[str, list[float]] = {}
 
 
@@ -1837,8 +1838,41 @@ def _read_cpu_percent() -> float:
         return 0.0
 
 
-def _read_meminfo() -> tuple[int, int]:
-    """Return used_bytes, total_bytes from /proc/meminfo."""
+def _read_cpu_per_core() -> list[float]:
+    """Per-core CPU usage from /proc/stat delta."""
+    global _CPU_CORE_SNAPSHOTS
+    result = []
+    try:
+        with open("/proc/stat", "r", encoding="utf-8") as f:
+            lines = f.readlines()
+        for line in lines:
+            if not line.startswith("cpu") or line.startswith("cpu "):
+                continue
+            label = line.split()[0]
+            core_id = int(label[3:])
+            parts = [int(x) for x in line.split()[1:]]
+            idle = parts[3] + (parts[4] if len(parts) > 4 else 0)
+            total = sum(parts)
+            prev = _CPU_CORE_SNAPSHOTS.get(core_id)
+            if prev is None:
+                _CPU_CORE_SNAPSHOTS[core_id] = (idle, total)
+                result.append(0.0)
+                continue
+            prev_idle, prev_total = prev
+            _CPU_CORE_SNAPSHOTS[core_id] = (idle, total)
+            d_total = total - prev_total
+            if d_total <= 0:
+                result.append(0.0)
+                continue
+            pct = 100.0 * (1.0 - ((idle - prev_idle) / d_total))
+            result.append(round(max(0.0, min(100.0, pct)), 1))
+    except Exception:
+        pass
+    return result
+
+
+def _read_meminfo() -> tuple[int, int, int, int]:
+    """Return (mem_used, mem_total, swap_used, swap_total) in bytes."""
     try:
         vals = {}
         with open("/proc/meminfo", "r", encoding="utf-8") as f:
@@ -1848,9 +1882,12 @@ def _read_meminfo() -> tuple[int, int]:
         total = int(vals.get("MemTotal", 0))
         available = int(vals.get("MemAvailable", vals.get("MemFree", 0)))
         used = max(0, total - available)
-        return used, total
+        swap_total = int(vals.get("SwapTotal", 0))
+        swap_free = int(vals.get("SwapFree", 0))
+        swap_used = max(0, swap_total - swap_free)
+        return used, total, swap_used, swap_total
     except Exception:
-        return 0, 0
+        return 0, 0, 0, 0
 
 
 def _read_temp_c() -> float | None:
@@ -2140,6 +2177,108 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
         super().__init__(*args, directory=str(WEB_DIR), **kwargs)
 
     @staticmethod
+    @staticmethod
+    def _install_kismet() -> bool:
+        import shutil as _sh
+        if _sh.which("kismet"):
+            return True
+        try:
+            subprocess.run(
+                ["bash", "-c",
+                 'wget -O - https://www.kismetwireless.net/repos/kismet-release.gpg.key --quiet | gpg --dearmor | tee /usr/share/keyrings/kismet-archive-keyring.gpg >/dev/null && '
+                 'echo "deb [signed-by=/usr/share/keyrings/kismet-archive-keyring.gpg] https://www.kismetwireless.net/repos/apt/release/trixie trixie main" > /etc/apt/sources.list.d/kismet.list && '
+                 'apt-get update -qq && apt-get install -y kismet'],
+                capture_output=True, timeout=300)
+            return _sh.which("kismet") is not None
+        except Exception:
+            return False
+
+    @staticmethod
+    def _ensure_kismet() -> bool:
+        try:
+            subprocess.run(["pgrep", "-x", "kismet"], capture_output=True, check=True)
+            return True
+        except subprocess.CalledProcessError:
+            pass
+        import shutil as _sh
+        if not _sh.which("kismet"):
+            if not RaspyJackHandler._install_kismet():
+                return False
+        log_dir = "/root/Raspyjack/loot/kismet/logs"
+        os.makedirs(log_dir, exist_ok=True)
+        conf_path = Path("/etc/kismet/kismet_raspyjack.conf")
+        if not conf_path.exists():
+            conf_path.parent.mkdir(parents=True, exist_ok=True)
+            conf_path.write_text(
+                f"httpd_bind_address=127.0.0.1\nhttpd_port=2501\nlog_prefix={log_dir}\n")
+        try:
+            subprocess.Popen([
+                "kismet", "--no-ncurses",
+                "--override", "raspyjack",
+                "--daemonize",
+            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            time.sleep(3)
+            return True
+        except FileNotFoundError:
+            return False
+
+    def _proxy_kismet(self, method: str) -> None:
+        if not self._ensure_kismet():
+            html = """<!DOCTYPE html><html><head><title>Kismet</title>
+<style>body{background:#05060a;color:#e2e8f0;font-family:monospace;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}
+.box{text-align:center;padding:40px;border:1px solid #1a2844;border-radius:12px;background:#0a0e1a}
+h2{color:#f43f5e;margin-bottom:12px}p{color:#94a3b8;font-size:14px}
+code{background:#1e293b;padding:4px 8px;border-radius:4px;color:#00ccff;font-size:13px}
+a{color:#00ccff;text-decoration:none}</style></head>
+<body><div class="box"><h2>Kismet not installed</h2>
+<p>Install manually:</p><p><code>sudo apt-get install kismet</code></p>
+<p style="margin-top:8px">or from <a href="https://www.kismetwireless.net/docs/readme/packages/" target="_blank">kismetwireless.net</a></p>
+<p style="margin-top:16px"><a href="/index.html">&larr; Back to WebUI</a></p></div></body></html>"""
+            self.send_response(503)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(html.encode())
+            return
+        target_path = self.path
+        if target_path.startswith("/kismet"):
+            target_path = target_path[len("/kismet"):] or "/"
+        target_url = f"http://127.0.0.1:2501{target_path}"
+        body = None
+        if method in ("POST", "PUT"):
+            length = int(self.headers.get("Content-Length", 0))
+            if length > 0:
+                body = self.rfile.read(length)
+        headers = {}
+        for h in ("Content-Type", "Accept", "Cookie", "KISMET", "Authorization"):
+            v = self.headers.get(h)
+            if v:
+                headers[h] = v
+        try:
+            req = urllib.request.Request(target_url, data=body, headers=headers, method=method)
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                resp_body = resp.read()
+                ct = resp.headers.get("Content-Type", "")
+                if "text/html" in ct and b"<head>" in resp_body:
+                    inject = b'<script>var KISMET_URI_PREFIX="/kismet/";</script>'
+                    resp_body = resp_body.replace(b"<head>", b"<head>" + inject, 1)
+                self.send_response(resp.status)
+                for key, val in resp.getheaders():
+                    if key.lower() not in ("transfer-encoding", "connection", "content-length"):
+                        self.send_header(key, val)
+                self.send_header("Content-Length", str(len(resp_body)))
+                self.end_headers()
+                self.wfile.write(resp_body)
+        except urllib.error.HTTPError as e:
+            self.send_response(e.code)
+            for key, val in e.headers.items():
+                if key.lower() not in ("transfer-encoding", "connection"):
+                    self.send_header(key, val)
+            self.end_headers()
+            self.wfile.write(e.read())
+        except Exception:
+            _json_response(self, {"error": "kismet daemon unreachable"}, status=HTTPStatus.BAD_GATEWAY)
+
+    @staticmethod
     def _ensure_transmission_daemon() -> bool:
         try:
             subprocess.run(["pgrep", "-x", "transmission-da"], capture_output=True, check=True)
@@ -2319,6 +2458,32 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
                 self._handle_gnss_live()
                 return
 
+            if parsed.path == "/api/system/location":
+                lat, lon, alt = 0.0, 0.0, 0.0
+                src = "none"
+                try:
+                    gnss_path = Path("/dev/shm/rj_gnss_live.json")
+                    if gnss_path.exists():
+                        gd = json.loads(gnss_path.read_text(encoding="utf-8"))
+                        fix = gd.get("fix", {})
+                        if fix.get("lat") and fix.get("lon"):
+                            lat, lon, alt = float(fix["lat"]), float(fix["lon"]), float(fix.get("alt", 0))
+                            src = "gnss"
+                except Exception:
+                    pass
+                if not lat:
+                    try:
+                        obs = Path("/root/Raspyjack/config/observer.json")
+                        if obs.exists():
+                            od = json.loads(obs.read_text(encoding="utf-8"))
+                            if od.get("lat") and od.get("lon"):
+                                lat, lon, alt = float(od["lat"]), float(od["lon"]), float(od.get("alt", 0))
+                                src = "manual"
+                    except Exception:
+                        pass
+                _json_response(self, {"lat": lat, "lon": lon, "alt": alt, "source": src})
+                return
+
             if parsed.path == "/api/aprs/live":
                 self._handle_aprs_live()
                 return
@@ -2376,6 +2541,26 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
             self._proxy_transmission("GET")
             return
 
+        if parsed.path == "/kismet/status":
+            running = subprocess.run(["pgrep", "-x", "kismet"], capture_output=True).returncode == 0
+            _json_response(self, {"running": running})
+            return
+
+        if parsed.path == "/kismet/stop":
+            query = parse_qs(parsed.query or "")
+            if not _auth_ok(self, query):
+                _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
+                return
+            subprocess.run(["killall", "kismet"], capture_output=True)
+            self.send_response(302)
+            self.send_header("Location", "/index.html")
+            self.end_headers()
+            return
+
+        if parsed.path.startswith("/kismet"):
+            self._proxy_kismet("GET")
+            return
+
         super().do_GET()
 
     def do_POST(self):
@@ -2388,6 +2573,9 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
             if parsed.path == "/rpc":
                 self.path = "/torrent/rpc"
             self._proxy_transmission("POST")
+            return
+        if parsed.path.startswith("/kismet"):
+            self._proxy_kismet("POST")
             return
         if parsed.path == "/api/auth/bootstrap":
             self._handle_auth_bootstrap()
@@ -2635,7 +2823,7 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
                 return
             self._handle_honeypot_start()
             return
-        if parsed.path == "/api/meteor/set_position":
+        if parsed.path in ("/api/meteor/set_position", "/api/system/set_location"):
             query = parse_qs(parsed.query or "")
             if not _auth_ok(self, query):
                 _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
@@ -3823,7 +4011,8 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
     def _handle_system_status(self) -> None:
         try:
             cpu = _read_cpu_percent()
-            mem_used, mem_total = _read_meminfo()
+            cpu_cores = _read_cpu_per_core()
+            mem_used, mem_total, swap_used, swap_total = _read_meminfo()
             du = shutil.disk_usage("/")
             temp_c = _read_temp_c()
             uptime_s = _read_uptime_seconds()
@@ -3873,8 +4062,11 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
 
             _json_response(self, {
                 "cpu_percent": round(cpu, 1),
+                "cpu_per_core": cpu_cores,
                 "mem_used": mem_used,
                 "mem_total": mem_total,
+                "swap_used": swap_used,
+                "swap_total": swap_total,
                 "disk_used": int(du.used),
                 "disk_total": int(du.total),
                 "temp_c": (round(temp_c, 1) if temp_c is not None else None),

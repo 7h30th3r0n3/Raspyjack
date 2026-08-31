@@ -419,6 +419,10 @@
         <a href="./honeypot.html" class="w-full px-3 py-2 rounded-xl text-left text-sm font-semibold border border-slate-400/20 bg-slate-800/40 text-slate-300 hover:text-white hover:bg-slate-700/50 transition block"><i class="fa-solid fa-shield-halved mr-2"></i>Honeypot SIEM</a>
         <a href="./pcap.html" class="w-full px-3 py-2 rounded-xl text-left text-sm font-semibold border border-slate-400/20 bg-slate-800/40 text-slate-300 hover:text-white hover:bg-slate-700/50 transition block"><i class="fa-solid fa-magnifying-glass-chart mr-2"></i>PCAP Analyzer</a>
         <a href="/torrent/" class="w-full px-3 py-2 rounded-xl text-left text-sm font-semibold border border-slate-400/20 bg-slate-800/40 text-slate-300 hover:text-white hover:bg-slate-700/50 transition block"><i class="fa-solid fa-download mr-2"></i>Torrent Client</a>
+        <div class="flex gap-1">
+          <a href="/kismet/" class="flex-1 px-3 py-2 rounded-xl text-left text-sm font-semibold border border-slate-400/20 bg-slate-800/40 text-slate-300 hover:text-white hover:bg-slate-700/50 transition block"><i class="fa-solid fa-wifi mr-2"></i>Kismet Scanner</a>
+          <a href="/kismet/stop" id="kismetStopBtn" class="px-2 py-2 rounded-xl text-sm font-semibold border border-red-500/30 bg-slate-800/40 text-red-400 hover:text-white hover:bg-red-900/50 transition block" title="Stop Kismet" style="display:none"><i class="fa-solid fa-stop"></i></a>
+        </div>
 
         <div class="pt-2 border-t border-slate-800/70">
           <div class="flex items-center justify-between px-3 pb-2">
@@ -817,6 +821,14 @@
       }
     });
   }
+  function checkKismet(){
+    fetch('/kismet/status').then(r=>r.json()).then(d=>{
+      var btn=document.getElementById('kismetStopBtn');
+      if(btn) btn.style.display=d.running?'block':'none';
+    }).catch(()=>{});
+  }
+  checkKismet();
+  setInterval(checkKismet,5000);
   </script>
 </body>
 </html>

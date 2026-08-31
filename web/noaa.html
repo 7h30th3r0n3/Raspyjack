@@ -109,6 +109,13 @@
   </select>
   <button id="btnCapNow" class="live-btn" onclick="captureNow()"><i class="fa-solid fa-play"></i> Capture Now</button>
   <button id="btnLive" class="live-btn" onclick="toggleLive()"><i class="fa-solid fa-tower-broadcast"></i> Live <i class="fa-solid fa-circle live-dot" id="liveDot"></i></button>
+  <select id="themeSel" onchange="if(_meteorMap)_rjSetTheme(_meteorMap,this.value)" title="Map theme" style="background:#111830;color:#888;border:1px solid #1a2844;padding:3px 6px;border-radius:5px;font-size:10px;cursor:pointer">
+    <option value="dark">🌃 Dark</option>
+    <option value="satellite">🛰️ Satellite</option>
+    <option value="topo">🏔️ Topo</option>
+    <option value="osm">🗺️ OSM</option>
+  </select>
+  <button onclick="showManualPos()" title="Set position manually" style="background:#111830;color:#888;border:1px solid #1a2844;padding:3px 8px;border-radius:5px;font-size:10px;cursor:pointer"><i class="fa-solid fa-map-pin"></i> Set Pos</button>
   <a href="./index.html"><i class="fa-solid fa-arrow-left"></i> WebUI</a>
 </div>
 
@@ -427,9 +434,7 @@ let _meteorMap=null,_meteorObsMarker=null,_meteorMapCentered=false,_meteorCircle
 
 function initMeteorMap(){
   _meteorMap=L.map('meteorMapEl',{zoomControl:true,attributionControl:false,worldCopyJump:true,minZoom:2}).setView([49,0],5);
-  _rjAddMapStyleControl(_meteorMap);
-  L.tileLayer('/tiles/{z}/{x}/{y}.png',{maxZoom:19}).addTo(_meteorMap);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,subdomains:'abcd'}).addTo(_meteorMap);
+  _rjInitMap(_meteorMap);
   _meteorObsMarker=L.circleMarker([0,0],{radius:6,fillColor:'#00ccff',fillOpacity:1,color:'#fff',weight:2}).addTo(_meteorMap);
   _meteorCircle=L.circle([0,0],{radius:2500000,color:'#00ccff',weight:1,opacity:0.1,fillOpacity:0.02,dashArray:'6,6'}).addTo(_meteorMap);
   updateMeteorMap();
@@ -491,6 +496,22 @@ function updateMeteorMap(){
     _meteorPassMarkers.push(m);
   });
 
+}
+
+function showManualPos(){
+  fetch('/api/system/location',{credentials:'include'}).then(r=>r.json()).then(d=>{
+    var lat=prompt('Latitude (current: '+(d.lat||'')+' ['+d.source+'])',d.lat||'');
+    if(lat===null)return;
+    var lon=prompt('Longitude (current: '+(d.lon||'')+')',d.lon||'');
+    if(lon===null)return;
+    fetch('/api/system/set_location',{method:'POST',credentials:'include',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({lat:parseFloat(lat),lon:parseFloat(lon)})
+    }).then(r=>r.json()).then(r=>{
+      if(r.ok)alert('Position saved: '+r.lat+', '+r.lon);
+      else alert('Error: '+(r.error||'unknown'));
+    });
+  });
 }
 </script>
 </body>

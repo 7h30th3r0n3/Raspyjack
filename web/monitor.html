@@ -160,13 +160,50 @@
       margin-bottom: 6px;
     }
     .cpu-pct {
-      font-size: 42px;
+      font-size: 32px;
       font-weight: 700;
       line-height: 1;
       transition: color 0.3s;
     }
-    .cpu-pct-unit { font-size: 18px; color: var(--dim); }
-    .cpu-bar-container { flex: 1; }
+    .cpu-pct-unit { font-size: 14px; color: var(--dim); }
+    .cpu-cores-grid {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+    .core-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 10px;
+    }
+    .core-label {
+      color: var(--dim);
+      font-weight: 700;
+      width: 14px;
+      text-align: right;
+    }
+    .core-bar-wrap { flex: 1; }
+    .core-bar-track {
+      height: 12px;
+      background: #0c1222;
+      border-radius: 2px;
+      overflow: hidden;
+      position: relative;
+    }
+    .core-bar-fill {
+      height: 100%;
+      border-radius: 2px;
+      background: linear-gradient(90deg, var(--green), var(--yellow) 60%, var(--red));
+      transition: width 0.5s cubic-bezier(0.22,1,0.36,1);
+    }
+    .core-pct {
+      font-weight: 700;
+      width: 32px;
+      text-align: right;
+      font-size: 10px;
+    }
 
     /* ── Bars (shared) ─────────────────────────────────── */
     .bar-track {
@@ -191,6 +228,10 @@
     .bar-fill.disk-gradient {
       background: linear-gradient(90deg, var(--purple), var(--magenta));
     }
+    .bar-fill.swap-gradient {
+      background: linear-gradient(90deg, var(--orange), var(--yellow));
+    }
+    .sub-title.swap-color { color: var(--orange); }
     .bar-pct-overlay {
       position: absolute;
       right: 6px;
@@ -518,18 +559,21 @@
       <i class="fa-solid fa-microchip"></i> CPU
       <span class="title-val" id="cpuCores" style="color:var(--dim)">-- core</span>
     </div>
-    <div class="cpu-hero">
-      <div>
-        <span class="cpu-pct" id="cpuPct">--</span><span class="cpu-pct-unit">%</span>
-      </div>
-      <div class="cpu-bar-container">
-        <div class="bar-track">
-          <div class="bar-fill cpu-gradient" id="cpuBar" style="width:0%"></div>
-          <div class="bar-pct-overlay" id="cpuBarPct">0%</div>
-        </div>
-      </div>
+    <div style="text-align:center;margin-bottom:4px">
+      <span class="cpu-pct" id="cpuPct">--</span><span class="cpu-pct-unit">%</span>
     </div>
-    <canvas class="spark-canvas" id="cpuSpark"></canvas>
+    <div class="cpu-cores-grid" id="cpuCoresGrid">
+      <div class="core-row"><span class="core-label">0:</span><div class="core-bar-wrap"><div class="core-bar-track"><div class="core-bar-fill" id="coreBar0" style="width:0%"></div></div></div><span class="core-pct" id="corePct0">0%</span></div>
+      <div class="core-row"><span class="core-label">1:</span><div class="core-bar-wrap"><div class="core-bar-track"><div class="core-bar-fill" id="coreBar1" style="width:0%"></div></div></div><span class="core-pct" id="corePct1">0%</span></div>
+      <div class="core-row"><span class="core-label">2:</span><div class="core-bar-wrap"><div class="core-bar-track"><div class="core-bar-fill" id="coreBar2" style="width:0%"></div></div></div><span class="core-pct" id="corePct2">0%</span></div>
+      <div class="core-row"><span class="core-label">3:</span><div class="core-bar-wrap"><div class="core-bar-track"><div class="core-bar-fill" id="coreBar3" style="width:0%"></div></div></div><span class="core-pct" id="corePct3">0%</span></div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:3px;margin-top:4px">
+      <canvas class="spark-canvas" id="coreSpark0" style="min-height:35px"></canvas>
+      <canvas class="spark-canvas" id="coreSpark1" style="min-height:35px"></canvas>
+      <canvas class="spark-canvas" id="coreSpark2" style="min-height:35px"></canvas>
+      <canvas class="spark-canvas" id="coreSpark3" style="min-height:35px"></canvas>
+    </div>
     <div class="load-row">
       <div class="load-item">
         <span class="load-label">1m</span>
@@ -565,6 +609,26 @@
         <span class="detail-val" id="memTotal">--</span>
         <span class="detail-label">Free</span>
         <span class="detail-val" id="memFree">--</span>
+      </div>
+    </div>
+    <hr class="memdisk-sep">
+    <!-- Swap -->
+    <div class="memdisk-block" id="swapBlock" style="display:none">
+      <div class="sub-title swap-color">
+        <i class="fa-solid fa-arrows-rotate"></i> Swap
+        <span class="sub-pct" id="swapPct">--%</span>
+      </div>
+      <div class="bar-track">
+        <div class="bar-fill swap-gradient" id="swapBar" style="width:0%"></div>
+        <div class="bar-pct-overlay" id="swapBarPct">0%</div>
+      </div>
+      <div class="detail-grid">
+        <span class="detail-label">Used</span>
+        <span class="detail-val" id="swapUsed">--</span>
+        <span class="detail-label">Total</span>
+        <span class="detail-val" id="swapTotal">--</span>
+        <span class="detail-label">Free</span>
+        <span class="detail-val" id="swapFree">--</span>
       </div>
     </div>
     <hr class="memdisk-sep">
@@ -648,6 +712,7 @@
 
   /* ── State ───────────────────────────────────────────── */
   var cpuHistory = [];
+  var coreHistories = [[], [], [], []];
   var tempHistory = [];
   var MAX_HIST = 60;
   var sortKey = 'cpu';
@@ -938,7 +1003,7 @@
 
   /* ── Update UI ───────────────────────────────────────── */
   function update(data) {
-    // CPU
+    // CPU aggregate
     var cpu = data.cpu_percent != null ? data.cpu_percent : 0;
     cpuHistory.push(cpu);
     if (cpuHistory.length > MAX_HIST) cpuHistory.shift();
@@ -947,23 +1012,29 @@
     cpuPctEl.textContent = cpu.toFixed(1);
     cpuPctEl.style.color = cpuBarColor(cpu);
 
-    var cpuBar = document.getElementById('cpuBar');
-    cpuBar.style.width = Math.min(cpu, 100) + '%';
-    document.getElementById('cpuBarPct').textContent = cpu.toFixed(0) + '%';
-
-    drawSparkline(
-      document.getElementById('cpuSpark'),
-      cpuHistory,
-      '#00ccff',
-      'rgba(0,204,255,0.3)',
-      'rgba(0,204,255,0.02)'
-    );
-
-    // Cores
-    if (cpuCores === null) {
-      cpuCores = 1; // Pi Zero default
-    }
+    // Per-core bars + sparklines
+    var cores = data.cpu_per_core || [];
+    var coreColors = ['#00ccff', '#00ff88', '#ffaa00', '#e879f9'];
+    var coreFillTop = ['rgba(0,204,255,0.25)', 'rgba(0,255,136,0.25)', 'rgba(255,170,0,0.25)', 'rgba(232,121,249,0.25)'];
+    var coreFillBot = ['rgba(0,204,255,0.02)', 'rgba(0,255,136,0.02)', 'rgba(255,170,0,0.02)', 'rgba(232,121,249,0.02)'];
+    cpuCores = cores.length || 1;
     document.getElementById('cpuCores').textContent = cpuCores + (cpuCores === 1 ? ' core' : ' cores');
+    for (var ci = 0; ci < 4; ci++) {
+      var cv = ci < cores.length ? cores[ci] : 0;
+      var barEl = document.getElementById('coreBar' + ci);
+      var pctEl = document.getElementById('corePct' + ci);
+      if (barEl) barEl.style.width = Math.min(cv, 100) + '%';
+      if (pctEl) {
+        pctEl.textContent = cv.toFixed(0) + '%';
+        pctEl.style.color = cpuBarColor(cv);
+      }
+      coreHistories[ci].push(cv);
+      if (coreHistories[ci].length > MAX_HIST) coreHistories[ci].shift();
+      var sparkEl = document.getElementById('coreSpark' + ci);
+      if (sparkEl) {
+        drawSparkline(sparkEl, coreHistories[ci], coreColors[ci], coreFillTop[ci], coreFillBot[ci]);
+      }
+    }
 
     // Load
     var load = data.load || [0, 0, 0];
@@ -988,6 +1059,25 @@
     document.getElementById('memUsed').textContent = fmtBytes(data.mem_used);
     document.getElementById('memTotal').textContent = fmtBytes(data.mem_total);
     document.getElementById('memFree').textContent = fmtBytes(memFree);
+
+    // Swap
+    var swapTotal = data.swap_total || 0;
+    var swapUsed = data.swap_used || 0;
+    var swapBlock = document.getElementById('swapBlock');
+    if (swapTotal > 0) {
+      swapBlock.style.display = '';
+      var swapPct = (swapUsed / swapTotal * 100);
+      var swapFreeB = swapTotal - swapUsed;
+      document.getElementById('swapPct').textContent = swapPct.toFixed(1) + '%';
+      document.getElementById('swapPct').style.color = swapPct > 50 ? 'var(--red)' : 'var(--orange)';
+      document.getElementById('swapBar').style.width = Math.min(swapPct, 100) + '%';
+      document.getElementById('swapBarPct').textContent = swapPct.toFixed(0) + '%';
+      document.getElementById('swapUsed').textContent = fmtBytes(swapUsed);
+      document.getElementById('swapTotal').textContent = fmtBytes(swapTotal);
+      document.getElementById('swapFree').textContent = fmtBytes(swapFreeB);
+    } else {
+      swapBlock.style.display = 'none';
+    }
 
     // Disk
     var diskPct = data.disk_total > 0 ? (data.disk_used / data.disk_total * 100) : 0;

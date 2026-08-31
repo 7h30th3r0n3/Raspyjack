@@ -145,6 +145,13 @@
   <span id="coords" onclick="navigator.clipboard.writeText(this.textContent)">--</span>
   <div class="spacer"></div>
   <button id="btnLive" onclick="toggleLive()" style="background:#111830;color:#888;border:1px solid #1a2844;padding:3px 10px;border-radius:5px;font-size:10px;cursor:pointer;display:flex;align-items:center;gap:4px"><i class="fa-solid fa-tower-broadcast"></i> Live <i id="liveDot" style="display:none;color:var(--green);font-size:6px;animation:blink 1.5s infinite" class="fa-solid fa-circle"></i></button>
+  <select id="themeSel" onchange="_rjSetTheme(leafletMap,this.value)" title="Map theme" style="background:#111830;color:#888;border:1px solid #1a2844;padding:3px 6px;border-radius:5px;font-size:10px;cursor:pointer">
+    <option value="dark">🌃 Dark</option>
+    <option value="satellite">🛰️ Satellite</option>
+    <option value="topo">🏔️ Topo</option>
+    <option value="osm">🗺️ OSM</option>
+  </select>
+  <button onclick="showManualPos()" title="Set position manually" style="background:#111830;color:#888;border:1px solid #1a2844;padding:3px 8px;border-radius:5px;font-size:10px;cursor:pointer"><i class="fa-solid fa-map-pin"></i> Set Pos</button>
   <a href="./index.html"><i class="fa-solid fa-arrow-left"></i> WebUI</a>
 </div>
 
@@ -537,9 +544,7 @@ function spRow(l,v,c){return`<div class="sp-row"><span class="sp-lbl">${l}</span
 let leafletMap=null,lMarker=null,lAccCircle=null,lTrail=null,lSatMarkers=[],lSatLines=[],lSatTrails={},_mapCentered=false;
 function initMap(){
   leafletMap=L.map('mapEl',{zoomControl:true,attributionControl:false,worldCopyJump:true,minZoom:2}).setView([48.85,2.35],3);
-  _rjAddMapStyleControl(leafletMap);
-  L.tileLayer('/tiles/{z}/{x}/{y}.png',{maxZoom:19}).addTo(leafletMap);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,subdomains:'abcd'}).addTo(leafletMap);
+  _rjInitMap(leafletMap);
   lMarker=L.circleMarker([0,0],{radius:6,fillColor:'#00ccff',fillOpacity:1,color:'#fff',weight:2}).addTo(leafletMap);
   lAccCircle=L.circle([0,0],{radius:50,color:'#00ccff',weight:1,opacity:.2,fillOpacity:.04,dashArray:'4,4'}).addTo(leafletMap);
   lTrail=L.polyline([],{color:'#00ccff',weight:2,opacity:.5}).addTo(leafletMap);
@@ -1060,6 +1065,23 @@ fetch('/api/gnss/live',{credentials:'include'}).then(r=>r.json()).then(d=>{
     poll();pollIv=setInterval(poll,2000);
   }
 }).catch(()=>{});
+
+function showManualPos(){
+  fetch('/api/system/location',{credentials:'include'}).then(r=>r.json()).then(d=>{
+    var curLat=d.lat||'';var curLon=d.lon||'';var src=d.source||'none';
+    var lat=prompt('Latitude (current: '+curLat+' ['+src+'])',curLat);
+    if(lat===null)return;
+    var lon=prompt('Longitude (current: '+curLon+')',curLon);
+    if(lon===null)return;
+    fetch('/api/system/set_location',{method:'POST',credentials:'include',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({lat:parseFloat(lat),lon:parseFloat(lon)})
+    }).then(r=>r.json()).then(r=>{
+      if(r.ok)alert('Position saved: '+r.lat+', '+r.lon);
+      else alert('Error: '+(r.error||'unknown'));
+    });
+  });
+}
 </script>
 </body>
 </html>

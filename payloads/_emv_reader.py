@@ -123,17 +123,23 @@ PDOL_VALUES = {
     0x9F59: bytes([0xC8, 0x80, 0x00]),
     0x9F5A: bytes([0x00]),
     0x9F58: bytes([0x01]),
-    0x9F66: bytes([0x79, 0x00, 0x40, 0x80]),
-    0x9F40: bytes([0x79, 0x00, 0x40, 0x80]),
-    0x9F02: bytes([0x00, 0x00, 0x00, 0x10, 0x00, 0x00]),
+    0x9F66: bytes([0xA6, 0x00, 0x00, 0x00]),
+    0x9F6C: bytes([0x00, 0x01]),
+    0x9F40: bytes([0xF0, 0x00, 0xF0, 0xA0, 0x01]),
+    0x9F02: bytes([0x00, 0x00, 0x00, 0x00, 0x01, 0x00]),
     0x9F03: bytes([0x00, 0x00, 0x00, 0x00, 0x00, 0x00]),
-    0x9F1A: bytes([0x01, 0x24]),
-    0x5F2A: bytes([0x01, 0x24]),
+    0x9F1A: bytes([0x02, 0x50]),
+    0x5F2A: bytes([0x09, 0x78]),
     0x95:   bytes([0x00, 0x00, 0x00, 0x00, 0x00]),
-    0x9A:   bytes([0x19, 0x01, 0x01]),
+    0x9A:   bytes([0x26, 0x08, 0x31]),
     0x9C:   bytes([0x00]),
     0x98:   bytes(20),
     0x9F37: bytes([0x82, 0x3D, 0xDE, 0x7A]),
+    0x9F35: bytes([0x22]),
+    0x9F33: bytes([0xE0, 0xF0, 0xC8]),
+    0x9F34: bytes([0x00, 0x00, 0x00]),
+    0x9F09: bytes([0x00, 0x02]),
+    0x9F41: bytes([0x00, 0x00, 0x00, 0x01]),
 }
 
 
@@ -420,14 +426,20 @@ class EMVReader:
             return resp[:-2] if len(resp) > 2 else None
         return resp
 
-    def select_ppse(self) -> bool:
-        """Select PPSE (2PAY.SYS.DDF01)."""
+    def select_ppse(self) -> list:
+        """Select PPSE (2PAY.SYS.DDF01). Returns list of AIDs found."""
         ppse = b"2PAY.SYS.DDF01"
         resp = self._apdu(0x00, 0xA4, 0x04, 0x00, ppse)
         if resp is None:
-            return False
+            return []
+        tlv = parse_tlv(resp)
+        aids = find_all_tags(tlv, TAG_AID)
         self.data.parse_response(resp)
-        return bool(self.data.aid)
+        if aids:
+            return [bytes(a) for a in aids]
+        if self.data.aid:
+            return [self.data.aid]
+        return []
 
     def select_application(self, aid: bytes = None) -> bool:
         """Select EMV application by AID."""
@@ -496,6 +508,8 @@ class EMVReader:
 
     def _read_record(self, sfi: int, record: int) -> Optional[bytes]:
         sfi_param = (sfi << 3) | 0x04
+        if sfi_param > 255 or record > 255:
+            return None
         return self._apdu(0x00, 0xB2, record, sfi_param)
 
     def get_pin_try_counter(self) -> int:
@@ -534,7 +548,7 @@ class EMVReader:
                 self.data.log_format = resp
 
     def read_transaction_logs(self):
-        if self.data.log_sfi == 0 or self.data.log_count == 0:
+        if self.data.log_sfi == 0 or self.data.log_count == 0 or self.data.log_sfi > 30:
             return
         fmt = self._parse_log_format(self.data.log_format)
         if not fmt:
@@ -589,21 +603,54 @@ class EMVReader:
                 tx["atc"] = (val[0] << 8 | val[1]) if len(val) >= 2 else val[0]
         return tx if tx else None
 
+    _FALLBACK_AIDS = [
+        bytes.fromhex("A0000000031010"),
+        bytes.fromhex("A0000000041010"),
+        bytes.fromhex("A0000000421010"),
+        bytes.fromhex("A00000002501"),
+        bytes.fromhex("A0000000651010"),
+        bytes.fromhex("A0000001523010"),
+        bytes.fromhex("A0000000032010"),
+        bytes.fromhex("A0000000422010"),
+        bytes.fromhex("A0000000042010"),
+    ]
+
     def read_card(self) -> Optional[EMVData]:
         """Full card read sequence: PPSE → SELECT → GPO → READ RECORDS → logs.
 
+        Tries all AIDs from PPSE, then falls back to direct AID probing.
         Returns EMVData with all extracted fields, or None on failure.
         """
-        if not self.select_ppse():
+        aids = self.select_ppse()
+        if not aids:
+            for fallback_aid in self._FALLBACK_AIDS:
+                if self.select_application(fallback_aid):
+                    aids = [fallback_aid]
+                    break
+        if not aids:
             return None
-        if not self.select_application():
-            return None
-        self.get_processing_options()
-        self.read_records()
-        self.get_pin_try_counter()
-        self.get_atc()
-        self.get_last_online_atc()
-        self.get_log_entry()
-        self.get_log_format()
-        self.read_transaction_logs()
-        return self.data
+
+        best = None
+        for aid in aids:
+            self.data = EMVData()
+            try:
+                if not self.select_application(aid):
+                    continue
+                self.get_processing_options()
+                self.read_records()
+            except Exception as e:
+                import traceback, sys
+                traceback.print_exc(file=sys.stderr)
+                continue
+            if self.data.pan:
+                self.get_pin_try_counter()
+                self.get_atc()
+                self.get_last_online_atc()
+                self.get_log_entry()
+                self.get_log_format()
+                self.read_transaction_logs()
+                return self.data
+            if best is None:
+                best = self.data
+
+        return best

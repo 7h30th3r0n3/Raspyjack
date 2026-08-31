@@ -672,8 +672,8 @@ def main():
 
     _detect_alsa_dev()
 
-    if not _check_ram(180):
-        _draw_error("Not enough RAM", "Need 180MB free")
+    if not _check_ram(120):
+        _draw_error("Not enough RAM", "Need 120MB free")
         time.sleep(3)
         GPIO.cleanup()
         return 1

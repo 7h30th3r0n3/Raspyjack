@@ -100,14 +100,11 @@
   <select id="sessionSel"><option value="">-- Sessions --</option></select>
   <button onclick="loadSession()"><i class="fa-solid fa-rotate"></i></button>
   <button id="btnLive" onclick="toggleLive()"><i class="fa-solid fa-tower-broadcast"></i> Live <i id="liveDot" class="fa-solid fa-circle"></i></button>
-  <select id="themeSel" onchange="setTheme(this.value)" title="Map theme">
-    <option value="hacker">&#127761; Stealth</option>
-    <option value="dark">&#127747; Dark</option>
-    <option value="midnight">&#128309; Midnight</option>
-    <option value="satellite">&#128752; Satellite</option>
-    <option value="topo">&#127956; Topo</option>
-    <option value="light">&#9728; Light</option>
-    <option value="street">&#128506; Street</option>
+  <select id="themeSel" onchange="_rjSetTheme(map,this.value)" title="Map theme">
+    <option value="dark">🌃 Dark</option>
+    <option value="satellite">🛰️ Satellite</option>
+    <option value="topo">🏔️ Topo</option>
+    <option value="osm">🗺️ OSM</option>
   </select>
   <div class="spacer"></div>
   <a href="./index.html"><i class="fa-solid fa-arrow-left"></i> WebUI</a>
@@ -142,60 +139,7 @@ L.Icon.Default.prototype.options.imagePath = './vendor/leaflet/';
 
 const map = L.map('map', {zoomControl:false, preferCanvas:true}).setView([46.8,2.3],6);
 L.control.zoom({position:'topright'}).addTo(map);
-if(window._rjAddMapStyleControl)_rjAddMapStyleControl(map,'bottomright');
-
-const THEMES = {
-  hacker: {
-    layers: [
-      {url:'/tiles/{z}/{x}/{y}.png', opts:{subdomains:'abcd', maxZoom:19, opacity:0.85}},
-      {url:'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', opts:{maxZoom:19, opacity:0.12}},
-    ],
-    bg:'#060a10', attr:'&copy;CartoDB &copy;OSM',
-  },
-  dark: {
-    layers: [{url:'/tiles/{z}/{x}/{y}.png', opts:{subdomains:'abcd', maxZoom:19, opacity:1}}],
-    bg:'#0a0a0a', attr:'&copy;CartoDB &copy;OSM',
-  },
-  midnight: {
-    layers: [{url:'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', opts:{maxZoom:20, opacity:1}}],
-    bg:'#0d1117', attr:'&copy;CartoDB &copy;OSM',
-  },
-  satellite: {
-    layers: [{url:'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', opts:{maxZoom:18, opacity:1}}],
-    bg:'#0a0a0a', attr:'&copy;Esri',
-  },
-  topo: {
-    layers: [{url:'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', opts:{maxZoom:17, opacity:0.85}}],
-    bg:'#1a1a2e', attr:'&copy;OpenTopoMap &copy;OSM',
-  },
-  light: {
-    layers: [{url:'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', opts:{subdomains:'abcd', maxZoom:19, opacity:1}}],
-    bg:'#e0e0e0', attr:'&copy;CartoDB &copy;OSM',
-  },
-  street: {
-    layers: [{url:'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', opts:{maxZoom:19, opacity:1}}],
-    bg:'#f0f0f0', attr:'&copy;OSM',
-  },
-};
-
-let tileLayers = [];
-function setTheme(name) {
-  const theme = THEMES[name];
-  if (!theme) return;
-  tileLayers.forEach(l => map.removeLayer(l));
-  tileLayers = [];
-  theme.layers.forEach(l => {
-    const tl = L.tileLayer(l.url, {...l.opts, attribution:theme.attr});
-    tl.addTo(map);
-    tileLayers.push(tl);
-  });
-  document.getElementById('map').style.background = theme.bg;
-  try { localStorage.setItem('adsb_theme', name); } catch(e){}
-}
-
-const savedTheme = (function(){ try{return localStorage.getItem('adsb_theme')}catch(e){return null} })() || 'hacker';
-document.getElementById('themeSel').value = savedTheme;
-setTheme(savedTheme);
+_rjInitMap(map);
 
 let markers = {};
 let trails = {};
