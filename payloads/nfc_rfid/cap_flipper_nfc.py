@@ -880,41 +880,57 @@ def _mode_emv():
 
 def _build_emv_lines(emv_data):
     lines = []
+    app_display = emv_data.app_name or emv_data.app_label or ""
+    aid_display = emv_data.aid_name or ""
+    if app_display or aid_display:
+        header = " / ".join(filter(None, [app_display, aid_display]))
+        lines.append(("", header, C_CYAN))
+
     if emv_data.pan:
         pan = emv_data.pan
         formatted = ' '.join(pan[i:i+4] for i in range(0, len(pan), 4))
         lines.append(("PAN", formatted, C_GREEN))
+
     if emv_data.exp_year or emv_data.exp_month:
-        lines.append(("Expires", "%02X/%02X" % (emv_data.exp_month, emv_data.exp_year), C_ORANGE))
+        lines.append(("Exp", "%02X/20%02X" % (emv_data.exp_month, emv_data.exp_year), C_ORANGE))
     if emv_data.effective_year or emv_data.effective_month:
-        lines.append(("Effective", "%02X/%02X" % (emv_data.effective_month, emv_data.effective_year), C_WHITE))
-    if emv_data.cardholder_name:
+        lines.append(("Since", "%02X/20%02X" % (emv_data.effective_month, emv_data.effective_year), C_WHITE))
+
+    if emv_data.cardholder_name and emv_data.cardholder_name.strip(" /"):
         lines.append(("Name", emv_data.cardholder_name, C_WHITE))
-    app_display = emv_data.app_name or emv_data.app_label
-    if app_display:
-        lines.append(("App", app_display, C_CYAN))
-    if emv_data.aid:
-        aid_label = emv_data.aid_name if emv_data.aid_name else emv_data.aid.hex().upper()
-        lines.append(("AID", aid_label, C_CYAN))
+
+    from payloads._emv_reader import country_name, currency_name
     if emv_data.country_code:
-        from payloads._emv_reader import country_name
         lines.append(("Country", country_name(emv_data.country_code), C_WHITE))
     if emv_data.currency_code:
-        from payloads._emv_reader import currency_name
         lines.append(("Currency", currency_name(emv_data.currency_code), C_WHITE))
     if emv_data.language:
-        lines.append(("Language", emv_data.language, C_WHITE))
-    if emv_data.atc:
-        lines.append(("ATC", str(emv_data.atc), C_ORANGE))
-    if emv_data.last_online_atc:
-        lines.append(("Last online", str(emv_data.last_online_atc), C_DIM))
+        lines.append(("Lang", emv_data.language[:2].upper(), C_WHITE))
+
+    if emv_data.cvm_text:
+        lines.append(("Auth", emv_data.cvm_text, C_ORANGE))
+    if emv_data.auc_text:
+        lines.append(("Usage", emv_data.auc_text, C_WHITE))
+    if emv_data.service_code:
+        svc = emv_data.service_code
+        svc_parts = []
+        if len(svc) >= 1:
+            svc_parts.append({"1": "Intl", "2": "Intl+chip", "5": "National", "6": "National+chip"}.get(svc[0], ""))
+        if len(svc) >= 3:
+            svc_parts.append({"0": "Normal", "2": "Contact issuer", "4": "Contact issuer"}.get(svc[2], ""))
+        svc_desc = ", ".join(filter(None, svc_parts))
+        if svc_desc:
+            lines.append(("Service", svc_desc, C_DIM))
+
     if emv_data.pin_try_counter >= 0:
         lines.append(("PIN tries", str(emv_data.pin_try_counter), C_RED))
-    if emv_data.aip_features:
-        lines.append(("Caps", " ".join(emv_data.aip_features), C_DIM))
+    if emv_data.atc:
+        lines.append(("Tx count", str(emv_data.atc), C_DIM))
+    if emv_data.pan_seq:
+        lines.append(("Card #", emv_data.pan_seq, C_DIM))
+
     if emv_data.transactions:
         lines.append(("", "--- Transactions ---", C_CYAN))
-        from payloads._emv_reader import country_name, currency_name
         for tx in emv_data.transactions[:10]:
             amt = tx.get("amount", 0)
             cur = currency_name(tx.get("currency", 0))
@@ -928,8 +944,9 @@ def _build_emv_lines(emv_data):
             lines.append(("", "%.2f %s  %s" % (amt, cur, ctry), C_GREEN))
             if date:
                 lines.append(("", "  %s %s" % (date, tm), C_DIM))
+
     if not lines:
-        lines.append(("Info", "No EMV data found", C_DIM))
+        lines.append(("", "No EMV data found", C_DIM))
     return lines
 
 

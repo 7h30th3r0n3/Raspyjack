@@ -242,6 +242,11 @@ class EMVData:
         self.afl_raw = b""
         self.transactions = []
         self.raw_tlv = []
+        self.track2_raw = b""
+        self.service_code = ""
+        self.pan_seq = ""
+        self.cvm_text = ""
+        self.auc_text = ""
 
     def _decode_pan(self, raw: bytes) -> str:
         """Decode BCD-encoded PAN."""
@@ -282,8 +287,49 @@ class EMVData:
 
         for track_tag in (TAG_TRACK2_EQUIV, TAG_TRACK2_DATA):
             track = find_tag(tlv, track_tag)
-            if track and not self.pan:
-                self._parse_track2(track)
+            if track:
+                self.track2_raw = bytes(track)
+                t2hex = self._decode_pan(track)
+                if 'D' not in t2hex.upper() and 'd' not in t2hex:
+                    t2hex = bytes(track).hex().upper()
+                sep = t2hex.upper().find('D')
+                if sep > 0 and len(t2hex) > sep + 7:
+                    self.service_code = t2hex[sep+5:sep+8]
+                if not self.pan:
+                    self._parse_track2(track)
+
+        pan_seq = find_tag(tlv, 0x5F34)
+        if pan_seq and len(pan_seq) >= 1:
+            self.pan_seq = "%02X" % pan_seq[0]
+
+        cvm_raw = find_tag(tlv, 0x8E)
+        if cvm_raw and len(cvm_raw) >= 10:
+            rules = []
+            for ci in range(8, len(cvm_raw), 2):
+                if ci + 1 >= len(cvm_raw):
+                    break
+                method = cvm_raw[ci] & 0x3F
+                cond = cvm_raw[ci + 1]
+                method_names = {0x01: "Plaintext PIN", 0x02: "Online PIN",
+                                0x03: "Plaintext PIN+Sig", 0x04: "Encrypted PIN",
+                                0x05: "Encrypted PIN+Sig", 0x1E: "Signature",
+                                0x1F: "No CVM", 0x20: "Mobile (CDCVM)"}
+                name = method_names.get(method, "")
+                if name:
+                    rules.append(name)
+            self.cvm_text = " + ".join(rules) if rules else ""
+
+        auc_raw = find_tag(tlv, 0x9F07)
+        if auc_raw and len(auc_raw) >= 2:
+            usages = []
+            if auc_raw[0] & 0x80: usages.append("Cash")
+            if auc_raw[0] & 0x40: usages.append("Intl Cash")
+            if auc_raw[0] & 0x20: usages.append("Goods")
+            if auc_raw[0] & 0x10: usages.append("Intl Goods")
+            if auc_raw[0] & 0x08: usages.append("Services")
+            if auc_raw[0] & 0x04: usages.append("Intl Services")
+            if auc_raw[0] & 0x02: usages.append("ATM")
+            self.auc_text = ", ".join(usages) if usages else ""
 
         exp = find_tag(tlv, TAG_EXP_DATE)
         if exp and len(exp) >= 2:
