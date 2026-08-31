@@ -945,6 +945,11 @@ def _build_emv_lines(emv_data):
             if date:
                 lines.append(("", "  %s %s" % (date, tm), C_DIM))
 
+    if emv_data.track2_raw:
+        t2 = emv_data.track2_raw.hex().upper()
+        lines.append(("", "--- Track2 ---", C_CYAN))
+        lines.append(("", t2, C_DIM))
+
     if not lines:
         lines.append(("", "No EMV data found", C_DIM))
     return lines
@@ -952,19 +957,29 @@ def _build_emv_lines(emv_data):
 
 def _save_emv(emv_data):
     os.makedirs(LOOT_DIR, exist_ok=True)
+    from payloads._emv_reader import country_name, currency_name
     data = {
         "pan": emv_data.pan,
-        "expires": "%02X/%02X" % (emv_data.exp_month, emv_data.exp_year) if emv_data.exp_year else "",
-        "effective": "%02X/%02X" % (emv_data.effective_month, emv_data.effective_year) if emv_data.effective_year else "",
-        "name": emv_data.cardholder_name,
-        "app": emv_data.app_label,
+        "pan_seq": emv_data.pan_seq,
+        "expires": "%02X/20%02X" % (emv_data.exp_month, emv_data.exp_year) if emv_data.exp_year else "",
+        "effective": "%02X/20%02X" % (emv_data.effective_month, emv_data.effective_year) if emv_data.effective_year else "",
+        "name": emv_data.cardholder_name if emv_data.cardholder_name.strip(" /") else "",
+        "app": emv_data.app_name or emv_data.app_label,
         "aid": emv_data.aid.hex().upper() if emv_data.aid else "",
         "network": emv_data.aid_name,
-        "country": "%04X" % emv_data.country_code if emv_data.country_code else "",
-        "currency": "%04X" % emv_data.currency_code if emv_data.currency_code else "",
+        "country": country_name(emv_data.country_code) if emv_data.country_code else "",
+        "country_code": "%04X" % emv_data.country_code if emv_data.country_code else "",
+        "currency": currency_name(emv_data.currency_code) if emv_data.currency_code else "",
+        "currency_code": "%04X" % emv_data.currency_code if emv_data.currency_code else "",
         "language": emv_data.language,
+        "auth": emv_data.cvm_text,
+        "usage": emv_data.auc_text,
+        "service_code": emv_data.service_code,
+        "track2": emv_data.track2_raw.hex().upper() if emv_data.track2_raw else "",
         "atc": emv_data.atc,
         "pin_tries": emv_data.pin_try_counter,
+        "aip": " ".join(emv_data.aip_features) if emv_data.aip_features else "",
+        "transactions": emv_data.transactions[:10] if emv_data.transactions else [],
     }
     last4 = emv_data.pan[-4:] if emv_data.pan else "0000"
     fname = f"EMV_{last4}_{int(time.time())}.json"
