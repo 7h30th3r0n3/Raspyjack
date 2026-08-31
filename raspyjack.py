@@ -2563,10 +2563,14 @@ def GetMenuString(inlist, duplicates=False):
                         index = 0
                         offset = 0
             elif kb_val == "ENTER":
-                if _menu_filter_active and inlist:
-                    pass
-                else:
-                    continue
+                if _menu_filter_active:
+                    _menu_filter_active = False
+            elif kb_val == "s" and _menu_filter_active and not _menu_filter:
+                _menu_filter_reset()
+                inlist = list(inlist_original)
+                total = len(inlist)
+                index = 0
+                offset = 0
             elif not _menu_filter_active and kb_val == "s":
                 _menu_filter_activate()
             else:
@@ -4764,7 +4768,13 @@ def GetMenuCarousel(inlist, duplicates=False):
                         total = len(inlist)
                         index = 0
             elif kb_val == "ENTER":
-                pass
+                if _menu_filter_active:
+                    _menu_filter_active = False
+            elif kb_val == "s" and _menu_filter_active and not _menu_filter:
+                _menu_filter_reset()
+                inlist = list(inlist_original)
+                total = len(inlist)
+                index = 0
             elif not _menu_filter_active and kb_val == "s":
                 _menu_filter_activate()
             else:
@@ -4907,7 +4917,13 @@ def GetMenuGrid(inlist, duplicates=False):
                         total = len(inlist)
                         index = 0
             elif kb_val == "ENTER":
-                pass
+                if _menu_filter_active:
+                    _menu_filter_active = False
+            elif kb_val == "s" and _menu_filter_active and not _menu_filter:
+                _menu_filter_reset()
+                inlist = list(inlist_original)
+                total = len(inlist)
+                index = 0
             elif not _menu_filter_active and kb_val == "s":
                 _menu_filter_activate()
             else:
