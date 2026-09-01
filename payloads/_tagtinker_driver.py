@@ -614,13 +614,7 @@ class TagTinker:
 
     # -- Low-level IR --
 
-    def _send_bursts(self, burst_gap_us):
-        if not burst_gap_us:
-            return
-        args = [IR_CARRIER_BIN] + [str(int(v)) for v in burst_gap_us]
-        subprocess.run(args, capture_output=True, timeout=30)
-
-    def _send_frame_pp4(self, data):
+    def _encode_frame_pp4(self, data):
         bg = []
         for byte in data:
             current = byte
@@ -631,9 +625,9 @@ class TagTinker:
                 bg.append(PP4_GAPS_US[symbol])
         bg.append(PP4_BURST_US)
         bg.append(1000)
-        self._send_bursts(bg)
+        return bg
 
-    def _send_frame_pp16(self, data):
+    def _encode_frame_pp16(self, data):
         bg = []
         for byte in data:
             current = byte
@@ -644,7 +638,7 @@ class TagTinker:
                 bg.append(PP16_GAPS_US[symbol])
         bg.append(PP16_BURST_US)
         bg.append(1000)
-        self._send_bursts(bg)
+        return bg
 
     def transmit(self, data, repeats=1, gap_delay=2, pp16=None, progress_cb=None):
         if pp16 is None:
@@ -655,21 +649,20 @@ class TagTinker:
 
         if pp16:
             tx_data = bytes([0x00, 0x00, 0x00, 0x40]) + bytes(data)
+            bg = self._encode_frame_pp16(tx_data)
         else:
             tx_data = bytes(data)
+            bg = self._encode_frame_pp4(tx_data)
 
-        for rep in range(repeats + 1):
-            if self._stop_requested:
-                return False
-            if pp16:
-                self._send_frame_pp16(tx_data)
-            else:
-                self._send_frame_pp4(tx_data)
-            if progress_cb and rep % 5 == 0:
-                progress_cb(rep, repeats)
-            if rep < repeats:
-                time.sleep(gap_delay * 0.0005)
-        return True
+        gap_us = int(gap_delay * 500)
+        pairs_str = " ".join(str(int(v)) for v in bg)
+        proc = subprocess.run(
+            [IR_CARRIER_BIN, "--stdin", str(repeats), str(gap_us)],
+            input=pairs_str, capture_output=True, text=True, timeout=60,
+        )
+        if progress_cb:
+            progress_cb(repeats, repeats)
+        return proc.returncode == 0
 
     # -- High-level commands --
 

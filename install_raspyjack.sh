@@ -271,16 +271,26 @@ else
   info "All packages already installed & up‑to‑date."
 fi
 
-# ───── 2‑a1b ▸ Kismet (from official repo) ───────────────────────
+# ───── 2‑a1b ▸ Kismet (from official repo, optional) ─────────────
 if ! cmd kismet; then
-  step "Installing Kismet from official repo …"
+  # Detect Debian codename for correct repo
+  DEBIAN_CODENAME=$(lsb_release -cs 2>/dev/null || grep VERSION_CODENAME /etc/os-release 2>/dev/null | cut -d= -f2)
+  DEBIAN_CODENAME=${DEBIAN_CODENAME:-trixie}
+  # Kismet repos exist for: bookworm, trixie
+  case "$DEBIAN_CODENAME" in
+    bookworm|trixie) ;;
+    *) DEBIAN_CODENAME="trixie" ;; # fallback
+  esac
+  step "Installing Kismet from official repo ($DEBIAN_CODENAME) …"
   wget -O - https://www.kismetwireless.net/repos/kismet-release.gpg.key --quiet \
-    | gpg --dearmor | sudo tee /usr/share/keyrings/kismet-archive-keyring.gpg >/dev/null
-  echo "deb [signed-by=/usr/share/keyrings/kismet-archive-keyring.gpg] https://www.kismetwireless.net/repos/apt/release/trixie trixie main" \
+    | gpg --dearmor | sudo tee /usr/share/keyrings/kismet-archive-keyring.gpg >/dev/null 2>&1
+  echo "deb [signed-by=/usr/share/keyrings/kismet-archive-keyring.gpg] https://www.kismetwireless.net/repos/apt/release/$DEBIAN_CODENAME $DEBIAN_CODENAME main" \
     | sudo tee /etc/apt/sources.list.d/kismet.list >/dev/null
-  sudo apt-get update -qq
-  sudo apt-get install -y kismet || warn "Kismet install failed (non-critical)"
+  sudo apt-get update -qq 2>/dev/null
+  sudo apt-get install -y --no-install-recommends kismet 2>/dev/null \
+    || warn "Kismet install failed (non-critical, can install later from WebUI)"
   sudo systemctl disable kismet 2>/dev/null
+  sudo systemctl stop kismet 2>/dev/null
 else
   info "Kismet already installed."
 fi
