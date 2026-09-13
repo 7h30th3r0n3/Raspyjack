@@ -116,11 +116,17 @@ def _get_changed_files():
 
     changes = []
     for line in out.splitlines():
-        parts = line.split("\t", 1)
-        if len(parts) == 2:
-            status = parts[0][0]  # A, M, D, R, C
-            filepath = parts[1]
-            changes.append((status, filepath))
+        parts = line.split("\t")          # renames have 3 fields: Rxxx old new
+        if len(parts) < 2:
+            continue
+        status = parts[0][0]              # A, M, D, R, C
+        if status in ("R", "C") and len(parts) >= 3:
+            old_path, new_path = parts[1], parts[2]
+            if status == "R":             # rename: old file goes away, new arrives
+                changes.append(("D", old_path))
+            changes.append(("A", new_path))   # copy (C): old stays, only new added
+        else:
+            changes.append((status, parts[1]))
     return changes
 
 
