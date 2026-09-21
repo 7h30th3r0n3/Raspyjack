@@ -161,7 +161,7 @@ Examples commonly used:
 
 ## 🚀 Install
 
-From a fresh Raspberry Pi OS Lite install:
+From a fresh Raspberry Pi OS Lite 64 bit install:
 
 ```bash
 sudo apt update
