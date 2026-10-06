@@ -14,7 +14,13 @@ from subprocess import STDOUT, check_output
 from PIL import Image, ImageDraw, ImageFont, ImageColor, ImageSequence, ImageOps
 import LCD_Config
 import LCD_1in44
-import RPi.GPIO as GPIO
+# GPIO backend: real RPi.GPIO on Raspberry Pi, evdev-based shim on CardputerZero
+# (CARDPUTER_320) where RPi.GPIO is absent. The APPLaunch wrapper exports
+# RJ_GPIO_BACKEND=evdev; display-type detection is a fallback.
+if os.environ.get("RJ_GPIO_BACKEND") == "evdev" or getattr(LCD_1in44, "_DISPLAY_TYPE", "") == "CARDPUTER_320":
+    import gpio_shim as GPIO
+else:
+    import RPi.GPIO as GPIO
 import socket
 import ipaddress
 import signal

@@ -5,3 +5,4 @@ payloads/sdr/data/aircraft.db
 
 # Offline map tiles (downloaded via scripts/download_tiles.sh)
 web/vendor/tiles/
+dist/

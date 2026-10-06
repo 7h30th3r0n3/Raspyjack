@@ -1,0 +1,9 @@
+#!/bin/bash
+set -e
+
+# Pre-seed wireshark/tshark so the pulled-in dependency installs non-interactively.
+if command -v debconf-set-selections >/dev/null 2>&1; then
+  echo "wireshark-common wireshark-common/install-setuid boolean true" | debconf-set-selections || true
+fi
+
+exit 0

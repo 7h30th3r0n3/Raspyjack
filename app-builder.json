@@ -1,0 +1,33 @@
+{
+  "package_name": "raspyjack",
+  "version": "0.dev",
+  "app_name": "RaspyJack",
+  "bin_name": "run-raspyjack",
+  "description": "RaspyJack offensive security toolkit for CardputerZero",
+
+  "store": {
+    "summary": "Full-featured offensive security & pentest toolkit for CardputerZero",
+    "description": "RaspyJack turns the CardputerZero into a pocket red-team platform: network recon (nmap, ARP/MITM, Responder), Wi-Fi attacks (deauth, evil twin, beacon/probe, wardriving), NFC/RFID, Sub-GHz CC1101 (spectrum, chat, replay), BLE, SDR, DNS spoofing and a full web UI. Needs an external USB Wi-Fi adapter for monitor-mode attacks.",
+    "categories": ["Security", "Radio & Comms"],
+    "screenshots": [
+      "screenshots/01-menu.png",
+      "screenshots/02-scan.png",
+      "screenshots/03-wifi.png",
+      "screenshots/04-subghz.png"
+    ],
+    "icon": "scripts/packaging/icon.png",
+    "license": "MIT",
+    "source_repo": "https://github.com/7h30th3r0n3/RaspyJack",
+    "author": { "github": "7h30th3r0n3", "display_name": "7h30th3r0n3" },
+    "share_code": "RJAK",
+    "permissions": {
+      "camera": true,
+      "microphone": true,
+      "imu": true,
+      "network": true,
+      "additional_hardware": true,
+      "background_service": false,
+      "external_display": false
+    }
+  }
+}
