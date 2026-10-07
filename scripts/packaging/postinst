@@ -97,12 +97,13 @@ if [ -f /etc/asound.conf ] \
   rm -f /etc/asound.conf
 fi
 
-# Low-RAM device (~352 MB): add a persistent swapfile so the full always-on
-# stack (PipeWire + APPLaunch + RaspyJack + WebUI + Caddy) does not OOM/crash.
+# Low-RAM device (~352 MB): add a persistent 4 GB swapfile so the full always-on
+# stack (PipeWire + APPLaunch + RaspyJack + WebUI + Caddy) plus source builds
+# (proxmark3) do not OOM/crash.
 SWAPFILE=/var/swap.raspyjack
 CUR_SWAP=$(free -m 2>/dev/null | awk '/Swap/{print $2}'); CUR_SWAP=${CUR_SWAP:-0}
-if [ ! -f "$SWAPFILE" ] && [ "$CUR_SWAP" -lt 1024 ]; then
-  if fallocate -l 1536M "$SWAPFILE" 2>/dev/null || dd if=/dev/zero of="$SWAPFILE" bs=1M count=1536 2>/dev/null; then
+if [ ! -f "$SWAPFILE" ] && [ "$CUR_SWAP" -lt 4096 ]; then
+  if fallocate -l 4096M "$SWAPFILE" 2>/dev/null || dd if=/dev/zero of="$SWAPFILE" bs=1M count=4096 2>/dev/null; then
     chmod 600 "$SWAPFILE"
     mkswap "$SWAPFILE" >/dev/null 2>&1 && swapon "$SWAPFILE" 2>/dev/null || true
     grep -q "$SWAPFILE" /etc/fstab 2>/dev/null || echo "$SWAPFILE none swap sw 0 0" >> /etc/fstab
