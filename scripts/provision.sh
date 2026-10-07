@@ -151,10 +151,19 @@ do_ragnar() {
 
 do_proxmark3() {
   command -v pm3 >/dev/null 2>&1 && { set_step proxmark3 done "already installed"; return 0; }
-  set_step proxmark3 installing "compiling (~15 min)"
-  if $LOWPRIO bash "$APP_DIR/scripts/install_proxmark3.sh" 2>/dev/null && command -v pm3 >/dev/null 2>&1; then
-    set_step proxmark3 done ""; return 0
+  # This device has very little RAM (~352 MB); a parallel proxmark3 build OOMs
+  # and crashes it. Build SINGLE-THREADED (taskset -c 0 => nproc=1 => make -j1)
+  # with a temporary 2 GB swapfile, low priority. Slow but does not crash.
+  set_step proxmark3 installing "compiling single-thread (long, ~30-60 min)"
+  local SW=/var/swap.rjprov rc=1
+  if [ ! -f "$SW" ]; then
+    ( fallocate -l 2G "$SW" 2>/dev/null || dd if=/dev/zero of="$SW" bs=1M count=2048 2>/dev/null ) \
+      && chmod 600 "$SW" && mkswap "$SW" >/dev/null 2>&1 && swapon "$SW" 2>/dev/null
   fi
+  nice -n 19 ionice -c3 taskset -c 0 bash "$APP_DIR/scripts/install_proxmark3.sh" 2>/dev/null
+  command -v pm3 >/dev/null 2>&1 && rc=0
+  swapoff "$SW" 2>/dev/null || true; rm -f "$SW" 2>/dev/null || true
+  if [ "$rc" -eq 0 ]; then set_step proxmark3 done ""; return 0; fi
   set_step proxmark3 failed "build failed (will retry)"; return 1
 }
 
