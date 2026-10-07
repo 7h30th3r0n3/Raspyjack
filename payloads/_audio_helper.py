@@ -50,12 +50,23 @@ def get_audio_card():
     return _card
 
 
+def _pipewire_running():
+    """True when a PipeWire/PulseAudio server is up (CardputerZero uses PipeWire)."""
+    try:
+        return subprocess.run(["pactl", "info"], capture_output=True,
+                              timeout=3).returncode == 0
+    except Exception:
+        return False
+
+
 def get_alsa_dev():
-    """Return playback ALSA device string like 'plughw:0,0'. Cached."""
+    """Return the playback device string. On a PipeWire system (CardputerZero)
+    return 'default' so audio routes through PipeWire via pipewire-alsa; a direct
+    plughw grab conflicts with PipeWire and plays silently. Cached."""
     global _dev
     if _dev is not None:
         return _dev
-    _dev = f"plughw:{get_audio_card()},0"
+    _dev = "default" if _pipewire_running() else f"plughw:{get_audio_card()},0"
     return _dev
 
 

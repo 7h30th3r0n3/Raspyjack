@@ -88,16 +88,13 @@ if [ ! -f "$FA_TARGET" ]; then
   rm -f "$FA_TARGET.tmp"
 fi
 
-# ALSA default card → the ES8388/ES8389 codec (so audio payloads + WebUI get
-# the right output device, matching install_raspyjack.sh).
-if command -v aplay >/dev/null 2>&1 && [ ! -f /etc/asound.conf ]; then
-  ES_CARD=$(aplay -l 2>/dev/null | grep -iE 'ES838[89]|ES8390' | head -1 | sed 's/card //' | cut -d: -f1)
-  if [ -n "$ES_CARD" ]; then
-    cat > /etc/asound.conf <<ASND
-defaults.pcm.card $ES_CARD
-defaults.ctl.card $ES_CARD
-ASND
-  fi
+# The CardputerZero OS uses PipeWire; pipewire-alsa (a dependency) makes the
+# ALSA 'default' device route through PipeWire. A forced raw-card /etc/asound.conf
+# overrides that and plays silently, so remove the placeholder older RaspyJack
+# packages wrote (only when it is exactly that — no user customization).
+if [ -f /etc/asound.conf ] \
+   && [ "$(grep -cvE '^[[:space:]]*(#|$|defaults\.(pcm|ctl)\.card )' /etc/asound.conf 2>/dev/null)" = "0" ]; then
+  rm -f /etc/asound.conf
 fi
 
 # pip extras not packaged as apt dependencies (match install_raspyjack.sh).
