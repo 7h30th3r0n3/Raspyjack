@@ -140,13 +140,15 @@ do_pyboy() {
 }
 
 do_ragnar() {
-  if PYTHONPATH="$APP_DIR/vendor/ragnar" python3 -c 'import headlessRagnar' >/dev/null 2>&1; then
-    set_step ragnar done "already installed"; return 0
-  fi
+  # Use a marker, NOT `import headlessRagnar` as the idempotency check: that
+  # import pulls Flask/pandas/scapy and is very slow/CPU-heavy on this device,
+  # so it must not run on every provisioning pass.
+  local marker=/var/lib/raspyjack/ragnar.done
+  [ -f "$marker" ] && { set_step ragnar done "already installed"; return 0; }
   set_step ragnar installing "apt + pip deps"
   if $LOWPRIO bash "$APP_DIR/scripts/install_ragnar_port.sh" 2>/dev/null \
-     && PYTHONPATH="$APP_DIR/vendor/ragnar" python3 -c 'import headlessRagnar' >/dev/null 2>&1; then
-    set_step ragnar done ""; return 0
+     && python3 -c 'import flask_socketio, sqlalchemy, paramiko' >/dev/null 2>&1; then
+    touch "$marker"; set_step ragnar done ""; return 0
   fi
   set_step ragnar failed "deps failed (will retry)"; return 1
 }
