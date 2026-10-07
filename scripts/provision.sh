@@ -32,7 +32,12 @@ TOOLS=(
   "pyboy|PyBoy (Game Boy)"
   "ragnar|Ragnar"
   "dump1090|dump1090 (ADS-B)"
+  "content|Screensavers + content"
 )
+
+# Where the heavy static content is fetched from (kept out of the .deb so the
+# install stays light on the 352 MB device).
+CONTENT_REPO="${RJ_CONTENT_REPO:-https://github.com/7h30th3r0n3/Raspyjack}"
 
 # Keep the device usable during source builds: low CPU/IO priority and pin to
 # 2 cores (taskset also caps nproc, so `make -j$(nproc)` builds stay at 2 jobs).
@@ -149,6 +154,27 @@ do_ragnar() {
     set_step ragnar done ""; return 0
   fi
   set_step ragnar failed "deps failed (will retry)"; return 1
+}
+
+do_content() {
+  local dst="$APP_DIR"
+  if [ "$(ls "$dst/img/screensaver"/*.gif 2>/dev/null | wc -l)" -gt 3 ]; then
+    set_step content done "already present"; return 0
+  fi
+  set_step content installing "downloading (sparse git)"
+  local tmp; tmp=$(mktemp -d)
+  if $LOWPRIO git clone --depth 1 --filter=blob:none --sparse "$CONTENT_REPO" "$tmp" 2>/dev/null \
+     && ( cd "$tmp" && git sparse-checkout set img/screensaver loot/DeadDrop/files 2>/dev/null ); then
+    mkdir -p "$dst/img/screensaver" "$dst/loot/DeadDrop/files"
+    cp -rn "$tmp/img/screensaver/." "$dst/img/screensaver/" 2>/dev/null || true
+    cp -rn "$tmp/loot/DeadDrop/files/." "$dst/loot/DeadDrop/files/" 2>/dev/null || true
+    rm -rf "$tmp"
+    if [ "$(ls "$dst/img/screensaver"/*.gif 2>/dev/null | wc -l)" -gt 3 ]; then
+      set_step content done ""; return 0
+    fi
+  fi
+  rm -rf "$tmp"
+  set_step content failed "download failed (will retry)"; return 1
 }
 
 do_proxmark3() {
