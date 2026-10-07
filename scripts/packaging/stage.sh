@@ -60,15 +60,24 @@ set -euo pipefail
 
 APP_DIR="/usr/share/APPLaunch/apps/raspyjack"
 LEGACY_DIR="/root/Raspyjack"
-RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp}/raspyjack"
+WORK_DIR="/tmp/raspyjack"
+
+# Audio: RaspyJack runs privileged (sudo) for raw sockets etc., but PipeWire
+# runs in the LAUNCHING user's session. Point audio at that session's
+# PipeWire/Pulse so sound works from the root process (ALSA 'default',
+# ffmpeg -f pulse, ffplay/SDL, paplay all follow these).
+USER_XDG="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+export XDG_RUNTIME_DIR="$USER_XDG"
+export PULSE_SERVER="unix:${USER_XDG}/pulse/native"
+export SDL_AUDIODRIVER="pulse"
 
 # Many payloads hardcode /root/Raspyjack; expose the installed tree there.
 if [ ! -e "$LEGACY_DIR" ] && [ "$(id -u)" -eq 0 ]; then
   ln -s "$APP_DIR" "$LEGACY_DIR" 2>/dev/null || true
 fi
 
-mkdir -p "$RUNTIME_DIR"
-cd "$RUNTIME_DIR"
+mkdir -p "$WORK_DIR"
+cd "$WORK_DIR"
 
 export PYTHONUNBUFFERED=1
 export PYTHONPATH="$APP_DIR${PYTHONPATH:+:$PYTHONPATH}"
@@ -77,10 +86,13 @@ export RJ_GPIO_BACKEND="${RJ_GPIO_BACKEND:-evdev}"
 # RaspyJack needs root: raw sockets, monitor mode, iptables, nmap SYN scans,
 # NFC/SPI/GPIO. The CardputerZero factory OS grants the default user passwordless
 # sudo (same assumption as the cardputerzero-pwnagotchi store app); 'sudo' is a
-# declared package dependency. Pass env explicitly to survive sudo env_reset.
+# declared package dependency. Pass env explicitly to survive sudo env_reset,
+# including the PipeWire session vars so audio reaches the user's sound server.
 if [ "$(id -u)" -ne 0 ]; then
   exec sudo RJ_GPIO_BACKEND="$RJ_GPIO_BACKEND" PYTHONUNBUFFERED=1 \
-       PYTHONPATH="$APP_DIR" python3 "$APP_DIR/raspyjack.py"
+       PYTHONPATH="$APP_DIR" XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" \
+       PULSE_SERVER="$PULSE_SERVER" SDL_AUDIODRIVER="$SDL_AUDIODRIVER" \
+       python3 "$APP_DIR/raspyjack.py"
 fi
 exec python3 "$APP_DIR/raspyjack.py"
 EOF
