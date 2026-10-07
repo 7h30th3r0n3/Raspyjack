@@ -42,6 +42,16 @@ for g in img/screensaver/smileyglitch.gif img/screensaver/youhavebeenhacked.gif;
   fi
 done
 
+# RPi.GPIO shim: shadow the system python3-rpi.gpio (which uses the lgpio
+# backend and crashes on CardputerZero) with the evdev-based gpio_shim. Several
+# modules (LCD_1in44, LCD_Config, input_events) do a top-level `import RPi.GPIO`
+# that bypasses raspyjack.py's conditional, so shadowing is the reliable fix.
+# PYTHONPATH=$APP_DIR (exported by the wrapper) makes this win over the system
+# package. Generated only in the staged tree → never ships to a Raspberry Pi.
+mkdir -p "$APP_ROOT/RPi"
+: > "$APP_ROOT/RPi/__init__.py"
+echo "from gpio_shim import *" > "$APP_ROOT/RPi/GPIO.py"
+
 # APPLaunch entry point. APPLaunch execs this directly (fork+execlp, no shell),
 # so all environment/privilege setup must live inside the script.
 cat > "$APP_ROOT/run-raspyjack.sh" <<'EOF'
