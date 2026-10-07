@@ -24,12 +24,14 @@ exec >>"$LOG" 2>&1
 echo "==== provision run $(date -Is) ===="
 
 # Ordered list: name|label (fast tools first, proxmark3 last ~15 min)
+# proxmark3 is NOT auto-provisioned: its ~30-60 min single-thread source build
+# saturates this small device. Install it on demand instead with
+# scripts/install_proxmark3.sh (the pm3_* payloads use /opt/proxmark3).
 TOOLS=(
   "kismet|Kismet (WiFi)"
   "pyboy|PyBoy (Game Boy)"
   "ragnar|Ragnar"
   "dump1090|dump1090 (ADS-B)"
-  "proxmark3|Proxmark3 (NFC)"
 )
 
 # Keep the device usable during source builds: low CPU/IO priority and pin to
