@@ -783,7 +783,17 @@ def _play_video(video_id, title, playlist_mode=False, start_offset=0):
     # Find the right ALSA audio device (prefer ES8388/ES8389, skip HDMI)
     has_audio = False
     alsa_dev = "default"
+    # On a PipeWire system (CardputerZero) route through PipeWire: a direct
+    # plughw grab conflicts with PipeWire and plays silently.
     try:
+        if subprocess.run(["pactl", "info"], capture_output=True, timeout=3).returncode == 0:
+            alsa_dev = "default"
+            has_audio = True
+    except Exception:
+        pass
+    try:
+        if has_audio:
+            raise StopIteration
         r = subprocess.run(["aplay", "-l"], capture_output=True, text=True, timeout=3)
         for line in r.stdout.split('\n'):
             if 'card' in line.lower() and ':' in line:
