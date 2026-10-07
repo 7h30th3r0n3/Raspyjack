@@ -11,8 +11,8 @@
     "categories": ["Security", "Radio & Comms"],
     "screenshots": [
       "screenshots/01-menu.png",
-      "screenshots/02-scan.png",
-      "screenshots/03-wifi.png",
+      "screenshots/02-nfc.png",
+      "screenshots/03-cctv.png",
       "screenshots/04-subghz.png"
     ],
     "icon": "scripts/packaging/icon.png",
