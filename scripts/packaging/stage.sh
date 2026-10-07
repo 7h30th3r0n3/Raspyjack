@@ -18,14 +18,19 @@ fi
 # Prune heavy, non-runtime artifacts to keep the .deb under the store web-portal
 # ceiling (~80 MB). loot/wordlists is kept on purpose (used by cracking payloads);
 # only the big DeadDrop demo blobs are dropped.
-#   *.psd  ~21 MB  Photoshop sources (vendor/ragnar) — useless at runtime
-# The screensaver GIF gallery and DeadDrop demo content ARE shipped (full app);
-# this makes the .deb too big for the web portal, so submit via czdev.
+# Keep the .deb small so it installs reliably on the 352 MB device (a 154 MB
+# unpack OOM-crashes it). The heavy static content is fetched after install by
+# the provisioning step instead:
+#   img/screensaver     ~111 MB  GIF gallery (one default kept below)
+#   loot/DeadDrop/files  ~29 MB  demo payload content
+#   *.psd                ~21 MB  Photoshop sources (useless at runtime)
 rm -rf \
   "$APP_ROOT/.github" \
   "$APP_ROOT/github-img" \
   "$APP_ROOT/docs" \
   "$APP_ROOT/dist" \
+  "$APP_ROOT/img/screensaver" \
+  "$APP_ROOT/loot/DeadDrop/files" \
   "$APP_ROOT/scripts/packaging/icon.png"
 find "$APP_ROOT" -name '*.psd' -delete 2>/dev/null || true
 find "$APP_ROOT" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
