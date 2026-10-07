@@ -187,6 +187,29 @@ def _build_cardputer_frame(src_image):
     return ImageOps.fit(src_image, (CARDPUTER_FRAME_WIDTH, CARDPUTER_FRAME_HEIGHT), _resampling_lanczos)
 
 
+_HDMI_MIRROR_PID_FILE = "/tmp/raspyjack_hdmi_mirror.pid"
+_hdmi_active_cache = [0.0, False]
+
+
+def _hdmi_mirror_active():
+    """True only while the HDMI mirror payload is running. Lets the display loop
+    skip the costly HDMI frame encode (JPEG + raw RGB) when HDMI isn't in use —
+    a big CPU saving on the CardputerZero. Cached ~1s."""
+    now = time.monotonic()
+    if now - _hdmi_active_cache[0] < 1.0:
+        return _hdmi_active_cache[1]
+    active = False
+    try:
+        with open(_HDMI_MIRROR_PID_FILE) as _f:
+            os.kill(int(_f.read().strip()), 0)
+        active = True
+    except Exception:
+        active = False
+    _hdmi_active_cache[0] = now
+    _hdmi_active_cache[1] = active
+    return active
+
+
 def _save_cardputer_frame(src_image):
     if not CARDPUTER_FRAME_ENABLED:
         return
@@ -315,7 +338,8 @@ def _display_loop():
                 if FRAME_MIRROR_ENABLED or CARDPUTER_FRAME_ENABLED:
                     now = time.monotonic()
                     save_webui_frame = FRAME_MIRROR_ENABLED and (now - last_frame_save) >= FRAME_MIRROR_INTERVAL
-                    save_cardputer_frame = CARDPUTER_FRAME_ENABLED and (now - last_cardputer_frame_save) >= CARDPUTER_FRAME_INTERVAL
+                    save_cardputer_frame = (CARDPUTER_FRAME_ENABLED and _hdmi_mirror_active()
+                                            and (now - last_cardputer_frame_save) >= CARDPUTER_FRAME_INTERVAL)
                     if save_webui_frame or save_cardputer_frame:
                         mirror_image = image.copy()
                     if save_webui_frame:
