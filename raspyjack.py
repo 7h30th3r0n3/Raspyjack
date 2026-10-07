@@ -5145,10 +5145,12 @@ LCD.LCD_ShowImage(image, 0, 0)
 # Create draw objects BEFORE main() so color functions can use them
 image = Image.new("RGB", (LCD.width, LCD.height), "WHITE")
 draw = ImageDraw.Draw(image)
-# Menu/UI text: slightly larger (14px) on the widescreen CardputerZero panel so
-# item letters read a bit wider; unchanged (S(10)) on the other displays.
-_menu_font_size = 14 if getattr(LCD, "display_type", "") == "CARDPUTER_320" else S(10)
-text_font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', _menu_font_size)
+# Menu/UI text: use the Bold face on the CardputerZero panel so item letters
+# read wider/heavier at the normal size; other displays keep the regular face.
+_menu_font_file = ('DejaVuSans-Bold.ttf'
+                   if getattr(LCD, "display_type", "") == "CARDPUTER_320"
+                   else 'DejaVuSans.ttf')
+text_font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/' + _menu_font_file, S(10))
 icon_font = ImageFont.truetype('/usr/share/fonts/truetype/fontawesome/fa-solid-900.ttf', S(13))
 font = text_font  # Keep backward compatibility
 
