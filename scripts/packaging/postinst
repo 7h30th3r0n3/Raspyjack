@@ -194,6 +194,11 @@ if [ ! -f "$CERT" ] || [ ! -f "$KEY" ] || [ "$(find "$CERT" -mtime +365 2>/dev/n
   chown caddy:caddy "$KEY" "$CERT" 2>/dev/null || true
 fi
 cat > /etc/caddy/Caddyfile <<CADDY
+{
+    # only bind :443 — :80 is often taken (apache2 from php) and the default
+    # HTTP->HTTPS redirect would make caddy fail to start.
+    auto_https disable_redirects
+}
 :443 {
     tls $CERT $KEY
     @ws path /ws*
