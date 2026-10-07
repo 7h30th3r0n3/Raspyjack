@@ -92,9 +92,10 @@ fi
 # ALSA 'default' device route through PipeWire. A forced raw-card /etc/asound.conf
 # overrides that and plays silently, so remove the placeholder older RaspyJack
 # packages wrote (only when it is exactly that — no user customization).
-if [ -f /etc/asound.conf ] \
-   && [ "$(grep -cvE '^[[:space:]]*(#|$|defaults\.(pcm|ctl)\.card )' /etc/asound.conf 2>/dev/null)" = "0" ]; then
-  rm -f /etc/asound.conf
+ASOUND_CONF="/etc/asound.conf"
+if [ -f "$ASOUND_CONF" ] \
+   && [ "$(grep -cvE '^[[:space:]]*(#|$|defaults\.(pcm|ctl)\.card )' "$ASOUND_CONF" 2>/dev/null)" = "0" ]; then
+  rm -f "$ASOUND_CONF"
 fi
 
 # apache2 is useless for RaspyJack (it uses php-cli's `php -S`, and even frees
