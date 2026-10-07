@@ -88,12 +88,57 @@ if [ ! -f "$FA_TARGET" ]; then
   rm -f "$FA_TARGET.tmp"
 fi
 
-# pip extras not packaged as apt dependencies.
-if command -v pip3 >/dev/null 2>&1; then
-  pip3 install --break-system-packages --quiet smbus2 bleak gpsd-py3 2>/dev/null || true
+# ALSA default card → the ES8388/ES8389 codec (so audio payloads + WebUI get
+# the right output device, matching install_raspyjack.sh).
+if command -v aplay >/dev/null 2>&1 && [ ! -f /etc/asound.conf ]; then
+  ES_CARD=$(aplay -l 2>/dev/null | grep -iE 'ES838[89]|ES8390' | head -1 | sed 's/card //' | cut -d: -f1)
+  if [ -n "$ES_CARD" ]; then
+    cat > /etc/asound.conf <<ASND
+defaults.pcm.card $ES_CARD
+defaults.ctl.card $ES_CARD
+ASND
+  fi
 fi
 
-if command -v systemctl >/dev/null 2>&1; then
+# pip extras not packaged as apt dependencies (match install_raspyjack.sh).
+if command -v pip3 >/dev/null 2>&1; then
+  pip3 install --break-system-packages --quiet smbus2 bleak gpsd-py3 sgp4 2>/dev/null || true
+  # opencv is not in apt — video_player / camera / object_detector need it.
+  pip3 install --break-system-packages --quiet opencv-python-headless 2>/dev/null || true
+  # The apt yt-dlp lags badly; YouTube breaks it (SABR). Pull the latest so the
+  # youtube / TV / video payloads work. --ignore-installed avoids the apt copy.
+  pip3 install --break-system-packages --quiet --upgrade --ignore-installed yt-dlp 2>/dev/null || true
+fi
+
+# First-boot provisioning of the heavy payload tools (kismet, dump1090, pyboy,
+# ragnar, proxmark3) — too large / source-built to be plain apt Depends. The
+# unit is created HERE (never shipped inside the .deb, so the store's
+# systemd-root file check doesn't apply) and runs provision.sh after the
+# network is up; it is idempotent and self-disables once everything installs.
+PROV="$APP_DIR/scripts/provision.sh"
+if command -v systemctl >/dev/null 2>&1 && [ -f "$PROV" ]; then
+  chmod +x "$PROV" 2>/dev/null || true
+  cat > /etc/systemd/system/raspyjack-provision.service <<UNIT
+[Unit]
+Description=RaspyJack first-boot provisioning (heavy payload tools)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=$PROV
+TimeoutStartSec=3600
+Nice=10
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+  systemctl daemon-reload >/dev/null 2>&1 || true
+  systemctl enable raspyjack-provision.service >/dev/null 2>&1 || true
+  if [ ! -f /var/lib/raspyjack/provision.done ]; then
+    systemctl start --no-block raspyjack-provision.service >/dev/null 2>&1 || true
+  fi
+elif command -v systemctl >/dev/null 2>&1; then
   systemctl daemon-reload >/dev/null 2>&1 || true
 fi
 
