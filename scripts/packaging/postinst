@@ -97,6 +97,14 @@ if [ -f /etc/asound.conf ] \
   rm -f /etc/asound.conf
 fi
 
+# apache2 is useless for RaspyJack (it uses php-cli's `php -S`, and even frees
+# :80 for its own captive portal) but gets pulled in on upgrades from the old
+# `php` dependency. Disable it to free RAM and port 80 (Caddy/HTTPS needs it).
+if command -v systemctl >/dev/null 2>&1 && dpkg -s apache2 >/dev/null 2>&1; then
+  systemctl disable --now apache2 >/dev/null 2>&1 || true
+  systemctl mask apache2 >/dev/null 2>&1 || true
+fi
+
 # Low-RAM device (~352 MB): add a persistent 4 GB swapfile so the full always-on
 # stack (PipeWire + APPLaunch + RaspyJack + WebUI + Caddy) plus source builds
 # (proxmark3) do not OOM/crash.
