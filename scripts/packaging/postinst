@@ -97,6 +97,20 @@ if [ -f /etc/asound.conf ] \
   rm -f /etc/asound.conf
 fi
 
+# Low-RAM device (~352 MB): add a persistent swapfile so the full always-on
+# stack (PipeWire + APPLaunch + RaspyJack + WebUI + Caddy) does not OOM/crash.
+SWAPFILE=/var/swap.raspyjack
+CUR_SWAP=$(free -m 2>/dev/null | awk '/Swap/{print $2}'); CUR_SWAP=${CUR_SWAP:-0}
+if [ ! -f "$SWAPFILE" ] && [ "$CUR_SWAP" -lt 1024 ]; then
+  if fallocate -l 1536M "$SWAPFILE" 2>/dev/null || dd if=/dev/zero of="$SWAPFILE" bs=1M count=1536 2>/dev/null; then
+    chmod 600 "$SWAPFILE"
+    mkswap "$SWAPFILE" >/dev/null 2>&1 && swapon "$SWAPFILE" 2>/dev/null || true
+    grep -q "$SWAPFILE" /etc/fstab 2>/dev/null || echo "$SWAPFILE none swap sw 0 0" >> /etc/fstab
+    # a bit less aggressive reclaim keeps the UI responsive under pressure
+    sysctl -w vm.swappiness=30 >/dev/null 2>&1 || true
+  fi
+fi
+
 # pip extras not packaged as apt dependencies (match install_raspyjack.sh).
 if command -v pip3 >/dev/null 2>&1; then
   pip3 install --break-system-packages --quiet smbus2 bleak gpsd-py3 sgp4 2>/dev/null || true
