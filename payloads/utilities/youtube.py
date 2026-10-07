@@ -230,7 +230,7 @@ def _play_audio(playlist, start_idx=0):
         try:
             r = subprocess.run(
                 ["yt-dlp", "-f", "bestaudio", "--get-url", url],
-                capture_output=True, text=True, timeout=30)
+                capture_output=True, text=True, timeout=90)
             audio_url = r.stdout.strip()
         except Exception:
             audio_url = ""
@@ -435,7 +435,7 @@ def _search_youtube(query, max_results=10):
         r = subprocess.run(
             ["yt-dlp", "--flat-playlist", "--no-download",
              "-j", f"ytsearch{max_results}:{query}"],
-            capture_output=True, text=True, timeout=30)
+            capture_output=True, text=True, timeout=90)
         if r.returncode != 0:
             err = r.stderr[:100] if r.stderr else "Unknown error"
             _show_msg("Search error", err[:20], (255, 50, 50))
@@ -761,7 +761,7 @@ def _play_video(video_id, title, playlist_mode=False, start_offset=0):
     try:
         r = subprocess.run(
             ["yt-dlp", "-f", quality_fmt, "--get-url", url],
-            capture_output=True, text=True, timeout=30)
+            capture_output=True, text=True, timeout=90)
         urls = r.stdout.strip().split('\n')
         video_url = urls[0] if urls else ""
         audio_url = urls[1] if len(urls) > 1 else ""
