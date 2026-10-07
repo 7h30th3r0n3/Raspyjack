@@ -5130,9 +5130,16 @@ LCD.LCD_Init(Lcd_ScanDir)
 LCD_Config.Driver_Delay_ms(5)  # 8
 #LCD.LCD_Clear()
 
-image = Image.open(default.install_path + 'img/logo.bmp')
+image = Image.open(default.install_path + 'img/logo.bmp').convert("RGB")
 if image.size != (LCD.width, LCD.height):
-    image = image.resize((LCD.width, LCD.height))
+    # Preserve aspect ratio: a plain resize stretches the square logo on the
+    # widescreen CardputerZero panel (320x170). Fit within the screen and
+    # center on black. No-op on square panels (128x128 / 240x240).
+    fitted = ImageOps.contain(image, (LCD.width, LCD.height))
+    canvas = Image.new("RGB", (LCD.width, LCD.height), (0, 0, 0))
+    canvas.paste(fitted, ((LCD.width - fitted.width) // 2,
+                          (LCD.height - fitted.height) // 2))
+    image = canvas
 LCD.LCD_ShowImage(image, 0, 0)
 
 # Create draw objects BEFORE main() so color functions can use them
