@@ -107,6 +107,110 @@ if command -v pip3 >/dev/null 2>&1; then
   pip3 install --break-system-packages --quiet --upgrade --ignore-installed yt-dlp 2>/dev/null || true
 fi
 
+# WebUI: device server (WebSocket :8765), HTTP WebUI (:8080) and an optional
+# Caddy HTTPS reverse proxy (:443). Services are created HERE (not shipped in
+# the .deb) and run as root like install_raspyjack.sh, minus the OS takeover.
+if command -v systemctl >/dev/null 2>&1 && [ -f "$APP_DIR/web_server.py" ]; then
+  cat > /etc/systemd/system/raspyjack-device.service <<UNIT
+[Unit]
+Description=RaspyJack Device Server (WebSocket)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=$LEGACY_DIR
+ExecStart=/usr/bin/python3 $LEGACY_DIR/device_server.py
+Restart=on-failure
+User=root
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=$LEGACY_DIR
+Environment=RJ_WS_TOKEN_FILE=$LEGACY_DIR/.webui_token
+Environment=RJ_WEB_AUTH_SECRET_FILE=$LEGACY_DIR/.webui_session_secret
+Environment=RJ_WEB_AUTH_FILE=$LEGACY_DIR/.webui_auth.json
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+  cat > /etc/systemd/system/raspyjack-webui.service <<UNIT
+[Unit]
+Description=RaspyJack WebUI HTTP Server
+After=raspyjack-device.service
+Requires=raspyjack-device.service
+
+[Service]
+Type=simple
+WorkingDirectory=$LEGACY_DIR
+ExecStart=/usr/bin/python3 $LEGACY_DIR/web_server.py
+Restart=on-failure
+User=root
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=$LEGACY_DIR
+Environment=RJ_WS_TOKEN_FILE=$LEGACY_DIR/.webui_token
+Environment=RJ_WEB_AUTH_SECRET_FILE=$LEGACY_DIR/.webui_session_secret
+Environment=RJ_WEB_AUTH_FILE=$LEGACY_DIR/.webui_auth.json
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+  systemctl daemon-reload >/dev/null 2>&1 || true
+  systemctl enable --now raspyjack-device.service >/dev/null 2>&1 || true
+  systemctl enable --now raspyjack-webui.service >/dev/null 2>&1 || true
+
+  # Optional HTTPS via Caddy (self-signed cert over the auto-detected IPs).
+  if command -v caddy >/dev/null 2>&1; then
+    cat > /usr/local/sbin/raspyjack-caddy-autoconfig.sh <<'SCRIPT'
+#!/bin/bash
+set -e
+CERT_DIR=/etc/caddy/certs
+CERT=$CERT_DIR/raspyjack.crt
+KEY=$CERT_DIR/raspyjack.key
+if [ ! -f "$CERT" ] || [ ! -f "$KEY" ] || [ "$(find "$CERT" -mtime +365 2>/dev/null)" ]; then
+  mkdir -p "$CERT_DIR"
+  SAN="IP:127.0.0.1,DNS:raspyjack,DNS:raspyjack.local,DNS:localhost"
+  for iface in $(ls /sys/class/net 2>/dev/null | grep -v '^lo$'); do
+    IP=$(ip -4 -o addr show "$iface" 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -n1)
+    [ -n "$IP" ] && SAN="$SAN,IP:$IP"
+  done
+  openssl req -x509 -nodes -days 3650 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
+    -keyout "$KEY" -out "$CERT" -subj "/CN=raspyjack" -addext "subjectAltName=$SAN" 2>/dev/null
+  chown caddy:caddy "$KEY" "$CERT" 2>/dev/null || true
+fi
+cat > /etc/caddy/Caddyfile <<CADDY
+:443 {
+    tls $CERT $KEY
+    @ws path /ws*
+    reverse_proxy @ws 127.0.0.1:8765
+    reverse_proxy 127.0.0.1:8080
+}
+CADDY
+systemctl reload caddy 2>/dev/null || systemctl restart caddy 2>/dev/null || true
+SCRIPT
+    chmod +x /usr/local/sbin/raspyjack-caddy-autoconfig.sh
+
+    cat > /etc/systemd/system/raspyjack-caddy-autoconfig.service <<UNIT
+[Unit]
+Description=RaspyJack Caddy auto-config (detect IPs, self-signed cert)
+After=network-online.target caddy.service
+Wants=network-online.target
+Requires=caddy.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/raspyjack-caddy-autoconfig.sh
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    systemctl enable --now caddy.service >/dev/null 2>&1 || true
+    systemctl enable raspyjack-caddy-autoconfig.service >/dev/null 2>&1 || true
+    /usr/local/sbin/raspyjack-caddy-autoconfig.sh >/dev/null 2>&1 || true
+  fi
+fi
+
 # First-boot provisioning of the heavy payload tools (kismet, dump1090, pyboy,
 # ragnar, proxmark3) — too large / source-built to be plain apt Depends. The
 # unit is created HERE (never shipped inside the .deb, so the store's
