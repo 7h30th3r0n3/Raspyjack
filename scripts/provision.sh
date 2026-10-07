@@ -32,6 +32,13 @@ TOOLS=(
   "proxmark3|Proxmark3 (NFC)"
 )
 
+# Keep the device usable during source builds: low CPU/IO priority and pin to
+# 2 cores (taskset also caps nproc, so `make -j$(nproc)` builds stay at 2 jobs).
+LOWPRIO=""
+command -v nice    >/dev/null 2>&1 && LOWPRIO="nice -n 19"
+command -v ionice  >/dev/null 2>&1 && LOWPRIO="$LOWPRIO ionice -c3"
+command -v taskset >/dev/null 2>&1 && [ "$(nproc 2>/dev/null || echo 1)" -gt 2 ] && LOWPRIO="$LOWPRIO taskset -c 0,1"
+
 py() { python3 - "$@"; }
 
 status_init() {
@@ -115,7 +122,7 @@ do_dump1090() {
   set_step dump1090 installing "compiling"
   local b=/tmp/dump1090-build
   rm -rf "$b"; git clone --depth 1 https://github.com/flightaware/dump1090 "$b" 2>/dev/null
-  if ( cd "$b" && make BLADERF=no HACKRF=no LIMESDR=no -j"$(nproc)" 2>/dev/null && cp dump1090 /usr/local/bin/ ); then
+  if ( cd "$b" && $LOWPRIO make BLADERF=no HACKRF=no LIMESDR=no -j"$(nproc)" 2>/dev/null && cp dump1090 /usr/local/bin/ ); then
     rm -rf "$b"; set_step dump1090 done ""; return 0
   fi
   rm -rf "$b"; set_step dump1090 failed "build failed (will retry)"; return 1
@@ -124,7 +131,7 @@ do_dump1090() {
 do_pyboy() {
   python3 -c 'import pyboy' >/dev/null 2>&1 && { set_step pyboy done "already installed"; return 0; }
   set_step pyboy installing "sdl2 + pip"
-  if bash "$APP_DIR/scripts/install_pyboy.sh" 2>/dev/null && python3 -c 'import pyboy' >/dev/null 2>&1; then
+  if $LOWPRIO bash "$APP_DIR/scripts/install_pyboy.sh" 2>/dev/null && python3 -c 'import pyboy' >/dev/null 2>&1; then
     set_step pyboy done ""; return 0
   fi
   set_step pyboy failed "install failed (will retry)"; return 1
@@ -135,7 +142,7 @@ do_ragnar() {
     set_step ragnar done "already installed"; return 0
   fi
   set_step ragnar installing "apt + pip deps"
-  if bash "$APP_DIR/scripts/install_ragnar_port.sh" 2>/dev/null \
+  if $LOWPRIO bash "$APP_DIR/scripts/install_ragnar_port.sh" 2>/dev/null \
      && PYTHONPATH="$APP_DIR/vendor/ragnar" python3 -c 'import headlessRagnar' >/dev/null 2>&1; then
     set_step ragnar done ""; return 0
   fi
@@ -145,7 +152,7 @@ do_ragnar() {
 do_proxmark3() {
   command -v pm3 >/dev/null 2>&1 && { set_step proxmark3 done "already installed"; return 0; }
   set_step proxmark3 installing "compiling (~15 min)"
-  if bash "$APP_DIR/scripts/install_proxmark3.sh" 2>/dev/null && command -v pm3 >/dev/null 2>&1; then
+  if $LOWPRIO bash "$APP_DIR/scripts/install_proxmark3.sh" 2>/dev/null && command -v pm3 >/dev/null 2>&1; then
     set_step proxmark3 done ""; return 0
   fi
   set_step proxmark3 failed "build failed (will retry)"; return 1
