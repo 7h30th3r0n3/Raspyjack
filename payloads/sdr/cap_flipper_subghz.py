@@ -245,7 +245,19 @@ def _apply_preset(radio, preset_name):
 # ── Raw capture via GDO0 edge timing ─────────────────────────────────────
 
 def _capture_raw(radio, duration_s=5.0, gdo0_pin=15):
-    """Capture raw OOK edges — only when RSSI above threshold (signal present)."""
+    """Capture raw OOK edges — only when RSSI above threshold (signal present).
+
+    Delegates to the driver's transport-agnostic capture_raw() when available
+    (works over both the USB bridge and the SPI HAT); falls back to the inline
+    gpiod path for older drivers.
+    """
+    cap = getattr(radio, "capture_raw", None)
+    if cap is not None:
+        try:
+            return cap(duration_s=duration_s)
+        except Exception:
+            pass
+
     pulses = []
     if not GPIOD_OK:
         return pulses
@@ -303,7 +315,7 @@ def _capture_raw(radio, duration_s=5.0, gdo0_pin=15):
 
 # ── Main menu ─────────────────────────────────────────────────────────────
 
-MENU_ITEMS = ["Read", "Read RAW", "Saved", "Decode .sub", "Freq Analyzer", "Add Manually", "Bruteforce", "Radio Settings"]
+MENU_ITEMS = ["Read", "Read RAW", "Saved", "Decode .sub", "Freq Analyzer", "Add Manually", "Bruteforce", "TPMS", "Garage Brute", "Radio Settings"]
 
 
 def _draw_menu(sel):
@@ -1560,6 +1572,114 @@ def _select_repeat():
 
 # ── Main ─────────────────────────────────────────────────────────────────
 
+def _sub_img():
+    img = Image.new("RGB", (W, H), C_BG)
+    return img, (ImageDraw.Draw(img) if IS_WIDE else ScaledDraw(img))
+
+
+# ── TPMS scan (native CC1101 decoders, OOK + 2-FSK sweep) ─────────────
+
+def _mode_tpms(radio):
+    try:
+        from payloads.sdr._tpms_cc1101 import tpms_multi_decode
+    except Exception as e:
+        _draw_msg("TPMS module", str(e)[:22], C_RED)
+        time.sleep(2)
+        return
+    store = {}            # id_hex -> hit
+    freqs = [433.92, 315.0]
+    presets = [p["name"] for p in PRESETS]
+    last_btn = 0
+    while _running:
+        btn = get_button(PINS, GPIO)
+        now = time.time()
+        if btn == "KEY3" and now - last_btn > DEBOUNCE:
+            return
+        # one sweep: each freq x each modulation preset
+        for fq in freqs:
+            for pr in presets:
+                if get_button(PINS, GPIO) == "KEY3":
+                    return
+                try:
+                    radio.set_frequency(fq)
+                    _apply_preset(radio, pr)
+                    radio.set_raw_rx(for_capture=True)
+                    pulses = _capture_raw(radio, duration_s=0.6)
+                    hit = tpms_multi_decode(pulses) if pulses else None
+                    if hit:
+                        store[hit.get("id_hex", str(hit.get("id")))] = hit
+                except Exception:
+                    pass
+        img, d = _sub_img()
+        _draw_header(d, "TPMS", right_text=f"{len(store)}")
+        y = 26 if IS_WIDE else 16
+        if not store:
+            d.text((6, y), "Scanning OOK+FSK...", font=FONT_SM, fill=C_DIM)
+            d.text((6, y + 16), "433.92 / 315 MHz", font=FONT_SM, fill=C_DIM)
+        else:
+            for h in list(store.values())[:6]:
+                line = "%s %s" % (h.get("model", "?"), h.get("id_hex", ""))
+                d.text((6, y), line[:40], font=FONT_SM, fill=C_GREEN)
+                y += 14
+                sub = "  %.2f bar  %s C" % (h.get("pressure_bar", 0.0), h.get("temp_c", "?"))
+                d.text((6, y), sub[:40], font=FONT_SM, fill=C_WHITE)
+                y += 16
+        _draw_footer(d, "K3:Back")
+        _show(img)
+
+
+# ── Garage brute (De Bruijn / OpenSesame, fixed-code only) ────────────
+
+def _mode_garage(radio):
+    try:
+        from payloads.sdr._debruijn_brute import (
+            PRESET_LIST, chunk_debruijn_pulses, preset_duration_s)
+    except Exception as e:
+        _draw_msg("Garage module", str(e)[:22], C_RED)
+        time.sleep(2)
+        return
+    sel = 0
+    last_btn = 0
+    while _running:
+        btn = get_button(PINS, GPIO)
+        now = time.time()
+        if btn and now - last_btn > DEBOUNCE:
+            last_btn = now
+            if btn == "KEY3":
+                return
+            if btn == "UP":
+                sel = (sel - 1) % len(PRESET_LIST)
+            if btn == "DOWN":
+                sel = (sel + 1) % len(PRESET_LIST)
+            if btn == "OK":
+                key, label, bits, freq = PRESET_LIST[sel]
+                dur = preset_duration_s(key)
+                _draw_msg("TX " + label, "%d-bit  %.2fs" % (bits, dur), C_ORANGE)
+                try:
+                    radio.set_frequency(freq / 1_000_000)
+                    chunks = chunk_debruijn_pulses(key)
+                    for i, buf in enumerate(chunks):
+                        if get_button(PINS, GPIO) == "KEY3":
+                            break
+                        radio.send_raw_pulses(buf, repeat=1)
+                    _draw_msg("Sent", label, C_GREEN)
+                except Exception as e:
+                    _draw_msg("TX Failed", str(e)[:22], C_RED)
+                time.sleep(1.2)
+        img, d = _sub_img()
+        _draw_header(d, "Garage Brute", right_text="fixed")
+        y = 26 if IS_WIDE else 16
+        for i, (key, label, bits, freq) in enumerate(PRESET_LIST):
+            is_sel = i == sel
+            if is_sel:
+                d.rectangle([2, y - 1, W - 2, y + 13], fill=C_SEL)
+            d.text((6, y), "%s %db %dMHz" % (label, bits, freq // 1_000_000),
+                   font=FONT_SM, fill=C_ORANGE if is_sel else C_WHITE)
+            y += 15
+        _draw_footer(d, "OK:TX  K3:Back")
+        _show(img)
+
+
 def main():
     global _radio
 
@@ -1615,6 +1735,10 @@ def main():
                 elif menu_sel == 6:
                     _mode_bruteforce(_radio)
                 elif menu_sel == 7:
+                    _mode_tpms(_radio)
+                elif menu_sel == 8:
+                    _mode_garage(_radio)
+                elif menu_sel == 9:
                     _mode_radio_settings(_radio)
 
             time.sleep(0.08)

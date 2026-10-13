@@ -3833,6 +3833,90 @@ def _manchester_encode_bits_inv(data, bit_count, te):
     return pulses
 
 
+# --- HITAG2 cipher (shared by Fiat V1 / Renault V1 key verify + crack) ---
+# Faithful port of protopirate_port.h fiat_v1_bcm_hitag2_* (HITAG2 LFSR + 5x4
+# filter network). Used by the HITAG2-based Renault V1 / Fiat V1 keyfobs; the
+# decoders capture the raw frame, these primitives serve the key-recovery pass.
+
+def _hitag2_byte_bit(byte, bit):
+    return (byte >> bit) & 1
+
+
+def _hitag2_truth(table, index):
+    return (table >> index) & 1
+
+
+def _hitag2_filter_index(a, b, c, d):
+    return ((a << 3) | (b << 2) | (c << 1) | d) & 0xFF
+
+
+def _hitag2_parity8(value):
+    value &= 0xFF
+    value ^= value >> 4
+    value ^= value >> 2
+    value ^= value >> 1
+    return value & 1
+
+
+def _hitag2_filter(state):
+    bb = _hitag2_byte_bit
+    group = _hitag2_truth(0x2C79, _hitag2_filter_index(
+        bb(state[0], 1), bb(state[0], 2), bb(state[0], 4), bb(state[0], 5)))
+    group |= _hitag2_truth(0x6671, _hitag2_filter_index(
+        bb(state[1], 0), bb(state[1], 1), bb(state[1], 3), bb(state[1], 7))) << 1
+    group |= _hitag2_truth(0x6671, _hitag2_filter_index(
+        bb(state[3], 5), bb(state[2], 0), bb(state[2], 2), bb(state[2], 6))) << 2
+    group |= _hitag2_truth(0x6671, _hitag2_filter_index(
+        bb(state[4], 6), bb(state[3], 0), bb(state[3], 2), bb(state[3], 3))) << 3
+    group |= _hitag2_truth(0x2C79, _hitag2_filter_index(
+        bb(state[5], 1), bb(state[5], 3), bb(state[5], 4), bb(state[4], 5))) << 4
+    return _hitag2_truth(0x7907287B, group)
+
+
+_HITAG2_FEEDBACK_MASKS = (0xB3, 0x80, 0x83, 0x22, 0x00, 0x73)
+
+
+def _hitag2_feedback(state):
+    fb = 0
+    for i in range(6):
+        fb ^= _hitag2_parity8(state[i] & _HITAG2_FEEDBACK_MASKS[i])
+    return fb & 1
+
+
+def _hitag2_shift(state, input_bit):
+    for i in range(5):
+        state[i] = ((state[i] << 1) | (state[i + 1] >> 7)) & 0xFF
+    state[5] = ((state[5] << 1) | (input_bit & 1)) & 0xFF
+
+
+def _hitag2_input_bit_u32_be(value, index):
+    return (value >> (31 - index)) & 1
+
+
+def _hitag2_input_bit_bytes_be(data, index):
+    return (data[index >> 3] >> (7 - (index & 7))) & 1
+
+
+def hitag2_generate_authenticator(uid, button, control, key, epoch):
+    """HITAG2 BCM authenticator (Fiat V1 / Renault V1). `key` = 6 bytes.
+
+    Faithful port of fiat_v1_bcm_generate_authenticator (protopirate_port.h).
+    """
+    state = [(uid >> 24) & 0xFF, (uid >> 16) & 0xFF, (uid >> 8) & 0xFF,
+             uid & 0xFF, key[4] & 0xFF, key[5] & 0xFF]
+    iv = ((epoch & 0x3FFFF) << 14) | ((control & 0x03FF) << 4) | (button & 0x0F)
+    for i in range(32):
+        inp = (_hitag2_input_bit_u32_be(iv, i)
+               ^ _hitag2_input_bit_bytes_be(key, i)
+               ^ _hitag2_filter(state))
+        _hitag2_shift(state, inp)
+    authenticator = 0
+    for _ in range(32):
+        authenticator = ((authenticator << 1) | _hitag2_filter(state)) & 0xFFFFFFFF
+        _hitag2_shift(state, _hitag2_feedback(state))
+    return authenticator & 0xFFFFFFFF
+
+
 class _VehicleManchesterDecoder:
     """Base Manchester decoder for vehicle keyfob protocols."""
     name = "Unknown Vehicle"
@@ -4240,6 +4324,17 @@ class RenaultV0Decoder(_VehicleManchesterDecoder):
     _TE_SHORT = 125; _TE_LONG = 250; _TE_DELTA = 60; _MIN_BITS = 82
     _PREAMBLE_MIN = 4; _GAP_US = 2000; _HAS_ENCODER = True
 
+class RenaultV1Decoder(_VehicleManchesterDecoder):
+    name = "Renault V1"
+    # HITAG2-based rolling key (protopirate_port.h renault_v1_feed). On-air:
+    # Manchester, TE=125us, 16-bit header + 64-bit key + 24-bit key2
+    # (MIN_COUNT_BIT=88). Decode captures the raw frame; HITAG2 key recovery
+    # uses the hitag2_* helpers (separate crack pass).
+    _TE_SHORT = 125; _TE_LONG = 250; _TE_DELTA = 60; _MIN_BITS = 88
+    _PREAMBLE_MIN = 4; _GAP_US = 21500; _HAS_ENCODER = True
+    def _parse_fields(self, sig):
+        sig.extra["type"] = "Renault HITAG2"
+
 class StarLineDecoder(_VehiclePWMDecoder):
     name = "StarLine"
     _TE_SHORT = 250; _TE_LONG = 500; _TE_DELTA = 120; _MIN_BITS = 64
@@ -4292,6 +4387,7 @@ ALL_PROTOCOLS.extend([
     PorscheTouaregDecoder(),
     PSADecoder(),
     RenaultV0Decoder(),
+    RenaultV1Decoder(),
     StarLineDecoder(),
     SubaruDecoder(),
     VAGDecoder(),

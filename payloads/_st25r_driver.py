@@ -500,6 +500,45 @@ class ST25R3916Driver:
         time.sleep(0.006)
         self._configure_nfc_a()
 
+    # ── Multi-protocol mode switching (NFC-F / NFC-B) ──────────────────
+    # Additive: lets a caller poll FeliCa (NFC-F) and ISO14443-B without
+    # disturbing the NFC-A reader/emulator paths. Mirrors Evil-Cardputer
+    # nfc_iso15693_felica.h (nfcv_set_mode / nfcv_restore_isoa). Every
+    # excursion MUST be followed by set_mode_nfc_a(); callers use try/finally.
+    _MODE_NFC_F = 0x18   # om=0011 FeliCa
+    _MODE_NFC_B = 0x10   # om=0010 ISO14443-B
+    _RATE_212   = 0x11   # tx/rx 212 kbps (FeliCa)
+    _RATE_106   = 0x00   # tx/rx 106 kbps
+
+    def _enter_mode(self, mode_def, bit_rate):
+        self._cmd(_CMD_STOP_ALL)
+        self._wr(_MODE_DEF, mode_def)
+        self._wr(_BIT_RATE, bit_rate)
+        self._cmd(_CMD_RESET_GAIN)
+        self._cmd(_CMD_CLEAR_FIFO)
+        self._enable_field()
+
+    def set_mode_nfc_f(self):
+        """Switch the reader to FeliCa (NFC-F, 212 kbps). Follow with set_mode_nfc_a()."""
+        self._enter_mode(self._MODE_NFC_F, self._RATE_212)
+
+    def set_mode_nfc_b(self):
+        """Switch the reader to ISO14443-B (106 kbps). Follow with set_mode_nfc_a()."""
+        self._enter_mode(self._MODE_NFC_B, self._RATE_106)
+
+    def set_mode_nfc_a(self):
+        """Restore the canonical NFC-A reader config so A-mode flows don't regress."""
+        self._configure_nfc_a()
+
+    def transceive_raw(self, data, timeout_ms=60, min_rx=1):
+        """Mode-agnostic framed transceive with hardware CRC (TX_CRC).
+
+        The RF mode must already be selected (set_mode_nfc_f/b). Returns the RX
+        FIFO bytes (CRC may be included; callers index from the start and use a
+        >= length check), or None. Reuses the proven NFC-A transceive cycle.
+        """
+        return self._transceive(list(data), timeout_ms=timeout_ms, min_rx=min_rx)
+
     def _prepare(self):
         self._cmd(_CMD_STOP_ALL)
         self._cmd(_CMD_RESET_GAIN)

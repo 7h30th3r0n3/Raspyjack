@@ -695,6 +695,113 @@ class NFCEmulator:
             if not r or (r[0] & 0xE6) != 0xA2:
                 return  # not an R-block -> abort this response
 
+    # ── mfkey32 reader-nonce capture ──────────────────────────────────
+
+    def _listener_rx_raw(self, nbytes, timeout_ms=40):
+        """Receive one frame with parity disabled and unpack the 9-bit groups.
+
+        With no_rx_par set the FIFO holds raw bits D7..D0 P D7..D0 P ...; this
+        strips every 9th (parity) bit and returns ``nbytes`` data bytes (mirrors
+        Evil's mfe_rx_raw / the MIFARE read unpack). Returns None on timeout.
+        """
+        d = self._drv
+        d._wr(_ISO14443A, d._rr(_ISO14443A) | 0xC0)  # no_tx_par + no_rx_par
+        flags = d._wait_irq(_I_RXE | _I_NRE | _I_EOF | _I_CRC_ERR | _I_PAR_ERR, timeout_ms)
+        if not (flags & _I_RXE):
+            return None
+        n = d._fifo_len()
+        if n <= 0:
+            return None
+        raw = d._fifo_r(n)
+        out = bytearray()
+        bit = 0
+        total = len(raw) * 8
+        while bit + 8 <= total and len(out) < nbytes:
+            v = 0
+            for b in range(8):
+                by = (bit + b) // 8
+                bi = (bit + b) % 8
+                if raw[by] & (1 << bi):
+                    v |= (1 << b)
+            out.append(v)
+            bit += 9  # skip the parity bit
+        return bytes(out)
+
+    def capture_mfkey32(self, uid, atqa, sak, on_event=None, should_stop=None,
+                        max_captures=24, idle_timeout=180.0):
+        """Emulate a MIFARE Classic card and capture reader-nonce tuples for mfkey32.
+
+        Presents the given identity, answers every reader AUTH (0x60/0x61) with a
+        FIXED tag nonce (MFE_STATIC_NT), and records the reader's encrypted
+        {nr, ar}. No sector key is needed; the returned tuples feed an offline
+        mfkey32 solver (see nfc_rfid/_mfkey32.py). Faithful to Evil's
+        nfc_mfemul.h capture path (mode 1). Reuses the existing target-mode
+        primitives; it does NOT run Crypto1 and never touches the emulate_* /
+        relay_iso_dep paths.
+
+        Returns a list of dicts: {uid, block, keytype, nt, nr, ar} (ints).
+        """
+        d = self._drv
+        self._setup_target_mode(uid, atqa, sak)
+        self._running = True
+        caps = []
+        cuid = int.from_bytes(bytes(uid[:4]), 'big')
+        nt = 0x01200145  # mirrors nfc_rfid/_mfkey32.MFE_STATIC_NT (Evil MFE_STATIC_NT)
+        ntb = nt.to_bytes(4, 'big')
+        last_field = time.time()
+
+        while self._running and (should_stop is None or not should_stop()):
+            rx = self._listener_rx(timeout_ms=200)
+            if rx is None:
+                if time.time() - last_field > idle_timeout:
+                    break
+                if d._stored_irqs & (_I_EOF | _I_WU_A | _I_WU_A_X):
+                    d._mod(_PASS_TGT, 0, 0x01)
+                    d._cmd(_CMD_GOTO_SENSE)
+                continue
+            last_field = time.time()
+
+            if len(rx) >= 3:
+                crc = _crc_a(rx[:-2])
+                if rx[-2] == (crc & 0xFF) and rx[-1] == ((crc >> 8) & 0xFF):
+                    rx = rx[:-2]
+
+            if len(rx) >= 2 and rx[0] in (_MF_AUTH_A, _MF_AUTH_B):
+                keytype = rx[0]
+                block = rx[1]
+                # Answer with the static nt ASAP (plaintext, std parity, no CRC).
+                self._listener_tx(ntb, with_crc=False)
+                # Reader replies {nr,ar} encrypted -> capture raw (no parity).
+                na = self._listener_rx_raw(8, timeout_ms=40)
+                d._wr(_ISO14443A, d._rr(_ISO14443A) & ~0xC0)  # restore std parity
+                if na and len(na) >= 8:
+                    nr = int.from_bytes(na[:4], 'big')
+                    ar = int.from_bytes(na[4:8], 'big')
+                    dup = any(c['nr'] == nr and c['ar'] == ar and
+                              c['block'] == block and c['keytype'] == keytype
+                              for c in caps)
+                    if not dup and len(caps) < max_captures:
+                        rec = {'uid': cuid, 'block': block, 'keytype': keytype,
+                               'nt': nt, 'nr': nr, 'ar': ar}
+                        caps.append(rec)
+                        if on_event:
+                            try:
+                                on_event({'state': 'nonce', 'count': len(caps), 'rec': rec})
+                            except Exception:
+                                pass
+                d._mod(_PASS_TGT, 0, 0x01)
+                d._cmd(_CMD_GOTO_SENSE)
+            elif rx and rx[0] == _MF_HALT_MSB:
+                d._mod(_PASS_TGT, 0, 0x01)
+                d._cmd(_CMD_GOTO_SENSE)
+
+        self._running = False
+        try:
+            d._cmd(_CMD_STOP_ALL)
+        except Exception:
+            pass
+        return caps
+
     def stop(self):
         """Stop emulation."""
         self._running = False
