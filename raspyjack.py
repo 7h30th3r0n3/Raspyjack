@@ -5070,7 +5070,124 @@ def _check_payload_request():
     return None
 
 
+def _provision_gate():
+    """First-boot setup screen for the CardputerZero store package.
+
+    The store installs RaspyJack under a package-transaction timeout, so the
+    heavy/optional tools are pulled afterwards by provision.sh (outside that
+    timeout). Block the menu behind a progress screen while that first pass
+    runs, so payloads don't launch before their tools exist. Reads the status
+    file provision.sh maintains. Hold OK ~3s to skip into the menu anyway.
+    Never gates a classic (non-store) install, and never hard-blocks on a
+    partial/failed result.
+    """
+    marker = "/var/lib/raspyjack/provision.done"
+    status_path = default.install_path + "loot/provision/status.json"
+    unit = "/etc/systemd/system/raspyjack-provision.service"
+    try:
+        if os.path.exists(marker):
+            return False
+        if not (os.path.exists(status_path) or os.path.exists(unit)):
+            return False  # classic install: no provisioning expected
+    except Exception:
+        return False
+
+    def _ok_held():
+        try:
+            if "_evdev" in globals() and _evdev is not None and _evdev.is_key_pressed(28):
+                return True
+        except Exception:
+            pass
+        try:
+            return GPIO.input(PINS["KEY_PRESS_PIN"]) == 0
+        except Exception:
+            return False
+
+    def _read_status():
+        try:
+            with open(status_path) as f:
+                return json.load(f)
+        except Exception:
+            return None
+
+    hold_start = None
+    partial_since = None
+    skipped = False
+    while True:
+        try:
+            if os.path.exists(marker):
+                break
+        except Exception:
+            break
+        d = _read_status()
+        steps = (d or {}).get("steps", [])
+        overall = (d or {}).get("overall", "starting")
+        total = len(steps)
+        done = sum(1 for s in steps if s.get("state") == "done")
+        cur = next((s for s in steps if s.get("state") == "installing"), None)
+        if cur:
+            cur_label = cur.get("label") or cur.get("name") or ""
+            cur_detail = cur.get("detail") or ""
+        elif not steps:
+            cur_label, cur_detail = "Preparing setup...", ""
+        else:
+            cur_label, cur_detail = "Finishing...", ""
+
+        if overall == "done":
+            break
+        if overall == "partial":
+            if partial_since is None:
+                partial_since = time.time()
+            elif time.time() - partial_since > 4:
+                break  # optional tools failed; retried next boot, don't block
+
+        if _ok_held():
+            if hold_start is None:
+                hold_start = time.time()
+            elif time.time() - hold_start >= 3.0:
+                skipped = True
+                break
+        else:
+            hold_start = None
+
+        try:
+            draw_lock.acquire()
+            draw.rectangle([0, 0, _SCR_W, _SCR_H], fill=color.background)
+            _draw_centered_text((S(3), S(4), _SCR_W - S(3), S(20)),
+                                "Setting up RaspyJack", fill=color.text, font=text_font)
+            if partial_since is not None:
+                msg = "Some optional tools\nwill retry next boot"
+            elif cur_detail:
+                msg = cur_label + "\n" + cur_detail
+            else:
+                msg = cur_label
+            _draw_centered_text((S(6), S(22), _SCR_W - S(6), _SCR_H - S(30)),
+                                msg, fill=color.text, font=text_font)
+            bar_x0, bar_y0 = S(10), _SCR_H - S(26)
+            bar_x1, bar_y1 = _SCR_W - S(10), _SCR_H - S(18)
+            draw.rectangle([bar_x0, bar_y0, bar_x1, bar_y1], outline=color.text, fill=color.background)
+            pct = (done / total) if total else 0.0
+            fw = int((bar_x1 - bar_x0) * max(0.0, min(1.0, pct)))
+            if fw > 0:
+                draw.rectangle([bar_x0, bar_y0, bar_x0 + fw, bar_y1], fill=color.text)
+            _draw_centered_text((S(3), _SCR_H - S(16), _SCR_W - S(3), _SCR_H - S(3)),
+                                "%d/%d   hold OK 3s to skip" % (done, total),
+                                fill=color.text, font=text_font)
+            LCD.LCD_ShowImage(image, 0, 0)
+        finally:
+            draw_lock.release()
+        time.sleep(0.4)
+    return skipped
+
+
 def main():
+    # First-boot provisioning gate (store package): block until heavy tools are
+    # installed, or the user holds OK to skip. No-op on a classic install.
+    try:
+        _provision_gate()
+    except Exception as e:
+        print("provision gate skipped:", e)
+
     # Draw background once
     try:
         draw_lock.acquire()

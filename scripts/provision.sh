@@ -28,11 +28,22 @@ echo "==== provision run $(date -Is) ===="
 # saturates this small device. Install it on demand instead with
 # scripts/install_proxmark3.sh (the pm3_* payloads use /opt/proxmark3).
 TOOLS=(
+  "aptextras|Extra tools (SDR, firmware, media)"
   "kismet|Kismet (WiFi)"
   "pyboy|PyBoy (Game Boy)"
   "ragnar|Ragnar"
   "dump1090|dump1090 (ADS-B)"
 )
+
+# Heavy/optional apt packages pulled OUT of the .deb Depends so the store's
+# package-transaction stays short enough to finish under its install timeout
+# (M5APPSTORE_PACKAGE_TIMEOUT). Installed here, after the package install, with
+# --no-install-recommends to avoid the giant SoapySDR/matplotlib/wireshark
+# Recommends chains that made a fresh store install time out and roll back.
+APTEXTRAS_PKGS="firmware-realtek firmware-atheros firmware-misc-nonfree \
+rtl-sdr rtl-433 gpsd python3-gps mpv ffmpeg yt-dlp bluez-alsa-utils \
+chocolate-doom freedoom john john-data reaver autossh ettercap-text-only \
+dsniff tshark php-cli xvfb xdotool libglib2.0-dev"
 
 # Keep the device usable during source builds: low CPU/IO priority and pin to
 # 2 cores (taskset also caps nproc, so `make -j$(nproc)` builds stay at 2 jobs).
@@ -92,6 +103,22 @@ PY
 }
 
 # ---------------------------------------------------------------- tools
+
+do_aptextras() {
+  local marker=/var/lib/raspyjack/aptextras.done
+  [ -f "$marker" ] && { set_step aptextras done "already installed"; return 0; }
+  set_step aptextras installing "apt install (no-recommends)"
+  if DEBIAN_FRONTEND=noninteractive $LOWPRIO apt-get install -y --no-install-recommends $APTEXTRAS_PKGS 2>/dev/null; then
+    touch "$marker"; set_step aptextras done ""; return 0
+  fi
+  # Retry once package-by-package so one unavailable package can't fail them all.
+  local ok=1 p
+  for p in $APTEXTRAS_PKGS; do
+    DEBIAN_FRONTEND=noninteractive $LOWPRIO apt-get install -y --no-install-recommends "$p" 2>/dev/null || ok=0
+  done
+  if [ "$ok" -eq 1 ]; then touch "$marker"; set_step aptextras done ""; return 0; fi
+  set_step aptextras failed "some packages failed (will retry)"; return 1
+}
 
 do_kismet() {
   command -v kismet >/dev/null 2>&1 && { set_step kismet done "already installed"; return 0; }
