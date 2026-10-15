@@ -406,6 +406,8 @@
         " gps_live": "",
         " iss_tracker": "",
         " network_anomaly": "",
+        " claude_code": "\uf544",
+        " claude_ask": "\uf075",
         " speech_to_text": "",
         " voice_journal": "",
         " camera": "",

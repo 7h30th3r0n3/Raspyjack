@@ -41,10 +41,17 @@
 static const int pinRfSw = PIN_RF_SW;
 
 // ---- Protocol constants ----
-#define PROTO_VER 1
+#define PROTO_VER 2           // v2: RX_RAW idle field widened u16->u32; TX safety limits
 #define FW_MAJOR 0
-#define FW_MINOR 1
+#define FW_MINOR 2
 #define MAX_BODY 2048
+
+// --- no-jamming / TX safety limits (hard guard, see [[no-jamming]]) ---
+#define MAX_TX_REPEAT 32
+#define MAX_TX_ON_PULSE_US 100000UL    // reject a single carrier-ON pulse > 100 ms
+#define MAX_TX_ON_TOTAL_US 5000000UL   // reject cumulative carrier-ON (xrepeat) > 5 s
+                                       // (blocks continuous-carrier jamming; a normal
+                                       //  burst replay is well under this)
 
 enum {
   CMD_PING = 0x01, CMD_INFO = 0x02,
@@ -53,7 +60,7 @@ enum {
 };
 enum {
   ST_OK = 0x00, ST_BADCMD = 0x01, ST_BADLEN = 0x02, ST_BUSY = 0x03,
-  ST_NOCHIP = 0x04, ST_CAPERR = 0x05,
+  ST_NOCHIP = 0x04, ST_CAPERR = 0x05, ST_TXLIMIT = 0x06,
 };
 
 // ---- CC1101 ----
@@ -83,7 +90,9 @@ static void IRAM_ATTR gdoISR() {
   isrLastEdge = now;
   // Pin level AFTER the edge; the elapsed time belongs to the previous level.
   int lvl = digitalRead(PIN_GDO0);
-  if (isrN < isrMax && d > 50 && d < 200000) {
+  // Upper bound 32767 us: durations are transported as int16, so anything
+  // larger would wrap. (A gap this long already ends the frame.)
+  if (isrN < isrMax && d > 50 && d < 32768) {
     // previous level = !lvl : high before a falling edge, low before a rising
     isrBuf[isrN++] = (lvl == LOW) ? (int16_t)d : (int16_t)(-(int32_t)d);
   }
@@ -103,14 +112,20 @@ static size_t cobsEncode(const uint8_t *in, size_t len, uint8_t *out) {
   out[codeIdx] = code;
   return oi;
 }
-static size_t cobsDecode(const uint8_t *in, size_t len, uint8_t *out) {
+static size_t cobsDecode(const uint8_t *in, size_t len, uint8_t *out, size_t outCap) {
   size_t i = 0, oi = 0;
   while (i < len) {
     uint8_t code = in[i];
     if (code == 0) return 0;
     i++;
-    for (uint8_t j = 1; j < code && i < len; j++) out[oi++] = in[i++];
-    if (code != 0xFF && i < len) out[oi++] = 0;
+    for (uint8_t j = 1; j < code && i < len; j++) {
+      if (oi >= outCap) return 0;          // bound output: drop malformed/oversized frame
+      out[oi++] = in[i++];
+    }
+    if (code != 0xFF && i < len) {
+      if (oi >= outCap) return 0;
+      out[oi++] = 0;
+    }
   }
   return oi;
 }
@@ -176,6 +191,19 @@ static void doTxRaw(const uint8_t *a, size_t n) {
   if (4 + (size_t)cnt * 2 > n) { sendErr(ST_BADLEN); return; }
   const uint8_t *p = a + 4;
 
+  // --- no-jamming / safety guard (hard limit, not just a host convention) ---
+  // Refuse anything that would key a long/continuous carrier.
+  if (repeat > MAX_TX_REPEAT) { sendErr(ST_TXLIMIT); return; }
+  uint32_t onTotal = 0;
+  for (uint16_t i = 0; i < cnt; i++) {
+    int16_t dur = (int16_t)(p[i * 2] | (p[i * 2 + 1] << 8));
+    if (dur > 0) {
+      if ((uint32_t)dur > MAX_TX_ON_PULSE_US) { sendErr(ST_TXLIMIT); return; }
+      onTotal += (uint32_t)dur;
+    }
+  }
+  if (onTotal * repeat > MAX_TX_ON_TOTAL_US) { sendErr(ST_TXLIMIT); return; }
+
   // Save + configure CC1101 for asynchronous-serial OOK.
   uint8_t sIocfg0 = ccRead(REG_IOCFG0);
   uint8_t sMdm2 = ccRead(REG_MDMCFG2);
@@ -205,6 +233,9 @@ static void doTxRaw(const uint8_t *a, size_t n) {
     if ((flags & 0x01) && r + 1 < repeat) delayMicroseconds(1000);
   }
   digitalWrite(PIN_GDO0, LOW);
+  // Release the ESP32 pin to INPUT BEFORE restoring IOCFG0: the saved config
+  // may make the CC1101 drive GDO0 (0x0D), which would fight an OUTPUT pin.
+  pinMode(PIN_GDO0, INPUT);
 
   // Restore.
   ccStrobe(SIDLE);
@@ -212,15 +243,16 @@ static void doTxRaw(const uint8_t *a, size_t n) {
   ccWrite(REG_MDMCFG2, sMdm2);
   ccWrite(REG_PKTCTRL0, sPkt);
   ccWrite(REG_FREND0, sFrend0);
-  pinMode(PIN_GDO0, INPUT);
   sendOk();
 }
 
 static void doRxRaw(const uint8_t *a, size_t n) {
-  if (n < 7) { sendErr(ST_BADLEN); return; }
+  // args: dur_ms:u16  idle_us:u32  max_sym:u16  flags:u8   (>= 9 bytes)
+  if (n < 9) { sendErr(ST_BADLEN); return; }
   uint16_t durMs = a[0] | (a[1] << 8);
-  uint32_t idleUs = (uint32_t)(a[2] | (a[3] << 8));
-  uint16_t maxSym = a[4] | (a[5] << 8);
+  uint32_t idleUs = (uint32_t)a[2] | ((uint32_t)a[3] << 8) |
+                    ((uint32_t)a[4] << 16) | ((uint32_t)a[5] << 24);
+  uint16_t maxSym = a[6] | (a[7] << 8);
   if (maxSym == 0 || maxSym > 1000) maxSym = 1000;  // keep response <= MAX_BODY
   // Host has already put the CC1101 in async-serial RX (IOCFG0=0x0D) via SPI.
 
@@ -319,7 +351,7 @@ void loop() {
     uint8_t b = (uint8_t)Serial.read();
     if (b == 0x00) {
       if (rxLen > 0) {
-        size_t dl = cobsDecode(rxFrame, rxLen, frameBody);
+        size_t dl = cobsDecode(rxFrame, rxLen, frameBody, sizeof(frameBody));
         if (dl > 0) dispatch(frameBody, dl);
       }
       rxLen = 0;

@@ -19,9 +19,11 @@ import time
 import struct
 import threading
 
-PROTO_VER = 1
+PROTO_VER = 2           # must match firmware PROTO_VER (v2: idle_us u32, TX limits)
 MAGIC = b"RJC1"
 MAX_BODY = 2048
+# device status codes (mirror firmware enum)
+ST_TXLIMIT = 0x06
 
 # commands
 CMD_PING = 0x01
@@ -94,18 +96,33 @@ class CC1101Usb:
 
     def __init__(self, port, timeout=1.0):
         import serial  # lazy; raises ImportError if pyserial absent
+        self._serial = serial
         self._port_name = port
-        self._ser = serial.Serial(port, baudrate=115200, timeout=timeout,
-                                   write_timeout=timeout)
-        self._lock = threading.RLock()
         self._timeout = timeout
+        self._lock = threading.RLock()
         # spidev-compatible attributes (no-ops on USB)
         self.max_speed_hz = 0
         self.mode = 0
         self.fw = (0, 0)
         self.cc_version = 0
-        # drain any boot noise
-        time.sleep(0.05)
+        self._ser = None
+        self._open_serial()
+
+    def _open_serial(self):
+        # dsrdtr/dtr/rts off so opening the port does NOT reset the ESP32
+        # (native-USB CDC auto-reset) and does not disturb other serial gear.
+        ser = self._serial.Serial(baudrate=115200, timeout=self._timeout,
+                                  write_timeout=self._timeout)
+        ser.port = self._port_name
+        try:
+            ser.dtr = False
+            ser.rts = False
+        except Exception:
+            pass
+        ser.open()
+        self._ser = ser
+        # let the firmware finish booting, then flush its boot log
+        time.sleep(0.3)
         try:
             self._ser.reset_input_buffer()
         except Exception:
@@ -118,11 +135,19 @@ class CC1101Usb:
         if len(body) > MAX_BODY:
             raise CC1101UsbError("request body too large")
         frame = cobs_encode(body) + b"\x00"
+        rt = read_timeout if read_timeout is not None else self._timeout
         with self._lock:
-            self._ser.write(frame)
-            self._ser.flush()
-            raw = self._read_frame(read_timeout if read_timeout is not None
-                                   else self._timeout)
+            try:
+                self._ser.reset_input_buffer()
+                self._ser.write(frame)
+                self._ser.flush()
+                raw = self._read_frame(rt)
+            except (self._serial.SerialException, OSError):
+                # hot-unplug / renumeration: try to reopen the same port once
+                self._reopen()
+                self._ser.write(frame)
+                self._ser.flush()
+                raw = self._read_frame(rt)
         resp = cobs_decode(raw)
         if not resp:
             raise CC1101UsbError("empty response")
@@ -130,6 +155,13 @@ class CC1101Usb:
         if status != 0x00:
             raise CC1101UsbError("device error 0x%02X for cmd 0x%02X" % (status, cmd))
         return resp[1:]
+
+    def _reopen(self):
+        try:
+            self._ser.close()
+        except Exception:
+            pass
+        self._open_serial()
 
     def _read_frame(self, timeout):
         """Read bytes until the 0x00 delimiter. Returns the pre-delimiter bytes."""
@@ -203,33 +235,41 @@ class CC1101Usb:
         data = self._txn(CMD_GDO_READ, bytes([which]))
         return data[0] if data else 0
 
+    # one TX frame carries at most this many int16 pulses (fits MAX_BODY)
+    MAX_TX_PULSES = 1000
+
     def tx_raw(self, pulses, repeat=1, flags=1):
-        """Device-side OOK replay. pulses = signed int16 µs list."""
-        repeat = max(1, min(255, int(repeat)))
-        clamped = []
-        for p in pulses:
-            p = int(p)
-            if p > 32767:
-                p = 32767
-            elif p < -32767:
-                p = -32767
-            clamped.append(p)
+        """Device-side OOK replay. pulses = signed int16 µs list.
+
+        Long waveforms (> MAX_TX_PULSES) are split into several frames emitted
+        back-to-back; `repeat` then loops the whole waveform host-side (a short
+        re-arm gap sits between chunks, negligible for OOK replay).
+        """
+        repeat = max(1, min(32, int(repeat)))     # firmware caps repeat (no-jamming)
+        clamped = [max(-32767, min(32767, int(p))) for p in pulses]
         n = len(clamped)
         if n == 0:
             return False
+        if n <= self.MAX_TX_PULSES:
+            self._tx_frame(clamped, repeat, flags)
+            return True
+        for _ in range(repeat):
+            for i in range(0, n, self.MAX_TX_PULSES):
+                self._tx_frame(clamped[i:i + self.MAX_TX_PULSES], 1, flags)
+        return True
+
+    def _tx_frame(self, clamped, repeat, flags):
+        n = len(clamped)
         hdr = struct.pack("<BBH", repeat, flags & 0xFF, n)
         body = hdr + struct.pack("<%dh" % n, *clamped)
-        if len(body) + 1 > MAX_BODY:
-            raise CC1101UsbError("TX frame too long (%d pulses); split it" % n)
-        # TX can take a while (repeat * frame duration); give it headroom
         self._txn(CMD_TX_RAW, body, read_timeout=max(5.0, repeat * 2.0))
-        return True
 
     def rx_raw(self, duration_s=1.0, idle_us=50000, max_sym=512, flags=0):
         """Device-side edge capture. Returns signed int16 µs list."""
         dur_ms = max(1, min(60000, int(duration_s * 1000)))
-        hdr = struct.pack("<HHHB", dur_ms, idle_us & 0xFFFF, max_sym & 0xFFFF,
-                          flags & 0xFF)
+        idle_us = max(0, min(0xFFFFFFFF, int(idle_us)))   # u32, no silent wrap
+        max_sym = max(1, min(1000, int(max_sym)))         # firmware caps at 1000
+        hdr = struct.pack("<HIHB", dur_ms, idle_us, max_sym, flags & 0xFF)
         data = self._txn(CMD_RX_RAW, hdr, read_timeout=duration_s + 3.0)
         if len(data) < 2:
             return []
@@ -243,22 +283,30 @@ class CC1101Usb:
 # ── Auto-detection ──────────────────────────────────────────────────────────
 
 def _candidate_ports():
-    """Yield serial device paths worth probing, ESP native-USB VID first."""
+    """Yield serial device paths worth probing.
+
+    When pyserial can enumerate VIDs we probe ONLY Espressif native-USB ports:
+    opening+writing a PING to an unrelated device (GPS, modem, another MCU)
+    could reset or disturb it. We only fall back to globbing when no VID info
+    is available at all.
+    """
     ordered = []
+    had_vid_info = False
     try:
         from serial.tools import list_ports
         infos = list(list_ports.comports())
-        # ESP32-S3 native USB first
-        infos.sort(key=lambda p: 0 if (p.vid in _ESP_VIDS) else 1)
-        for p in infos:
-            ordered.append(p.device)
+        esp = [p.device for p in infos if p.vid in _ESP_VIDS]
+        if any(p.vid is not None for p in infos):
+            had_vid_info = True
+            ordered = esp            # only ESP ports when VIDs are known
+        else:
+            ordered = [p.device for p in infos]
     except Exception:
         pass
-    # fall back to raw globbing if list_ports gave nothing
-    if not ordered:
+    # fall back to raw globbing only when we had no VID info to filter on
+    if not ordered and not had_vid_info:
         import glob
         ordered = sorted(glob.glob("/dev/ttyACM*")) + sorted(glob.glob("/dev/ttyUSB*"))
-    # de-dup, keep order
     seen = set()
     for dev in ordered:
         if dev not in seen:
@@ -280,8 +328,14 @@ def detect(port=None, timeout=0.6):
             link = CC1101Usb(dev, timeout=timeout)
         except Exception:
             continue
+        proto = None
+        for _attempt in range(2):          # first PING can race the boot log
+            try:
+                proto, _fw = link.ping()
+                break
+            except Exception:
+                time.sleep(0.15)
         try:
-            proto, _fw = link.ping()
             if proto == PROTO_VER:
                 try:
                     link.info()

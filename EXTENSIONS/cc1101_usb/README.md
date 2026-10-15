@@ -1,17 +1,25 @@
 # CC1101-over-USB bridge for RaspyJack
 
-Make the RaspyJack sub-GHz payloads work on **any** Raspberry Pi by moving the
-CC1101 off the Pi's SPI/GPIO (which the LCD + Ethernet HAT already use) and onto
-a tiny **ESP32-S3** USB dongle. The Pi talks to the dongle over USB-CDC; all the
-timing-critical OOK work (replay + edge capture) happens on the ESP32.
+Give the RaspyJack sub-GHz payloads a CC1101 over USB — on a PC, a CardputerZero,
+or any host with no free SPI bus. A tiny **ESP32-C3/S3** does the timing-critical
+OOK work (replay + edge capture); the host talks to it over USB-CDC.
 
 ```
-  Raspberry Pi ──USB──► ESP32-S3 ──SPI──► CC1101 ──► antenna
-   (RaspyJack)   CDC     (bridge fw)        (radio)
+  host (Pi / PC) ──USB──► ESP32-C3/S3 ──SPI──► CC1101 ──► antenna
+                   CDC      (bridge fw)         (radio)
 ```
 
-No change to the Pi's wiring, and the existing CardputerZero Cap HAT keeps
-working: the driver auto-detects USB first, then falls back to the SPI HAT.
+The driver auto-detects the USB bridge first, then falls back to a local SPI
+CC1101 (CardputerZero Cap HAT, or a bare module on the Pi's SPI0.1 / CE1 — the
+native path needs no dongle and gives better RAW timing).
+
+> **Responsible use.** This is a TX-capable sub-GHz tool. Transmit (replay /
+> brute) **only** on frequencies you are allowed to use in your jurisdiction
+> (EU: 433.05–434.79 MHz 10 mW; 868 MHz with duty-cycle limits — 315/915 are
+> US) and **only** against targets you are explicitly authorised to test
+> (pentest / CTF / research). **No jamming** — no continuous carrier, no
+> RollJam/RollBack; the firmware hard-caps TX-on time to enforce this. The
+> operator is responsible for legal compliance.
 
 ---
 
@@ -19,9 +27,9 @@ working: the driver auto-detects USB first, then falls back to the SPI HAT.
 
 | Qty | Part | Notes |
 |-----|------|-------|
-| 1 | **ESP32-S3** dev board with **native USB** | e.g. ESP32-S3-DevKitC-1, or an S3 "SuperMini". Must be S3/S2/C3 (native USB-CDC), *not* a classic ESP32. |
-| 1 | **CC1101 SPI module** | generic 8-pin 433/868 MHz board, or E07-M1101D. 3.3 V part. |
-| 1 | Antenna | 433 MHz (and/or 868 MHz) helical or SMA whip to match your module. |
+| 1 | **ESP32-C3 SuperMini** (carrier PCB default) | or any S3/S2/C3 board with **native USB-CDC** for a bare-wire build. **Not** a classic ESP32 (no native USB). |
+| 1 | **CC1101 SPI module** | the carrier PCB expects a **2×4 (nRF24 footprint)** module; a bare-wire build takes any 433/868 MHz CC1101. 3.3 V part. |
+| 1 | **Antenna matched to the band** | a real 433 MHz (≈16.4 cm ¼-wave) or 868 MHz (≈8.2 cm) antenna. ⚠️ A spring from an actual *nRF24* module is 2.4 GHz and gives ~metres only. Never TX without an antenna. |
 | — | 1× 100 nF + 1× 10 µF cap | decoupling across the CC1101 VCC/GND, close to the module. |
 | — | Short dupont wires | keep SCK/MISO/MOSI short (< 10 cm). |
 
@@ -42,6 +50,13 @@ there if your board differs.
 | MISO / SO  | GPIO13        | SPI MISO (also CHIP_RDYn) |
 | GDO0       | GPIO4         | OOK data in (TX) / out (RX) — **required** |
 | GDO2       | GPIO5         | optional status/IRQ |
+
+**On an ESP32-C3** use the `esp32-c3` env (`pio run -e esp32-c3 -t upload`) and
+this map instead — the C3 cannot use GPIO12–17 (SPI flash) or 18/19 (USB):
+
+| CC1101 | CSN | SCK | MOSI | MISO | GDO0 | GDO2 |
+|--------|-----|-----|------|------|------|------|
+| **C3 GPIO** | 7 | 4 | 6 | 5 | 10 | 3 |
 
 > The firmware drives GDO0 as an output for TX (CC1101 `IOCFG0=0x2E`, Hi-Z) and
 > reads it as an input for RX (`IOCFG0=0x0D`). One wire, direction per mode —
