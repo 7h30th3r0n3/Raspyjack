@@ -7,7 +7,6 @@ import os
 import secrets
 import subprocess
 import netifaces
-from scapy.all import ARP, Ether, srp
 from datetime import datetime
 import threading, smbus, time, pyudev, serial, struct, json
 from subprocess import STDOUT, check_output
@@ -5110,6 +5109,24 @@ def _provision_gate():
         except Exception:
             return None
 
+    log_path = default.install_path + "loot/provision/provision.log"
+    try:
+        term_font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf', S(8))
+    except Exception:
+        term_font = text_font
+
+    def _tail_log(n):
+        # Last n non-empty lines of the provision log (the live "terminal").
+        try:
+            with open(log_path, "rb") as f:
+                f.seek(0, 2)
+                size = f.tell()
+                f.seek(max(0, size - 8192))
+                data = f.read().decode("utf-8", "replace")
+            return [ln.rstrip() for ln in data.splitlines() if ln.strip()][-n:]
+        except Exception:
+            return []
+
     hold_start = None
     partial_since = None
     skipped = False
@@ -5150,29 +5167,62 @@ def _provision_gate():
         else:
             hold_start = None
 
+        # Elapsed since provisioning started (from the status file).
+        elapsed = ""
+        try:
+            started = (d or {}).get("started")
+            if started:
+                secs = int((datetime.now() - datetime.strptime(started, "%Y-%m-%dT%H:%M:%S")).total_seconds())
+                if secs >= 0:
+                    elapsed = "%dm%02ds" % (secs // 60, secs % 60)
+        except Exception:
+            elapsed = ""
+
+        glyph = {"done": "[x]", "installing": "[>]", "failed": "[!]", "pending": "[ ]"}
         try:
             draw_lock.acquire()
             draw.rectangle([0, 0, _SCR_W, _SCR_H], fill=color.background)
-            _draw_centered_text((S(3), S(4), _SCR_W - S(3), S(20)),
-                                "Setting up RaspyJack", fill=color.text, font=text_font)
+            # Header: title + elapsed.
+            hdr = "Setting up RaspyJack"
+            if elapsed:
+                hdr += "  " + elapsed
+            draw.text((S(4), S(1)), hdr, fill=color.text, font=text_font)
+            # Current step + overall count.
             if partial_since is not None:
-                msg = "Some optional tools\nwill retry next boot"
+                step_line = "some tools failed, will retry"
             elif cur_detail:
-                msg = cur_label + "\n" + cur_detail
+                step_line = "%s %s: %s" % (glyph.get((cur or {}).get("state"), ">"), cur_label, cur_detail)
             else:
-                msg = cur_label
-            _draw_centered_text((S(6), S(22), _SCR_W - S(6), _SCR_H - S(30)),
-                                msg, fill=color.text, font=text_font)
-            bar_x0, bar_y0 = S(10), _SCR_H - S(26)
-            bar_x1, bar_y1 = _SCR_W - S(10), _SCR_H - S(18)
+                step_line = "%s %s" % (glyph.get((cur or {}).get("state"), ">"), cur_label)
+            step_line = "%s   %d/%d" % (step_line, done, total)
+            while step_line and draw.textbbox((0, 0), step_line, font=text_font)[2] > _SCR_W - S(8):
+                step_line = step_line[:-1]
+            draw.text((S(4), S(13)), step_line, fill=color.text, font=text_font)
+            # Progress bar.
+            bar_x0, bar_y0 = S(4), S(25)
+            bar_x1, bar_y1 = _SCR_W - S(4), S(29)
             draw.rectangle([bar_x0, bar_y0, bar_x1, bar_y1], outline=color.text, fill=color.background)
             pct = (done / total) if total else 0.0
             fw = int((bar_x1 - bar_x0) * max(0.0, min(1.0, pct)))
             if fw > 0:
                 draw.rectangle([bar_x0, bar_y0, bar_x0 + fw, bar_y1], fill=color.text)
-            _draw_centered_text((S(3), _SCR_H - S(16), _SCR_W - S(3), _SCR_H - S(3)),
-                                "%d/%d   hold OK 3s to skip" % (done, total),
-                                fill=color.text, font=text_font)
+            # Live "terminal" feed: tail of the provision log.
+            try:
+                tlh = draw.textbbox((0, 0), "Ag", font=term_font)[3] + 1
+            except Exception:
+                tlh = S(8)
+            term_top, term_bot = S(33), _SCR_H - S(13)
+            nlines = max(1, int((term_bot - term_top) / max(1, tlh)))
+            maxw = _SCR_W - S(6)
+            yy = term_top
+            for ln in _tail_log(nlines):
+                while ln and draw.textbbox((0, 0), ln, font=term_font)[2] > maxw:
+                    ln = ln[:-1]
+                draw.text((S(3), yy), ln, fill=color.text, font=term_font)
+                yy += tlh
+            # Footer.
+            foot = "hold OK 3s = skip" if partial_since is None else "partial - hold OK = skip"
+            draw.text((S(4), _SCR_H - S(11)), foot, fill=color.text, font=term_font)
             LCD.LCD_ShowImage(image, 0, 0)
         finally:
             draw_lock.release()

@@ -40,7 +40,11 @@ TOOLS=(
 # (M5APPSTORE_PACKAGE_TIMEOUT). Installed here, after the package install, with
 # --no-install-recommends to avoid the giant SoapySDR/matplotlib/wireshark
 # Recommends chains that made a fresh store install time out and roll back.
-APTEXTRAS_PKGS="firmware-realtek firmware-atheros firmware-misc-nonfree \
+# python3-scapy is here (not a hard Depend) on purpose: it Recommends ipython3,
+# which pulls the whole ipython + matplotlib/scipy/sympy stack, blowing the
+# store transaction past its timeout. Installed with --no-install-recommends it
+# is a lean library install, which is all RaspyJack's payloads need.
+APTEXTRAS_PKGS="python3-scapy firmware-realtek firmware-atheros firmware-misc-nonfree \
 rtl-sdr rtl-433 gpsd python3-gps mpv ffmpeg yt-dlp bluez-alsa-utils \
 chocolate-doom freedoom john john-data reaver autossh ettercap-text-only \
 dsniff tshark php-cli xvfb xdotool libglib2.0-dev"
@@ -108,13 +112,17 @@ do_aptextras() {
   local marker=/var/lib/raspyjack/aptextras.done
   [ -f "$marker" ] && { set_step aptextras done "already installed"; return 0; }
   set_step aptextras installing "apt install (no-recommends)"
-  if DEBIAN_FRONTEND=noninteractive $LOWPRIO apt-get install -y --no-install-recommends $APTEXTRAS_PKGS 2>/dev/null; then
+  # DPKG::Lock::Timeout: the package postinst triggers this service while the
+  # store's own apt transaction may still hold the dpkg lock, so wait for it
+  # instead of failing the task.
+  local APT="apt-get -o DPKG::Lock::Timeout=600 install -y --no-install-recommends"
+  if DEBIAN_FRONTEND=noninteractive $LOWPRIO $APT $APTEXTRAS_PKGS 2>/dev/null; then
     touch "$marker"; set_step aptextras done ""; return 0
   fi
   # Retry once package-by-package so one unavailable package can't fail them all.
   local ok=1 p
   for p in $APTEXTRAS_PKGS; do
-    DEBIAN_FRONTEND=noninteractive $LOWPRIO apt-get install -y --no-install-recommends "$p" 2>/dev/null || ok=0
+    DEBIAN_FRONTEND=noninteractive $LOWPRIO $APT "$p" 2>/dev/null || ok=0
   done
   if [ "$ok" -eq 1 ]; then touch "$marker"; set_step aptextras done ""; return 0; fi
   set_step aptextras failed "some packages failed (will retry)"; return 1
