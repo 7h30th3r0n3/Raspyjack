@@ -15,9 +15,11 @@ import time
 from typing import Optional, List, Callable
 
 try:
-    from payloads._crypto1 import Crypto1
+    from payloads._crypto1 import Crypto1, prng_successor, pack_with_parity
 except ImportError:
     Crypto1 = None
+    prng_successor = None
+    pack_with_parity = None
 
 # ── ST25R3916 register/command constants (mirror _st25r_driver.py) ────
 
@@ -210,13 +212,18 @@ class NFCEmulator:
         if with_crc:
             crc = _crc_a(plaintext)
             plaintext = bytes(plaintext) + bytes([crc & 0xFF, (crc >> 8) & 0xFF])
-        encrypted = self._crypto.encrypt_bytes(plaintext)
+        # encrypt_bytes() returns (ciphertext, encrypted-parity-bits). With
+        # no_tx_par the frontend sends raw bits, so the parity bits must be
+        # interleaved into the stream exactly like the reader side does
+        # (crypto1.pack_with_parity), and the TX length given in bits.
+        enc, par = self._crypto.encrypt_bytes(plaintext)
+        packed, total_bits = pack_with_parity(enc, par)
         d = self._drv
         d._cmd(_CMD_CLEAR_FIFO)
         # Set no_tx_par + no_rx_par for custom parity (encrypted stream)
         d._wr(_ISO14443A, d._rr(_ISO14443A) | 0xC0)
-        d._fifo_w(encrypted)
-        d._set_tx_len(len(encrypted))
+        d._fifo_w(packed)
+        d._set_tx_len(total_bits >> 3, total_bits & 7)
         d._cmd(_CMD_TX_NO_CRC)
         d._wait_irq(_I_TXE, 10)
         # Restore parity
@@ -247,6 +254,7 @@ class NFCEmulator:
         self._auth_complete = False
         self._comm_encrypted = False
         self._cmd_in_progress = False
+        self._write_block = 0
         if self._crypto:
             self._crypto.reset()
 
@@ -276,8 +284,17 @@ class NFCEmulator:
             encrypted_nt = self._crypto.encrypt_with_keystream(nt_bytes, ks)
             self._listener_tx_encrypted(encrypted_nt, with_crc=False)
 
-        self._cmd_in_progress = True
-        return True
+        # The reader answers {nr}{ar} ENCRYPTED with custom (Crypto1) parity, so
+        # it must be read raw (no_rx_par) and unpacked, exactly like the proven
+        # capture_mfkey32 path — NOT via the main loop's standard _listener_rx
+        # (which would see parity errors). Handle the whole handshake inline.
+        na = self._listener_rx_raw(8, timeout_ms=40)
+        self._drv._wr(_ISO14443A, self._drv._rr(_ISO14443A) & ~0xC0)  # restore parity
+        self._cmd_in_progress = False
+        if not na or len(na) < 8:
+            self._reset_auth()
+            return False
+        return self._handle_auth_part2(na)
 
     def _handle_auth_part2(self, data):
         """Handle MIFARE AUTH second part: verify NR+AR, send AT."""
@@ -289,14 +306,14 @@ class NFCEmulator:
         ar = int.from_bytes(data[4:8], 'big')
 
         self._crypto.word(nr, True)
-        expected = self._crypto.prng_successor(self._nt, 64)
+        expected = prng_successor(self._nt, 64)
         actual = ar ^ self._crypto.word(0, False)
 
         if actual != expected:
             self._reset_auth()
             return False
 
-        at = self._crypto.prng_successor(self._nt, 96)
+        at = prng_successor(self._nt, 96)
         at_bytes = at.to_bytes(4, 'big')
         self._listener_tx_encrypted(at_bytes, with_crc=False)
 
@@ -340,9 +357,10 @@ class NFCEmulator:
     def _handle_write_part2(self, data, data_blocks):
         """Handle MIFARE WRITE second part: receive data."""
         self._cmd_in_progress = False
+        block_num = self._write_block
+        self._write_block = 0
         if len(data) < _MF_BLOCK_SIZE:
             return False
-        block_num = self._write_block
         if block_num < len(data_blocks):
             data_blocks[block_num] = bytes(data[:_MF_BLOCK_SIZE])
         return True
@@ -363,6 +381,16 @@ class NFCEmulator:
             keys_b: dict {sector: 6-byte key} for key B (default all FF)
             timeout: max emulation time in seconds
             on_auth: callback(key_type, block, nr, ar) called on each auth
+
+        HARDWARE LIMIT (measured on the Cap-NFC C0): the Crypto1 handshake is now
+        logically correct — the card reads {nr}{ar} raw, verifies ar == suc2(nt),
+        and computes the correct AT = suc3(nt). BUT a reader's MIFARE auth still
+        fails here because the AT must be transmitted within the ~86 us frame-delay
+        time, while one Crypto1 op alone costs ~0.5 ms in pure Python on this device
+        (full AT compute ~3 ms, ~35x over budget). So full Classic *emulation that a
+        reader authenticates* is not achievable on this hardware; only UID/anti-
+        collision presentation works. The mfkey capture path (capture_mfkey32) is
+        unaffected because it never has to answer within the FDT.
         """
         if keys_a is None:
             keys_a = {}
@@ -398,8 +426,10 @@ class NFCEmulator:
             cmd = rx[0] if rx else 0
 
             if self._cmd_in_progress:
-                if self._auth_complete and not self._write_block:
-                    # Auth part 2
+                if not self._write_block:
+                    # Auth part 2 (nr/ar). _auth_complete is still False here;
+                    # it only flips True once the handshake below succeeds, so
+                    # routing must key off _write_block, not _auth_complete.
                     if not self._handle_auth_part2(rx):
                         self._listener_tx_short(_MF_NACK)
                         self._reset_auth()

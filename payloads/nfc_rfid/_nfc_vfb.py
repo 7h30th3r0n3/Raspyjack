@@ -10,12 +10,19 @@ SAFETY CONTRACT (no regression): each poller switches the ST25R3916 into
 NFC-F or NFC-B, polls, then ALWAYS restores NFC-A via a try/finally so the
 existing Read / Emulate / EMV / Relay flows stay healthy.
 
-VALIDATION: unvalidated on real tags (even Evil flags these as believed-correct
-but untested). Needs on-device testing.
+VALIDATION (2026-10-27, via PM3 `hf felica litesim`): FeliCa poll returns ZERO
+bytes across all attempts on the Cap-NFC C0 (HITS=0/18) — the TX/RX path is dead,
+not just a parse/CRC issue.
 
-Hardware polling is believed correct against the ST25R3916 hardware-CRC
-transceive model: the chip appends CRC (FeliCa CRC / CRC-B) on TX and
-checks/strips it on RX while in the matching mode.
+ROOT CAUSE (not yet fixed — a real RF bring-up task): `_st25r_driver._enter_mode`
+only writes MODE_DEF + BIT_RATE for NFC-F/NFC-B, whereas `_configure_nfc_a` also
+programs the full analog receiver front-end (RX_CONF1-4 reg 0x24-0x27, the
+over/under-shoot and correlator B-registers, AUX correlator) tuned for NFC-A
+106 kbps. Those receiver settings are WRONG for the 212 kbps FeliCa subcarrier
+(and for ISO-B), so the demodulator never recovers a response. Fixing it needs
+the ST25R3916 technology-specific analog-config register tables (cf. ST RFAL
+rfalSetAnalogConfig for POLL_NFCF_212 / POLL_NFCB) added to `_enter_mode`, plus
+on-device iteration. Until then felica_poll/isob_poll will not detect tags.
 """
 
 

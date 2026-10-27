@@ -26,9 +26,56 @@ working, Evil-aligned feature; finishing the join is a follow-up.
 
 import os
 import sys
+import re
+import shutil
+import subprocess
 
 # The fixed tag nonce presented on every AUTH (identical to Evil's MFE_STATIC_NT).
 MFE_STATIC_NT = 0x01200145
+
+# Compiled proxmark3 key-recovery tools, built from the official
+# RfidResearchGroup/proxmark3 source (tools/mfc) for this device's arch and
+# vendored under nfc_rfid/bin/. They do on-device what the pure-python solver
+# below cannot reliably finish (the crapto1 odd/even JOIN), so when present they
+# are used first and the real key comes out on the CardputerZero itself.
+_BIN_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bin")
+_FOUND_KEY_RE = re.compile(r"Found Key:\s*\[([0-9a-fA-F]{12})\]")
+
+
+def _mfkey_bin(name):
+    """Path to a vendored mfkey tool (nfc_rfid/bin/<name>), else one on PATH."""
+    p = os.path.join(_BIN_DIR, name)
+    if os.path.isfile(p) and os.access(p, os.X_OK):
+        return p
+    return shutil.which(name)
+
+
+def recover_key_binary(uid, nt0, nr0, ar0, nt1, nr1, ar1, timeout=120):
+    """Recover the 48-bit key with the compiled proxmark3 tool.
+
+    Picks the right tool for the capture:
+      * nt0 == nt1 (static tag nonce, our emulation case) -> ``mfkey32`` (v1),
+        CLI ``mfkey32 <uid> <nt> <nr0> <ar0> <nr1> <ar1>``.
+      * nt0 != nt1 (real card, PRNG advances between reads) -> ``mfkey32v2``
+        (moebius), CLI ``mfkey32v2 <uid> <nt0> <nr0> <ar0> <nt1> <nr1> <ar1>``.
+    Returns the key (int) or None (tool absent / no key); callers then fall back
+    to the python solver. Output line parsed: ``Found Key: [xxxxxxxxxxxx]``.
+    """
+    if (nt0 & 0xFFFFFFFF) == (nt1 & 0xFFFFFFFF):
+        exe = _mfkey_bin("mfkey32")                 # v1: single static nonce
+        vals = (uid, nt0, nr0, ar0, nr1, ar1)
+    else:
+        exe = _mfkey_bin("mfkey32v2")               # v2/moebius: two nonces
+        vals = (uid, nt0, nr0, ar0, nt1, nr1, ar1)
+    if not exe:
+        return None
+    args = [exe] + ["%08x" % (v & 0xFFFFFFFF) for v in vals]
+    try:
+        r = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+    except Exception:
+        return None
+    m = _FOUND_KEY_RE.search((r.stdout or "") + "\n" + (r.stderr or ""))
+    return int(m.group(1), 16) if m else None
 
 # Reuse the crypto primitives already shipped with RaspyJack.
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -222,7 +269,14 @@ def recover_key(uid, nt0, nr0, ar0, nt1, nr1, ar1):
     All inputs are ints; nr*/ar* are the ENCRYPTED values as captured over the
     air. Returns the key (int) or None. Always validated against the second
     nonce, so it never returns a wrong key. See the module NOTE on solver status.
+
+    Tries the compiled ``mfkey32v2`` tool first (fast and complete); only falls
+    back to the in-progress python solver when the tool is unavailable.
     """
+    k = recover_key_binary(uid, nt0, nr0, ar0, nt1, nr1, ar1)
+    if k is not None and _validate(k, uid, nt1, nr1, ar1):
+        return k
+
     p64 = prng_successor(nt0, 64)
     for odd, even in _lfsr_recovery32(ar0 ^ p64, 0):
         cr = Crypto1()

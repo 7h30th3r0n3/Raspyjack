@@ -47,7 +47,7 @@ TOOLS=(
 APTEXTRAS_PKGS="python3-scapy firmware-realtek firmware-atheros firmware-misc-nonfree \
 rtl-sdr rtl-433 gpsd python3-gps mpv ffmpeg yt-dlp bluez-alsa-utils \
 chocolate-doom freedoom john john-data reaver autossh ettercap-text-only \
-dsniff tshark php-cli xvfb xdotool libglib2.0-dev"
+dsniff tshark php-cli xvfb xdotool libglib2.0-dev wifite"
 
 # Keep the device usable during source builds: low CPU/IO priority and pin to
 # 2 cores (taskset also caps nproc, so `make -j$(nproc)` builds stay at 2 jobs).

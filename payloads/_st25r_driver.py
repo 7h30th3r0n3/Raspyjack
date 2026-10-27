@@ -972,12 +972,15 @@ class ST25R3916Driver:
     def ul_read_all(self):
         ver = self.ntag_get_version()
         if ver:
-            storage = ver.get("storage", 0) & 0x0F
-            page_map = {0x03: 15, 0x06: 45, 0x09: 45, 0x0F: 135, 0x11: 231, 0x13: 231}
+            # GET_VERSION storage byte (full, not masked):
+            #   UL EV1 48B=0x0B/20p, 128B=0x0E/41p; NTAG213=0x0F/45p,
+            #   NTAG215=0x11/135p, NTAG216=0x13/231p.
+            storage = ver.get("storage", 0)
+            page_map = {0x0B: 20, 0x0E: 41, 0x0F: 45, 0x11: 135, 0x13: 231}
             total_pages = page_map.get(storage, 45)
             tag_type = "NTAG"
             if ver["type"] == 0x03:
-                sizes = {0x06: "NTAG213", 0x0F: "NTAG215", 0x11: "NTAG216"}
+                sizes = {0x0F: "NTAG213", 0x11: "NTAG215", 0x13: "NTAG216"}
                 tag_type = sizes.get(storage, "NTAG21x")
             elif ver["type"] == 0x04:
                 tag_type = "MIFARE Ultralight EV1"
