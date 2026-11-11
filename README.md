@@ -1,5 +1,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/platform-Raspberry%20Pi-red?style=flat-square&logo=raspberry-pi">
+  <img src="https://img.shields.io/badge/M5Stack-CardputerZero-00ccff?style=flat-square">
+  <img src="https://img.shields.io/badge/App%20Store-RJAK%20(one--tap)-success?style=flat-square">
   <img src="https://img.shields.io/badge/code-python3-yellow?style=flat-square&logo=python">
   <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square">
   <img src="https://img.shields.io/badge/usage-authorized%20testing%20only-blue?style=flat-square">
@@ -8,8 +10,11 @@
 <div align="center">
   <h1>RaspyJack</h1>
   <img src="github-img/logo.jpg" width="240" alt="RaspyJack logo"/>
-  <p><strong>Portable Raspberry Pi offensive toolkit</strong> with LCD control, payload launcher, WebUI, and Payload IDE.</p>
+  <p><strong>Portable Raspberry Pi &amp; M5Stack CardputerZero offensive security toolkit</strong> with LCD control, payload launcher, WebUI, and Payload IDE.</p>
+  <p><em>A handheld pentest / red-team multi-tool for WiFi, NFC/RFID, Sub-GHz, SDR and Bluetooth, running on Raspberry Pi (Zero 2 W, 3B+, 4B) and the all-in-one M5Stack CardputerZero.</em></p>
 </div>
+
+> 🏪 **Now on the CardputerZero App Store.** If you have a **M5Stack CardputerZero**, install RaspyJack in one tap: open the App Store and search **RaspyJack** (share code **`RJAK`**). No flashing, no SSH. See [Install](#-install).
 
 ---
 
@@ -99,6 +104,11 @@ Check the WIKI for more ! https://github.com/7h30th3r0n3/Raspyjack/wiki
     <th>Buy</th>
   </tr>
    <tr>
+    <td><strong>M5Stack CardputerZero</strong></td>
+    <td>All-in-one handheld: Pi CM0 + keyboard + LCD + battery. RaspyJack installs in one tap from the <strong>CardputerZero App Store</strong> (share code <code>RJAK</code>)</td>
+    <td><a href="https://shop.m5stack.com/products/m5stack-cardputer-zero?ref=7h30th3r0n3">Buy</a></td>
+  </tr>
+   <tr>
     <td><strong>Raspberry Pi 3 Model B</strong> </td>
     <td>Almost same specs as RPI 0w2</td>
     <td><a href="https://s.click.aliexpress.com/e/_c4k1RESn">Buy</a></td>
@@ -160,6 +170,18 @@ Examples commonly used:
 ---
 
 ## 🚀 Install
+
+### 🏪 CardputerZero: one-tap from the App Store (easiest)
+
+On a **M5Stack CardputerZero**, RaspyJack is published on the official **CardputerZero App Store**:
+
+1. Connect the CardputerZero to WiFi.
+2. Open the **App Store**, search **RaspyJack** (or enter share code **`RJAK`**).
+3. Tap **Install**, then launch it.
+
+No flashing, no SSH, no git. Updates are delivered through the store. You can still install manually on the CardputerZero if you prefer (skip the OS-flashing step, it already ships with Debian, and run the manual steps below). Full guide: [Installation wiki](https://github.com/7h30th3r0n3/Raspyjack/wiki/Installation).
+
+### 🧱 Manual install (Raspberry Pi / other boards)
 
 From a fresh Raspberry Pi OS Lite install:
 
@@ -527,6 +549,14 @@ Videos made by the community about RaspyJack (Thanks to all of you💕):
 - [@dagnazty](https://github.com/dagnazty)
 - [@Hosseios](https://github.com/Hosseios)
 - [@m0usem0use](https://github.com/m0usem0use)
+
+---
+
+## 🔎 Keywords
+
+RaspyJack is a portable penetration testing and red-team toolkit for the **Raspberry Pi** and the **M5Stack CardputerZero**. If you found this searching for a CardputerZero pentest tool, a Pi Zero 2 W hacking handheld, or a Flipper Zero / Hak5 alternative, you are in the right place.
+
+<sub>Raspberry Pi pentest, CardputerZero, M5Stack Cardputer Zero, Pi Zero 2 W, handheld hacking tool, portable pentest device, red team toolkit, offensive security, WiFi deauth, evil twin, evil portal, captive portal, wardriving, handshake capture, Responder, ARP MITM, DNS spoofing, NFC RFID, Sub-GHz CC1101, SDR RTL-SDR, Bluetooth BLE, Nmap, reverse shell, DuckyScript, payload launcher, WebUI, Kali-style handheld, Flipper Zero alternative, Hak5 alternative, Sharkjack, Bash Bunny alternative, cybersecurity, ethical hacking, CTF.</sub>
 
 ---
 
