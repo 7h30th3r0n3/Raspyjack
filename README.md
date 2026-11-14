@@ -181,6 +181,20 @@ On a **M5Stack CardputerZero**, RaspyJack is published on the official **Cardput
 
 No flashing, no SSH, no git. Updates are delivered through the store. You can still install manually on the CardputerZero if you prefer (skip the OS-flashing step, it already ships with Debian, and run the manual steps below). Full guide: [Installation wiki](https://github.com/7h30th3r0n3/Raspyjack/wiki/Installation).
 
+> ⚠️ **Known issue: RaspyJack installs and runs once, but no longer launches from the icon after a reboot (CardputerZero).**
+>
+> RaspyJack needs root, so the launcher starts it with `sudo`. Some CardputerZero factory images do **not** grant the first user passwordless sudo, so at boot `sudo` asks for a password that nobody can type, the app exits immediately, and APPLaunch drops back to the menu. It works right after install (or when you launch it once over SSH) because sudo is still authenticated, but it does not survive a reboot. The app itself is fine, this is purely a sudo-permission difference between images.
+>
+> **Fix (run once over SSH, no reboot needed):** grant passwordless sudo to the device group RaspyJack runs as. `%gpio` covers the launching user whatever its name is (`pi`, or a custom one):
+>
+> ```bash
+> echo '%gpio ALL=(ALL) NOPASSWD: ALL' | sudo tee /etc/sudoers.d/010-raspyjack
+> sudo chmod 0440 /etc/sudoers.d/010-raspyjack
+> sudo visudo -c   # must report "parsed OK" for every file; if it errors, delete the file above before rebooting
+> ```
+>
+> Then launch RaspyJack from the icon: it now starts every time, including after a reboot. A permanent fix that removes this manual step is coming in a store update.
+
 ### 🧱 Manual install (Raspberry Pi / other boards)
 
 From a fresh Raspberry Pi OS Lite install:
