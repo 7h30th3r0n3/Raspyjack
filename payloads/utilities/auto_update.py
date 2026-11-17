@@ -24,6 +24,7 @@ import json
 import signal
 import subprocess
 import shutil
+import urllib.request
 from datetime import datetime
 
 _ANSI_RE = re.compile(r'\x1b\[[0-9;]*[a-zA-Z]')
@@ -47,8 +48,11 @@ from payloads._input_helper import get_button
 RASPYJACK_DIR = "/root/Raspyjack"
 BACKUP_ROOT = "/root/raspyjack_backups"
 SERVICE_NAME = "raspyjack"
+PACKAGE_NAME = "raspyjack"
 GIT_REMOTE = "origin"
 GIT_BRANCH = "main"
+STORE_REGISTRY_URL = "https://cardputer.cc/generated/registry.json"
+STORE_REGISTRY_MAX_BYTES = 4 * 1024 * 1024
 INSTALL_SCRIPT = "/root/Raspyjack/install_raspyjack.sh"
 
 CONFIG_FILES = [
@@ -234,8 +238,87 @@ def _git(args, timeout=30):
         return False, "", str(e)
 
 
+def is_git_checkout():
+    # Checked on disk, not via git (a failing git call must not turn a clone into a
+    # package install); a leftover .git under a dpkg-owned install does not count.
+    return (
+        os.path.exists(os.path.join(RASPYJACK_DIR, ".git"))
+        and get_installed_package_version() is None
+    )
+
+
+def get_installed_package_version():
+    try:
+        r = subprocess.run(
+            ["dpkg-query", "-W", "-f=${db:Status-Abbrev} ${Version}", PACKAGE_NAME],
+            capture_output=True, text=True, timeout=10,
+        )
+    except Exception:
+        return None
+    status, _, version = r.stdout.strip().partition(" ")
+    return version.strip() if r.returncode == 0 and status.startswith("ii") and version.strip() else None
+
+
+def fetch_store_registry():
+    try:
+        req = urllib.request.Request(
+            STORE_REGISTRY_URL, headers={"User-Agent": "raspyjack-auto-update"}
+        )
+        with urllib.request.urlopen(req, timeout=20) as response:
+            registry = json.loads(response.read(STORE_REGISTRY_MAX_BYTES))
+    except Exception:
+        return None
+    return registry if isinstance(registry, dict) else None
+
+
+def find_store_version(registry):
+    apps = registry.get("apps")
+    if not isinstance(apps, list):
+        return None
+    for app in apps:
+        download = app.get("download") if isinstance(app, dict) else None
+        if isinstance(download, dict) and download.get("package") == PACKAGE_NAME:
+            return app.get("version")
+    return None
+
+
+def is_store_version_newer(store_version, installed_version):
+    """Return True/False, or None when dpkg can't compare the versions."""
+    try:
+        r = subprocess.run(
+            ["dpkg", "--compare-versions", store_version, "gt", installed_version],
+            timeout=10,
+        )
+    except Exception:
+        return None
+    if r.returncode in (0, 1):
+        return r.returncode == 0
+    return None
+
+
+def check_store_update():
+    installed = get_installed_package_version()
+    if not installed:
+        return "Package not\ninstalled", False
+    registry = fetch_store_registry()
+    if registry is None:
+        return "Can't reach\nApp Store registry", False
+    store_version = find_store_version(registry)
+    if not store_version:
+        return "Not listed in\nthe App Store", False
+    newer = is_store_version_newer(store_version, installed)
+    if newer is None:
+        return "Can't compare\nversions", False
+    if newer:
+        return f"New: {store_version}\nUpdate in App Store\nSearch: RaspyJack\nCode: RJAK", True
+    return f"Already up to date!\n{installed}", False
+
+
 def get_current_version():
     """Return (short_hash, date, full_hash)."""
+    if not is_git_checkout():
+        package_version = get_installed_package_version()
+        return package_version or "?", "package (.deb)" if package_version else "no git, no package", ""
     ok, h, _ = _git(["rev-parse", "--short", "HEAD"])
     short = h if ok else "?"
     ok, fh, _ = _git(["rev-parse", "HEAD"])
@@ -247,10 +330,14 @@ def get_current_version():
 
 def check_update_available():
     """Fetch remote and check if updates exist. Returns (available, info, count)."""
+    if not is_git_checkout():
+        show_progress("Checking...", "App Store registry")
+        info, newer_available = check_store_update()
+        return False, info, 1 if newer_available else 0
     show_progress("Checking...", "Fetching remote")
     ok, _, err = _git(["fetch", GIT_REMOTE], timeout=60)
     if not ok:
-        return False, f"Fetch failed: {err[:30]}", 0
+        return False, f"Fetch failed:\n{' '.join(err.split())[:20]}", 0
 
     ok, local, _ = _git(["rev-parse", "HEAD"])
     ok2, remote, _ = _git(["rev-parse", f"{GIT_REMOTE}/{GIT_BRANCH}"])
@@ -492,11 +579,15 @@ def draw_home(version, date, disk_free, backup_count):
     d.text((4, 46), f"Disk: {disk_free}", font=FONT, fill="#888888")
     d.text((4, 60), f"Backups: {backup_count}", font=FONT, fill="#888888")
 
-    d.text((4, 80), "KEY1  Check & Update", font=FONT_SM, fill="#58a6ff")
-    d.text((4, 92), "KEY2  Rollback", font=FONT_SM, fill="#FFAA00")
+    key1_label = "KEY1  Check & Update" if is_git_checkout() else "KEY1  Check App Store"
+    d.text((4, 80), key1_label, font=FONT_SM, fill="#58a6ff")
+    can_roll_back = is_git_checkout()
+    if can_roll_back:
+        d.text((4, 92), "KEY2  Rollback", font=FONT_SM, fill="#FFAA00")
 
     d.rectangle((0, 116, 127, 127), fill="#111")
-    d.text((2, 117), "KEY1:Update K2:Roll K3:X", font=FONT_SM, fill="#888")
+    footer = "KEY1:Update K2:Roll K3:X" if can_roll_back else "KEY1:Check K3:Exit"
+    d.text((2, 117), footer, font=FONT_SM, fill="#888")
 
     LCD.LCD_ShowImage(img, 0, 0)
 
@@ -593,8 +684,13 @@ def main():
                     # 1. Check for updates
                     available, info, count = check_update_available()
                     if not available:
-                        show([info], invert=count == 0)
-                        time.sleep(3)
+                        show(info.split("\n"), invert=count == 0)
+                        if is_git_checkout():
+                            time.sleep(3)
+                        else:
+                            time.sleep(0.5)
+                            while _running and get_button(PINS, GPIO) is None:
+                                time.sleep(0.05)
                         # Refresh home info
                         version, date, full_hash = get_current_version()
                         draw_home(version, date, disk_free, backup_count)
@@ -655,7 +751,7 @@ def main():
 
                     time.sleep(0.3)
 
-                elif btn == "KEY2":
+                elif btn == "KEY2" and is_git_checkout():
                     # Rollback menu
                     backups = list_backups()
                     rollback_sel = 0
