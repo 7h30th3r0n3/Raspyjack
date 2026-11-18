@@ -301,6 +301,92 @@ class TestTsIso:
 
 
 # ---------------------------------------------------------------------------
+# Tests: WiGLE CSV FirstSeen (UTC, from the GPS fix) - shared by WiGLE,
+# WDGWars and WarDrift
+# ---------------------------------------------------------------------------
+
+def _fix(ts, mode=3, lat=48.85, lon=2.35):
+    return {"lat": lat, "lon": lon, "alt": 35, "mode": mode, "ts": ts}
+
+
+class TestWigleTime:
+    def test_utc_wigle_format(self):
+        assert wd._wigle_time(1700000000.0) == "2023-11-14 22:13:20"
+
+
+class TestGpsFix:
+    def setup_method(self):
+        _reset_globals()
+
+    def test_no_gps(self):
+        assert wd._gps_fix(time.time()) is None
+
+    def test_carries_fix_time(self):
+        fix_ts = time.time() - 5
+        wd.gps_data = _fix(fix_ts)
+        assert wd._gps_fix(time.time()) == {"lat": 48.85, "lon": 2.35, "alt": 35, "ts": fix_ts}
+
+    def test_stale_fix_rejected(self):
+        wd.gps_data = _fix(time.time() - 31)
+        assert wd._gps_fix(time.time()) is None
+
+    def test_no_fix_mode_rejected(self):
+        wd.gps_data = _fix(time.time(), mode=1)
+        assert wd._gps_fix(time.time()) is None
+
+    def test_null_island_rejected(self):
+        wd.gps_data = _fix(time.time(), lat=0.0, lon=0.0)
+        assert wd._gps_fix(time.time()) is None
+
+
+class TestWigleRows:
+    def setup_method(self):
+        _reset_globals()
+
+    def test_live_row_time_is_fix_time(self):
+        fix_ts = time.time() - 20
+        wd.gps_data = _fix(fix_ts)
+        _merge_raw_network("AA:BB:CC:DD:EF:01", "AP", 6, -50, "Open", "", False)
+        assert wd._csv_buffer[-1][3] == wd._wigle_time(fix_ts)
+
+    def test_iw_path_uses_fix(self):
+        fix_ts = time.time() - 20
+        wd.gps_data = _fix(fix_ts)
+        wd._merge_iw_network("AA:BB:CC:DD:EF:02", "AP", 6, -50, "Open", "", False)
+        assert wd.networks["AA:BB:CC:DD:EF:02"]["gps"]["ts"] == fix_ts
+
+    def test_iw_path_rejects_stale_fix(self):
+        wd.gps_data = _fix(time.time() - 31)
+        wd._merge_iw_network("AA:BB:CC:DD:EF:03", "AP", 6, -50, "Open", "", False)
+        assert wd.networks["AA:BB:CC:DD:EF:03"]["gps"] is None
+
+    def test_export_row_time_is_fix_time(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(wd, "LOOT_DIR", str(tmp_path))
+        fix_ts = time.time() - 20
+        wd.gps_data = _fix(fix_ts)
+        _merge_raw_network("AA:BB:CC:DD:EF:04", "AP", 6, -50, "Open", "", False)
+        wigle = [p for p in wd._export_all() if os.path.basename(p).startswith("wigle_")]
+        with open(wigle[0]) as f:
+            lines = f.read().splitlines()
+        assert lines[0].startswith("WigleWifi-1.4,")
+        assert lines[2].split(",")[3] == wd._wigle_time(fix_ts)
+
+    def test_every_position_source_uses_gps_fix(self):
+        """Every function that stores a network position must go through
+        _gps_fix, so all paths apply the same fix check and fix time."""
+        import inspect
+        fns = [f for _, f in inspect.getmembers(wd, inspect.isfunction)
+               if f.__module__ == wd.__name__
+               and '"gps": gps_pos' in inspect.getsource(f)]
+        names = {f.__name__ for f in fns}
+        assert {"_merge_raw_network", "_packet_handler", "_merge_iw_network"} <= names
+        for f in fns:
+            src = inspect.getsource(f)
+            assert "_gps_fix(" in src, f.__name__
+            assert "gps_data" not in src, f.__name__
+
+
+# ---------------------------------------------------------------------------
 # Tests: _merge_raw_network
 # ---------------------------------------------------------------------------
 

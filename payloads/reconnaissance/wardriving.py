@@ -37,7 +37,7 @@ import threading
 import subprocess
 import struct
 import socket
-from datetime import datetime
+from datetime import datetime, timezone
 from collections import Counter, deque
 
 sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..", "..")))
@@ -592,6 +592,27 @@ def _ts_iso(ts):
     return ts
 
 
+def _wigle_time(ts):
+    """Epoch -> WiGLE CSV FirstSeen ('YYYY-MM-DD HH:MM:SS', UTC per the WiGLE spec)."""
+    return datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _gps_fix(now_ts):
+    """Position for a sighting, or None without a recent 2D/3D fix.
+
+    Carries the fix time ("ts"), so a CSV row's FirstSeen is the moment the
+    device was at that position. WarDrift rebuilds the route from these pairs
+    and rejects trails that jump.
+    """
+    snap = gps_data
+    if not snap or snap.get("mode", 0) < 2 or now_ts - snap.get("ts", 0) > 30:
+        return None
+    if abs(snap.get("lat", 0)) < 1 and abs(snap.get("lon", 0)) < 1:
+        return None
+    return {"lat": snap["lat"], "lon": snap["lon"],
+            "alt": snap.get("alt", 0), "ts": snap["ts"]}
+
+
 def _get_vendor(mac):
     """OUI vendor lookup."""
     prefix = mac[:8].upper()
@@ -651,13 +672,7 @@ def _merge_raw_network(bssid, ssid, channel, signal, security, cipher, wps):
     vendor = _get_vendor(bssid)
     now_ts = time.time()
 
-    gps_snap = gps_data
-    if gps_snap and (gps_snap.get("mode", 0) < 2 or now_ts - gps_snap.get("ts", 0) > 30):
-        gps_snap = None
-    if gps_snap and abs(gps_snap.get("lat", 0)) < 1 and abs(gps_snap.get("lon", 0)) < 1:
-        gps_snap = None
-    gps_pos = ({"lat": gps_snap["lat"], "lon": gps_snap["lon"],
-                "alt": gps_snap.get("alt", 0)} if gps_snap else None)
+    gps_pos = _gps_fix(now_ts)
 
     csv_snap = None
     with lock:
@@ -794,9 +809,7 @@ def _packet_handler(pkt):
         now = datetime.now().isoformat()
         now_ts = time.time()
 
-        gps_snap = gps_data
-        gps_pos = {"lat": gps_snap["lat"], "lon": gps_snap["lon"],
-                   "alt": gps_snap.get("alt", 0)} if gps_snap else None
+        gps_pos = _gps_fix(now_ts)
 
         csv_snap = None
         with lock:
@@ -1194,13 +1207,7 @@ def _merge_iw_network(bssid, ssid, channel, signal, security,
     csv_snap = None
     now_ts = time.time()
 
-    gps_snap = gps_data
-    if gps_snap and (gps_snap.get("mode", 0) < 2 or now_ts - gps_snap.get("ts", 0) > 30):
-        gps_snap = None
-    if gps_snap and abs(gps_snap.get("lat", 0)) < 1 and abs(gps_snap.get("lon", 0)) < 1:
-        gps_snap = None
-    gps_pos = ({"lat": gps_snap["lat"], "lon": gps_snap["lon"],
-                "alt": gps_snap.get("alt", 0)} if gps_snap else None)
+    gps_pos = _gps_fix(now_ts)
 
     with lock:
         total_beacons += 1
@@ -1413,7 +1420,7 @@ def _export_all():
                 auth_mode = _security_to_wigle(
                     n["security"], n["cipher"], n["auth"])
                 writer.writerow([
-                    bssid, n["ssid"], auth_mode, n["first_seen"],
+                    bssid, n["ssid"], auth_mode, _wigle_time(gps["ts"]),
                     n["channel"], n["signal"],
                     f"{gps['lat']:.6f}", f"{gps['lon']:.6f}",
                     f"{gps.get('alt', 0):.1f}", "10", "WIFI",
@@ -2410,10 +2417,8 @@ def _append_live_csv(bssid, net):
     if not gps:
         return
     auth = _security_to_wigle(net["security"], net["cipher"], net.get("auth", ""))
-    fs = net["first_seen"]
-    first_seen_str = _ts_iso(fs)
     _csv_buffer.append([
-        bssid, net["ssid"], auth, first_seen_str,
+        bssid, net["ssid"], auth, _wigle_time(gps["ts"]),
         net["channel"], net["signal"],
         f"{gps['lat']:.6f}", f"{gps['lon']:.6f}",
         f"{gps.get('alt', 0):.1f}", "10", "WIFI",
