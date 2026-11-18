@@ -117,8 +117,6 @@ def _upload_csv(api_key, filepath):
     )
 
     ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
 
     try:
         with urllib.request.urlopen(req, timeout=30, context=ctx) as resp:
@@ -149,8 +147,6 @@ def _get_profile(api_key):
         },
     )
     ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
     try:
         with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
             return json.loads(resp.read().decode())
