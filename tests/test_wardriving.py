@@ -371,6 +371,40 @@ class TestWigleRows:
         assert lines[0].startswith("WigleWifi-1.4,")
         assert lines[2].split(",")[3] == wd._wigle_time(fix_ts)
 
+    def test_fix_later_writes_one_row(self):
+        """A network first seen without a fix gets its CSV row when the fix
+        comes, once, with the fix time."""
+        for merge in (_merge_raw_network, wd._merge_iw_network):
+            _reset_globals()
+            bssid = "AA:BB:CC:DD:EF:10"
+            merge(bssid, "AP", 6, -50, "Open", "", False)
+            assert len(wd._csv_buffer) == 0, merge.__name__
+            fix_ts = time.time() - 5
+            wd.gps_data = _fix(fix_ts)
+            merge(bssid, "AP", 6, -50, "Open", "", False)
+            merge(bssid, "AP", 6, -50, "Open", "", False)
+            assert len(wd._csv_buffer) == 1, merge.__name__
+            assert wd._csv_buffer[0][3] == wd._wigle_time(fix_ts), merge.__name__
+            assert bssid in wd._dirty_bssids, merge.__name__
+
+    def test_every_late_fix_writes_row(self):
+        """Every place that attaches a later fix to a known network must also
+        write its CSV row and mark it for the database."""
+        import inspect
+        import re
+        blocks = []
+        for _, f in inspect.getmembers(wd, inspect.isfunction):
+            if f.__module__ != wd.__name__:
+                continue
+            for block in re.findall(r'net\["gps"\] = gps_pos(.*?)\n\s*if ssid',
+                                    inspect.getsource(f), re.S):
+                blocks.append((f.__name__, block))
+        assert {n for n, _ in blocks} >= {
+            "_merge_raw_network", "_packet_handler", "_merge_iw_network"}
+        for name, block in blocks:
+            assert "csv_snap = net" in block, name
+            assert "_dirty_bssids.add(bssid)" in block, name
+
     def test_every_position_source_uses_gps_fix(self):
         """Every function that stores a network position must go through
         _gps_fix, so all paths apply the same fix check and fix time."""

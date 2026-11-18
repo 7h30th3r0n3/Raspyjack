@@ -711,6 +711,7 @@ def _merge_raw_network(bssid, ssid, channel, signal, security, cipher, wps):
                 _inc_wigle_count += 1
                 _gps_bssids.append(bssid)
                 _dirty_bssids.add(bssid)
+                csv_snap = net
             if ssid != "<hidden>" and net["ssid"] == "<hidden>":
                 net["ssid"] = ssid
 
@@ -857,6 +858,7 @@ def _packet_handler(pkt):
                     _inc_wigle_count += 1
                     _gps_bssids.append(bssid)
                     _dirty_bssids.add(bssid)
+                    csv_snap = net
                 if ssid != "<hidden>" and net["ssid"] == "<hidden>":
                     net["ssid"] = ssid
 
@@ -1244,6 +1246,8 @@ def _merge_iw_network(bssid, ssid, channel, signal, security,
                 net["gps"] = gps_pos
                 _inc_wigle_count += 1
                 _gps_bssids.append(bssid)
+                _dirty_bssids.add(bssid)
+                csv_snap = net
             if ssid != "<hidden>" and net["ssid"] == "<hidden>":
                 net["ssid"] = ssid
 
