@@ -457,6 +457,7 @@
         " sdr_aprs": "",
         " sdr_meteor": "",
         " gnss_skyplot": "",
+        " Evil-LORA-Tunnel": "",
         " kismet_scanner": ""
     },
     "fallbacks": {

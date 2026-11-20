@@ -136,11 +136,12 @@ _CHARSET_MAP = {
 
 
 def lcd_keyboard(lcd, font, pins, gpio, title="Input", default="",
-                 charset="full", max_len=64):
+                 charset="full", max_len=64, masked=False):
     """
     Show a paged on-screen keyboard on the LCD.
 
     Returns the entered string, or None if cancelled.
+    Masked entries use local input and conceal their value on mirrored frames.
     """
     if Image is None or ScaledDraw is None:
         return default or ""
@@ -191,7 +192,7 @@ def lcd_keyboard(lcd, font, pins, gpio, title="Input", default="",
     # Available height for grid: FOOTER_Y - GRID_TOP
     GRID_H = FOOTER_Y - GRID_TOP
 
-    remote_session_id = open_remote_text_session(
+    remote_session_id = None if masked else open_remote_text_session(
         title=title,
         default=default,
         charset=charset,
@@ -217,7 +218,7 @@ def lcd_keyboard(lcd, font, pins, gpio, title="Input", default="",
             if cursor_r < n_rows:
                 cursor_c = min(cursor_c, len(grid[cursor_r]) - 1)
 
-            remote_event = get_remote_text_event(remote_session_id)
+            remote_event = None if masked else get_remote_text_event(remote_session_id)
             if remote_event:
                 special = str(remote_event.get("special") or "")
                 if special == "ESCAPE":
@@ -234,12 +235,13 @@ def lcd_keyboard(lcd, font, pins, gpio, title="Input", default="",
 
             # Physical keyboard (TCA8418) input
             if _hw_ok:
+                shifted = _hw_kbd.is_key_pressed(42) or _hw_kbd.is_key_pressed(54)
                 for code, char in _HW_KEYS.items():
                     now = _hw_kbd.is_key_pressed(code)
                     was = _hw_prev.get(code, False)
                     _hw_prev[code] = now
                     if now and not was and len(text) < max_len:
-                        text.append(char)
+                        text.append(char.upper() if shifted else char)
                 bk = _hw_kbd.is_key_pressed(14)
                 if bk and not _hw_prev.get(14, False) and text:
                     text.pop()
@@ -249,7 +251,10 @@ def lcd_keyboard(lcd, font, pins, gpio, title="Input", default="",
                     return "".join(text)
                 _hw_prev[28] = en
 
-            btn = get_button(pins, gpio)
+            # On CardputerZero, the GPIO shim also reports Enter, Backspace,
+            # Space and F/Z/X/C as navigation. Consume each physical key once.
+            typing = _hw_ok and any(_hw_prev.values())
+            btn = None if typing else get_button(pins, gpio)
 
             if btn == "KEY3":
                 return None
@@ -318,7 +323,7 @@ def lcd_keyboard(lcd, font, pins, gpio, title="Input", default="",
             d.text((90, 1), f"[{page_label}]", font=key_font, fill="#FFAA00")
 
             # Input field
-            display_text = "".join(text)
+            display_text = "*" * len(text) if masked else "".join(text)
             if len(display_text) > 18:
                 display_text = "..." + display_text[-15:]
             d.rectangle((2, INPUT_Y, 125, INPUT_Y + INPUT_H - 1),
@@ -370,4 +375,5 @@ def lcd_keyboard(lcd, font, pins, gpio, title="Input", default="",
             lcd.LCD_ShowImage(img, 0, 0)
             time.sleep(0.03)
     finally:
-        close_remote_text_session(remote_session_id)
+        if not masked:
+            close_remote_text_session(remote_session_id)
