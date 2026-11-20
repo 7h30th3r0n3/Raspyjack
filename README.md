@@ -108,6 +108,11 @@ Check the WIKI for more ! https://github.com/7h30th3r0n3/Raspyjack/wiki
     <td>All-in-one handheld: Pi CM0 + keyboard + LCD + battery. RaspyJack installs in one tap from the <strong>CardputerZero App Store</strong> (share code <code>RJAK</code>)</td>
     <td><a href="https://shop.m5stack.com/products/m5stack-cardputer-zero?ref=7h30th3r0n3">Buy</a></td>
   </tr>
+  <tr>
+    <td><strong>M5Stack Cap LoRa-1262 with GNSS</strong></td>
+    <td>Record Meshtastic and MeshCore packets with receiver GPS on CardputerZero. Open Payload → hardware → Evil-LORA-Tunnel.</td>
+    <td><a href="docs/evil-lora-tunnel.md">Recorder guide</a></td>
+  </tr>
    <tr>
     <td><strong>Raspberry Pi 3 Model B</strong> </td>
     <td>Almost same specs as RPI 0w2</td>
