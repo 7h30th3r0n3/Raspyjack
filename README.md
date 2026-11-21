@@ -15,6 +15,8 @@
 </div>
 
 > 🏪 **Now on the CardputerZero App Store.** If you have a **M5Stack CardputerZero**, install RaspyJack in one tap: open the App Store and search **RaspyJack** (share code **`RJAK`**). No flashing, no SSH. See [Install](#-install).
+>
+> ⌨️ **CardputerZero keys:** **KEY1 = Space** · **KEY2 = Tab** · **KEY3 = Esc** (KEY3 quits). Navigate with the arrow keys, select with Enter.
 
 ---
 
