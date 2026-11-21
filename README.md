@@ -181,6 +181,8 @@ On a **M5Stack CardputerZero**, RaspyJack is published on the official **Cardput
 
 No flashing, no SSH, no git. Updates are delivered through the store. You can still install manually on the CardputerZero if you prefer (skip the OS-flashing step, it already ships with Debian, and run the manual steps below). Full guide: [Installation wiki](https://github.com/7h30th3r0n3/Raspyjack/wiki/Installation).
 
+> ⌨️ **CardputerZero keys:** the three function buttons are **KEY1 = Space**, **KEY2 = Tab**, **KEY3 = Esc** (KEY3 exits). Navigate with the arrow keys, select with Enter. Full map in [Input mapping](#-input-mapping).
+
 > ⚠️ **Known issue: RaspyJack installs and runs once, but no longer launches from the icon after a reboot (CardputerZero).**
 >
 > RaspyJack needs root, so the launcher starts it with `sudo`. Some CardputerZero factory images do **not** grant the first user passwordless sudo, so at boot `sudo` asks for a password that nobody can type, the app exits immediately, and APPLaunch drops back to the menu. It works right after install (or when you launch it once over SSH) because sudo is still authenticated, but it does not survive a reboot. The app itself is fine, this is purely a sudo-permission difference between images.
@@ -271,16 +273,16 @@ Raspyjack now includes a vendored port of
 
 ## 🎮 Input mapping
 
-| Control | Action |
-|---|---|
-| UP / DOWN | Navigate |
-| LEFT | Back |
-| RIGHT / OK | Enter / Select |
-| KEY1 | Context/extra action (varies) |
-| KEY2 | Secondary action (varies) |
-| KEY3 | Exit / Cancel |
+| Control | Action | CardputerZero key |
+|---|---|---|
+| UP / DOWN | Navigate | Arrow keys |
+| LEFT | Back | ← |
+| RIGHT / OK | Enter / Select | → / Enter |
+| **KEY1** | Context/extra action (varies) | **Space** |
+| **KEY2** | Secondary action (varies) | **Tab** |
+| **KEY3** | Exit / Cancel | **Esc** |
 
-> **On the M5Stack CardputerZero** (keyboard instead of GPIO buttons), the three buttons map to keys: **KEY1 = Space**, **KEY2 = Tab**, **KEY3 = Esc**. The joystick directions and OK use the arrow keys and Enter.
+> On the **M5Stack CardputerZero** there are no physical GPIO buttons: the three function buttons are the keyboard keys above. **KEY1 = Space**, **KEY2 = Tab**, **KEY3 = Esc**.
 ---
 
 ## 🖥️ Dual-Display Support
