@@ -279,6 +279,8 @@ Raspyjack now includes a vendored port of
 | KEY1 | Context/extra action (varies) |
 | KEY2 | Secondary action (varies) |
 | KEY3 | Exit / Cancel |
+
+> **On the M5Stack CardputerZero** (keyboard instead of GPIO buttons), the three buttons map to keys: **KEY1 = Space**, **KEY2 = Tab**, **KEY3 = Esc**. The joystick directions and OK use the arrow keys and Enter.
 ---
 
 ## 🖥️ Dual-Display Support
