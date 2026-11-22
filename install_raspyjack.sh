@@ -234,7 +234,7 @@ PACKAGES=(
 
 # CardputerZero extra packages
 if [[ "$DISPLAY_TYPE" == "CARDPUTER_320" ]]; then
-  PACKAGES+=( mpv rtl-433 bluez-alsa-utils chocolate-doom freedoom xvfb xdotool )
+  PACKAGES+=( mpv rtl-433 bluez-alsa-utils chocolate-doom freedoom xvfb xdotool python3-libgpiod )
 fi
 
 # SDR/radio tools
