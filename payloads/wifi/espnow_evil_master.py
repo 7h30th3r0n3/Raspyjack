@@ -37,7 +37,7 @@ import struct
 import csv
 import subprocess
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from collections import Counter
 
 sys.path.append(os.path.abspath(os.path.join(__file__, "..", "..", "..")))
@@ -284,7 +284,8 @@ class WardLogger:
         self.csv_path = os.path.join(LOOT_DIR, f"ward_{ts}.csv")
         self._file = open(self.csv_path, "w", newline="")
         self._writer = csv.writer(self._file)
-        self._writer.writerow([self.WIGLE_HEADER])
+        # Written raw: writerow() would quote the comma-separated pre-header.
+        self._file.write(self.WIGLE_HEADER + "\n")
         self._writer.writerow(self.COLUMNS)
         self._count = 0
         self._seen_bssids = set()
@@ -293,7 +294,7 @@ class WardLogger:
         self._ssid_counter = Counter()
 
     def log(self, ap, gps_data):
-        first_seen = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        first_seen = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         is_new = ap["bssid"] not in self._seen_bssids
         self._writer.writerow([
             ap["bssid"], ap["ssid"], f"[{ap['enc']}]", first_seen,
