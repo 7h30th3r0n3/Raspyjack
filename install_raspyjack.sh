@@ -273,24 +273,83 @@ fi
 
 # ───── 2‑a1b ▸ Kismet (from official repo, optional) ─────────────
 if ! cmd kismet; then
-  # Detect Debian codename for correct repo
-  DEBIAN_CODENAME=$(lsb_release -cs 2>/dev/null || grep VERSION_CODENAME /etc/os-release 2>/dev/null | cut -d= -f2)
-  DEBIAN_CODENAME=${DEBIAN_CODENAME:-trixie}
-  # Kismet repos exist for: bookworm, trixie
-  case "$DEBIAN_CODENAME" in
-    bookworm|trixie) ;;
-    *) DEBIAN_CODENAME="trixie" ;; # fallback
+  KISMET_ARCH=$(dpkg --print-architecture 2>/dev/null || true)
+  case "$KISMET_ARCH" in
+    amd64|arm64)
+      # Detect Debian codename for correct repo
+      DEBIAN_CODENAME=$(lsb_release -cs 2>/dev/null || grep '^VERSION_CODENAME=' /etc/os-release 2>/dev/null | head -n1 | cut -d= -f2 | tr -d '"\r ' || true)
+      DEBIAN_CODENAME=${DEBIAN_CODENAME:-trixie}
+      # Kismet repos exist for: bookworm, trixie
+      case "$DEBIAN_CODENAME" in
+        bookworm|trixie) ;;
+        *) DEBIAN_CODENAME="trixie" ;; # fallback
+      esac
+      step "Installing Kismet from official repo ($DEBIAN_CODENAME, $KISMET_ARCH) …"
+      # De-armor off to the side. Tee'ing the live keyring before gpg succeeds
+      # truncates it; deleting that file afterwards leaves kismet.list signed-by
+      # a path apt can no longer read, and the next unguarded apt aborts.
+      kismet_keyring=/usr/share/keyrings/kismet-archive-keyring.gpg
+      kismet_list=/etc/apt/sources.list.d/kismet.list
+      kismet_stage="${kismet_keyring}.tmp.$$"
+      kismet_list_stage="${kismet_list}.tmp.$$"
+      kismet_key_ok=0
+      kismet_key_tmp=""
+      if kismet_key_tmp=$(mktemp "${TMPDIR:-/tmp}/kismet-archive-keyring.XXXXXX"); then
+        if wget -O - https://www.kismetwireless.net/repos/kismet-release.gpg.key --quiet \
+          | gpg --dearmor | tee "$kismet_key_tmp" >/dev/null 2>&1 \
+          && [ -s "$kismet_key_tmp" ]; then
+          if sudo tee "$kismet_stage" < "$kismet_key_tmp" >/dev/null \
+            && sudo mv -f "$kismet_stage" "$kismet_keyring" \
+            && sudo chmod 644 "$kismet_keyring"; then
+            kismet_key_ok=1
+          else
+            if ! sudo rm -f "$kismet_stage"; then
+              warn "Could not remove staged Kismet keyring $kismet_stage"
+            fi
+            warn "Could not install Kismet GPG key $kismet_keyring (non-critical, can install later from WebUI)"
+          fi
+        else
+          warn "Could not fetch Kismet GPG key (non-critical, can install later from WebUI)"
+        fi
+        if [ -f "$kismet_key_tmp" ] && ! rm -f "$kismet_key_tmp"; then
+          warn "Could not remove temporary Kismet keyring $kismet_key_tmp"
+        fi
+      else
+        kismet_key_tmp=""
+        warn "Could not create temporary file for Kismet GPG key (non-critical, can install later from WebUI)"
+      fi
+      if [ "$kismet_key_ok" -eq 1 ]; then
+        if echo "deb [arch=$KISMET_ARCH signed-by=/usr/share/keyrings/kismet-archive-keyring.gpg] https://www.kismetwireless.net/repos/apt/release/$DEBIAN_CODENAME $DEBIAN_CODENAME main" \
+          | sudo tee "$kismet_list_stage" >/dev/null \
+          && sudo mv -f "$kismet_list_stage" "$kismet_list" \
+          && sudo apt-get update -qq 2>/dev/null; then
+          sudo apt-get install -y --no-install-recommends kismet 2>/dev/null \
+            || warn "Kismet install failed (non-critical, can install later from WebUI)"
+        else
+          if ! sudo rm -f "$kismet_list_stage"; then
+            warn "Could not remove staged Kismet source list $kismet_list_stage"
+          fi
+          warn "Kismet APT update failed (non-critical, can install later from WebUI)"
+        fi
+      elif ! sudo test -s "$kismet_keyring" && sudo test -e "$kismet_list"; then
+        # Keyring is missing or empty, so the list's signed-by path would make
+        # the next unguarded apt abort. Drop the list, and say so if we cannot.
+        if ! sudo rm -f "$kismet_list"; then
+          warn "Could not remove $kismet_list (still references missing Kismet keyring $kismet_keyring)"
+        fi
+      fi
+      if cmd kismet; then
+        sudo systemctl disable kismet 2>/dev/null || true
+        sudo systemctl stop kismet 2>/dev/null || true
+      fi
+      ;;
+    *)
+      if ! sudo rm -f /etc/apt/sources.list.d/kismet.list; then
+        warn "Could not remove /etc/apt/sources.list.d/kismet.list"
+      fi
+      warn "Skipping Kismet install on ${KISMET_ARCH:-unknown}: official Kismet packages require a 64-bit OS (amd64/arm64)"
+      ;;
   esac
-  step "Installing Kismet from official repo ($DEBIAN_CODENAME) …"
-  wget -O - https://www.kismetwireless.net/repos/kismet-release.gpg.key --quiet \
-    | gpg --dearmor | sudo tee /usr/share/keyrings/kismet-archive-keyring.gpg >/dev/null 2>&1
-  echo "deb [signed-by=/usr/share/keyrings/kismet-archive-keyring.gpg] https://www.kismetwireless.net/repos/apt/release/$DEBIAN_CODENAME $DEBIAN_CODENAME main" \
-    | sudo tee /etc/apt/sources.list.d/kismet.list >/dev/null
-  sudo apt-get update -qq 2>/dev/null
-  sudo apt-get install -y --no-install-recommends kismet 2>/dev/null \
-    || warn "Kismet install failed (non-critical, can install later from WebUI)"
-  sudo systemctl disable kismet 2>/dev/null
-  sudo systemctl stop kismet 2>/dev/null
 else
   info "Kismet already installed."
 fi
