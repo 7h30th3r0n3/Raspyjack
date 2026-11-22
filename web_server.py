@@ -2177,19 +2177,130 @@ class RaspyJackHandler(SimpleHTTPRequestHandler):
         super().__init__(*args, directory=str(WEB_DIR), **kwargs)
 
     @staticmethod
-    @staticmethod
     def _install_kismet() -> bool:
         import shutil as _sh
         if _sh.which("kismet"):
             return True
         try:
-            subprocess.run(
-                ["bash", "-c",
-                 'wget -O - https://www.kismetwireless.net/repos/kismet-release.gpg.key --quiet | gpg --dearmor | tee /usr/share/keyrings/kismet-archive-keyring.gpg >/dev/null && '
-                 'echo "deb [signed-by=/usr/share/keyrings/kismet-archive-keyring.gpg] https://www.kismetwireless.net/repos/apt/release/trixie trixie main" > /etc/apt/sources.list.d/kismet.list && '
-                 'apt-get update -qq && apt-get install -y kismet'],
-                capture_output=True, timeout=300)
-            return _sh.which("kismet") is not None
+            arch_res = subprocess.run(
+                ["dpkg", "--print-architecture"],
+                capture_output=True, text=True, timeout=10,
+            )
+            arch = (arch_res.stdout or "").strip() if arch_res.returncode == 0 else ""
+            if arch not in ("amd64", "arm64"):
+                return False
+
+            codename = "trixie"
+            try:
+                with open("/etc/os-release", "r", encoding="utf-8") as f:
+                    for line in f:
+                        key, sep, val = line.strip().partition("=")
+                        if sep and key == "VERSION_CODENAME":
+                            candidate = val.strip().strip('"').strip("'").lower()
+                            if candidate in ("bookworm", "trixie"):
+                                codename = candidate
+                            break
+            except OSError:
+                pass
+
+            repo_line = (
+                f"deb [arch={arch} signed-by=/usr/share/keyrings/kismet-archive-keyring.gpg] "
+                f"https://www.kismetwireless.net/repos/apt/release/{codename} {codename} main"
+            )
+            # Stage the keyring and the source list. Writing either live file
+            # before wget/gpg/mv succeed truncates a key apt is already using.
+            # On failure, restore the previous keyring and drop kismet.list when
+            # that keyring is missing or empty so later apt can still read sources.
+            import textwrap
+            script = textwrap.dedent("""\
+                set -o pipefail
+                keyring=/usr/share/keyrings/kismet-archive-keyring.gpg
+                list=/etc/apt/sources.list.d/kismet.list
+                repo_line='__REPO_LINE__'
+                tmp=$(mktemp "${TMPDIR:-/tmp}/kismet-archive-keyring.XXXXXX") || exit 1
+                bak=$(mktemp "${TMPDIR:-/tmp}/kismet-archive-keyring.bak.XXXXXX") || {
+                  if ! rm -f "$tmp"; then
+                    echo "Could not remove temporary Kismet keyring $tmp" >&2
+                  fi
+                  exit 1
+                }
+                had_bak=0
+                rc=0
+                if [ -s "$keyring" ]; then
+                  if ! cp "$keyring" "$bak"; then
+                    echo "Could not back up Kismet keyring $keyring to $bak" >&2
+                    if ! rm -f "$tmp"; then
+                      echo "Could not remove temporary Kismet keyring $tmp" >&2
+                    fi
+                    if ! rm -f "$bak"; then
+                      echo "Could not remove Kismet keyring backup $bak" >&2
+                    fi
+                    exit 1
+                  fi
+                  had_bak=1
+                fi
+                if ! wget -O - https://www.kismetwireless.net/repos/kismet-release.gpg.key --quiet | gpg --dearmor > "$tmp"; then
+                  rc=1
+                elif [ ! -s "$tmp" ]; then
+                  rc=1
+                else
+                  stage="${keyring}.tmp.$$"
+                  if ! tee "$stage" < "$tmp" >/dev/null || ! mv -f "$stage" "$keyring" || ! chmod 644 "$keyring"; then
+                    rc=1
+                    if [ -e "$stage" ] && ! rm -f "$stage"; then
+                      echo "Could not remove staged Kismet keyring $stage" >&2
+                    fi
+                    if [ "$had_bak" -eq 1 ]; then
+                      rst="${keyring}.restore.$$"
+                      if ! tee "$rst" < "$bak" >/dev/null || ! mv -f "$rst" "$keyring" || ! chmod 644 "$keyring"; then
+                        echo "Could not restore Kismet keyring $keyring from $bak" >&2
+                        if [ -e "$rst" ] && ! rm -f "$rst"; then
+                          echo "Could not remove Kismet keyring restore file $rst" >&2
+                        fi
+                      fi
+                    fi
+                  fi
+                fi
+                if [ "$rc" -eq 0 ]; then
+                  list_stage="${list}.tmp.$$"
+                  if ! echo "$repo_line" > "$list_stage" \\
+                    || ! mv -f "$list_stage" "$list" \\
+                    || ! apt-get update -qq \\
+                    || ! apt-get install -y --no-install-recommends kismet; then
+                    rc=1
+                    if [ -e "$list_stage" ] && ! rm -f "$list_stage"; then
+                      echo "Could not remove staged Kismet source list $list_stage" >&2
+                    fi
+                  fi
+                fi
+                if [ ! -s "$keyring" ] && [ -e "$list" ]; then
+                  if ! rm -f "$list"; then
+                    echo "Could not remove $list (signed-by $keyring missing or unreadable)" >&2
+                  fi
+                fi
+                if [ -e "$tmp" ] && ! rm -f "$tmp"; then
+                  echo "Could not remove temporary Kismet keyring $tmp" >&2
+                fi
+                if [ -e "$bak" ] && ! rm -f "$bak"; then
+                  echo "Could not remove Kismet keyring backup $bak" >&2
+                fi
+                exit "$rc"
+                """).strip().replace("__REPO_LINE__", repo_line)
+            proc = subprocess.run(
+                ["bash", "-c", script],
+                capture_output=True, text=True, errors="replace", timeout=300,
+            )
+            err = proc.stderr if isinstance(getattr(proc, "stderr", None), str) else ""
+            if err.strip():
+                print(err.strip(), file=sys.stderr)
+            if not _sh.which("kismet"):
+                return False
+            for action in ("disable", "stop"):
+                try:
+                    subprocess.run(["systemctl", action, "kismet"], capture_output=True, timeout=30)
+                except Exception:
+                    pass
+            return True
         except Exception:
             return False
 
