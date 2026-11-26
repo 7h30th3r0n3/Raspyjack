@@ -274,6 +274,9 @@ class ST25R3916Driver:
     # ── Power ─────────────────────────────────────────────────────────
 
     def _power_on(self):
+        ext5v = "/sys/class/leds/ext_5v_out/brightness"
+        if not os.path.exists(ext5v):
+            return
         try:
             p = "/sys/class/leds/ext_usb_gpio_fun/brightness"
             if os.path.exists(p):
@@ -282,7 +285,7 @@ class ST25R3916Driver:
         except OSError:
             pass
         try:
-            with open("/sys/class/leds/ext_5v_out/brightness", "w") as f:
+            with open(ext5v, "w") as f:
                 f.write("1")
         except OSError:
             pass
@@ -303,23 +306,17 @@ class ST25R3916Driver:
                 pass
 
     def _power_off(self):
+        # On CardputerZero, GPIO26 gates the Cap 3.3V rail and ext_5v_out powers
+        # the header shared with the ST7789V LCD on SPI0. Driving GPIO26 low or
+        # cutting ext_5v_out while the Cap is attached freezes the LCD panel.
+        # Release the line handle only (the BSP retains the output level),
+        # matching _cc1101_driver.py and M5Stack's Cap-CC1101-NFC driver.
         if self._pwr_req:
             try:
-                self._pwr_req.set_value(_PWR_GPIO, gpiod.line.Value.INACTIVE)
                 self._pwr_req.release()
             except Exception:
                 pass
             self._pwr_req = None
-        try:
-            subprocess.run(["pinctrl", "set", "26", "op", "dl"],
-                           capture_output=True, timeout=3)
-        except Exception:
-            pass
-        try:
-            with open("/sys/class/leds/ext_5v_out/brightness", "w") as f:
-                f.write("0")
-        except OSError:
-            pass
 
     # ── Lifecycle ─────────────────────────────────────────────────────
 
@@ -339,6 +336,7 @@ class ST25R3916Driver:
             except Exception:
                 pass
         if not os.path.exists(dev):
+            self.close()
             return False
 
         try:
@@ -347,6 +345,8 @@ class ST25R3916Driver:
             self._spi.max_speed_hz = self._speed
             self._spi.mode = _SPI_MODE
         except OSError:
+            self._spi = None
+            self.close()
             return False
 
         if _GPIOD_OK:
@@ -371,15 +371,13 @@ class ST25R3916Driver:
                 if (ic & _ID_TYPE_MASK) == _ID_ST25R3916:
                     break
             else:
-                self._spi.close()
-                self._spi = None
+                self.close()
                 return False
 
         try:
             self._init_hw()
         except Exception:
-            self._spi.close()
-            self._spi = None
+            self.close()
             return False
 
         self._opened = True
