@@ -216,6 +216,46 @@ reboot
 
 After reboot, RaspyJack should be available on-device.
 
+### Optional Quartermaster wardriving app
+
+**Payload → Reconnaissance → Quartermaster** opens the installed Quartermaster app on the handheld.
+Use its GPS, radio dashboard and WiGLE logs, then quit from its home screen to return to RaspyJack.
+The original **wardriving** and **wardriving_replay** payloads are still available.
+
+- **CardputerZero.** Install **Quartermaster** using App Store share code **WARD**. Open it once under your normal
+  login and quit before launching it from RaspyJack. The launcher uses the same framebuffer RaspyJack detected.
+- **Raspberry Pi with a Waveshare joystick HAT.** The DIY package supports Raspberry Pi OS Bookworm and Trixie with the
+  standard Raspberry Pi repositories. Use the 1.44-inch ST7735S (128×128) or the 1.3-inch ST7789 (240×240).
+  The build guide includes the parts, display settings and first-drive checks. [Quartermaster DIY build guide](https://github.com/valleytechsolutions/Quartermaster/blob/main/docs/diy.md)
+
+On the Pi, run these commands as your login user. RaspyJack supplies its current HAT profile at launch.
+
+```sh
+wget https://github.com/valleytechsolutions/Quartermaster/releases/download/pi-v1.2.5/quartermaster-pi_1.2.5_all.deb
+sudo apt update
+sudo raspi-config nonint do_spi 0
+sudo apt install ./quartermaster-pi_1.2.5_all.deb
+sudo reboot
+```
+
+Leave the standalone Quartermaster display service off when booting into RaspyJack. If you previously enabled it,
+run `sudo systemctl disable --now "quartermaster@$USER.service"` from your normal login. The display and buttons
+belong to Quartermaster until you exit. On the HAT, the joystick and K1 select, K2 goes back and K3 opens actions.
+A USB keyboard also works. From the Quartermaster home screen, press K2 or Esc and confirm **Quit**.
+
+Quartermaster runs as the user who started RaspyJack with sudo, or the Pi's sole regular login when RaspyJack
+runs as a service. Its settings, upload credentials and logs use that user's home directory. Logs are in
+`~/quartermaster/logs/`. For a machine with multiple regular logins, run `sudo systemctl edit raspyjack.service`,
+set the account you normally use for Quartermaster as shown below, and restart RaspyJack when ready.
+
+```ini
+[Service]
+Environment=RJ_QUARTERMASTER_USER=your-login
+```
+
+The launcher opens the local screen. The RaspyJack WebUI and payloads do not receive Quartermaster's input or logs.
+The [Quartermaster project](https://github.com/valleytechsolutions/Quartermaster) maintains the app and its updates.
+
 ---
 
 ## 🔄 Update

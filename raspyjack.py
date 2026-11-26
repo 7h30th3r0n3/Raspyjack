@@ -4113,6 +4113,48 @@ def launch_webui():
     Dialog_info("Loading WebUI...", wait=True)
     exec_payload("utilities/webui.py")
 
+
+def launch_quartermaster():
+    """Give the local display to the independently installed Quartermaster app."""
+    import quartermaster_launcher
+
+    try:
+        command, options = quartermaster_launcher.prepare(LCD.display_type, getattr(LCD_Config, "FB_DEVICE", None))
+    except quartermaster_launcher.LaunchError as exc:
+        Dialog(str(exc))
+        return
+    except OSError as exc:
+        print(f"[Quartermaster] {exc}", flush=True)
+        Dialog("Cannot start app.\nCheck system journal.")
+        return
+
+    _wait_for_button_release()
+    screen_lock.set()
+    problem = ""
+    try:
+        # A refresh may already be writing a frame when screen_lock is set.
+        with draw_lock:
+            try:
+                with LCD_Config.quartermaster_display(PINS.values()):
+                    result = subprocess.run(command, **options)
+                if result.returncode:
+                    problem = f"App exit {result.returncode}\nCheck system journal."
+            except (OSError, subprocess.SubprocessError) as exc:
+                print(f"[Quartermaster] {exc}", flush=True)
+                problem = "Cannot start app.\nCheck system journal."
+            finally:
+                _setup_gpio()
+    finally:
+        screen_lock.clear()
+    # evdev delivers separate events to each reader. No RaspyJack menu polls during the child.
+    rj_input.flush()
+    _wait_for_button_release()
+    _mark_user_activity()
+    RenderCurrentMenuOnce()
+    mark_display_dirty()
+    if problem:
+        Dialog(problem)
+
 def quick_wifi_toggle():
     """FAST toggle between wlan0 and wlan1 - immediate switching."""
     if not WIFI_AVAILABLE:
@@ -4590,6 +4632,8 @@ class DisposableMenu:
             # Add root files directly to category menu
             for p in root_files:
                 cat_items.append([f" {os.path.splitext(os.path.basename(p))[0]}", partial(exec_payload, p)])
+            if cat == "reconnaissance":
+                cat_items.append([" Quartermaster", launch_quartermaster])
 
             # Add subdirectories as expandable folders
             for subdir in sorted(subdirs.keys()):

@@ -25,6 +25,7 @@
 
 import os
 import time
+from contextlib import contextmanager
 
 # ---------------------------------------------------------------------------
 # Display type detection from gui_conf.json
@@ -110,6 +111,17 @@ if _DISPLAY_TYPE == "CARDPUTER_320":
         fb.seek(0)
         fb.write(data)
 
+    @contextmanager
+    def quartermaster_display(button_pins):
+        global _fb_mmap, _fb_fd
+        if _fb_mmap is not None:
+            _fb_mmap.close()
+            _fb_mmap = None
+        if _fb_fd is not None:
+            os.close(_fb_fd)
+            _fb_fd = None
+        yield  # GPIO_Init opens the framebuffer again when RaspyJack redraws.
+
     def epd_digital_write(pin, value):
         pass
 
@@ -145,6 +157,17 @@ else:
     LCD_BL_PIN = 24
 
     SPI = spidev.SpiDev(0, 0)
+
+    @contextmanager
+    def quartermaster_display(button_pins):
+        # gpiozero/lgpio must be able to claim the joystick and the HAT's control lines.
+        pins = tuple(button_pins) + (LCD_RST_PIN, LCD_DC_PIN, LCD_CS_PIN, LCD_BL_PIN)
+        GPIO.cleanup(pins)
+        SPI.close()
+        try:
+            yield
+        finally:
+            SPI.open(0, 0)
 
     def epd_digital_write(pin, value):
         GPIO.output(pin, value)
