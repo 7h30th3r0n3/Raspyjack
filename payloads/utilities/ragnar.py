@@ -228,7 +228,7 @@ def _api_json(path: str, method: str = "GET", payload: dict | None = None) -> tu
         headers["Content-Type"] = "application/json"
     req = urllib.request.Request(url, data=data, method=method, headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=3) as resp:
+        with urllib.request.urlopen(req, timeout=8) as resp:
             raw = resp.read().decode("utf-8", "ignore")
             parsed = json.loads(raw) if raw else {}
             return True, parsed
@@ -476,33 +476,64 @@ def _fetch_credentials() -> list[dict]:
 
 
 def _fetch_wifi_networks() -> list[dict]:
-    """Fetch scanned WiFi networks."""
+    """Fetch scanned WiFi networks.
+
+    /api/wifi/networks returns scan results under "available" (and saved ones
+    under "known") — not a "networks" key — so the old code always read an
+    empty list. Read those with fallbacks, and be lenient about per-network
+    field names (signal/rssi, security/encryption).
+    """
     ok, data = _api_json("/api/wifi/networks")
     if not ok:
         return []
-    nets = data if isinstance(data, list) else data.get("networks", [])
+    if isinstance(data, list):
+        nets = data
+    else:
+        nets = data.get("available") or data.get("networks") or data.get("known") or []
     result = []
     for n in nets[:20]:
+        if not isinstance(n, dict):
+            continue
+        raw_sig = n.get("signal", n.get("rssi", n.get("quality", 0)))
+        try:
+            signal = int(float(raw_sig))
+        except (TypeError, ValueError):
+            signal = 0
         result.append({
             "ssid": str(n.get("ssid", "") or ""),
-            "signal": int(n.get("signal", 0) or 0),
-            "security": str(n.get("security", "") or ""),
-            "connected": bool(n.get("connected")),
+            "signal": signal,
+            "security": str(n.get("security") or n.get("encryption") or n.get("auth") or ""),
+            "connected": bool(n.get("connected") or n.get("in_use") or n.get("active")),
         })
     return result
 
 
 def _fetch_wifi_status() -> dict:
-    """Fetch current WiFi connection status."""
+    """Fetch current WiFi connection status.
+
+    /api/wifi/status reports connection under several keys depending on
+    version (wifi_connected / network_connected / interface_connected, with
+    connected_ssid / current_ssid and ip_address). Read those with fallbacks
+    so a connected device isn't shown as "Not connected".
+    """
     ok, data = _api_json("/api/wifi/status")
     if not ok:
         return {}
+    connected = bool(
+        data.get("connected")
+        or data.get("wifi_connected")
+        or data.get("network_connected")
+        or data.get("interface_connected")
+    )
+    ssid = data.get("connected_ssid") or data.get("current_ssid") or data.get("ssid") or ""
+    ip = data.get("ip_address") or data.get("ip") or ""
+    interface = data.get("interface") or data.get("default_interface") or ""
     return {
-        "connected": bool(data.get("connected")),
-        "ssid": str(data.get("ssid", "") or ""),
+        "connected": connected,
+        "ssid": str(ssid),
         "signal": str(data.get("signal", "") or ""),
-        "ip": str(data.get("ip", "") or ""),
-        "interface": str(data.get("interface", "") or ""),
+        "ip": str(ip),
+        "interface": str(interface),
     }
 
 
