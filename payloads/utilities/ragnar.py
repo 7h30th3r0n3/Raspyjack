@@ -8,6 +8,7 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 import traceback
 import urllib.error
@@ -221,7 +222,7 @@ def _preflight_ragnar() -> tuple[bool, str]:
             env=env,
             capture_output=True,
             text=True,
-            timeout=15,
+            timeout=60,
             check=False,
         )
     except Exception as exc:
@@ -328,7 +329,7 @@ def _start_ragnar() -> tuple[bool, str]:
 
     RAGNAR_PID_PATH.write_text(f"{proc.pid}\n", encoding="utf-8")
 
-    deadline = time.time() + 8
+    deadline = time.time() + 45
     while time.time() < deadline:
         if _running_pid():
             ok, _status = _api_json("/api/status")
@@ -1032,15 +1033,61 @@ def main() -> None:
             cached_wifi_nets = _fetch_wifi_networks()
             cached_wifi_status = _fetch_wifi_status()
 
+    # Background action runner: start/stop Ragnar (and other control-page
+    # actions) can block for up to ~100s on preflight + API-wait. Running them
+    # on a worker thread keeps the UI loop rendering a live "working" status
+    # instead of appearing frozen.
+    action_state = {"thread": None, "label": "", "result": None}
+
+    def _begin_action(action_key: str, label: str) -> bool:
+        thread = action_state["thread"]
+        if thread is not None and thread.is_alive():
+            return False
+
+        def _worker():
+            try:
+                res = _run_control(action_key)
+            except Exception as exc:  # pragma: no cover - defensive
+                res = (False, _shorten(str(exc), 24))
+            action_state["result"] = res
+
+        action_state["result"] = None
+        action_state["label"] = label
+        action_state["thread"] = threading.Thread(target=_worker, daemon=True)
+        action_state["thread"].start()
+        return True
+
+    def _action_busy() -> bool:
+        thread = action_state["thread"]
+        return thread is not None and thread.is_alive()
+
     try:
         while True:
             now = time.monotonic()
+
+            # Pick up a finished background action, if any.
+            if (
+                action_state["thread"] is not None
+                and not action_state["thread"].is_alive()
+                and action_state["result"] is not None
+            ):
+                ok, notice = action_state["result"]
+                notice_until = now + (4 if ok else 6)
+                action_state["thread"] = None
+                action_state["result"] = None
+                action_state["label"] = ""
+                state = _fetch_state()
+                last_refresh = now
+
             if now - last_refresh > 2.0:
                 state = _fetch_state()
                 last_refresh = now
                 _refresh_detail_data()
 
-            shown_notice = notice if now < notice_until else None
+            if _action_busy():
+                shown_notice = _shorten(f"{action_state['label']}...", 24)
+            else:
+                shown_notice = notice if now < notice_until else None
             anim_step = int(now * 4)
 
             extra = {
@@ -1133,10 +1180,10 @@ def main() -> None:
             # ---- OK: confirm / select / refresh ----
             elif btn == "OK":
                 if cur_page == "controls":
-                    ok, notice = _run_control(CONTROL_ITEMS[control_idx])
-                    notice_until = time.monotonic() + (4 if ok else 6)
-                    state = _fetch_state()
-                    last_refresh = time.monotonic()
+                    key = CONTROL_ITEMS[control_idx]
+                    if _begin_action(key, CONTROL_LABELS[key]):
+                        notice = _shorten(f"{CONTROL_LABELS[key]}...", 24)
+                        notice_until = time.monotonic() + 120
                 elif cur_page == "attacks":
                     if cached_targets and 0 <= attack_target_idx < len(cached_targets):
                         t = cached_targets[attack_target_idx]
@@ -1177,10 +1224,10 @@ def main() -> None:
                     # Cycle attack type
                     attack_type_idx = (attack_type_idx + 1) % len(ATTACK_TYPES)
                 elif cur_page == "controls":
-                    ok, notice = _run_control(CONTROL_ITEMS[control_idx])
-                    notice_until = time.monotonic() + (4 if ok else 6)
-                    state = _fetch_state()
-                    last_refresh = time.monotonic()
+                    key = CONTROL_ITEMS[control_idx]
+                    if _begin_action(key, CONTROL_LABELS[key]):
+                        notice = _shorten(f"{CONTROL_LABELS[key]}...", 24)
+                        notice_until = time.monotonic() + 120
                 else:
                     state = _fetch_state()
                     last_detail_fetch = 0.0
