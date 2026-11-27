@@ -219,7 +219,7 @@ PACKAGES=(
   python3-scapy python3-netifaces python3-pyudev python3-serial \
   python3-smbus python3-rpi.gpio python3-spidev python3-pil python3-qrcode python3-numpy \
   python3-setuptools python3-cryptography python3-requests python3-websockets \
-  python3-evdev \
+  python3-evdev python3-pyte python3-libgpiod \
   libglib2.0-dev python3-bluez bluez \
   fonts-dejavu-core nmap ncat tcpdump tshark arp-scan dsniff ettercap-text-only php procps \
   aircrack-ng wireless-tools wpasupplicant iw \
@@ -231,6 +231,10 @@ PACKAGES=(
 # NOTE: ffmpeg + yt-dlp (above) power the media payloads:
 #   utilities/youtube.py, utilities/video_player.py, utilities/tv.py (RaspyJack TV).
 # python3-numpy / python3-pil (above) are required by their framebuffer render path.
+# python3-pyte (above) is required by the PTY terminal payloads:
+#   remote_access/shell.py, ai/claude_code.py, wifi/wifite.py.
+# python3-libgpiod (above) drives the HAT reset/IRQ lines in _st25r_driver.py
+#   (NFC) and _cc1101_driver.py / sdr/cap_flipper_subghz.py (sub-GHz).
 
 # CardputerZero extra packages
 if [[ "$DISPLAY_TYPE" == "CARDPUTER_320" ]]; then

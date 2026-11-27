@@ -64,7 +64,7 @@ WIFITE_CMD = ["/bin/bash", "-c", (
     "if ! command -v wifite >/dev/null 2>&1; then\n"
     "  echo '[*] wifite not installed - fetching it...'\n"
     "  DEBIAN_FRONTEND=noninteractive apt-get update -qq 2>/dev/null\n"
-    "  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends wifite 2>&1 | tail -n 4\n"
+    "  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends wifite hcxdumptool hcxtools 2>&1 | tail -n 4\n"
     "  command -v wifite >/dev/null 2>&1 || pip3 install --break-system-packages wifite 2>&1 | tail -n 4\n"
     "fi\n"
     "if command -v wifite >/dev/null 2>&1; then\n"

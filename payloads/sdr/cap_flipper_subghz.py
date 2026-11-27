@@ -70,6 +70,10 @@ def _get_hex_char():
 
 try:
     import gpiod
+    # These drivers use the libgpiod v2 API (LineSettings / request_lines).
+    # Raspberry Pi OS Bookworm ships python3-libgpiod 1.x: treat it as absent.
+    if not hasattr(gpiod, "LineSettings"):
+        raise ImportError("libgpiod v2 API required")
     GPIOD_OK = True
 except ImportError:
     GPIOD_OK = False
