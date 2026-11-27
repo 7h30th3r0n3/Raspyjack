@@ -211,36 +211,12 @@ def _display_url() -> str:
     return f"http://{_best_ip()}:{RAGNAR_PORT}"
 
 
-def _preflight_ragnar() -> tuple[bool, str]:
-    env = os.environ.copy()
-    env["RAGNAR_PAGER_MODE"] = "1"  # skip EPD init — conflicts with RaspyJack LCD SPI
-    env["PYTHONPATH"] = str(RAGNAR_ROOT) + os.pathsep + env.get("PYTHONPATH", "")
-    try:
-        proc = subprocess.run(
-            [sys.executable, "-c", "import headlessRagnar; print('OK')"],
-            cwd=str(RAGNAR_ROOT),
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=60,
-            check=False,
-        )
-    except Exception as exc:
-        return False, f"Preflight failed: {exc}"
-
-    if proc.returncode == 0:
-        return True, "OK"
-
-    blob = "\n".join(part for part in (proc.stderr, proc.stdout) if part).strip()
-    if "ModuleNotFoundError" in blob and "No module named" in blob:
-        marker = "No module named "
-        idx = blob.rfind(marker)
-        if idx >= 0:
-            missing = blob[idx + len(marker):].strip().strip("'\"")
-            return False, f"Missing dep: {missing}"
-    if blob:
-        return False, _shorten(blob.splitlines()[-1], 24)
-    return False, "Import preflight failed"
+# The old import preflight was removed. It ran `import headlessRagnar` in a
+# subprocess to test importability, but on this stack that import boots the
+# entire Ragnar web app (~45s cold, binds the port, starts threads). It was
+# slow, had side effects, and timed out spuriously ("preflight failed") on
+# slow/busy devices. _start_ragnar now launches directly and reports real
+# failures from the process exit + log tail instead.
 
 
 def _api_json(path: str, method: str = "GET", payload: dict | None = None) -> tuple[bool, dict]:
@@ -304,12 +280,6 @@ def _start_ragnar() -> tuple[bool, str]:
     if _running_pid():
         return True, "Already running"
 
-    ready, message = _preflight_ragnar()
-    if not ready:
-        if message.startswith("Missing dep:"):
-            return False, f"{message} install_ragnar_port"
-        return False, message
-
     RAGNAR_LOG_DIR.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
@@ -329,18 +299,24 @@ def _start_ragnar() -> tuple[bool, str]:
 
     RAGNAR_PID_PATH.write_text(f"{proc.pid}\n", encoding="utf-8")
 
-    deadline = time.time() + 45
+    # Ragnar boots its full web stack on import (~45s cold on this hardware).
+    # Wait generously for the API, but treat a still-booting (alive) process as
+    # "starting", not a failure — the UI keeps polling and shows API: OK when up.
+    deadline = time.time() + 90
     while time.time() < deadline:
-        if _running_pid():
-            ok, _status = _api_json("/api/status")
-            if ok:
-                return True, "Ragnar started"
-        time.sleep(0.4)
+        if proc.poll() is not None:
+            _clear_pid()
+            details = _tail_log(2)
+            return False, (details[-1][:24] if details else "Ragnar exited")
+        ok, _status = _api_json("/api/status")
+        if ok:
+            return True, "Ragnar started"
+        time.sleep(1.0)
 
+    if _running_pid():
+        return True, "Starting ~1min"
     details = _tail_log(2)
-    if details:
-        return False, details[-1][:24]
-    return False, "Start failed"
+    return False, (details[-1][:24] if details else "Start failed")
 
 
 def _short_bool(value: bool) -> str:
