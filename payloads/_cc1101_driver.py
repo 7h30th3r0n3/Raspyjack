@@ -324,8 +324,11 @@ class CC1101:
         self._power_off()
 
     def _power_on(self):
+        ext5v = "/sys/class/leds/ext_5v_out/brightness"
+        if not os.path.exists(ext5v):
+            return
         try:
-            with open("/sys/class/leds/ext_5v_out/brightness", "w") as f:
+            with open(ext5v, "w") as f:
                 f.write("1")
         except Exception:
             pass
@@ -854,8 +857,13 @@ class CC1101:
             return False
         if not os.path.exists("/dev/spidev0.1"):
             return False
+        ext5v = "/sys/class/leds/ext_5v_out/brightness"
+        if not os.path.exists(ext5v):
+            return False
+        req = None
+        spi = None
         try:
-            with open("/sys/class/leds/ext_5v_out/brightness", "w") as f:
+            with open(ext5v, "w") as f:
                 f.write("1")
             time.sleep(0.1)
             if GPIOD_OK:
@@ -873,10 +881,18 @@ class CC1101:
             spi.xfer2([SRES])
             time.sleep(0.01)
             r = spi.xfer2([REG_VERSION | 0xC0, 0x00])
-            spi.close()
-            if GPIOD_OK:
-                req.release()
             return r[1] not in (0x00, 0xFF)
         except Exception:
             return False
+        finally:
+            if spi is not None:
+                try:
+                    spi.close()
+                except Exception:
+                    pass
+            if req is not None:
+                try:
+                    req.release()
+                except Exception:
+                    pass
     detect_hat = staticmethod(detect_hat)
