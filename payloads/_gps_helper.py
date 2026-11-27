@@ -61,17 +61,23 @@ def detect_gps():
         if not os.path.exists(dev):
             continue
         for baud in _BAUD_RATES:
+            ser = None
             try:
                 ser = serial.Serial(dev, baud, timeout=1.5)
                 time.sleep(0.3)
                 data = ser.read(256)
-                ser.close()
                 if _is_nmea(data):
                     _detected_device = dev
                     _detected_baud = baud
                     return dev, baud
             except Exception:
                 continue
+            finally:
+                if ser is not None:
+                    try:
+                        ser.close()
+                    except Exception:
+                        pass
 
     return None, None
 
@@ -128,3 +134,43 @@ def start_gps():
 def get_detected_info():
     """Return (device, baud) of last detected GPS."""
     return _detected_device, _detected_baud
+
+
+def get_gps_data():
+    """Return the current GPS fix as a dict, or None if unavailable.
+
+    Reads from a running gpsd (start it first with ``start_gps()``) via the
+    ``gpsd`` python module (``gpsd-py3``). Returns a dict with keys:
+        lat, lon  -- decimal degrees (only present with a 2D/3D fix)
+        alt       -- metres (3D fix only, else None)
+        speed     -- metres/second
+        mode      -- gpsd fix mode (0/1 = no fix, 2 = 2D, 3 = 3D)
+        sats      -- satellites used in the fix
+    Returns None if the gpsd module is missing, gpsd is not running, or there
+    is no positional fix yet. Callers should treat a return of None, or a dict
+    whose ``lat``/``lon`` are absent, as "no coordinates available".
+    """
+    try:
+        import gpsd as _gpsd
+    except Exception:
+        return None
+    try:
+        _gpsd.connect()
+        pkt = _gpsd.get_current()
+    except Exception:
+        return None
+    try:
+        mode = getattr(pkt, "mode", 0)
+        data = {
+            "mode": mode,
+            "sats": getattr(pkt, "sats", 0),
+            "speed": pkt.speed() if mode >= 2 else 0.0,
+        }
+        if mode >= 2:
+            lat, lon = pkt.position()
+            data["lat"] = lat
+            data["lon"] = lon
+            data["alt"] = pkt.altitude() if mode >= 3 else None
+        return data
+    except Exception:
+        return None
