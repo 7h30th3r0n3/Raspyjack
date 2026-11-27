@@ -8,6 +8,7 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 import traceback
 import urllib.error
@@ -63,7 +64,6 @@ CONTROL_ITEMS = (
     "manual_off",
     "scan_network",
     "scan_vulns",
-    "deep_scan",
     "scan_arp",
 )
 CONTROL_LABELS = {
@@ -75,7 +75,6 @@ CONTROL_LABELS = {
     "manual_off": "Manual OFF",
     "scan_network": "Network Scan",
     "scan_vulns": "Vuln Scan",
-    "deep_scan": "Deep Scan",
     "scan_arp": "ARP Sweep",
 }
 
@@ -210,39 +209,16 @@ def _display_url() -> str:
     return f"http://{_best_ip()}:{RAGNAR_PORT}"
 
 
-def _preflight_ragnar() -> tuple[bool, str]:
-    env = os.environ.copy()
-    env["RAGNAR_PAGER_MODE"] = "1"  # skip EPD init — conflicts with RaspyJack LCD SPI
-    env["PYTHONPATH"] = str(RAGNAR_ROOT) + os.pathsep + env.get("PYTHONPATH", "")
-    try:
-        proc = subprocess.run(
-            [sys.executable, "-c", "import headlessRagnar; print('OK')"],
-            cwd=str(RAGNAR_ROOT),
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=15,
-            check=False,
-        )
-    except Exception as exc:
-        return False, f"Preflight failed: {exc}"
-
-    if proc.returncode == 0:
-        return True, "OK"
-
-    blob = "\n".join(part for part in (proc.stderr, proc.stdout) if part).strip()
-    if "ModuleNotFoundError" in blob and "No module named" in blob:
-        marker = "No module named "
-        idx = blob.rfind(marker)
-        if idx >= 0:
-            missing = blob[idx + len(marker):].strip().strip("'\"")
-            return False, f"Missing dep: {missing}"
-    if blob:
-        return False, _shorten(blob.splitlines()[-1], 24)
-    return False, "Import preflight failed"
+# The old import preflight was removed. It ran `import headlessRagnar` in a
+# subprocess to test importability, but on this stack that import boots the
+# entire Ragnar web app (~45s cold, binds the port, starts threads). It was
+# slow, had side effects, and timed out spuriously ("preflight failed") on
+# slow/busy devices. _start_ragnar now launches directly and reports real
+# failures from the process exit + log tail instead.
 
 
-def _api_json(path: str, method: str = "GET", payload: dict | None = None) -> tuple[bool, dict]:
+def _api_json(path: str, method: str = "GET", payload: dict | None = None,
+              timeout: float = 8) -> tuple[bool, dict]:
     url = _base_url() + path
     data = None
     headers = {}
@@ -251,7 +227,7 @@ def _api_json(path: str, method: str = "GET", payload: dict | None = None) -> tu
         headers["Content-Type"] = "application/json"
     req = urllib.request.Request(url, data=data, method=method, headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=3) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             raw = resp.read().decode("utf-8", "ignore")
             parsed = json.loads(raw) if raw else {}
             return True, parsed
@@ -303,12 +279,6 @@ def _start_ragnar() -> tuple[bool, str]:
     if _running_pid():
         return True, "Already running"
 
-    ready, message = _preflight_ragnar()
-    if not ready:
-        if message.startswith("Missing dep:"):
-            return False, f"{message} install_ragnar_port"
-        return False, message
-
     RAGNAR_LOG_DIR.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
@@ -328,18 +298,24 @@ def _start_ragnar() -> tuple[bool, str]:
 
     RAGNAR_PID_PATH.write_text(f"{proc.pid}\n", encoding="utf-8")
 
-    deadline = time.time() + 8
+    # Ragnar boots its full web stack on import (~45s cold on this hardware).
+    # Wait generously for the API, but treat a still-booting (alive) process as
+    # "starting", not a failure — the UI keeps polling and shows API: OK when up.
+    deadline = time.time() + 90
     while time.time() < deadline:
-        if _running_pid():
-            ok, _status = _api_json("/api/status")
-            if ok:
-                return True, "Ragnar started"
-        time.sleep(0.4)
+        if proc.poll() is not None:
+            _clear_pid()
+            details = _tail_log(2)
+            return False, (details[-1][:24] if details else "Ragnar exited")
+        ok, _status = _api_json("/api/status")
+        if ok:
+            return True, "Ragnar started"
+        time.sleep(1.0)
 
+    if _running_pid():
+        return True, "Starting ~1min"
     details = _tail_log(2)
-    if details:
-        return False, details[-1][:24]
-    return False, "Start failed"
+    return False, (details[-1][:24] if details else "Start failed")
 
 
 def _short_bool(value: bool) -> str:
@@ -499,33 +475,64 @@ def _fetch_credentials() -> list[dict]:
 
 
 def _fetch_wifi_networks() -> list[dict]:
-    """Fetch scanned WiFi networks."""
+    """Fetch scanned WiFi networks.
+
+    /api/wifi/networks returns scan results under "available" (and saved ones
+    under "known") — not a "networks" key — so the old code always read an
+    empty list. Read those with fallbacks, and be lenient about per-network
+    field names (signal/rssi, security/encryption).
+    """
     ok, data = _api_json("/api/wifi/networks")
     if not ok:
         return []
-    nets = data if isinstance(data, list) else data.get("networks", [])
+    if isinstance(data, list):
+        nets = data
+    else:
+        nets = data.get("available") or data.get("networks") or data.get("known") or []
     result = []
     for n in nets[:20]:
+        if not isinstance(n, dict):
+            continue
+        raw_sig = n.get("signal", n.get("rssi", n.get("quality", 0)))
+        try:
+            signal = int(float(raw_sig))
+        except (TypeError, ValueError):
+            signal = 0
         result.append({
             "ssid": str(n.get("ssid", "") or ""),
-            "signal": int(n.get("signal", 0) or 0),
-            "security": str(n.get("security", "") or ""),
-            "connected": bool(n.get("connected")),
+            "signal": signal,
+            "security": str(n.get("security") or n.get("encryption") or n.get("auth") or ""),
+            "connected": bool(n.get("connected") or n.get("in_use") or n.get("active")),
         })
     return result
 
 
 def _fetch_wifi_status() -> dict:
-    """Fetch current WiFi connection status."""
+    """Fetch current WiFi connection status.
+
+    /api/wifi/status reports connection under several keys depending on
+    version (wifi_connected / network_connected / interface_connected, with
+    connected_ssid / current_ssid and ip_address). Read those with fallbacks
+    so a connected device isn't shown as "Not connected".
+    """
     ok, data = _api_json("/api/wifi/status")
     if not ok:
         return {}
+    connected = bool(
+        data.get("connected")
+        or data.get("wifi_connected")
+        or data.get("network_connected")
+        or data.get("interface_connected")
+    )
+    ssid = data.get("connected_ssid") or data.get("current_ssid") or data.get("ssid") or ""
+    ip = data.get("ip_address") or data.get("ip") or ""
+    interface = data.get("interface") or data.get("default_interface") or ""
     return {
-        "connected": bool(data.get("connected")),
-        "ssid": str(data.get("ssid", "") or ""),
+        "connected": connected,
+        "ssid": str(ssid),
         "signal": str(data.get("signal", "") or ""),
-        "ip": str(data.get("ip", "") or ""),
-        "interface": str(data.get("interface", "") or ""),
+        "ip": str(ip),
+        "interface": str(interface),
     }
 
 
@@ -549,20 +556,30 @@ def _run_control(action: str) -> tuple[bool, str]:
         "manual_off": ("/api/manual/orchestrator/stop", {}),
         "scan_network": ("/api/manual/scan/network", {}),
         "scan_vulns": ("/api/manual/scan/vulnerability", {"ip": "all"}),
-        "deep_scan": ("/api/scan/deep", {}),
         "scan_arp": ("/api/scan/arp-localnet", {}),
     }
     entry = mapping.get(action)
     if not entry:
         return False, "Unknown action"
     path, payload = entry
-    method = "POST" if payload is not None else "GET"
-    if action in ("scan_arp",):
-        method = "GET"
-    ok, data = _api_json(path, method=method, payload=payload if method == "POST" else None)
-    if ok and (data.get("success") is True or data.get("ok") is True or "message" in data):
-        return True, _shorten(data.get("message", CONTROL_LABELS[action]), 24)
-    return False, _shorten(data.get("error", "Action failed"), 24)
+    if action == "scan_arp":
+        # The ARP sweep runs synchronously and can take ~15s (the other scans
+        # return immediately after kicking off), and it replies with
+        # {"success": "True", ...} and no "message". Give it headroom so it is
+        # not falsely reported as failed. Runs on the action worker thread.
+        ok, data = _api_json(path, method="GET", timeout=30)
+    else:
+        ok, data = _api_json(path, method="POST", payload=payload)
+    success_flag = data.get("success")
+    succeeded = (
+        success_flag is True
+        or str(success_flag).lower() == "true"
+        or data.get("ok") is True
+        or "message" in data
+    )
+    if ok and succeeded:
+        return True, _shorten(str(data.get("message") or CONTROL_LABELS[action]), 24)
+    return False, _shorten(str(data.get("error") or data.get("message") or "Action failed"), 24)
 
 
 def _run_attack(target_ip: str, target_port: str, attack_type: str) -> tuple[bool, str]:
@@ -996,7 +1013,6 @@ def main() -> None:
     notice = "LT/RT pages"
     notice_until = time.monotonic() + 3
     last_render_key = None
-    last_refresh = 0.0
     state = _fetch_state()
 
     # Per-page scroll/selection indices
@@ -1006,41 +1022,118 @@ def main() -> None:
     attack_type_idx = 0
     wifi_idx = 0
 
-    # Lazily fetched data (refreshed on page enter or action)
+    # ---- Background data poller -------------------------------------------
+    # The UI loop must NEVER block on the network, or screen switches lag for
+    # seconds while /api/* calls (3s timeout each) complete — especially with
+    # the Ragnar engine busy. A daemon thread owns ALL polling and publishes
+    # into `poll`; the UI loop only reads the latest snapshot, renders, and
+    # handles buttons. Same endpoints and cadence as before, just off the
+    # input/render path, so no extra load on the device or the engine.
+    poll = {
+        "state": state,
+        "stats": {},
+        "targets": [],
+        "creds": [],
+        "wifi_nets": [],
+        "wifi_status": {},
+    }
+    poll_page = {"idx": 0}            # UI publishes the current page here
+    poll_force = threading.Event()    # UI requests an immediate refresh
+    poll_stop = threading.Event()     # set on exit to end the thread
+
+    def _poller() -> None:
+        last_state = 0.0
+        last_detail = 0.0
+        while not poll_stop.is_set():
+            forced = poll_force.is_set()
+            if forced:
+                poll_force.clear()
+            now = time.monotonic()
+            if forced or now - last_state > 2.0:
+                poll["state"] = _fetch_state()
+                last_state = now
+            if forced or now - last_detail > 3.0:
+                page = PAGES[poll_page["idx"]]
+                if page == "stats":
+                    poll["stats"] = _fetch_stats()
+                elif page in ("targets", "attacks"):
+                    poll["targets"] = _fetch_targets()
+                elif page == "credentials":
+                    poll["creds"] = _fetch_credentials()
+                elif page == "wifi":
+                    poll["wifi_nets"] = _fetch_wifi_networks()
+                    poll["wifi_status"] = _fetch_wifi_status()
+                last_detail = now
+            poll_stop.wait(0.2)
+
+    poll_thread = threading.Thread(target=_poller, daemon=True)
+    poll_thread.start()
+
+    # Snapshot locals populated from `poll` each UI iteration (no network here).
     cached_stats: dict = {}
     cached_targets: list = []
     cached_creds: list = []
     cached_wifi_nets: list = []
     cached_wifi_status: dict = {}
-    last_detail_fetch = 0.0  # tracks when detail data was last pulled
 
-    def _refresh_detail_data():
-        nonlocal cached_stats, cached_targets, cached_creds
-        nonlocal cached_wifi_nets, cached_wifi_status, last_detail_fetch
-        page = PAGES[page_idx]
-        now = time.monotonic()
-        if now - last_detail_fetch < 3.0:
-            return
-        last_detail_fetch = now
-        if page == "stats":
-            cached_stats = _fetch_stats()
-        elif page in ("targets", "attacks"):
-            cached_targets = _fetch_targets()
-        elif page == "credentials":
-            cached_creds = _fetch_credentials()
-        elif page == "wifi":
-            cached_wifi_nets = _fetch_wifi_networks()
-            cached_wifi_status = _fetch_wifi_status()
+    # Background action runner: start/stop Ragnar (and other control-page
+    # actions) can block for ~1min on the engine boot / API-wait. Running them
+    # on a worker thread keeps the UI loop rendering a live "working" status
+    # instead of appearing frozen.
+    action_state = {"thread": None, "label": "", "result": None}
+
+    def _begin_action(action_key: str, label: str) -> bool:
+        thread = action_state["thread"]
+        if thread is not None and thread.is_alive():
+            return False
+
+        def _worker():
+            try:
+                res = _run_control(action_key)
+            except Exception as exc:  # pragma: no cover - defensive
+                res = (False, _shorten(str(exc), 24))
+            action_state["result"] = res
+
+        action_state["result"] = None
+        action_state["label"] = label
+        action_state["thread"] = threading.Thread(target=_worker, daemon=True)
+        action_state["thread"].start()
+        return True
+
+    def _action_busy() -> bool:
+        thread = action_state["thread"]
+        return thread is not None and thread.is_alive()
 
     try:
         while True:
             now = time.monotonic()
-            if now - last_refresh > 2.0:
-                state = _fetch_state()
-                last_refresh = now
-                _refresh_detail_data()
 
-            shown_notice = notice if now < notice_until else None
+            # Publish current page + read the latest snapshot (no network here).
+            poll_page["idx"] = page_idx
+            state = poll["state"]
+            cached_stats = poll["stats"]
+            cached_targets = poll["targets"]
+            cached_creds = poll["creds"]
+            cached_wifi_nets = poll["wifi_nets"]
+            cached_wifi_status = poll["wifi_status"]
+
+            # Pick up a finished background action, if any.
+            if (
+                action_state["thread"] is not None
+                and not action_state["thread"].is_alive()
+                and action_state["result"] is not None
+            ):
+                ok, notice = action_state["result"]
+                notice_until = now + (4 if ok else 6)
+                action_state["thread"] = None
+                action_state["result"] = None
+                action_state["label"] = ""
+                poll_force.set()
+
+            if _action_busy():
+                shown_notice = _shorten(f"{action_state['label']}...", 24)
+            else:
+                shown_notice = notice if now < notice_until else None
             anim_step = int(now * 4)
 
             extra = {
@@ -1094,17 +1187,13 @@ def main() -> None:
 
             # ---- LEFT/RIGHT: always change page ----
             if btn == "LEFT":
-                old_page = page_idx
                 page_idx = (page_idx - 1) % len(PAGES)
-                if page_idx != old_page:
-                    last_detail_fetch = 0.0
-                    _refresh_detail_data()
+                poll_page["idx"] = page_idx
+                poll_force.set()
             elif btn == "RIGHT":
-                old_page = page_idx
                 page_idx = (page_idx + 1) % len(PAGES)
-                if page_idx != old_page:
-                    last_detail_fetch = 0.0
-                    _refresh_detail_data()
+                poll_page["idx"] = page_idx
+                poll_force.set()
 
             # ---- UP/DOWN: scroll / select within page ----
             elif btn == "UP":
@@ -1133,10 +1222,10 @@ def main() -> None:
             # ---- OK: confirm / select / refresh ----
             elif btn == "OK":
                 if cur_page == "controls":
-                    ok, notice = _run_control(CONTROL_ITEMS[control_idx])
-                    notice_until = time.monotonic() + (4 if ok else 6)
-                    state = _fetch_state()
-                    last_refresh = time.monotonic()
+                    key = CONTROL_ITEMS[control_idx]
+                    if _begin_action(key, CONTROL_LABELS[key]):
+                        notice = _shorten(f"{CONTROL_LABELS[key]}...", 24)
+                        notice_until = time.monotonic() + 120
                 elif cur_page == "attacks":
                     if cached_targets and 0 <= attack_target_idx < len(cached_targets):
                         t = cached_targets[attack_target_idx]
@@ -1159,9 +1248,7 @@ def main() -> None:
                         notice = "No network selected"
                         notice_until = time.monotonic() + 3
                 else:
-                    state = _fetch_state()
-                    last_detail_fetch = 0.0
-                    _refresh_detail_data()
+                    poll_force.set()
                     notice = "Refreshed"
                     notice_until = time.monotonic() + 2
 
@@ -1170,21 +1257,17 @@ def main() -> None:
                 if cur_page == "wifi":
                     ok, notice = _wifi_scan()
                     notice_until = time.monotonic() + 3
-                    if ok:
-                        time.sleep(2)
-                        cached_wifi_nets = _fetch_wifi_networks()
+                    poll_force.set()  # poller picks up new networks next cycle
                 elif cur_page == "attacks":
                     # Cycle attack type
                     attack_type_idx = (attack_type_idx + 1) % len(ATTACK_TYPES)
                 elif cur_page == "controls":
-                    ok, notice = _run_control(CONTROL_ITEMS[control_idx])
-                    notice_until = time.monotonic() + (4 if ok else 6)
-                    state = _fetch_state()
-                    last_refresh = time.monotonic()
+                    key = CONTROL_ITEMS[control_idx]
+                    if _begin_action(key, CONTROL_LABELS[key]):
+                        notice = _shorten(f"{CONTROL_LABELS[key]}...", 24)
+                        notice_until = time.monotonic() + 120
                 else:
-                    state = _fetch_state()
-                    last_detail_fetch = 0.0
-                    _refresh_detail_data()
+                    poll_force.set()
                     notice = "Refreshed"
                     notice_until = time.monotonic() + 2
 
@@ -1193,11 +1276,9 @@ def main() -> None:
                 if cur_page == "wifi":
                     ok, notice = _wifi_disconnect()
                     notice_until = time.monotonic() + 3
-                    cached_wifi_status = _fetch_wifi_status()
+                    poll_force.set()
                 else:
-                    state = _fetch_state()
-                    last_detail_fetch = 0.0
-                    _refresh_detail_data()
+                    poll_force.set()
                     notice = "Refreshed"
                     notice_until = time.monotonic() + 2
 
@@ -1210,6 +1291,7 @@ def main() -> None:
                 break
             time.sleep(0.08)
     finally:
+        poll_stop.set()
         try:
             if LCD is not None:
                 LCD.LCD_Clear()
