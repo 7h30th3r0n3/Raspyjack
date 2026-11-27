@@ -64,7 +64,6 @@ CONTROL_ITEMS = (
     "manual_off",
     "scan_network",
     "scan_vulns",
-    "deep_scan",
     "scan_arp",
 )
 CONTROL_LABELS = {
@@ -76,7 +75,6 @@ CONTROL_LABELS = {
     "manual_off": "Manual OFF",
     "scan_network": "Network Scan",
     "scan_vulns": "Vuln Scan",
-    "deep_scan": "Deep Scan",
     "scan_arp": "ARP Sweep",
 }
 
@@ -219,7 +217,8 @@ def _display_url() -> str:
 # failures from the process exit + log tail instead.
 
 
-def _api_json(path: str, method: str = "GET", payload: dict | None = None) -> tuple[bool, dict]:
+def _api_json(path: str, method: str = "GET", payload: dict | None = None,
+              timeout: float = 8) -> tuple[bool, dict]:
     url = _base_url() + path
     data = None
     headers = {}
@@ -228,7 +227,7 @@ def _api_json(path: str, method: str = "GET", payload: dict | None = None) -> tu
         headers["Content-Type"] = "application/json"
     req = urllib.request.Request(url, data=data, method=method, headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=8) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             raw = resp.read().decode("utf-8", "ignore")
             parsed = json.loads(raw) if raw else {}
             return True, parsed
@@ -557,20 +556,30 @@ def _run_control(action: str) -> tuple[bool, str]:
         "manual_off": ("/api/manual/orchestrator/stop", {}),
         "scan_network": ("/api/manual/scan/network", {}),
         "scan_vulns": ("/api/manual/scan/vulnerability", {"ip": "all"}),
-        "deep_scan": ("/api/scan/deep", {}),
         "scan_arp": ("/api/scan/arp-localnet", {}),
     }
     entry = mapping.get(action)
     if not entry:
         return False, "Unknown action"
     path, payload = entry
-    method = "POST" if payload is not None else "GET"
-    if action in ("scan_arp",):
-        method = "GET"
-    ok, data = _api_json(path, method=method, payload=payload if method == "POST" else None)
-    if ok and (data.get("success") is True or data.get("ok") is True or "message" in data):
-        return True, _shorten(data.get("message", CONTROL_LABELS[action]), 24)
-    return False, _shorten(data.get("error", "Action failed"), 24)
+    if action == "scan_arp":
+        # The ARP sweep runs synchronously and can take ~15s (the other scans
+        # return immediately after kicking off), and it replies with
+        # {"success": "True", ...} and no "message". Give it headroom so it is
+        # not falsely reported as failed. Runs on the action worker thread.
+        ok, data = _api_json(path, method="GET", timeout=30)
+    else:
+        ok, data = _api_json(path, method="POST", payload=payload)
+    success_flag = data.get("success")
+    succeeded = (
+        success_flag is True
+        or str(success_flag).lower() == "true"
+        or data.get("ok") is True
+        or "message" in data
+    )
+    if ok and succeeded:
+        return True, _shorten(str(data.get("message") or CONTROL_LABELS[action]), 24)
+    return False, _shorten(str(data.get("error") or data.get("message") or "Action failed"), 24)
 
 
 def _run_attack(target_ip: str, target_port: str, attack_type: str) -> tuple[bool, str]:
