@@ -2480,6 +2480,7 @@ a{color:#00ccff;text-decoration:none}</style></head>
             or parsed.path.startswith("/api/aprs/")
             or parsed.path.startswith("/api/honeypot/")
             or parsed.path.startswith("/api/scanner/")
+            or parsed.path.startswith("/api/sentinel/")
         ):
             query = parse_qs(parsed.query or "")
             if parsed.path == "/api/auth/bootstrap-status":
@@ -2557,6 +2558,10 @@ a{color:#00ccff;text-decoration:none}</style></head>
 
             if parsed.path == "/api/scanner/live":
                 self._handle_scanner_live()
+                return
+
+            if parsed.path == "/api/sentinel/live":
+                self._handle_sentinel_live()
                 return
             if parsed.path == "/api/scanner/audio":
                 self._handle_scanner_audio()
@@ -2808,6 +2813,27 @@ a{color:#00ccff;text-decoration:none}</style></head>
                 _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
                 return
             self._handle_scanner_control()
+            return
+        if parsed.path == "/api/sentinel/start":
+            query = parse_qs(parsed.query or "")
+            if not _auth_ok(self, query):
+                _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
+                return
+            self._handle_sentinel_start()
+            return
+        if parsed.path == "/api/sentinel/stop":
+            query = parse_qs(parsed.query or "")
+            if not _auth_ok(self, query):
+                _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
+                return
+            self._handle_sentinel_stop()
+            return
+        if parsed.path == "/api/sentinel/control":
+            query = parse_qs(parsed.query or "")
+            if not _auth_ok(self, query):
+                _json_response(self, {"error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
+                return
+            self._handle_sentinel_control()
             return
         if parsed.path == "/api/gnss/start":
             query = parse_qs(parsed.query or "")
@@ -3899,6 +3925,84 @@ a{color:#00ccff;text-decoration:none}</style></head>
             with open(tmp, "w") as f:
                 json.dump(cmd, f)
             os.replace(tmp, self._SDR_CONTROL_PATH)
+            _json_response(self, {"ok": True})
+        except Exception as exc:
+            _json_response(self, {"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+
+    # ------------------------------------------------------------------
+    # Evil-Sentinel rig controller (wifi/sentinel_rig.py owns the serial ports;
+    # it publishes rj_sentinel_live.json and consumes rj_sentinel_control.json)
+    # ------------------------------------------------------------------
+
+    _SENTINEL_LIVE_PATH = Path("/dev/shm/rj_sentinel_live.json")
+    _SENTINEL_CONTROL_PATH = "/dev/shm/rj_sentinel_control.json"
+    _SENTINEL_CH5 = {36, 40, 44, 48, 52, 56, 60, 64, 100, 104, 108, 112}
+
+    def _handle_sentinel_live(self) -> None:
+        if self._SENTINEL_LIVE_PATH.exists():
+            try:
+                raw = self._SENTINEL_LIVE_PATH.read_text(encoding="utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(raw.encode())
+                return
+            except Exception:
+                pass
+        _json_response(self, {"ts": 0, "running": False, "nodes": []})
+
+    def _handle_sentinel_start(self) -> None:
+        try:
+            if PAYLOAD_STATE_PATH.exists():
+                raw = PAYLOAD_STATE_PATH.read_text(encoding="utf-8")
+                pdata = json.loads(raw) if raw else {}
+                if pdata.get("running"):
+                    _json_response(self, {"ok": True, "status": "already_running", "path": pdata.get("path")})
+                    return
+            Path("/dev/shm/rj_payload_request.json").write_text(json.dumps({
+                "action": "start",
+                "path": "wifi/sentinel_rig.py",
+            }))
+            _json_response(self, {"ok": True, "status": "starting"})
+        except Exception as exc:
+            _json_response(self, {"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+
+    def _handle_sentinel_stop(self) -> None:
+        _kill_payload("sentinel_rig.py")
+        try:
+            self._SENTINEL_LIVE_PATH.unlink(missing_ok=True)
+        except Exception:
+            pass
+        _json_response(self, {"ok": True, "status": "stopped"})
+
+    def _handle_sentinel_control(self) -> None:
+        body = _read_json(self)
+        if body is None:
+            _json_response(self, {"error": "invalid json"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        action = str(body.get("action", "")).strip()
+        if action == "set":
+            ch = body.get("ch")
+            if not isinstance(ch, int) or not (ch in (0, -1, -2) or 1 <= ch <= 14 or ch in self._SENTINEL_CH5):
+                _json_response(self, {"error": "bad channel code"}, status=HTTPStatus.BAD_REQUEST)
+                return
+            if not isinstance(body.get("mac"), str):
+                _json_response(self, {"error": "mac required"}, status=HTTPStatus.BAD_REQUEST)
+                return
+        elif action == "allhop":
+            pass
+        elif action in ("record", "fifo"):
+            if not isinstance(body.get("on"), bool):
+                _json_response(self, {"error": "on must be bool"}, status=HTTPStatus.BAD_REQUEST)
+                return
+        else:
+            _json_response(self, {"error": f"unknown action: {action}"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        try:
+            tmp = self._SENTINEL_CONTROL_PATH + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(dict(body), f)
+            os.replace(tmp, self._SENTINEL_CONTROL_PATH)
             _json_response(self, {"ok": True})
         except Exception as exc:
             _json_response(self, {"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)

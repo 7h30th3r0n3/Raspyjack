@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RaspyJack Sentinel Rig</title>
+  <link rel="stylesheet" href="./vendor/css/fontawesome.min.css">
+  <style>
+    :root{color-scheme:dark;--bg:#05060a;--panel:#080c14;--border:#0f1a2a;--accent:#00ccff;--green:#00ff88;--red:#ff3333;--orange:#ff8800;--yellow:#ffaa00;--card:#0a0e18;--dim:#4a6080}
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:#ccc;min-height:100vh;display:flex;flex-direction:column}
+    /* Topbar */
+    #topbar{height:42px;background:#0a0e1a;display:flex;align-items:center;padding:0 10px;gap:6px;border-bottom:1px solid var(--border);flex-shrink:0;position:sticky;top:0;z-index:50}
+    #topbar h1{font-size:13px;color:var(--accent);white-space:nowrap;margin-right:4px;letter-spacing:1px}
+    #topbar h1 .hex{color:var(--green)}
+    .tb{background:#111830;color:#888;border:1px solid #1a2844;padding:5px 10px;border-radius:5px;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap;display:inline-flex;align-items:center;gap:5px;transition:all .15s}
+    .tb:hover{color:#fff;background:#1a2850}
+    .tb.on{border-color:var(--accent);color:var(--accent);background:rgba(0,204,255,.08)}
+    .tb.go{border-color:var(--green);color:var(--green)}
+    .tb.rec-on{border-color:var(--red);color:var(--red);animation:glow 1.2s infinite}
+    .tb.pipe-on{border-color:var(--yellow);color:var(--yellow)}
+    .dot{width:7px;height:7px;border-radius:50%;background:#333;display:inline-block}
+    .dot.live{background:var(--green);box-shadow:0 0 8px var(--green);animation:pulse 1.5s infinite}
+    .spacer{flex:1;min-width:4px}
+    #topbar a{color:#555;font-size:10px;text-decoration:none;white-space:nowrap}
+    #topbar a:hover{color:var(--accent)}
+    @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+    @keyframes glow{0%,100%{box-shadow:0 0 4px rgba(255,50,50,.4)}50%{box-shadow:0 0 12px rgba(255,50,50,.8)}}
+    /* Layout */
+    .wrap{max-width:1100px;width:100%;margin:0 auto;padding:16px 16px 48px}
+    .stats{display:flex;gap:18px;flex-wrap:wrap;align-items:baseline;border-bottom:1px solid var(--border);padding-bottom:12px;margin-bottom:8px}
+    .stat{font-size:11px;color:var(--dim);letter-spacing:1px}
+    .stat b{color:var(--accent);font-size:17px;font-family:'Courier New',monospace}
+    h2{font-size:10px;letter-spacing:2px;color:var(--dim);margin:20px 0 8px;font-weight:600;text-transform:uppercase}
+    h2 .sub{color:#2a3858;letter-spacing:1px;text-transform:none}
+    /* Band chart */
+    .band{display:grid;gap:5px;align-items:end;height:130px;background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:10px 10px 6px}
+    .ch{display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%;position:relative}
+    .ch .bar{width:72%;border-radius:3px 3px 1px 1px;min-height:2px;height:2px;background:#122230;transition:height .4s cubic-bezier(.2,.8,.2,1),background .4s}
+    .ch.on .bar{box-shadow:0 0 10px -2px currentColor}
+    .ch .n{font-size:10px;color:var(--dim);margin-top:5px;font-family:'Courier New',monospace}
+    .ch.on .n{color:#ccc}
+    .ch .f{position:absolute;top:-14px;font-size:9px;color:var(--dim);opacity:0;transition:opacity .3s;font-family:'Courier New',monospace}
+    .ch.on .f{opacity:1;color:var(--accent)}
+    /* Node cards */
+    .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:12px}
+    .card{background:linear-gradient(180deg,#0b1018,#080c14);border:1px solid var(--border);border-radius:12px;padding:14px;position:relative;overflow:hidden}
+    .card:before{content:"";position:absolute;inset:0 auto 0 0;width:3px;background:var(--accent);opacity:.7}
+    .card .top{display:flex;align-items:center;gap:11px}
+    .badge{min-width:48px;height:48px;border-radius:9px;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#07131a;border:1px solid #16303a;color:var(--accent)}
+    .badge .cn{font-size:16px;font-weight:700;line-height:1;font-family:'Courier New',monospace}
+    .badge .cl{font-size:7px;letter-spacing:2px;color:var(--dim);margin-top:2px}
+    .mac{font-size:13px;color:#dff5ee;letter-spacing:1px;font-family:'Courier New',monospace}
+    .meta{font-size:10px;color:var(--dim);letter-spacing:.5px;margin-top:3px}
+    .warn{color:var(--red)}
+    .fps{margin-left:auto;text-align:right}
+    .fps b{font-size:24px;color:#eafff6;font-family:'Courier New',monospace}
+    .fps span{font-size:9px;color:var(--dim);display:block;letter-spacing:2px}
+    .pbar{height:6px;background:#0a1020;border-radius:3px;margin-top:12px;overflow:hidden}
+    .pbar>i{display:block;height:100%;width:0;border-radius:3px;background:linear-gradient(90deg,var(--green),var(--accent));transition:width .4s,background .4s}
+    .spark{margin-top:9px;width:100%;height:30px;display:block}
+    .ctl{margin-top:10px;display:flex;align-items:center;gap:7px}
+    .ctl select{flex:1;font-family:'Courier New',monospace;font-size:11px;color:#ccc;background:#07101a;border:1px solid var(--border);border-radius:7px;padding:6px 7px;cursor:pointer;appearance:none}
+    .ctl select:focus{outline:none;border-color:var(--accent)}
+    .tag{font-size:8px;letter-spacing:2px;color:var(--green);border:1px solid #16303a;border-radius:4px;padding:3px 5px}
+    /* overlay */
+    #overlay{position:fixed;inset:42px 0 0 0;display:flex;align-items:center;justify-content:center;background:rgba(5,6,10,.92);z-index:40;flex-direction:column;gap:14px;text-align:center}
+    #overlay.hidden{display:none}
+    #overlay i{font-size:40px;color:#1a3050}
+    #overlay .t{font-size:16px;color:#3a5070}
+    #overlay .s{font-size:12px;color:#2a3858;max-width:320px}
+    .big{background:rgba(0,255,136,.08);border:1px solid var(--green);color:var(--green);padding:9px 22px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:8px}
+    .big:hover{background:rgba(0,255,136,.16)}
+    footer{margin-top:22px;color:var(--dim);font-size:10px;letter-spacing:.5px;display:flex;gap:16px;flex-wrap:wrap;border-top:1px solid var(--border);padding-top:12px}
+    footer b{color:#ccc}
+  </style>
+  <script src="./theme.js"></script>
+</head>
+<body>
+<script>fetch("/api/auth/me",{credentials:"include"}).then(r=>{if(!r.ok)throw 0;return r.json()}).then(d=>{if(!d||!d.authenticated)throw 0}).catch(()=>{document.body.innerHTML='<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;gap:16px;font-family:sans-serif;background:#05060a"><i class="fa-solid fa-lock" style="font-size:48px;color:#f43f5e"></i><h2 style="color:#e2e8f0">Authentication Required</h2><p style="color:#94a3b8">Please log in through the WebUI first.</p><a href="./index.html" style="color:#00ccff;text-decoration:none;padding:8px 20px;border:1px solid #00ccff;border-radius:6px;margin-top:8px">Go to Login</a></div>'})</script>
+
+<div id="topbar">
+  <h1><span class="hex">&#x2b22;</span> SENTINEL RIG</h1>
+  <span class="dot" id="liveDot"></span>
+  <button class="tb go" id="btnStart" onclick="startRig()"><i class="fa-solid fa-play"></i> Start</button>
+  <button class="tb" id="btnStop" onclick="stopRig()"><i class="fa-solid fa-stop"></i> Stop</button>
+  <div class="spacer"></div>
+  <button class="tb" id="btnAllHop" onclick="allHop()" title="C5 -> hop5, the rest -> hop"><i class="fa-solid fa-shuffle"></i> All hop</button>
+  <button class="tb" id="btnRec" onclick="toggleRec()"><i class="fa-solid fa-circle"></i> REC</button>
+  <button class="tb" id="btnPipe" onclick="togglePipe()" title="live FIFO for wireshark/tshark/kismet on the Pi"><i class="fa-solid fa-diagram-project"></i> PIPE</button>
+  <a href="./index.html"><i class="fa-solid fa-arrow-left"></i> WebUI</a>
+</div>
+
+<div class="wrap">
+  <div class="stats">
+    <div class="stat"><b id="sNodes">0</b> nodes</div>
+    <div class="stat"><b id="sFps">0</b> frames/s</div>
+    <div class="stat"><b id="sTot">0</b> frames</div>
+    <div class="stat">uptime <b id="sUp">0s</b></div>
+    <div class="stat" id="sRec" style="display:none;color:var(--red)"><i class="fa-solid fa-circle"></i> <b id="sRecN">0</b> rec</div>
+    <div class="stat" id="sPipe" style="display:none;color:var(--yellow)"><i class="fa-solid fa-diagram-project"></i> <span id="sPipeS">pipe</span></div>
+  </div>
+
+  <h2>2.4 GHz band <span class="sub">&middot; packets seen, hopping-aware</span></h2>
+  <div class="band" id="band24"></div>
+
+  <section id="sec5" style="display:none">
+    <h2>5 GHz band <span class="sub">&middot; C5 dual-band nodes</span></h2>
+    <div class="band" id="band5"></div>
+  </section>
+
+  <h2>Nodes <span class="sub">&middot; channel applies live</span></h2>
+  <div class="cards" id="cards"></div>
+
+  <footer>
+    <div>merged &rarr; <b>loot/sentinel</b> (REC) / <b id="fPipe">/tmp/sentinel.pcap</b> (PIPE)</div>
+    <div>passive &middot; receive only</div>
+  </footer>
+</div>
+
+<div id="overlay">
+  <i class="fa-solid fa-tower-broadcast"></i>
+  <div class="t" id="ovTitle">Rig controller not running</div>
+  <div class="s" id="ovSub">Plug the Evil-Sentinel nodes into the powered hub, then start the controller. The LCD payload owns the rig; this page drives it live.</div>
+  <button class="big" onclick="startRig()"><i class="fa-solid fa-play"></i> Start controller</button>
+</div>
+
+<script>
+const CH24=[1,2,3,4,5,6,7,8,9,10,11,12,13];
+const CH5=[36,40,44,48,52,56,60,64,100,104,108,112];
+const CCOL=l=>l>.66?'var(--red)':l>.33?'var(--yellow)':'var(--green)';
+const fmtK=v=>v>=1000?(v/1000).toFixed(v>=10000?0:1)+'k':''+v;
+const fmtUp=s=>{s=Math.floor(s);return s<60?s+'s':Math.floor(s/60)+'m'+(s%60)+'s';};
+function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+
+async function post(b){try{await fetch('/api/sentinel/control',{method:'POST',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});}catch(e){}}
+function setCh(mac,v){post({action:'set',mac:mac,ch:parseInt(v,10)});}
+function allHop(){post({action:'allhop'});}
+let REC=false,PIPE=false;
+function toggleRec(){REC=!REC;post({action:'record',on:REC});}
+function togglePipe(){PIPE=!PIPE;post({action:'fifo',on:PIPE});}
+async function startRig(){try{await fetch('/api/sentinel/start',{method:'POST',credentials:'include'});}catch(e){}}
+async function stopRig(){try{await fetch('/api/sentinel/stop',{method:'POST',credentials:'include'});}catch(e){}}
+
+function chOptions(dual){
+  let o='<option value="0">HOP 2.4</option>';
+  if(dual)o+='<option value="-1">HOP 5 GHz</option><option value="-2">HOP DUAL</option>';
+  o+='<optgroup label="2.4 GHz lock">'+CH24.map(c=>`<option value="${c}">ch ${c}</option>`).join('')+'</optgroup>';
+  if(dual)o+='<optgroup label="5 GHz lock">'+CH5.map(c=>`<option value="${c}">ch ${c}</option>`).join('')+'</optgroup>';
+  return o;
+}
+function spark(h){const w=260,ht=30,m=Math.max(...h,1);
+  const pts=h.map((v,i)=>`${(i/(h.length-1)*w).toFixed(1)},${(ht-v/m*(ht-3)-1).toFixed(1)}`).join(' ');
+  return `<svg class="spark" viewBox="0 0 ${w} ${ht}" preserveAspectRatio="none"><polyline fill="none" stroke="var(--accent)" stroke-width="1.5" points="${pts}"/></svg>`;}
+function fillBand(el,chans,counts,gmax){
+  if(el.children.length!==chans.length){el.innerHTML='';el.style.gridTemplateColumns=`repeat(${chans.length},1fr)`;
+    chans.forEach(c=>el.insertAdjacentHTML('beforeend',`<div class="ch"><div class="f"></div><div class="bar"></div><div class="n">${c}</div></div>`));}
+  chans.forEach((c,i)=>{const cnt=counts[i]||0,load=Math.min(cnt/gmax,1),e=el.children[i];
+    e.classList.toggle('on',cnt>0);const bar=e.querySelector('.bar');
+    bar.style.height=(cnt>0?6+load*96:2)+'px';
+    bar.style.background=cnt>0?CCOL(load):'#122230';bar.style.color=cnt>0?CCOL(load):'transparent';
+    e.querySelector('.f').textContent=cnt>0?fmtK(cnt):'';});
+}
+
+function render(d){
+  document.getElementById('overlay').classList.toggle('hidden',!!d.running);
+  document.getElementById('liveDot').classList.toggle('live',!!d.running);
+  if(!d.running){document.getElementById('sNodes').textContent='0';return;}
+  const nodes=d.nodes||[];
+  document.getElementById('sNodes').textContent=nodes.length;
+  document.getElementById('sFps').textContent=d.fps_total||0;
+  document.getElementById('sTot').textContent=(d.total||0).toLocaleString();
+  document.getElementById('sUp').textContent=fmtUp(d.uptime||0);
+  // rec / pipe status (reflect device-side truth, keep local toggles in sync)
+  REC=!!d.rec;PIPE=!!d.fifo;
+  document.getElementById('btnRec').className='tb'+(REC?' rec-on':'');
+  document.getElementById('btnPipe').className='tb'+(PIPE?' pipe-on':'');
+  const sRec=document.getElementById('sRec');sRec.style.display=REC?'':'none';
+  if(REC)document.getElementById('sRecN').textContent=fmtK(d.rec_frames||0);
+  const sPipe=document.getElementById('sPipe');sPipe.style.display=PIPE?'':'none';
+  if(PIPE)document.getElementById('sPipeS').textContent=d.fifo_ready?'reader attached':'waiting reader';
+  if(d.fifo_path)document.getElementById('fPipe').textContent=d.fifo_path;
+
+  const gmax=Math.max(1,...(d.band24||[]),...(d.band5||[]));
+  fillBand(document.getElementById('band24'),CH24,d.band24||[],gmax);
+  const sec5=document.getElementById('sec5');
+  if(d.has5){sec5.style.display='';fillBand(document.getElementById('band5'),d.ch5||CH5,d.band5||[],gmax);}
+  else sec5.style.display='none';
+
+  const peak=Math.max(...nodes.map(n=>n.fps),1);
+  const cards=document.getElementById('cards');
+  if(cards.children.length!==nodes.length||cards.dataset.macs!==nodes.map(n=>n.mac).join()){
+    cards.dataset.macs=nodes.map(n=>n.mac).join();
+    cards.innerHTML=nodes.map((n,i)=>`<div class="card">
+      <div class="top">
+        <div class="badge"><div class="cn" id="cn${i}">${esc(n.label)}</div><div class="cl" id="cl${i}">${n.ch<1?'SWEEP':'CHAN'}</div></div>
+        <div><div class="mac">${esc(n.mac)}</div><div class="meta" id="mt${i}"></div></div>
+        <div class="fps"><b id="fp${i}">0</b><span>FR/S</span></div>
+      </div>
+      <div class="ctl"><select id="se${i}" onchange="setCh('${esc(n.mac)}',this.value)">${chOptions(n.dual)}</select>${n.dual?'<span class="tag">DUAL</span>':''}</div>
+      <div class="pbar"><i id="pb${i}"></i></div>
+      <div id="sp${i}"></div>
+    </div>`).join('');
+  }
+  nodes.forEach((n,i)=>{
+    document.getElementById('fp'+i).textContent=n.fps;
+    document.getElementById('cn'+i).textContent=n.label;
+    document.getElementById('cl'+i).textContent=n.ch<1?'SWEEP':'CHAN';
+    const se=document.getElementById('se'+i);if(se&&document.activeElement!==se)se.value=String(n.ch);
+    const bad=n.ch_seen&&n.ch>0&&n.ch_seen!==n.ch;
+    document.getElementById('mt'+i).innerHTML=`${(n.total||0).toLocaleString()} frames`+(bad?` <span class="warn">&#9888; sees ch${n.ch_seen}</span>`:'');
+    const pb=document.getElementById('pb'+i),load=Math.min(n.fps/peak,1);
+    pb.style.width=(load*100)+'%';
+    pb.style.background=load>.66?'linear-gradient(90deg,var(--yellow),var(--red))':'linear-gradient(90deg,var(--green),var(--accent))';
+    document.getElementById('sp'+i).innerHTML=spark(n.hist||[]);
+  });
+}
+
+async function tick(){
+  let d;try{d=await(await fetch('/api/sentinel/live',{cache:'no-store',credentials:'include'})).json();}catch(e){return;}
+  try{render(d);}catch(e){}
+}
+tick();setInterval(tick,500);
+</script>
+</body>
+</html>
