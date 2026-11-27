@@ -117,6 +117,10 @@ def _rssi_sweep(radio, center, span, num_bins):
         radio._write_reg(0x0D, (freq_word >> 16) & 0xFF)
         radio._write_reg(0x0E, (freq_word >> 8) & 0xFF)
         radio._write_reg(0x0F, freq_word & 0xFF)
+        # Route the antenna to this bin's band (RF_SW0 + RF_SW1). Without this
+        # the switch stays on whatever band open() selected, so every band but
+        # 433 reads an isolated antenna — and wide sweeps need per-bin switching.
+        radio._set_rf_switch(freq_mhz)
         radio._strobe(0x3A)  # SFRX
         radio._strobe(0x34)  # SRX
         time.sleep(0.003)

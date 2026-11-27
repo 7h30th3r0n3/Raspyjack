@@ -184,15 +184,29 @@ _PA_TABLE_BY_BAND = {
     915: [0xC0],
 }
 
-# RF switch GPIO14 values per band (from M5Stack binary)
-# GPIO14 = RF_SW0 controls antenna path
-# SW0=0→315MHz, SW0=1→433/868/915MHz (both RX and TX)
-_RF_SW_BY_BAND = {
+# Antenna-path RF switch control. The Cap CC1101 has TWO SP3T switch lines:
+#   RF_SW0 -> host GPIO14
+#   RF_SW1 -> the CC1101's GDO2 pin (set via the IOCFG2 register, NOT a host GPIO)
+# Datasheet truth table (RF_SW0, RF_SW1) -> band:
+#   (0,1)=315MHz  (1,0)=433MHz  (1,1)=868/915MHz
+# Driving GDO2 as a static level: IOCFG2=0x6F -> constant 1 (RF_SW1=1),
+#                                 IOCFG2=0x2F -> constant 0 (RF_SW1=0).
+# Without RF_SW1 control the antenna only reaches the 433 path, so 315 and
+# 868/915 RX/TX are dead (verified on CardputerZero).
+_RF_SW_BY_BAND = {       # RF_SW0 (GPIO14)
     315: 0,
     433: 1,
     868: 1,
     915: 1,
 }
+_RF_SW1_BY_BAND = {      # RF_SW1 (CC1101 GDO2 via IOCFG2)
+    315: 1,
+    433: 0,
+    868: 1,
+    915: 1,
+}
+_IOCFG2_SW1_HIGH = 0x6F  # GDO2 constant 1 -> RF_SW1 = 1
+_IOCFG2_SW1_LOW = 0x2F   # GDO2 constant 0 -> RF_SW1 = 0
 
 
 class CC1101:
@@ -288,9 +302,19 @@ class CC1101:
         for b in (315, 433, 868, 915):
             if abs(band - b) < 50:
                 val = _RF_SW_BY_BAND[b]
+                sw1 = _RF_SW1_BY_BAND[b]
                 break
         else:
             val = 0
+            sw1 = 0
+        # RF_SW1 is wired to the CC1101 GDO2 pin -> set it via IOCFG2 so the
+        # antenna reaches the correct band filter. Without this only the 433
+        # path is selectable and 315 / 868 / 915 are isolated.
+        try:
+            self._write_reg(REG_IOCFG2,
+                            _IOCFG2_SW1_HIGH if sw1 else _IOCFG2_SW1_LOW)
+        except Exception:
+            pass
         if self._gpio_req:
             try:
                 lv = gpiod.line.Value.ACTIVE if val else gpiod.line.Value.INACTIVE
