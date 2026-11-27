@@ -973,7 +973,6 @@ def main() -> None:
     notice = "LT/RT pages"
     notice_until = time.monotonic() + 3
     last_render_key = None
-    last_refresh = 0.0
     state = _fetch_state()
 
     # Per-page scroll/selection indices
@@ -983,34 +982,62 @@ def main() -> None:
     attack_type_idx = 0
     wifi_idx = 0
 
-    # Lazily fetched data (refreshed on page enter or action)
+    # ---- Background data poller -------------------------------------------
+    # The UI loop must NEVER block on the network, or screen switches lag for
+    # seconds while /api/* calls (3s timeout each) complete — especially with
+    # the Ragnar engine busy. A daemon thread owns ALL polling and publishes
+    # into `poll`; the UI loop only reads the latest snapshot, renders, and
+    # handles buttons. Same endpoints and cadence as before, just off the
+    # input/render path, so no extra load on the device or the engine.
+    poll = {
+        "state": state,
+        "stats": {},
+        "targets": [],
+        "creds": [],
+        "wifi_nets": [],
+        "wifi_status": {},
+    }
+    poll_page = {"idx": 0}            # UI publishes the current page here
+    poll_force = threading.Event()    # UI requests an immediate refresh
+    poll_stop = threading.Event()     # set on exit to end the thread
+
+    def _poller() -> None:
+        last_state = 0.0
+        last_detail = 0.0
+        while not poll_stop.is_set():
+            forced = poll_force.is_set()
+            if forced:
+                poll_force.clear()
+            now = time.monotonic()
+            if forced or now - last_state > 2.0:
+                poll["state"] = _fetch_state()
+                last_state = now
+            if forced or now - last_detail > 3.0:
+                page = PAGES[poll_page["idx"]]
+                if page == "stats":
+                    poll["stats"] = _fetch_stats()
+                elif page in ("targets", "attacks"):
+                    poll["targets"] = _fetch_targets()
+                elif page == "credentials":
+                    poll["creds"] = _fetch_credentials()
+                elif page == "wifi":
+                    poll["wifi_nets"] = _fetch_wifi_networks()
+                    poll["wifi_status"] = _fetch_wifi_status()
+                last_detail = now
+            poll_stop.wait(0.2)
+
+    poll_thread = threading.Thread(target=_poller, daemon=True)
+    poll_thread.start()
+
+    # Snapshot locals populated from `poll` each UI iteration (no network here).
     cached_stats: dict = {}
     cached_targets: list = []
     cached_creds: list = []
     cached_wifi_nets: list = []
     cached_wifi_status: dict = {}
-    last_detail_fetch = 0.0  # tracks when detail data was last pulled
-
-    def _refresh_detail_data():
-        nonlocal cached_stats, cached_targets, cached_creds
-        nonlocal cached_wifi_nets, cached_wifi_status, last_detail_fetch
-        page = PAGES[page_idx]
-        now = time.monotonic()
-        if now - last_detail_fetch < 3.0:
-            return
-        last_detail_fetch = now
-        if page == "stats":
-            cached_stats = _fetch_stats()
-        elif page in ("targets", "attacks"):
-            cached_targets = _fetch_targets()
-        elif page == "credentials":
-            cached_creds = _fetch_credentials()
-        elif page == "wifi":
-            cached_wifi_nets = _fetch_wifi_networks()
-            cached_wifi_status = _fetch_wifi_status()
 
     # Background action runner: start/stop Ragnar (and other control-page
-    # actions) can block for up to ~100s on preflight + API-wait. Running them
+    # actions) can block for ~1min on the engine boot / API-wait. Running them
     # on a worker thread keeps the UI loop rendering a live "working" status
     # instead of appearing frozen.
     action_state = {"thread": None, "label": "", "result": None}
@@ -1041,6 +1068,15 @@ def main() -> None:
         while True:
             now = time.monotonic()
 
+            # Publish current page + read the latest snapshot (no network here).
+            poll_page["idx"] = page_idx
+            state = poll["state"]
+            cached_stats = poll["stats"]
+            cached_targets = poll["targets"]
+            cached_creds = poll["creds"]
+            cached_wifi_nets = poll["wifi_nets"]
+            cached_wifi_status = poll["wifi_status"]
+
             # Pick up a finished background action, if any.
             if (
                 action_state["thread"] is not None
@@ -1052,13 +1088,7 @@ def main() -> None:
                 action_state["thread"] = None
                 action_state["result"] = None
                 action_state["label"] = ""
-                state = _fetch_state()
-                last_refresh = now
-
-            if now - last_refresh > 2.0:
-                state = _fetch_state()
-                last_refresh = now
-                _refresh_detail_data()
+                poll_force.set()
 
             if _action_busy():
                 shown_notice = _shorten(f"{action_state['label']}...", 24)
@@ -1117,17 +1147,13 @@ def main() -> None:
 
             # ---- LEFT/RIGHT: always change page ----
             if btn == "LEFT":
-                old_page = page_idx
                 page_idx = (page_idx - 1) % len(PAGES)
-                if page_idx != old_page:
-                    last_detail_fetch = 0.0
-                    _refresh_detail_data()
+                poll_page["idx"] = page_idx
+                poll_force.set()
             elif btn == "RIGHT":
-                old_page = page_idx
                 page_idx = (page_idx + 1) % len(PAGES)
-                if page_idx != old_page:
-                    last_detail_fetch = 0.0
-                    _refresh_detail_data()
+                poll_page["idx"] = page_idx
+                poll_force.set()
 
             # ---- UP/DOWN: scroll / select within page ----
             elif btn == "UP":
@@ -1182,9 +1208,7 @@ def main() -> None:
                         notice = "No network selected"
                         notice_until = time.monotonic() + 3
                 else:
-                    state = _fetch_state()
-                    last_detail_fetch = 0.0
-                    _refresh_detail_data()
+                    poll_force.set()
                     notice = "Refreshed"
                     notice_until = time.monotonic() + 2
 
@@ -1193,9 +1217,7 @@ def main() -> None:
                 if cur_page == "wifi":
                     ok, notice = _wifi_scan()
                     notice_until = time.monotonic() + 3
-                    if ok:
-                        time.sleep(2)
-                        cached_wifi_nets = _fetch_wifi_networks()
+                    poll_force.set()  # poller picks up new networks next cycle
                 elif cur_page == "attacks":
                     # Cycle attack type
                     attack_type_idx = (attack_type_idx + 1) % len(ATTACK_TYPES)
@@ -1205,9 +1227,7 @@ def main() -> None:
                         notice = _shorten(f"{CONTROL_LABELS[key]}...", 24)
                         notice_until = time.monotonic() + 120
                 else:
-                    state = _fetch_state()
-                    last_detail_fetch = 0.0
-                    _refresh_detail_data()
+                    poll_force.set()
                     notice = "Refreshed"
                     notice_until = time.monotonic() + 2
 
@@ -1216,11 +1236,9 @@ def main() -> None:
                 if cur_page == "wifi":
                     ok, notice = _wifi_disconnect()
                     notice_until = time.monotonic() + 3
-                    cached_wifi_status = _fetch_wifi_status()
+                    poll_force.set()
                 else:
-                    state = _fetch_state()
-                    last_detail_fetch = 0.0
-                    _refresh_detail_data()
+                    poll_force.set()
                     notice = "Refreshed"
                     notice_until = time.monotonic() + 2
 
@@ -1233,6 +1251,7 @@ def main() -> None:
                 break
             time.sleep(0.08)
     finally:
+        poll_stop.set()
         try:
             if LCD is not None:
                 LCD.LCD_Clear()
