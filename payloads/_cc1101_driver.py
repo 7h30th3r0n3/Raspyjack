@@ -215,10 +215,21 @@ class CC1101:
         self._profile = "2fsk_mid"
         self._opened = False
         self._lock = threading.Lock()
+        # USB bridge (ESP32-S3) transport; None when running on the SPI HAT.
+        self._transport = None
+        self.is_usb = False
 
     def open(self):
         if self._opened:
             return True
+        # Transport selection: RJ_CC1101_TRANSPORT = auto (default) | usb | spi
+        mode = os.environ.get("RJ_CC1101_TRANSPORT", "auto").lower()
+        if mode in ("auto", "usb"):
+            if self._try_open_usb():
+                return True
+            if mode == "usb":
+                return False
+        # --- SPI HAT path (CardputerZero Cap HAT) ---
         if not SPIDEV_OK or not GPIOD_OK:
             return False
         try:
@@ -242,8 +253,64 @@ class CC1101:
             self.close()
             return False
 
+    def _try_open_usb(self):
+        """Probe for the ESP32-S3 USB bridge; wire it up as self._spi if found."""
+        try:
+            from payloads import _cc1101_usb as usbmod
+        except Exception:
+            try:
+                import _cc1101_usb as usbmod  # when payloads/ is on sys.path
+            except Exception:
+                return False
+        try:
+            link = usbmod.detect()
+        except Exception:
+            link = None
+        if link is None:
+            return False
+        self._transport = link
+        self._spi = link            # duck-typed: provides xfer2()
+        self.is_usb = True
+        try:
+            link.power(1)
+            time.sleep(0.05)
+        except Exception:
+            pass
+        try:
+            self._reset()
+            time.sleep(0.05)
+            ver = self._read_status(REG_VERSION)
+            if ver in (0x00, 0xFF):
+                self.close()
+                return False
+            self._apply_config()
+            self.set_frequency(self._freq_mhz)
+            self._opened = True
+            return True
+        except Exception:
+            self.close()
+            return False
+
     def close(self):
         self._opened = False
+        if self.is_usb:
+            if self._transport:
+                try:
+                    self._strobe(SIDLE)
+                except Exception:
+                    pass
+                try:
+                    self._transport.power(0)
+                except Exception:
+                    pass
+                try:
+                    self._transport.close()
+                except Exception:
+                    pass
+            self._transport = None
+            self._spi = None
+            self.is_usb = False
+            return
         if self._spi:
             try:
                 self._strobe(SIDLE)
@@ -291,6 +358,12 @@ class CC1101:
                 break
         else:
             val = 0
+        if self.is_usb:
+            try:
+                self._transport.rf_switch(val)
+            except Exception:
+                pass
+            return
         if self._gpio_req:
             try:
                 lv = gpiod.line.Value.ACTIVE if val else gpiod.line.Value.INACTIVE
@@ -470,6 +543,73 @@ class CC1101:
         self._strobe(SFRX)
         self._strobe(SRX)
 
+    def capture_raw(self, duration_s=1.0, rssi_gate=True, rssi_threshold=-50.0,
+                    silence_s=0.5):
+        """Capture raw OOK edges as a signed-µs pulse list (+ = high/carrier,
+        - = low). Works transparently over the USB bridge (device-side RMT/ISR
+        timing) and the SPI HAT (gpiod edge timestamps). Call set_raw_rx()
+        first to put the CC1101 into async-serial mode.
+        """
+        # RSSI gating: only capture once a signal is above threshold.
+        if rssi_gate:
+            deadline = time.time() + duration_s
+            while time.time() < deadline:
+                try:
+                    if self.get_rssi() > rssi_threshold:
+                        break
+                except Exception:
+                    break
+                time.sleep(0.005)
+            else:
+                return []
+
+        if self.is_usb:
+            try:
+                return self._transport.rx_raw(
+                    duration_s=duration_s, idle_us=int(silence_s * 1_000_000))
+            except Exception:
+                return []
+
+        # --- SPI HAT path: timestamp GDO0 edges via gpiod ---
+        if not GPIOD_OK:
+            return []
+        pulses = []
+        try:
+            chip = gpiod.Chip(self._gpio_chip_path)
+            cfg = gpiod.LineSettings(
+                direction=gpiod.line.Direction.INPUT,
+                edge_detection=gpiod.line.Edge.BOTH,
+            )
+            req = chip.request_lines(
+                config={self._gdo0_line: cfg}, consumer="cc1101-raw")
+        except Exception:
+            return pulses
+        last_time = time.monotonic_ns()
+        last_level = False
+        last_edge = time.time()
+        deadline = time.time() + duration_s
+        try:
+            while time.time() < deadline:
+                if req.wait_edge_events(timeout=0.05):
+                    for ev in req.read_edge_events():
+                        now_ns = ev.timestamp_ns
+                        dur_us = (now_ns - last_time) / 1000
+                        if 50 < dur_us < 200000:
+                            pulses.append(int(dur_us) if last_level else -int(dur_us))
+                            last_edge = time.time()
+                        last_level = ev.event_type == gpiod.EdgeEvent.Type.RISING_EDGE
+                        last_time = now_ns
+                if time.time() - last_edge > silence_s:
+                    break
+        except Exception:
+            pass
+        finally:
+            try:
+                req.release()
+            except Exception:
+                pass
+        return pulses
+
     def send_raw_pulses(self, pulses, repeat=1, te_us=None):
         """Send raw OOK pulses via CC1101.
 
@@ -486,6 +626,14 @@ class CC1101:
             pulses.append(-10000)
         elif abs(pulses[-1]) < 5000:
             pulses[-1] = -10000
+
+        # USB bridge: timing is done on the ESP32 (RMT). Repeat is handled
+        # device-side, so send a single frame + repeat count.
+        if self.is_usb:
+            try:
+                return bool(self._transport.tx_raw(pulses, repeat=max(1, int(repeat))))
+            except Exception:
+                return False
 
         if repeat > 1:
             frame = list(pulses)

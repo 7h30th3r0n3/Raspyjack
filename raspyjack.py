@@ -7,14 +7,19 @@ import os
 import secrets
 import subprocess
 import netifaces
-from scapy.all import ARP, Ether, srp
 from datetime import datetime
 import threading, smbus, time, pyudev, serial, struct, json
 from subprocess import STDOUT, check_output
 from PIL import Image, ImageDraw, ImageFont, ImageColor, ImageSequence, ImageOps
 import LCD_Config
 import LCD_1in44
-import RPi.GPIO as GPIO
+# GPIO backend: real RPi.GPIO on Raspberry Pi, evdev-based shim on CardputerZero
+# (CARDPUTER_320) where RPi.GPIO is absent. The APPLaunch wrapper exports
+# RJ_GPIO_BACKEND=evdev; display-type detection is a fallback.
+if os.environ.get("RJ_GPIO_BACKEND") == "evdev" or getattr(LCD_1in44, "_DISPLAY_TYPE", "") == "CARDPUTER_320":
+    import gpio_shim as GPIO
+else:
+    import RPi.GPIO as GPIO
 import socket
 import ipaddress
 import signal
@@ -181,6 +186,29 @@ def _build_cardputer_frame(src_image):
     return ImageOps.fit(src_image, (CARDPUTER_FRAME_WIDTH, CARDPUTER_FRAME_HEIGHT), _resampling_lanczos)
 
 
+_HDMI_MIRROR_PID_FILE = "/tmp/raspyjack_hdmi_mirror.pid"
+_hdmi_active_cache = [0.0, False]
+
+
+def _hdmi_mirror_active():
+    """True only while the HDMI mirror payload is running. Lets the display loop
+    skip the costly HDMI frame encode (JPEG + raw RGB) when HDMI isn't in use —
+    a big CPU saving on the CardputerZero. Cached ~1s."""
+    now = time.monotonic()
+    if now - _hdmi_active_cache[0] < 1.0:
+        return _hdmi_active_cache[1]
+    active = False
+    try:
+        with open(_HDMI_MIRROR_PID_FILE) as _f:
+            os.kill(int(_f.read().strip()), 0)
+        active = True
+    except Exception:
+        active = False
+    _hdmi_active_cache[0] = now
+    _hdmi_active_cache[1] = active
+    return active
+
+
 def _save_cardputer_frame(src_image):
     if not CARDPUTER_FRAME_ENABLED:
         return
@@ -309,7 +337,8 @@ def _display_loop():
                 if FRAME_MIRROR_ENABLED or CARDPUTER_FRAME_ENABLED:
                     now = time.monotonic()
                     save_webui_frame = FRAME_MIRROR_ENABLED and (now - last_frame_save) >= FRAME_MIRROR_INTERVAL
-                    save_cardputer_frame = CARDPUTER_FRAME_ENABLED and (now - last_cardputer_frame_save) >= CARDPUTER_FRAME_INTERVAL
+                    save_cardputer_frame = (CARDPUTER_FRAME_ENABLED and _hdmi_mirror_active()
+                                            and (now - last_cardputer_frame_save) >= CARDPUTER_FRAME_INTERVAL)
                     if save_webui_frame or save_cardputer_frame:
                         mirror_image = image.copy()
                     if save_webui_frame:
@@ -5040,7 +5069,175 @@ def _check_payload_request():
     return None
 
 
+def _provision_gate():
+    """First-boot setup screen for the CardputerZero store package.
+
+    The store installs RaspyJack under a package-transaction timeout, so the
+    heavy/optional tools are pulled afterwards by provision.sh (outside that
+    timeout). Block the menu behind a progress screen while that first pass
+    runs, so payloads don't launch before their tools exist. Reads the status
+    file provision.sh maintains. Hold OK ~3s to skip into the menu anyway.
+    Never gates a classic (non-store) install, and never hard-blocks on a
+    partial/failed result.
+    """
+    marker = "/var/lib/raspyjack/provision.done"
+    status_path = default.install_path + "loot/provision/status.json"
+    unit = "/etc/systemd/system/raspyjack-provision.service"
+    try:
+        if os.path.exists(marker):
+            return False
+        if not (os.path.exists(status_path) or os.path.exists(unit)):
+            return False  # classic install: no provisioning expected
+    except Exception:
+        return False
+
+    def _ok_held():
+        try:
+            if "_evdev" in globals() and _evdev is not None and _evdev.is_key_pressed(28):
+                return True
+        except Exception:
+            pass
+        try:
+            return GPIO.input(PINS["KEY_PRESS_PIN"]) == 0
+        except Exception:
+            return False
+
+    def _read_status():
+        try:
+            with open(status_path) as f:
+                return json.load(f)
+        except Exception:
+            return None
+
+    log_path = default.install_path + "loot/provision/provision.log"
+    try:
+        term_font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf', S(8))
+    except Exception:
+        term_font = text_font
+
+    def _tail_log(n):
+        # Last n non-empty lines of the provision log (the live "terminal").
+        try:
+            with open(log_path, "rb") as f:
+                f.seek(0, 2)
+                size = f.tell()
+                f.seek(max(0, size - 8192))
+                data = f.read().decode("utf-8", "replace")
+            return [ln.rstrip() for ln in data.splitlines() if ln.strip()][-n:]
+        except Exception:
+            return []
+
+    hold_start = None
+    partial_since = None
+    skipped = False
+    while True:
+        try:
+            if os.path.exists(marker):
+                break
+        except Exception:
+            break
+        d = _read_status()
+        steps = (d or {}).get("steps", [])
+        overall = (d or {}).get("overall", "starting")
+        total = len(steps)
+        done = sum(1 for s in steps if s.get("state") == "done")
+        cur = next((s for s in steps if s.get("state") == "installing"), None)
+        if cur:
+            cur_label = cur.get("label") or cur.get("name") or ""
+            cur_detail = cur.get("detail") or ""
+        elif not steps:
+            cur_label, cur_detail = "Preparing setup...", ""
+        else:
+            cur_label, cur_detail = "Finishing...", ""
+
+        if overall == "done":
+            break
+        if overall == "partial":
+            if partial_since is None:
+                partial_since = time.time()
+            elif time.time() - partial_since > 4:
+                break  # optional tools failed; retried next boot, don't block
+
+        if _ok_held():
+            if hold_start is None:
+                hold_start = time.time()
+            elif time.time() - hold_start >= 3.0:
+                skipped = True
+                break
+        else:
+            hold_start = None
+
+        # Elapsed since provisioning started (from the status file).
+        elapsed = ""
+        try:
+            started = (d or {}).get("started")
+            if started:
+                secs = int((datetime.now() - datetime.strptime(started, "%Y-%m-%dT%H:%M:%S")).total_seconds())
+                if secs >= 0:
+                    elapsed = "%dm%02ds" % (secs // 60, secs % 60)
+        except Exception:
+            elapsed = ""
+
+        glyph = {"done": "[x]", "installing": "[>]", "failed": "[!]", "pending": "[ ]"}
+        try:
+            draw_lock.acquire()
+            draw.rectangle([0, 0, _SCR_W, _SCR_H], fill=color.background)
+            # Header: title + elapsed.
+            hdr = "Setting up RaspyJack"
+            if elapsed:
+                hdr += "  " + elapsed
+            draw.text((S(4), S(1)), hdr, fill=color.text, font=text_font)
+            # Current step + overall count.
+            if partial_since is not None:
+                step_line = "some tools failed, will retry"
+            elif cur_detail:
+                step_line = "%s %s: %s" % (glyph.get((cur or {}).get("state"), ">"), cur_label, cur_detail)
+            else:
+                step_line = "%s %s" % (glyph.get((cur or {}).get("state"), ">"), cur_label)
+            step_line = "%s   %d/%d" % (step_line, done, total)
+            while step_line and draw.textbbox((0, 0), step_line, font=text_font)[2] > _SCR_W - S(8):
+                step_line = step_line[:-1]
+            draw.text((S(4), S(13)), step_line, fill=color.text, font=text_font)
+            # Progress bar.
+            bar_x0, bar_y0 = S(4), S(25)
+            bar_x1, bar_y1 = _SCR_W - S(4), S(29)
+            draw.rectangle([bar_x0, bar_y0, bar_x1, bar_y1], outline=color.text, fill=color.background)
+            pct = (done / total) if total else 0.0
+            fw = int((bar_x1 - bar_x0) * max(0.0, min(1.0, pct)))
+            if fw > 0:
+                draw.rectangle([bar_x0, bar_y0, bar_x0 + fw, bar_y1], fill=color.text)
+            # Live "terminal" feed: tail of the provision log.
+            try:
+                tlh = draw.textbbox((0, 0), "Ag", font=term_font)[3] + 1
+            except Exception:
+                tlh = S(8)
+            term_top, term_bot = S(33), _SCR_H - S(13)
+            nlines = max(1, int((term_bot - term_top) / max(1, tlh)))
+            maxw = _SCR_W - S(6)
+            yy = term_top
+            for ln in _tail_log(nlines):
+                while ln and draw.textbbox((0, 0), ln, font=term_font)[2] > maxw:
+                    ln = ln[:-1]
+                draw.text((S(3), yy), ln, fill=color.text, font=term_font)
+                yy += tlh
+            # Footer.
+            foot = "hold OK 3s = skip" if partial_since is None else "partial - hold OK = skip"
+            draw.text((S(4), _SCR_H - S(11)), foot, fill=color.text, font=term_font)
+            LCD.LCD_ShowImage(image, 0, 0)
+        finally:
+            draw_lock.release()
+        time.sleep(0.4)
+    return skipped
+
+
 def main():
+    # First-boot provisioning gate (store package): block until heavy tools are
+    # installed, or the user holds OK to skip. No-op on a classic install.
+    try:
+        _provision_gate()
+    except Exception as e:
+        print("provision gate skipped:", e)
+
     # Draw background once
     try:
         draw_lock.acquire()
@@ -5124,15 +5321,27 @@ LCD.LCD_Init(Lcd_ScanDir)
 LCD_Config.Driver_Delay_ms(5)  # 8
 #LCD.LCD_Clear()
 
-image = Image.open(default.install_path + 'img/logo.bmp')
+image = Image.open(default.install_path + 'img/logo.bmp').convert("RGB")
 if image.size != (LCD.width, LCD.height):
-    image = image.resize((LCD.width, LCD.height))
+    # Preserve aspect ratio: a plain resize stretches the square logo on the
+    # widescreen CardputerZero panel (320x170). Fit within the screen and
+    # center on black. No-op on square panels (128x128 / 240x240).
+    fitted = ImageOps.contain(image, (LCD.width, LCD.height))
+    canvas = Image.new("RGB", (LCD.width, LCD.height), (0, 0, 0))
+    canvas.paste(fitted, ((LCD.width - fitted.width) // 2,
+                          (LCD.height - fitted.height) // 2))
+    image = canvas
 LCD.LCD_ShowImage(image, 0, 0)
 
 # Create draw objects BEFORE main() so color functions can use them
 image = Image.new("RGB", (LCD.width, LCD.height), "WHITE")
 draw = ImageDraw.Draw(image)
-text_font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', S(10))
+# Menu/UI text: use the Bold face on the CardputerZero panel so item letters
+# read wider/heavier at the normal size; other displays keep the regular face.
+_menu_font_file = ('DejaVuSans-Bold.ttf'
+                   if getattr(LCD, "display_type", "") == "CARDPUTER_320"
+                   else 'DejaVuSans.ttf')
+text_font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/' + _menu_font_file, S(10))
 icon_font = ImageFont.truetype('/usr/share/fonts/truetype/fontawesome/fa-solid-900.ttf', S(13))
 font = text_font  # Keep backward compatibility
 

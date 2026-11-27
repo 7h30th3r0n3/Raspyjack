@@ -1,0 +1,275 @@
+#!/bin/bash
+set -e
+
+APP_DIR="/usr/share/APPLaunch/apps/raspyjack"
+LEGACY_DIR="/root/Raspyjack"
+
+# Expose the installed tree at the /root/Raspyjack path hardcoded by payloads.
+if [ -d "$APP_DIR" ]; then
+  if [ ! -e "$LEGACY_DIR" ]; then
+    ln -s "$APP_DIR" "$LEGACY_DIR"
+  elif [ -d "$LEGACY_DIR" ] && [ ! -L "$LEGACY_DIR" ] && [ "$LEGACY_DIR" != "$APP_DIR" ]; then
+    echo "raspyjack: keeping existing $LEGACY_DIR; package app is in $APP_DIR" >&2
+  fi
+fi
+
+# Create runtime directories not shipped in the package.
+if [ -d "$LEGACY_DIR" ]; then
+  for d in \
+    config/ad_recon config/auto_loot_exfil config/bt_audio config/cctv_scanner \
+    config/cctv_viewer config/dns_tunnel config/exfil_ftp config/exfil_smb \
+    config/http_exfil config/reverse_ssh config/rtsp_viewer config/scheduler \
+    config/ssid_pool config/timer config/tripwire config/usb_gadget config/wifi_alert \
+    loot/Autostart loot/Favorites loot/MITM loot/Nmap loot/network loot/wardriving \
+    loot/wordlists wifi/profiles loot/DeadDrop/files
+  do
+    mkdir -p "$LEGACY_DIR/$d"
+  done
+
+  if [ ! -f "$LEGACY_DIR/gui_conf.json" ]; then
+    cat > "$LEGACY_DIR/gui_conf.json" <<'JSON'
+{
+  "COLORS": {
+    "BACKGROUND": "#000000",
+    "BORDER": "#05ff00",
+    "GAMEPAD": "#141494",
+    "GAMEPAD_FILL": "#eeeeee",
+    "SELECTED_TEXT": "#00ff55",
+    "SELECTED_TEXT_BACKGROUND": "#2d0fff",
+    "TEXT": "#05ff00"
+  },
+  "DISPLAY": {
+    "type": "CARDPUTER_320",
+    "supported_types": ["ST7735_128", "ST7789_240", "CARDPUTER_320"],
+    "flip": false
+  },
+  "LOCK": {
+    "auto_lock_seconds": 0,
+    "enabled": false,
+    "pin_hash": ""
+  },
+  "PATHS": {
+    "IMAGEBROWSER_START": "/root/Raspyjack/img/",
+    "SCREENSAVER_GIF": "/root/Raspyjack/img/screensaver/default.gif"
+  },
+  "PINS": {
+    "KEY1_PIN": 21,
+    "KEY2_PIN": 20,
+    "KEY3_PIN": 16,
+    "KEY_DOWN_PIN": 19,
+    "KEY_LEFT_PIN": 5,
+    "KEY_PRESS_PIN": 13,
+    "KEY_RIGHT_PIN": 26,
+    "KEY_UP_PIN": 6
+  }
+}
+JSON
+  fi
+
+  chmod 0755 "$LEGACY_DIR" "$LEGACY_DIR/wifi" "$LEGACY_DIR/wifi/profiles" 2>/dev/null || true
+  chmod +x "$LEGACY_DIR/Navarro/navarro.py" "$LEGACY_DIR/scripts/pin_wifi_names.sh" 2>/dev/null || true
+fi
+
+# Font Awesome (used by the UI) — downloaded as a plain file, never piped to a shell.
+FA_TARGET="/usr/share/fonts/truetype/fontawesome/fa-solid-900.ttf"
+if [ ! -f "$FA_TARGET" ]; then
+  mkdir -p "$(dirname "$FA_TARGET")"
+  for url in \
+    "https://use.fontawesome.com/releases/v6.5.1/webfonts/fa-solid-900.ttf" \
+    "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/webfonts/fa-solid-900.ttf" \
+    "https://raw.githubusercontent.com/FortAwesome/Font-Awesome/6.x/webfonts/fa-solid-900.ttf"
+  do
+    if wget -q --timeout=10 -O "$FA_TARGET.tmp" "$url"; then
+      mv "$FA_TARGET.tmp" "$FA_TARGET"
+      chmod 0644 "$FA_TARGET"
+      break
+    fi
+  done
+  rm -f "$FA_TARGET.tmp"
+fi
+
+# The CardputerZero OS uses PipeWire; pipewire-alsa (a dependency) makes the
+# ALSA 'default' device route through PipeWire. A forced raw-card /etc/asound.conf
+# overrides that and plays silently, so remove the placeholder older RaspyJack
+# packages wrote (only when it is exactly that — no user customization).
+ASOUND_CONF="/etc/asound.conf"
+if [ -f "$ASOUND_CONF" ] \
+   && [ "$(grep -cvE '^[[:space:]]*(#|$|defaults\.(pcm|ctl)\.card )' "$ASOUND_CONF" 2>/dev/null)" = "0" ]; then
+  rm -f "$ASOUND_CONF"
+fi
+
+# apache2 is useless for RaspyJack (it uses php-cli's `php -S`, and even frees
+# :80 for its own captive portal) but gets pulled in on upgrades from the old
+# `php` dependency. Disable it to free RAM and port 80 (Caddy/HTTPS needs it).
+if command -v systemctl >/dev/null 2>&1 && dpkg -s apache2 >/dev/null 2>&1; then
+  systemctl disable --now apache2 >/dev/null 2>&1 || true
+  systemctl mask apache2 >/dev/null 2>&1 || true
+fi
+
+# Low-RAM device (~352 MB): add a persistent 4 GB swapfile so the full always-on
+# stack (PipeWire + APPLaunch + RaspyJack + WebUI + Caddy) plus source builds
+# (proxmark3) do not OOM/crash.
+SWAPFILE=/var/swap.raspyjack
+CUR_SWAP=$(free -m 2>/dev/null | awk '/Swap/{print $2}'); CUR_SWAP=${CUR_SWAP:-0}
+if [ ! -f "$SWAPFILE" ] && [ "$CUR_SWAP" -lt 4096 ]; then
+  if fallocate -l 4096M "$SWAPFILE" 2>/dev/null || dd if=/dev/zero of="$SWAPFILE" bs=1M count=4096 2>/dev/null; then
+    chmod 600 "$SWAPFILE"
+    mkswap "$SWAPFILE" >/dev/null 2>&1 && swapon "$SWAPFILE" 2>/dev/null || true
+    grep -q "$SWAPFILE" /etc/fstab 2>/dev/null || echo "$SWAPFILE none swap sw 0 0" >> /etc/fstab
+    # a bit less aggressive reclaim keeps the UI responsive under pressure
+    sysctl -w vm.swappiness=30 >/dev/null 2>&1 || true
+  fi
+fi
+
+# pip extras not packaged as apt dependencies (match install_raspyjack.sh).
+if command -v pip3 >/dev/null 2>&1; then
+  pip3 install --break-system-packages --quiet smbus2 bleak gpsd-py3 sgp4 2>/dev/null || true
+  # opencv is not in apt — video_player / camera / object_detector need it.
+  pip3 install --break-system-packages --quiet opencv-python-headless 2>/dev/null || true
+  # The apt yt-dlp lags badly; YouTube breaks it (SABR). Pull the latest so the
+  # youtube / TV / video payloads work. --ignore-installed avoids the apt copy.
+  pip3 install --break-system-packages --quiet --upgrade --ignore-installed yt-dlp 2>/dev/null || true
+fi
+
+# WebUI: device server (WebSocket :8765), HTTP WebUI (:8080) and an optional
+# Caddy HTTPS reverse proxy (:443). Services are created HERE (not shipped in
+# the .deb) and run as root like install_raspyjack.sh, minus the OS takeover.
+if command -v systemctl >/dev/null 2>&1 && [ -f "$APP_DIR/web_server.py" ]; then
+  cat > /etc/systemd/system/raspyjack-device.service <<UNIT
+[Unit]
+Description=RaspyJack Device Server (WebSocket)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=$LEGACY_DIR
+ExecStart=/usr/bin/python3 $LEGACY_DIR/device_server.py
+Restart=on-failure
+User=root
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=$LEGACY_DIR
+Environment=RJ_WS_TOKEN_FILE=$LEGACY_DIR/.webui_token
+Environment=RJ_WEB_AUTH_SECRET_FILE=$LEGACY_DIR/.webui_session_secret
+Environment=RJ_WEB_AUTH_FILE=$LEGACY_DIR/.webui_auth.json
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+  cat > /etc/systemd/system/raspyjack-webui.service <<UNIT
+[Unit]
+Description=RaspyJack WebUI HTTP Server
+After=raspyjack-device.service
+Requires=raspyjack-device.service
+
+[Service]
+Type=simple
+WorkingDirectory=$LEGACY_DIR
+ExecStart=/usr/bin/python3 $LEGACY_DIR/web_server.py
+Restart=on-failure
+User=root
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=$LEGACY_DIR
+Environment=RJ_WS_TOKEN_FILE=$LEGACY_DIR/.webui_token
+Environment=RJ_WEB_AUTH_SECRET_FILE=$LEGACY_DIR/.webui_session_secret
+Environment=RJ_WEB_AUTH_FILE=$LEGACY_DIR/.webui_auth.json
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+  systemctl daemon-reload >/dev/null 2>&1 || true
+  systemctl enable --now raspyjack-device.service >/dev/null 2>&1 || true
+  systemctl enable --now raspyjack-webui.service >/dev/null 2>&1 || true
+
+  # Optional HTTPS via Caddy (self-signed cert over the auto-detected IPs).
+  if command -v caddy >/dev/null 2>&1; then
+    cat > /usr/local/sbin/raspyjack-caddy-autoconfig.sh <<'SCRIPT'
+#!/bin/bash
+set -e
+CERT_DIR=/etc/caddy/certs
+CERT=$CERT_DIR/raspyjack.crt
+KEY=$CERT_DIR/raspyjack.key
+if [ ! -f "$CERT" ] || [ ! -f "$KEY" ] || [ "$(find "$CERT" -mtime +365 2>/dev/null)" ]; then
+  mkdir -p "$CERT_DIR"
+  SAN="IP:127.0.0.1,DNS:raspyjack,DNS:raspyjack.local,DNS:localhost"
+  for iface in $(ls /sys/class/net 2>/dev/null | grep -v '^lo$'); do
+    IP=$(ip -4 -o addr show "$iface" 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -n1)
+    [ -n "$IP" ] && SAN="$SAN,IP:$IP"
+  done
+  openssl req -x509 -nodes -days 3650 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
+    -keyout "$KEY" -out "$CERT" -subj "/CN=raspyjack" -addext "subjectAltName=$SAN" 2>/dev/null
+  chown caddy:caddy "$KEY" "$CERT" 2>/dev/null || true
+fi
+cat > /etc/caddy/Caddyfile <<CADDY
+{
+    # only bind :443 — :80 is often taken (apache2 from php) and the default
+    # HTTP->HTTPS redirect would make caddy fail to start.
+    auto_https disable_redirects
+}
+:443 {
+    tls $CERT $KEY
+    @ws path /ws*
+    reverse_proxy @ws 127.0.0.1:8765
+    reverse_proxy 127.0.0.1:8080
+}
+CADDY
+systemctl reload caddy 2>/dev/null || systemctl restart caddy 2>/dev/null || true
+SCRIPT
+    chmod +x /usr/local/sbin/raspyjack-caddy-autoconfig.sh
+
+    cat > /etc/systemd/system/raspyjack-caddy-autoconfig.service <<UNIT
+[Unit]
+Description=RaspyJack Caddy auto-config (detect IPs, self-signed cert)
+After=network-online.target caddy.service
+Wants=network-online.target
+Requires=caddy.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/raspyjack-caddy-autoconfig.sh
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    systemctl enable --now caddy.service >/dev/null 2>&1 || true
+    systemctl enable raspyjack-caddy-autoconfig.service >/dev/null 2>&1 || true
+    /usr/local/sbin/raspyjack-caddy-autoconfig.sh >/dev/null 2>&1 || true
+  fi
+fi
+
+# First-boot provisioning of the heavy payload tools (kismet, dump1090, pyboy,
+# ragnar, proxmark3) — too large / source-built to be plain apt Depends. The
+# unit is created HERE (never shipped inside the .deb, so the store's
+# systemd-root file check doesn't apply) and runs provision.sh after the
+# network is up; it is idempotent and self-disables once everything installs.
+PROV="$APP_DIR/scripts/provision.sh"
+if command -v systemctl >/dev/null 2>&1 && [ -f "$PROV" ]; then
+  chmod +x "$PROV" 2>/dev/null || true
+  cat > /etc/systemd/system/raspyjack-provision.service <<UNIT
+[Unit]
+Description=RaspyJack first-boot provisioning (heavy payload tools)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=$PROV
+TimeoutStartSec=3600
+Nice=10
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+  systemctl daemon-reload >/dev/null 2>&1 || true
+  systemctl enable raspyjack-provision.service >/dev/null 2>&1 || true
+  if [ ! -f /var/lib/raspyjack/provision.done ]; then
+    systemctl start --no-block raspyjack-provision.service >/dev/null 2>&1 || true
+  fi
+elif command -v systemctl >/dev/null 2>&1; then
+  systemctl daemon-reload >/dev/null 2>&1 || true
+fi
+
+exit 0

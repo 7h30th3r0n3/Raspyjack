@@ -223,6 +223,14 @@ def _save_json(path, data):
 # ---------------------------------------------------------------------------
 def _detect_alsa():
     global _alsa_dev, _alsa_card
+    # On a PipeWire system (CardputerZero) route through PipeWire: a direct
+    # plughw grab conflicts with PipeWire and plays silently.
+    try:
+        if subprocess.run(["pactl", "info"], capture_output=True, timeout=3).returncode == 0:
+            _alsa_dev = "default"
+            return
+    except Exception:
+        pass
     try:
         r = subprocess.run(["aplay", "-l"], capture_output=True, text=True, timeout=3)
         for line in r.stdout.split("\n"):

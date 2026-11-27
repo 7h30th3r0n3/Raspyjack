@@ -132,5 +132,8 @@ def resume():
         pass
 
 
-if not os.path.exists(_PAUSE_FLAG):
-    start()
+# Always start the reader thread. The loop itself honours _PAUSE_FLAG
+# (it closes the device while the flag exists and reopens it once the flag is
+# removed), so a stale flag left behind by a payload that was crashed or
+# SIGKILL'd can no longer stop the keyboard from ever starting.
+start()

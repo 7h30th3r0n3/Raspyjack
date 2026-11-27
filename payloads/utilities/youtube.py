@@ -98,6 +98,14 @@ _stream_quality_idx = 2
 
 def _detect_alsa_dev():
     global _alsa_dev
+    # On a PipeWire system (CardputerZero) route through PipeWire: a direct
+    # plughw grab conflicts with PipeWire and plays silently.
+    try:
+        if subprocess.run(["pactl", "info"], capture_output=True, timeout=3).returncode == 0:
+            _alsa_dev = "default"
+            return
+    except Exception:
+        pass
     try:
         r = subprocess.run(["aplay", "-l"], capture_output=True, text=True, timeout=3)
         for line in r.stdout.split('\n'):
@@ -222,7 +230,7 @@ def _play_audio(playlist, start_idx=0):
         try:
             r = subprocess.run(
                 ["yt-dlp", "-f", "bestaudio", "--get-url", url],
-                capture_output=True, text=True, timeout=30)
+                capture_output=True, text=True, timeout=90)
             audio_url = r.stdout.strip()
         except Exception:
             audio_url = ""
@@ -427,7 +435,7 @@ def _search_youtube(query, max_results=10):
         r = subprocess.run(
             ["yt-dlp", "--flat-playlist", "--no-download",
              "-j", f"ytsearch{max_results}:{query}"],
-            capture_output=True, text=True, timeout=30)
+            capture_output=True, text=True, timeout=90)
         if r.returncode != 0:
             err = r.stderr[:100] if r.stderr else "Unknown error"
             _show_msg("Search error", err[:20], (255, 50, 50))
@@ -753,7 +761,7 @@ def _play_video(video_id, title, playlist_mode=False, start_offset=0):
     try:
         r = subprocess.run(
             ["yt-dlp", "-f", quality_fmt, "--get-url", url],
-            capture_output=True, text=True, timeout=30)
+            capture_output=True, text=True, timeout=90)
         urls = r.stdout.strip().split('\n')
         video_url = urls[0] if urls else ""
         audio_url = urls[1] if len(urls) > 1 else ""
@@ -775,7 +783,17 @@ def _play_video(video_id, title, playlist_mode=False, start_offset=0):
     # Find the right ALSA audio device (prefer ES8388/ES8389, skip HDMI)
     has_audio = False
     alsa_dev = "default"
+    # On a PipeWire system (CardputerZero) route through PipeWire: a direct
+    # plughw grab conflicts with PipeWire and plays silently.
     try:
+        if subprocess.run(["pactl", "info"], capture_output=True, timeout=3).returncode == 0:
+            alsa_dev = "default"
+            has_audio = True
+    except Exception:
+        pass
+    try:
+        if has_audio:
+            raise StopIteration
         r = subprocess.run(["aplay", "-l"], capture_output=True, text=True, timeout=3)
         for line in r.stdout.split('\n'):
             if 'card' in line.lower() and ':' in line:
@@ -796,14 +814,13 @@ def _play_video(video_id, title, playlist_mode=False, start_offset=0):
     cmd = ["ffmpeg", "-hide_banner", "-loglevel", "quiet", "-re"]
     if start_offset > 0:
         cmd += ["-ss", str(int(start_offset))]
-    cmd += ["-i", video_url]
-    if audio_url and has_audio:
-        cmd += ["-i", audio_url]
-    cmd += ["-map", "0:v:0",
+    # Video-only ffmpeg. Audio is played by a SEPARATE ffmpeg (started below):
+    # a single process doing both video->pipe and audio->alsa stalls the audio
+    # when the slow SPI display backpressures the video pipe.
+    cmd += ["-i", video_url,
+            "-map", "0:v:0",
             "-vf", f"scale={W}:{H}:force_original_aspect_ratio=decrease,pad={W}:{H}:(ow-iw)/2:(oh-ih)/2,fps={target_fps}",
             "-pix_fmt", "rgb565le", "-f", "rawvideo", "pipe:1"]
-    if audio_url and has_audio:
-        cmd += ["-map", "1:a:0", "-af", "aresample=async=1", "-ac", "2", "-ar", "44100", "-f", "alsa", alsa_dev]
 
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=FB_SIZE * 16)
 
@@ -822,6 +839,20 @@ def _play_video(video_id, title, playlist_mode=False, start_offset=0):
         _show_msg("ffmpeg error", err[:20], (255, 50, 50))
         time.sleep(2)
         return "next" if playlist_mode else None
+
+    # Separate audio pipeline (decoupled from the slow video pipe above).
+    audio_proc = None
+    if audio_url and has_audio:
+        try:
+            a_cmd = ["ffmpeg", "-hide_banner", "-loglevel", "quiet", "-re"]
+            if start_offset > 0:
+                a_cmd += ["-ss", str(int(start_offset))]
+            a_cmd += ["-i", audio_url, "-vn", "-af", "aresample=async=1",
+                      "-ac", "2", "-ar", "44100", "-f", "alsa", alsa_dev]
+            audio_proc = subprocess.Popen(a_cmd, stdout=subprocess.DEVNULL,
+                                          stderr=subprocess.DEVNULL)
+        except Exception:
+            audio_proc = None
 
     use_fb = IS_WIDE
     fb_fd = None
@@ -872,6 +903,8 @@ def _play_video(video_id, title, playlist_mode=False, start_offset=0):
                 if paused:
                     pause_offset = time.time() - start_time
                     proc.send_signal(signal.SIGSTOP)
+                    if audio_proc and audio_proc.poll() is None:
+                        audio_proc.send_signal(signal.SIGSTOP)
                     img = Image.new("RGB", (W, H), C["bg"])
                     d = _draw(img)
                     if IS_WIDE:
@@ -883,6 +916,8 @@ def _play_video(video_id, title, playlist_mode=False, start_offset=0):
                     LCD.LCD_ShowImage(img, 0, 0)
                 else:
                     proc.send_signal(signal.SIGCONT)
+                    if audio_proc and audio_proc.poll() is None:
+                        audio_proc.send_signal(signal.SIGCONT)
                 time.sleep(0.3)
                 continue
 
@@ -948,6 +983,12 @@ def _play_video(video_id, title, playlist_mode=False, start_offset=0):
         try:
             proc.kill()
             proc.wait(timeout=2)
+        except Exception:
+            pass
+        try:
+            if audio_proc:
+                audio_proc.kill()
+                audio_proc.wait(timeout=2)
         except Exception:
             pass
         try:
