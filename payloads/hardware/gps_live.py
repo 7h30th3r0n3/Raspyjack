@@ -197,62 +197,70 @@ def _reader():
         _gps["status"] = "ERR:helper"
         return
 
-    # Stop gpsd so we can read the port directly
+    # Stop gpsd so we can read the port directly. From here on we MUST restart
+    # gpsd on every exit path, otherwise GPS stays dead for every other payload
+    # until the device is rebooted.
     subprocess.run(["systemctl", "stop", "gpsd.service", "gpsd.socket"],
                    capture_output=True, timeout=5)
     subprocess.run(["killall", "-9", "gpsd"], capture_output=True, timeout=3)
     time.sleep(0.3)
 
-    dev, baud = detect_gps()
-    if not dev:
-        _gps["status"] = "NO GPS"
-        return
-
-    _release_serial_port(dev)
-    time.sleep(0.3)
-
-    _gps["device"] = os.path.basename(dev)
-    _gps["baud"] = str(baud)
-
+    ser = None
     try:
-        ser = _serial.Serial(dev, baud, timeout=1.5)
-    except Exception as e:
-        _gps["status"] = f"ERR:{e}"
-        return
+        dev, baud = detect_gps()
+        if not dev:
+            _gps["status"] = "NO GPS"
+            return
 
-    while _running:
+        _release_serial_port(dev)
+        time.sleep(0.3)
+
+        _gps["device"] = os.path.basename(dev)
+        _gps["baud"] = str(baud)
+
         try:
-            raw = ser.readline().decode("ascii", errors="ignore").strip()
+            ser = _serial.Serial(dev, baud, timeout=1.5)
+        except Exception as e:
+            _gps["status"] = f"ERR:{e}"
+            return
+
+        while _running:
+            try:
+                raw = ser.readline().decode("ascii", errors="ignore").strip()
+            except Exception:
+                break
+            if not raw.startswith("$"):
+                continue
+
+            with _lock:
+                _nmea.append(raw)
+                if len(_nmea) > 100:
+                    del _nmea[:50]
+
+            parts = raw.split(",")
+            tag = parts[0]
+            if "GGA" in tag:
+                _parse_gga(parts)
+            elif "RMC" in tag:
+                _parse_rmc(parts)
+            elif "GSA" in tag:
+                _parse_gsa(parts)
+            elif "VTG" in tag:
+                _parse_vtg(parts)
+
+            _render()
+    finally:
+        if ser is not None:
+            try:
+                ser.close()
+            except Exception:
+                pass
+
+        # Restart gpsd for other payloads
+        try:
+            start_gps()
         except Exception:
-            break
-        if not raw.startswith("$"):
-            continue
-
-        with _lock:
-            _nmea.append(raw)
-            if len(_nmea) > 100:
-                del _nmea[:50]
-
-        parts = raw.split(",")
-        tag = parts[0]
-        if "GGA" in tag:
-            _parse_gga(parts)
-        elif "RMC" in tag:
-            _parse_rmc(parts)
-        elif "GSA" in tag:
-            _parse_gsa(parts)
-        elif "VTG" in tag:
-            _parse_vtg(parts)
-
-        _render()
-
-    ser.close()
-
-    # Restart gpsd for other payloads
-    try:
-        start_gps()
-    except Exception:
-        subprocess.run(["systemctl", "start", "gpsd"], capture_output=True)
+            subprocess.run(["systemctl", "start", "gpsd"], capture_output=True)
 
 
 def main():
